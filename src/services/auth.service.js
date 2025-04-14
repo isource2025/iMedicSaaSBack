@@ -1,4 +1,3 @@
-
 const { executeQuery } = require('../models/db');
 
 const autenticarUsuario = async (username, contraseña) => {
@@ -24,6 +23,102 @@ const autenticarUsuario = async (username, contraseña) => {
 };
 
 /**
+ * Obtiene todos los sectores disponibles con sus descripciones
+ * @returns {Promise<Array>} Lista de sectores con sus descripciones
+ */
+const obtenerSectores = async () => {
+  try {
+    // Realizar JOIN con la tabla imsectores para obtener la descripción
+    const consulta = `
+      SELECT 
+        p.idpersonal as ValorPersonalSector, 
+        s.descripcion as DescripcionPersonalSector 
+      FROM 
+        impersonalsectores p
+      INNER JOIN 
+        imsectores s ON p.idsector = s.valor
+    `;
+    
+    const resultado = await executeQuery(consulta);
+    console.log('Datos obtenidos de sectores con JOIN:', JSON.stringify(resultado, null, 2));
+    return resultado;
+  } catch (error) {
+    console.error('Error al obtener sectores:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene los sectores disponibles para un usuario específico
+ * @param {string} username - Nombre de usuario
+ * @returns {Promise<Array>} Lista de sectores filtrados para el usuario
+ */
+const obtenerSectoresPorUsuario = async (username) => {
+  try {
+    // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
+    const consulta = `
+      SELECT 
+        p.idpersonal as ValorPersonalSector, 
+        s.descripcion as DescripcionPersonalSector 
+      FROM 
+        impersonalsectores p
+      INNER JOIN 
+        imsectores s ON p.idsector = s.valor
+      INNER JOIN 
+        impassword pw ON p.idpersonal = pw.valorpersonal
+      WHERE 
+        pw.nombrered = @p0
+    `;
+    
+    const parametros = [{ value: username }];
+    const resultado = await executeQuery(consulta, parametros);
+    console.log(`Sectores filtrados para usuario ${username}:`, JSON.stringify(resultado, null, 2));
+    return resultado;
+  } catch (error) {
+    console.error(`Error al obtener sectores para usuario ${username}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Obtiene el idsector y la descripción correspondiente a un idpersonal
+ * @param {string} idpersonal - ID del personal
+ * @returns {Promise<Object>} Información del sector (idsector y descripción)
+ */
+const obtenerIdSectorPorIdPersonal = async (idpersonal) => {
+  try {
+    if (!idpersonal) {
+      return null;
+    }
+    
+    const consulta = `
+      SELECT 
+        p.idsector,
+        s.descripcion
+      FROM 
+        impersonalsectores p
+      INNER JOIN 
+        imsectores s ON p.idsector = s.valor
+      WHERE 
+        p.idpersonal = @p0
+    `;
+    
+    const parametros = [{ value: idpersonal }];
+    const resultado = await executeQuery(consulta, parametros);
+    
+    if (resultado && resultado.length > 0) {
+      console.log(`Sector encontrado para idpersonal ${idpersonal}:`, JSON.stringify(resultado[0], null, 2));
+      return resultado[0];
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`Error al obtener sector para idpersonal ${idpersonal}:`, error.message);
+    throw error;
+  }
+};
+
+/**
  * Autentica con credenciales temporales (contingencia)
  * @param {string} username - Nombre de usuario
  * @param {string} contraseña - Contraseña del usuario
@@ -36,5 +131,8 @@ const autenticarConCredencialesTemporales = async (username, contraseña) => {
 
 module.exports = {
   autenticarUsuario,
-  autenticarConCredencialesTemporales
+  autenticarConCredencialesTemporales,
+  obtenerSectores,
+  obtenerSectoresPorUsuario,
+  obtenerIdSectorPorIdPersonal
 };

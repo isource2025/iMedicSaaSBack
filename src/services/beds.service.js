@@ -12,6 +12,39 @@ const obtenerCamas = async () => {
 };
 
 /**
+ * Obtener todos los estados de cama desde imEstadoCama
+ * @returns {Promise<Array>} Lista de estados de cama
+ */
+const obtenerEstadosCama = async () => {
+  // Usando alias para devolver los campos con nombres en minúsculas
+  const consulta = `SELECT Valor as valor, Descripcion as descripcion FROM imEstadoCama`;
+  return await executeQuery(consulta);
+};
+
+/**
+ * Filtrar camas por estado usando la relación entre imhabitacioncamas y imestadocama
+ * @param {string} estadoValor - Valor del estado a filtrar (del campo valor en imestadocama)
+ * @returns {Promise<Array>} Lista de camas filtradas
+ */
+const filtrarCamasPorEstado = async (estadoValor) => {
+  const consulta = `
+    SELECT 
+      hc.*,
+      ec.valor as valorEstadoCama, 
+      ec.descripcion as descripcionEstadoCama
+    FROM 
+      imHabitacionCamas hc
+    INNER JOIN 
+      imEstadoCama ec ON hc.ValorEstadoCama = ec.valor
+    WHERE 
+      ec.valor = @p0
+  `;
+  
+  const parametros = [{ value: estadoValor }];
+  return await executeQuery(consulta, parametros);
+};
+
+/**
  * Obtener una cama por ID
  * @param {number} id - ID de la cama
  * @returns {Promise<Object|null>} Cama encontrada o null
@@ -50,4 +83,6 @@ module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
   actualizarEstadoCama,
+  obtenerEstadosCama,
+  filtrarCamasPorEstado,
 };

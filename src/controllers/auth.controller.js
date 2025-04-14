@@ -1,7 +1,7 @@
 const authService = require('../services/auth.service');
 
 const inicioSesion = async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, sector } = req.body;
   
   try {
     console.log(`Intento de inicio de sesión con usuario: ${username}`);
@@ -12,6 +12,10 @@ const inicioSesion = async (req, res) => {
       
       if (usuario) {
         console.log(`Inicio de sesión exitoso para usuario ${username} desde SQL Server`);
+        
+        // Obtener el idsector correspondiente al idpersonal seleccionado
+        const sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
+        
         return res.json({
           success: true,
           mensaje: 'Inicio de sesión exitoso',
@@ -19,7 +23,13 @@ const inicioSesion = async (req, res) => {
             id: usuario.id || 1,
             nombreUsuario: usuario.nombrered,
             nombre: usuario.nombre || 'Usuario',
-            rol: usuario.rol || 'usuario'
+            rol: usuario.rol || 'usuario',
+            valorpersonal: usuario.valorpersonal || ''
+          },
+          sectorSeleccionado: {
+            idpersonal: sector,
+            idsector: sectorInfo ? sectorInfo.idsector : '',
+            descripcion: sectorInfo ? sectorInfo.descripcion : ''
           },
           token: 'token-simulado',
           fuente: 'db'
@@ -61,6 +71,52 @@ const inicioSesion = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene todos los sectores disponibles
+ * @param {Request} req - Solicitud HTTP
+ * @param {Response} res - Respuesta HTTP
+ */
+const obtenerSectores = async (req, res) => {
+  try {
+    const sectores = await authService.obtenerSectores();
+    res.json({
+      success: true,
+      data: sectores
+    });
+  } catch (error) {
+    console.error('Error al obtener sectores:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener los sectores'
+    });
+  }
+};
+
+/**
+ * Obtiene los sectores disponibles para un usuario específico
+ * @param {Request} req - Solicitud HTTP
+ * @param {Response} res - Respuesta HTTP
+ */
+const obtenerSectoresPorUsuario = async (req, res) => {
+  const { username } = req.params;
+  
+  try {
+    const sectores = await authService.obtenerSectoresPorUsuario(username);
+    res.json({
+      success: true,
+      data: sectores
+    });
+  } catch (error) {
+    console.error(`Error al obtener sectores para usuario ${username}:`, error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener los sectores para el usuario'
+    });
+  }
+};
+
 module.exports = {
-  inicioSesion
+  inicioSesion,
+  obtenerSectores,
+  obtenerSectoresPorUsuario
 };
