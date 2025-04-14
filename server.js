@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const { connectDB } = require('./config/db');
 
 // Cargar variables de entorno
 dotenv.config();
@@ -8,8 +9,22 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Inicializar conexión a la base de datos
+connectDB()
+  .then(() => {
+    console.log('Base de datos conectada correctamente');
+  })
+  .catch(err => {
+    console.error('Error de conexión a la base de datos:', err.message);
+    // No finalizamos el proceso para que el servidor siga funcionando
+    // incluso si la base de datos no está disponible inicialmente
+  });
+
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Rutas
