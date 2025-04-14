@@ -3,39 +3,42 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Función para conectar a la base de datos
+/**
+ * Connect to database with fallback from SQL authentication to Windows authentication
+ * @returns {Promise<object>} SQL connection object
+ */
 async function connectDB() {
   try {
-    // Construir cadena de conexión
+    // Build connection string
     const server = process.env.DB_INSTANCE 
       ? `${process.env.DB_SERVER}\\${process.env.DB_INSTANCE}`
       : process.env.DB_SERVER;
     
-    // Configurar opciones de conexión probando primero autenticación SQL
+    // Configure connection options first trying SQL authentication
     const connectionString = {
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       server: server,
       options: {
-        encrypt: false, // Para conexiones locales en red privada
+        encrypt: false, // For local connections in private network
         trustServerCertificate: true,
         enableArithAbort: true
       },
       connectionTimeout: 30000
     };
     
-    console.log(`Intentando conectar a: ${server}, Base de datos: ${process.env.DB_NAME}`);
+    console.log(`Attempting to connect to: ${server}, Database: ${process.env.DB_NAME}`);
     
     try {
-      // Intentar con autenticación SQL Server
+      // Try SQL Server authentication
       await sql.connect(connectionString);
-      console.log('Conexión exitosa a SQL Server usando autenticación SQL');
+      console.log('Successful connection to SQL Server using SQL authentication');
     } catch (sqlError) {
-      console.error('Error al conectar con autenticación SQL:', sqlError.message);
+      console.error('Error connecting with SQL authentication:', sqlError.message);
       
-      // Si falla, intentar con autenticación de Windows
-      console.log('Intentando conectar con autenticación de Windows...');
+      // If it fails, try Windows authentication
+      console.log('Trying to connect with Windows authentication...');
       
       const windowsAuth = {
         database: process.env.DB_NAME,
@@ -51,13 +54,13 @@ async function connectDB() {
       };
       
       await sql.connect(windowsAuth);
-      console.log('Conexión exitosa a SQL Server usando autenticación de Windows');
+      console.log('Successful connection to SQL Server using Windows authentication');
     }
     
     return sql;
   } catch (err) {
-    console.error('Error al conectar a SQL Server:', err.message);
-    console.error('Detalles adicionales:', err);
+    console.error('Error connecting to SQL Server:', err.message);
+    console.error('Additional details:', err);
     throw err;
   }
 }
