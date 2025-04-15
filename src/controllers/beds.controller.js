@@ -98,10 +98,30 @@ const filtrarCamasPorEstado = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene todos los sectores desde imSectores
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+const obtenerSectores = async (req, res) => {
+  try {
+    const sectores = await bedsService.obtenerSectores();
+    res.json({ success: true, data: sectores });
+  } catch (error) {
+    console.error('Error al obtener sectores:', error);
+    res.status(500).json({ 
+      success: false, 
+      mensaje: 'Error al obtener los sectores',
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
   actualizarEstadoCama,
   obtenerEstadosCama,
   filtrarCamasPorEstado,
+  obtenerSectores,
 };
