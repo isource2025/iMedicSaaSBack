@@ -4,10 +4,28 @@ const { executeQuery } = require('../models/db');
 
 /**
  * Obtener todas las camas desde imHabitacionCamas
- * @returns {Promise<Array>} Lista de camas
+ * @returns {Promise<Array>} Lista de camas con información del paciente y diagnóstico
  */
 const obtenerCamas = async () => {
-  const consulta = `SELECT * FROM imHabitacionCamas`;
+  const consulta = `
+    SELECT 
+      hc.*,
+      p.ApellidoYNombre as NombrePaciente,
+      d.Descripcion as DiagnosticoDescripcion,
+      ec.Descripcion as EstadoDescripcion,
+      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
+    FROM 
+      imHabitacionCamas hc
+    LEFT JOIN 
+      imVisita v ON hc.NumeroVisita = v.NumeroVisita
+    LEFT JOIN 
+      imPacientes p ON v.IdPaciente = p.IdPaciente
+    LEFT JOIN
+      imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
+    LEFT JOIN
+      imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
+    ORDER BY
+      hc.ValorHabitacionCama ASC`;
   return await executeQuery(consulta);
 };
 
@@ -31,13 +49,25 @@ const filtrarCamasPorEstado = async (estadoValor) => {
     SELECT 
       hc.*,
       ec.valor as valorEstadoCama, 
-      ec.descripcion as descripcionEstadoCama
+      ec.descripcion as descripcionEstadoCama,
+      ec.Descripcion as EstadoDescripcion,
+      p.ApellidoYNombre as NombrePaciente,
+      d.Descripcion as DiagnosticoDescripcion,
+      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
     FROM 
       imHabitacionCamas hc
     INNER JOIN 
       imEstadoCama ec ON hc.ValorEstadoCama = ec.valor
+    LEFT JOIN 
+      imVisita v ON hc.NumeroVisita = v.NumeroVisita
+    LEFT JOIN 
+      imPacientes p ON v.IdPaciente = p.IdPaciente
+    LEFT JOIN
+      imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
     WHERE 
       ec.valor = @p0
+    ORDER BY
+      hc.ValorHabitacionCama ASC
   `;
   
   const parametros = [{ value: estadoValor }];
@@ -50,7 +80,17 @@ const filtrarCamasPorEstado = async (estadoValor) => {
  * @returns {Promise<Object|null>} Cama encontrada o null
  */
 const obtenerCamaPorId = async (id) => {
-  const consulta = `SELECT * FROM imHabitacionCamas WHERE id = @p0`;
+  const consulta = `
+    SELECT 
+      hc.*,
+      p.ApellidoYNombre as NombrePaciente
+    FROM 
+      imHabitacionCamas hc
+    LEFT JOIN 
+      imVisita v ON hc.NumeroVisita = v.NumeroVisita
+    LEFT JOIN 
+      imPacientes p ON v.IdPaciente = p.IdPaciente
+    WHERE hc.id = @p0`;
   const parametros = [{ value: id }];
   const resultado = await executeQuery(consulta, parametros);
   return resultado.length > 0 ? resultado[0] : null;
@@ -68,7 +108,16 @@ const actualizarEstadoCama = async (id, estado) => {
     SET estado = @p1
     WHERE id = @p0;
 
-    SELECT * FROM imHabitacionCamas WHERE id = @p0;
+    SELECT 
+      hc.*,
+      p.ApellidoYNombre as NombrePaciente
+    FROM 
+      imHabitacionCamas hc
+    LEFT JOIN 
+      imVisita v ON hc.NumeroVisita = v.NumeroVisita
+    LEFT JOIN 
+      imPacientes p ON v.IdPaciente = p.IdPaciente
+    WHERE hc.id = @p0;
   `;
   const parametros = [
     { value: id },
@@ -79,10 +128,32 @@ const actualizarEstadoCama = async (id, estado) => {
   return resultado.length > 0 ? resultado[0] : null;
 };
 
+/**
+ * Obtener todos los sectores desde imSectores
+ * @returns {Promise<Array>} Lista de sectores donde ambint='I' y que tengan camas asociadas
+ */
+const obtenerSectores = async () => {
+  const consulta = `
+    SELECT DISTINCT
+      s.Valor as valor,
+      s.Descripcion as descripcion
+    FROM 
+      imSectores s
+    INNER JOIN
+      imHabitacionCamas hc ON s.Valor = hc.ValorSector
+    WHERE
+      s.AmbInt = 'I'
+    ORDER BY
+      s.Descripcion
+  `;
+  return await executeQuery(consulta);
+};
+
 module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
   actualizarEstadoCama,
   obtenerEstadosCama,
   filtrarCamasPorEstado,
+  obtenerSectores,
 };

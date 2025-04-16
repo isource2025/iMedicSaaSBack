@@ -8,6 +8,9 @@ router.get('/', bedsController.obtenerCamas);
 // Obtiene todos los estados de cama de la tabla imEstadoCama
 router.get('/estados', bedsController.obtenerEstadosCama);
 
+// Obtiene todos los sectores de la tabla imSectores
+router.get('/sectores', bedsController.obtenerSectores);
+
 // Filtra camas por su relación con estados en imestadocama
 router.get('/filtro/estado/:estado', bedsController.filtrarCamasPorEstado);
 
