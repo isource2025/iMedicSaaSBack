@@ -25,20 +25,33 @@ async function connectDB() {
         trustServerCertificate: true,
         enableArithAbort: true
       },
-      connectionTimeout: 30000
+      connectionTimeout: 30000,
+      pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000
+      }
     };
     
-    console.log(`Attempting to connect to: ${server}, Database: ${process.env.DB_NAME}`);
+    console.log(`Intentando conectar a: ${server}, Base de datos: ${process.env.DB_NAME}`);
+    console.log('Credenciales: Usuario:', process.env.DB_USER);
+    console.log('Configuración de conexión:', JSON.stringify({
+      server: connectionString.server,
+      database: connectionString.database,
+      options: connectionString.options
+    }, null, 2));
     
     try {
       // Try SQL Server authentication
       await sql.connect(connectionString);
-      console.log('Successful connection to SQL Server using SQL authentication');
+      console.log('Conexión exitosa a SQL Server usando autenticación SQL');
     } catch (sqlError) {
-      console.error('Error connecting with SQL authentication:', sqlError.message);
+      console.error('Error al conectar con autenticación SQL:', sqlError.message);
+      console.error('Código de error:', sqlError.code);
+      console.error('Detalles:', JSON.stringify(sqlError, null, 2));
       
       // If it fails, try Windows authentication
-      console.log('Trying to connect with Windows authentication...');
+      console.log('Intentando conectar con autenticación Windows...');
       
       const windowsAuth = {
         database: process.env.DB_NAME,
@@ -54,13 +67,17 @@ async function connectDB() {
       };
       
       await sql.connect(windowsAuth);
-      console.log('Successful connection to SQL Server using Windows authentication');
+      console.log('Conexión exitosa a SQL Server usando autenticación Windows');
     }
     
     return sql;
   } catch (err) {
-    console.error('Error connecting to SQL Server:', err.message);
-    console.error('Additional details:', err);
+    console.error('Error al conectar a SQL Server:', err.message);
+    console.error('Código de error:', err.code);
+    console.error('Número de error:', err.number);
+    console.error('Estado:', err.state);
+    console.error('Clase:', err.class);
+    console.error('Detalles completos:', JSON.stringify(err, null, 2));
     throw err;
   }
 }
