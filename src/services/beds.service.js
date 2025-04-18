@@ -11,8 +11,13 @@ const obtenerCamas = async () => {
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
+      p.NumeroDocumento as DocumentoPaciente,
+      p.Sexo as SexoPaciente,
+      sx.Descripcion as DescripcionSexo,
       d.Descripcion as DiagnosticoDescripcion,
       ec.Descripcion as EstadoDescripcion,
+      c.RazonSocial as RazonSocialCliente,
+      sm.Descripcion as ServicioMedicoDescripcion,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
     FROM 
       imHabitacionCamas hc
@@ -21,9 +26,15 @@ const obtenerCamas = async () => {
     LEFT JOIN 
       imPacientes p ON v.IdPaciente = p.IdPaciente
     LEFT JOIN
+      imSexo sx ON p.Sexo = sx.Valor
+    LEFT JOIN
       imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
     LEFT JOIN
       imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
+    LEFT JOIN
+      imClientes c ON v.Contrato = c.Valor
+    LEFT JOIN
+      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     ORDER BY
       hc.ValorHabitacionCama ASC`;
   return await executeQuery(consulta);
@@ -52,7 +63,12 @@ const filtrarCamasPorEstado = async (estadoValor) => {
       ec.descripcion as descripcionEstadoCama,
       ec.Descripcion as EstadoDescripcion,
       p.ApellidoYNombre as NombrePaciente,
+      p.NumeroDocumento as DocumentoPaciente,
+      p.Sexo as SexoPaciente,
+      sx.Descripcion as DescripcionSexo,
       d.Descripcion as DiagnosticoDescripcion,
+      c.RazonSocial as RazonSocialCliente,
+      sm.Descripcion as ServicioMedicoDescripcion,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
     FROM 
       imHabitacionCamas hc
@@ -63,7 +79,13 @@ const filtrarCamasPorEstado = async (estadoValor) => {
     LEFT JOIN 
       imPacientes p ON v.IdPaciente = p.IdPaciente
     LEFT JOIN
+      imSexo sx ON p.Sexo = sx.Valor
+    LEFT JOIN
       imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
+    LEFT JOIN
+      imClientes c ON v.Contrato = c.Valor
+    LEFT JOIN
+      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     WHERE 
       ec.valor = @p0
     ORDER BY
@@ -83,13 +105,23 @@ const obtenerCamaPorId = async (id) => {
   const consulta = `
     SELECT 
       hc.*,
-      p.ApellidoYNombre as NombrePaciente
+      p.ApellidoYNombre as NombrePaciente,
+      p.Sexo as SexoPaciente,
+      sx.Descripcion as DescripcionSexo,
+      c.RazonSocial as RazonSocialCliente,
+      sm.Descripcion as ServicioMedicoDescripcion
     FROM 
       imHabitacionCamas hc
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
       imPacientes p ON v.IdPaciente = p.IdPaciente
+    LEFT JOIN
+      imSexo sx ON p.Sexo = sx.Valor
+    LEFT JOIN
+      imClientes c ON v.Contrato = c.Valor
+    LEFT JOIN
+      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     WHERE hc.id = @p0`;
   const parametros = [{ value: id }];
   const resultado = await executeQuery(consulta, parametros);
@@ -105,18 +137,28 @@ const obtenerCamaPorId = async (id) => {
 const actualizarEstadoCama = async (id, estado) => {
   const consulta = `
     UPDATE imHabitacionCamas
-    SET estado = @p1
+    SET ValorEstadoCama = @p1
     WHERE id = @p0;
 
     SELECT 
       hc.*,
-      p.ApellidoYNombre as NombrePaciente
+      p.ApellidoYNombre as NombrePaciente,
+      p.Sexo as SexoPaciente,
+      sx.Descripcion as DescripcionSexo,
+      c.RazonSocial as RazonSocialCliente,
+      sm.Descripcion as ServicioMedicoDescripcion
     FROM 
       imHabitacionCamas hc
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
       imPacientes p ON v.IdPaciente = p.IdPaciente
+    LEFT JOIN
+      imSexo sx ON p.Sexo = sx.Valor
+    LEFT JOIN
+      imClientes c ON v.Contrato = c.Valor
+    LEFT JOIN
+      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     WHERE hc.id = @p0;
   `;
   const parametros = [
@@ -149,6 +191,40 @@ const obtenerSectores = async () => {
   return await executeQuery(consulta);
 };
 
+/**
+ * Obtener los registros de control frecuente por número de visita
+ * @param {number} numeroVisita Número de visita para filtrar
+ * @returns {Promise<Array>} Lista de registros de control frecuente
+ */
+const obtenerControlesFrecuentesPorVisita = async (numeroVisita) => {
+  const consulta = `
+    SELECT 
+      dbo.fn_ClarionDATE2SQL(icf.FechaControl) as FechaControl,
+      dbo.fn_ClarionTIME2SQL(icf.HoraControl) as HoraControl,
+      icf.IdSector,
+      icf.Pulso,
+      icf.Maximo,
+      icf.Minimo,
+      icf.PAMedia,
+      icf.FrecuenciaRespiratoria,
+      icf.Axilar,
+      icf.Rectal,
+      icf.Saturometria,
+      icf.HGT,
+      icf.Observaciones,
+      icf.Profesional
+    FROM 
+      imInterCtrlFrecuente icf
+    WHERE 
+      icf.NumeroVisita = @p0
+    ORDER BY 
+      icf.FechaControl DESC, icf.HoraControl DESC
+  `;
+  
+  const parametros = [{ value: numeroVisita }];
+  return await executeQuery(consulta, parametros);
+};
+
 module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
@@ -156,4 +232,5 @@ module.exports = {
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
+  obtenerControlesFrecuentesPorVisita,
 };

@@ -117,11 +117,35 @@ const obtenerSectores = async (req, res) => {
   }
 };
 
+/**
+ * Obtener los registros de control frecuente por número de visita
+ * @param {Object} req Request
+ * @param {Object} res Response
+ */
+const obtenerControlesFrecuentesPorVisita = async (req, res) => {
+  try {
+    const { numeroVisita } = req.params;
+    const registros = await bedsService.obtenerControlesFrecuentesPorVisita(numeroVisita);
+    res.json({
+      success: true,
+      data: registros
+    });
+  } catch (error) {
+    console.error('Error al obtener los controles frecuentes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener los controles frecuentes',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
-  actualizarEstadoCama,
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
+  obtenerControlesFrecuentesPorVisita,
+  actualizarEstadoCama
 };
