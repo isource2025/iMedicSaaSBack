@@ -1,7 +1,7 @@
 const authService = require('../services/auth.service');
 
 const inicioSesion = async (req, res) => {
-  const { username, password, sector } = req.body;
+  const { username, password, sector, idsector } = req.body;
   
   try {
     console.log(`Intento de inicio de sesión con usuario: ${username}`);
@@ -13,8 +13,26 @@ const inicioSesion = async (req, res) => {
       if (usuario) {
         console.log(`Inicio de sesión exitoso para usuario ${username} desde SQL Server`);
         
-        // Obtener el idsector correspondiente al idpersonal seleccionado
-        const sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
+        // Obtener información del sector seleccionado
+        let sectorInfo = null;
+        
+        if (idsector) {
+          // Si se recibió el idsector directamente, lo usamos para obtener la descripción
+          console.log(`Usando idsector proporcionado: ${idsector}`);
+          
+          // Consultar la descripción del sector basado en el idsector
+          const sectorDesc = await authService.obtenerDescripcionSector(idsector);
+          
+          sectorInfo = {
+            idpersonal: sector,
+            idsector: idsector,
+            descripcion: sectorDesc ? sectorDesc.descripcion : 'Sector Desconocido'
+          };
+        } else {
+          // Método anterior: obtener el idsector desde el idpersonal
+          console.log(`Usando método anterior con sector/idpersonal: ${sector}`);
+          sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
+        }
         
         return res.json({
           success: true,
