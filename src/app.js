@@ -11,6 +11,7 @@ const { configureCors } = require('./middlewares/cors.middleware');
 // Importar rutas
 const authRoutes = require('./routes/auth.routes');
 const bedsRoutes = require('./routes/beds.routes');
+const patientsRoutes = require('./routes/patients.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -39,6 +40,7 @@ app.use(express.json()); // Parseo de JSON
 // Configurar rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/beds', bedsRoutes);
+app.use('/api/patients', patientsRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
