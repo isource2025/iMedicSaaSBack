@@ -117,8 +117,6 @@ const obtenerSectores = async (req, res) => {
   }
 };
 
-<<<<<<< HEAD
-=======
 /**
  * Obtener los registros de control frecuente por número de visita
  * @param {Object} req Request
@@ -142,17 +140,12 @@ const obtenerControlesFrecuentesPorVisita = async (req, res) => {
   }
 };
 
->>>>>>> feature/emiliano-14-04-25
 module.exports = {
   obtenerCamas,
   obtenerCamaPorId,
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
-<<<<<<< HEAD
-};
-=======
   obtenerControlesFrecuentesPorVisita,
   actualizarEstadoCama
 };
->>>>>>> feature/emiliano-14-04-25
