@@ -58,7 +58,8 @@ const obtenerSectoresPorUsuario = async (username) => {
     // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
     const consulta = `
       SELECT 
-        p.idpersonal as ValorPersonalSector, 
+        p.idpersonal as ValorPersonalSector,
+        p.idsector as ValorSector, 
         s.descripcion as DescripcionPersonalSector 
       FROM 
         impersonalsectores p
@@ -71,6 +72,7 @@ const obtenerSectoresPorUsuario = async (username) => {
     `;
     
     const parametros = [{ value: username }];
+    console.log(`Ejecutando consulta SQL:\n${consulta}\nCon parámetro: ${username}`);
     const resultado = await executeQuery(consulta, parametros);
     console.log(`Sectores filtrados para usuario ${username}:`, JSON.stringify(resultado, null, 2));
     return resultado;
@@ -111,6 +113,7 @@ const obtenerIdSectorPorIdPersonal = async (idpersonal) => {
       return resultado[0];
     }
     
+    console.warn(`No se encontró ningún sector para idpersonal ${idpersonal}`);
     return null;
   } catch (error) {
     console.error(`Error al obtener sector para idpersonal ${idpersonal}:`, error.message);
@@ -129,10 +132,50 @@ const autenticarConCredencialesTemporales = async (username, contraseña) => {
   return username === 'admin' && contraseña === 'admin';
 };
 
+/**
+ * Obtiene la descripción de un sector basado en su idsector
+ * @param {string} idsector - ID del sector
+ * @returns {Promise<Object>} Objeto con la descripción del sector
+ */
+const obtenerDescripcionSector = async (idsector) => {
+  try {
+    if (!idsector) {
+      return null;
+    }
+    
+    const consulta = `
+      SELECT 
+        valor as idsector,
+        descripcion
+      FROM 
+        imsectores
+      WHERE 
+        valor = @p0
+    `;
+    
+    const parametros = [{ value: idsector }];
+    console.log(`Consultando descripción para idsector: ${idsector}`);
+    
+    const resultado = await executeQuery(consulta, parametros);
+    
+    if (resultado && resultado.length > 0) {
+      console.log(`Descripción encontrada para idsector ${idsector}:`, JSON.stringify(resultado[0], null, 2));
+      return resultado[0];
+    }
+    
+    console.warn(`No se encontró descripción para idsector ${idsector}`);
+    return null;
+  } catch (error) {
+    console.error(`Error al obtener descripción para idsector ${idsector}:`, error.message);
+    throw error;
+  }
+};
+
 module.exports = {
   autenticarUsuario,
   autenticarConCredencialesTemporales,
   obtenerSectores,
   obtenerSectoresPorUsuario,
-  obtenerIdSectorPorIdPersonal
+  obtenerIdSectorPorIdPersonal,
+  obtenerDescripcionSector
 };
