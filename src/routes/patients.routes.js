@@ -8,6 +8,9 @@ router.get('/', patientsController.obtenerPacientes);
 // Busca pacientes por nombre o número de documento
 router.get('/search', patientsController.buscarPacientes);
 
+// Obtiene las tablas de referencia (sexo, raza, provincia, etc.)
+router.get('/reference-tables', patientsController.obtenerTablasReferencia);
+
 // Obtiene un paciente específico por su ID
 router.get('/:id', patientsController.obtenerPacientePorId);
 

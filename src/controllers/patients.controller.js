@@ -1,6 +1,4 @@
-/**
- * Controlador para la gestión de pacientes
- */
+const { toClarionDate, toClarionTime } = require('../utils/fecha');
 const patientsService = require('../services/patients.service');
 
 /**
@@ -99,8 +97,28 @@ const obtenerPacientePorId = async (req, res) => {
  */
 const crearPaciente = async (req, res) => {
   try {
-    const { ApellidoyNombre, Domicilio, Sexo, NumeroHC, FechaNacimiento, EstadoCivil } = req.body;
-    
+    const { 
+      ApellidoyNombre, 
+      TipoDocumento, 
+      NumeroDocumento, 
+      Sexo, 
+      NumeroHC, 
+      FechaNacimiento, 
+      HoraNacimiento, 
+      Domicilio, 
+      ValorLocalidad, 
+      Provincia, 
+      Nacionalidad, 
+      EstadoCivil, 
+      Religion, 
+      Raza,
+      TelefonoParticular,
+      TelefonoCelular,
+      Email,
+      CUITCUIL,
+      NumeroAfiliado
+    } = req.body;
+
     // Validación básica
     if (!ApellidoyNombre || !Sexo || !NumeroHC) {
       return res.status(400).json({
@@ -108,29 +126,56 @@ const crearPaciente = async (req, res) => {
         mensaje: 'Faltan campos obligatorios (nombre, sexo y número de historia clínica)'
       });
     }
-    
-    const nuevoPaciente = await patientsService.crearPaciente({
+
+    // Convertir hora de formato HH:MM a HHMM (entero)
+    let horaInt = null;
+    if (HoraNacimiento) {
+      const [horas, minutos] = HoraNacimiento.split(':').map(Number);
+      if (!isNaN(horas) && !isNaN(minutos)) {
+        horaInt = horas * 100 + minutos;
+      }
+    }
+
+    // Preparar datos para la BD
+    const pacienteData = {
       ApellidoyNombre,
+      TipoDocumento,
+      NumeroDocumento,
       Domicilio,
+      ValorLocalidad: ValorLocalidad ? parseInt(ValorLocalidad) : null,
+      Provincia: Provincia ? parseInt(Provincia) : null,
+      Nacionalidad,
       Sexo,
       NumeroHC,
-      FechaNacimiento,
-      EstadoCivil
-    });
-    
+      FechaNacimiento: toClarionDate(FechaNacimiento), // <-- Transformación crítica
+      Hora: horaInt,
+      CUIT: CUITCUIL,
+      EstadoCivil,
+      Religion,
+      Raza: Raza ? parseInt(Raza) : null,
+      TelefonoParticular,
+      TelefonoNegocio: TelefonoCelular,
+      Mail: Email,
+      NumeroSSN: NumeroAfiliado
+    };
+
+    const nuevoPaciente = await patientsService.crearPaciente(pacienteData);
+
     res.status(201).json({
       success: true,
       mensaje: 'Paciente creado con éxito',
       data: nuevoPaciente
     });
+
   } catch (error) {
     console.error('Error al crear paciente:', error);
     res.status(500).json({
       success: false,
-      mensaje: 'Error al crear el paciente'
+      mensaje: 'Error al crear el paciente',
+      error: error.message
     });
   }
-};
+}
 
 /**
  * Actualiza un paciente existente
@@ -140,7 +185,41 @@ const crearPaciente = async (req, res) => {
 const actualizarPaciente = async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const { ApellidoyNombre, Domicilio, Sexo, NumeroHC, FechaNacimiento, EstadoCivil } = req.body;
+    const { 
+      ApellidoyNombre, 
+      TipoDocumento, 
+      NumeroDocumento, 
+      Sexo, 
+      NumeroHC, 
+      FechaNacimiento, 
+      HoraNacimiento, 
+      Domicilio, 
+      ValorLocalidad, 
+      Provincia, 
+      Nacionalidad, 
+      EstadoCivil, 
+      Religion, 
+      Raza,
+      TelefonoParticular,
+      TelefonoCelular,
+      Email,
+      CUITCUIL,
+      CoberturaMedica,
+      NumeroAfiliado,
+      ApellidoMadre,
+      GrupoSangre,
+      FactorSangre,
+      LugarNacimiento,
+      Ocupacion,
+      Observaciones,
+      SituacionLaboral,
+      NivelDeEstudios,
+      DadorOrganos,
+      IdiomaPrimario,
+      GrupoEtnico,
+      Ciudadania,
+      EstadoMilitar
+    } = req.body;
     
     if (isNaN(id)) {
       return res.status(400).json({
@@ -157,14 +236,43 @@ const actualizarPaciente = async (req, res) => {
       });
     }
     
-    const pacienteActualizado = await patientsService.actualizarPaciente(id, {
+    // Preparar datos para la BD
+    const pacienteData = {
       ApellidoyNombre,
+      ApellidoMadre,
+      TipoDocumento,
+      NumeroDocumento,
       Domicilio,
+      ValorLocalidad: ValorLocalidad ? parseInt(ValorLocalidad) : null,
+      Provincia: Provincia ? parseInt(Provincia) : null,
+      Nacionalidad,
       Sexo,
       NumeroHC,
       FechaNacimiento,
-      EstadoCivil
-    });
+      Hora: patientsService.timeToInt(HoraNacimiento),
+      CUIT: CUITCUIL,
+      EstadoCivil,
+      Religion,
+      Raza: Raza ? parseInt(Raza) : null,
+      TelefonoParticular,
+      TelefonoNegocio: TelefonoCelular,
+      Mail: Email,
+      NumeroSSN: NumeroAfiliado,
+      GrupoSangre,
+      FactorSangre,
+      LugarNacimiento,
+      Ocupacion: Ocupacion ? parseInt(Ocupacion) : null,
+      Observaciones,
+      SituacionLaboral,
+      NivelDeEstudios,
+      DadorOrganos,
+      IdiomaPrimario,
+      GrupoEtnico,
+      Ciudadania,
+      EstadoMilitar
+    };
+    
+    const pacienteActualizado = await patientsService.actualizarPaciente(id, pacienteData);
     
     if (!pacienteActualizado) {
       return res.status(404).json({
@@ -225,11 +333,34 @@ const eliminarPaciente = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene todas las tablas de referencia necesarias para el formulario de pacientes
+ * @param {Object} req - Objeto de solicitud Express
+ * @param {Object} res - Objeto de respuesta Express
+ */
+const obtenerTablasReferencia = async (req, res) => {
+  try {
+    const tablasReferencia = await patientsService.obtenerTablasReferencia();
+    
+    res.json({
+      success: true,
+      data: tablasReferencia
+    });
+  } catch (error) {
+    console.error('Error al obtener tablas de referencia:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener las tablas de referencia'
+    });
+  }
+};
+
 module.exports = {
   obtenerPacientes,
   buscarPacientes,
   obtenerPacientePorId,
   crearPaciente,
   actualizarPaciente,
-  eliminarPaciente
+  eliminarPaciente,
+  obtenerTablasReferencia
 };
