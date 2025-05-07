@@ -1,4 +1,4 @@
-const { toClarionDate, toClarionTime } = require('../utils/fecha');
+const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/dateUtils');
 const patientsService = require('../services/patients.service');
 
 /**
@@ -147,7 +147,7 @@ const crearPaciente = async (req, res) => {
       Nacionalidad,
       Sexo,
       NumeroHC,
-      FechaNacimiento: toClarionDate(FechaNacimiento), // <-- Transformación crítica
+      FechaNacimiento: convertirFechaAClarion(FechaNacimiento), // <-- Transformación crítica
       Hora: horaInt,
       CUIT: CUITCUIL,
       EstadoCivil,
