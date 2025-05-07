@@ -82,7 +82,50 @@ async function connectDB() {
   }
 }
 
+/**
+ * Ejecuta una consulta SQL con parámetros opcionales
+ * @param {string} query - Consulta SQL a ejecutar
+ * @param {Array} params - Parámetros opcionales para la consulta
+ * @returns {Promise<Array>} - Resultado de la consulta
+ */
+async function executeQuery(query, params = []) {
+  try {
+    // Asegúrate de que la conexión esté establecida
+    if (!sql.connected) {
+      await connectDB();
+    }
+    
+    // Preparar la solicitud
+    const request = new sql.Request();
+    
+    // Agregar parámetros a la solicitud
+    if (params && params.length > 0) {
+      params.forEach((param, index) => {
+        request.input(`p${index}`, param);
+      });
+    }
+    
+    console.log(`Ejecutando consulta: ${query}`);
+    
+    // Ejecutar la consulta
+    const result = await request.query(query);
+    
+    console.log(`Consulta ejecutada. Filas afectadas: ${result.rowsAffected[0]}`);
+    console.log(`Registros obtenidos: ${result.recordset ? result.recordset.length : 0}`);
+    
+    // Devolver los resultados
+    return result.recordset || [];
+  } catch (error) {
+    console.error('Error al ejecutar consulta SQL:', error.message);
+    console.error('Consulta:', query);
+    console.error('Parámetros:', JSON.stringify(params));
+    console.error('Detalles del error:', JSON.stringify(error, null, 2));
+    throw new Error(`Error ejecutando consulta: ${error.message}`);
+  }
+}
+
 module.exports = {
   connectDB,
+  executeQuery,
   sql
 };

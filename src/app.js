@@ -12,6 +12,9 @@ const { configureCors } = require('./middlewares/cors.middleware');
 const authRoutes = require('./routes/auth.routes');
 const bedsRoutes = require('./routes/beds.routes');
 const patientsRoutes = require('./routes/patients.routes');
+const empresaRoutes = require('./routes/empresa.routes');
+const catalogsRoutes = require('./routes/catalogs.routes');
+const sexoRoutes = require('./routes/sexo.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -41,6 +44,9 @@ app.use(express.json()); // Parseo de JSON
 app.use('/api/auth', authRoutes);
 app.use('/api/beds', bedsRoutes);
 app.use('/api/patients', patientsRoutes);
+app.use('/api/empresa', empresaRoutes);
+app.use('/api/catalogs', catalogsRoutes);
+app.use('/api/sexo', sexoRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

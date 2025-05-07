@@ -228,11 +228,122 @@ const eliminarPaciente = async (id) => {
   }
 };
 
+/**
+ * Obtiene los datos de una visita por su número de visita
+ * @param {string|number} numeroVisita - Número de visita a consultar
+ * @returns {Promise<Object|null>} Promise con los datos de la visita o null si no existe
+ */
+const obtenerVisitaPorNumero = async (numeroVisita) => {
+  console.log("Numero de visita en servicio:"+ numeroVisita);
+  try {
+    const query = `
+      SELECT 
+        v.NumeroVisita,
+        CONVERT(VARCHAR(10), v.FechaAdmisionS, 23) AS fechaAdmision,
+        CONVERT(VARCHAR(5), v.FechaAdmisionS, 108) AS horaAdmision,
+        dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS fechaEgreso,
+        dbo.fn_ClarionTIME2SQL(v.HoraEgreso) AS horaEgreso,
+        v.DisposicionEgreso AS disposicionEgreso,
+        v.DiagnosticoEgreso AS diagnosticoEgreso,
+        p.IDPaciente AS idPaciente,
+        p.ApellidoyNombre AS nombrePaciente,
+        h.ValorHabitacionCama AS habitacionCama,
+        h.Observaciones AS descripcionHabitacionCama
+      FROM 
+        imvisita v
+      LEFT JOIN 
+        impacientes p ON v.IDPaciente = p.IDPaciente
+      LEFT JOIN 
+        imhabitacioncamas h ON v.NumeroVisita = h.NumeroVisita
+      WHERE 
+        v.NumeroVisita = @p0
+    `;
+    
+    const parametros = [{ value: numeroVisita }];
+    const result = await executeQuery(query, parametros);
+    
+    if (result.length === 0) {
+      return null;
+    }
+    
+    return result[0];
+  } catch (error) {
+    console.error(`Error al obtener visita con número ${numeroVisita}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Registra el egreso de un paciente
+ * @param {Object} egresoData - Datos del egreso
+ * @returns {Promise<Object>} Promise con los datos del egreso registrado
+ */
+const registrarEgresoPaciente = async (egresoData) => {
+  try {
+    // Actualizar la visita con los datos de egreso
+    const queryUpdateVisita = `
+      UPDATE imvisitas
+      SET 
+        FechaEgreso = @p1,
+        HoraEgreso = @p2,
+        DisposicionEgreso = @p3,
+        DiagnosticoEgreso = @p4,
+        CodOperadorEgreso = @p5
+      WHERE NumeroVisita = @p0;
+      
+      -- Retornar la visita actualizada
+      SELECT 
+        NumeroVisita,
+        CONVERT(VARCHAR(10), FechaAdmision, 23) AS fechaAdmision,
+        CONVERT(VARCHAR(5), HoraAdmision, 108) AS horaAdmision,
+        CONVERT(VARCHAR(10), FechaEgreso, 23) AS fechaEgreso,
+        CONVERT(VARCHAR(5), HoraEgreso, 108) AS horaEgreso,
+        DisposicionEgreso AS disposicionEgreso,
+        DiagnosticoEgreso AS diagnosticoEgreso
+      FROM imvisitas
+      WHERE NumeroVisita = @p0;
+    `;
+    
+    const parametrosVisita = [
+      { value: egresoData.numeroVisita },
+      { value: egresoData.fechaEgreso },
+      { value: egresoData.horaEgreso },
+      { value: egresoData.disposicionEgreso },
+      { value: egresoData.diagnosticoEgreso || null },
+      { value: egresoData.codOperador || null }
+    ];
+    
+    const resultVisita = await executeQuery(queryUpdateVisita, parametrosVisita);
+    
+    // Si se proporcionó un bedId, actualizar el estado de la cama
+    if (egresoData.bedId) {
+      const queryUpdateCama = `
+        UPDATE imhabitacioncamastmp
+        SET 
+          EstadoCama = 'DISPONIBLE',
+          IDPaciente = NULL
+        WHERE ValorHabitacionCama = @p0;
+      `;
+      
+      const parametrosCama = [{ value: egresoData.bedId }];
+      await executeQuery(queryUpdateCama, parametrosCama);
+    }
+    
+    return resultVisita[0];
+  } catch (error) {
+    console.error(`Error al registrar egreso para visita ${egresoData.numeroVisita}:`, error);
+    throw error;
+  }
+};
+
+
 module.exports = {
   obtenerPacientes,
   buscarPacientes,
   obtenerPacientePorId,
   crearPaciente,
   actualizarPaciente,
-  eliminarPaciente
+  eliminarPaciente,
+  obtenerVisitaPorNumero,
+  registrarEgresoPaciente,
 };

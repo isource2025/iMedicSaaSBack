@@ -225,11 +225,139 @@ const eliminarPaciente = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene los datos de una visita por su número
+ * @param {Object} req - Objeto de solicitud Express
+ * @param {Object} res - Objeto de respuesta Express
+ */
+const obtenerVisitaPorNumero = async (req, res) => {
+  try {
+    const numeroVisita = req.params.numeroVisita;
+    console.log('Solicitando visita con número:', numeroVisita);
+    
+    if (!numeroVisita) {
+      console.log('Error: No se proporcionó número de visita');
+      return res.status(400).json({
+        success: false,
+        mensaje: 'Se requiere el número de visita'
+      });
+    }
+    
+    // Intentar convertir a entero para validar
+    const numeroVisitaInt = parseInt(numeroVisita, 10);
+    if (isNaN(numeroVisitaInt)) {
+      console.error(`Error: El número de visita '${numeroVisita}' no es un número válido`);
+      return res.status(400).json({
+        success: false,
+        mensaje: `El número de visita '${numeroVisita}' no es un número válido`
+      });
+    }
+    
+    const visita = await patientsService.obtenerVisitaPorNumero(numeroVisitaInt);
+    console.log('Resultado de consulta de visita:', visita ? 'Encontrada' : 'No encontrada');
+    
+    if (!visita) {
+      return res.status(404).json({
+        success: false,
+        mensaje: 'Visita no encontrada'
+      });
+    }
+    
+    console.log('Enviando datos de visita:', JSON.stringify(visita));
+    res.json({
+      success: true,
+      data: visita
+    });
+  } catch (error) {
+    console.error('Error al obtener visita:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener los datos de la visita',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Registra el egreso de un paciente
+ * @param {Object} req - Objeto de solicitud Express
+ * @param {Object} res - Objeto de respuesta Express
+ */
+const registrarEgresoPaciente = async (req, res) => {
+  try {
+    const egresoData = req.body;
+    
+    // Validación básica
+    if (!egresoData.numeroVisita || !egresoData.fechaEgreso || !egresoData.horaEgreso || !egresoData.disposicionEgreso) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'Faltan campos obligatorios para el egreso'
+      });
+    }
+    
+    // Obtener la visita para validar
+    const visitaExistente = await patientsService.obtenerVisitaPorNumero(egresoData.numeroVisita);
+    
+    if (!visitaExistente) {
+      return res.status(404).json({
+        success: false,
+        mensaje: 'Visita no encontrada'
+      });
+    }
+    
+    // Validar que la fecha de egreso sea posterior o igual a la fecha de admisión
+    const fechaEgreso = new Date(egresoData.fechaEgreso);
+    const fechaAdmision = new Date(visitaExistente.fechaAdmision);
+    
+    if (fechaEgreso < fechaAdmision) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'La fecha de egreso no puede ser anterior a la fecha de admisión'
+      });
+    }
+    
+    // Si las fechas son iguales, validar las horas
+    if (fechaEgreso.getTime() === fechaAdmision.getTime()) {
+      const horaEgresoArr = egresoData.horaEgreso.split(':').map(Number);
+      const horaAdmisionArr = visitaExistente.horaAdmision.split(':').map(Number);
+      
+      // Convertir a minutos para comparar fácilmente
+      const minutosEgreso = horaEgresoArr[0] * 60 + horaEgresoArr[1];
+      const minutosAdmision = horaAdmisionArr[0] * 60 + horaAdmisionArr[1];
+      
+      if (minutosEgreso <= minutosAdmision) {
+        return res.status(400).json({
+          success: false,
+          mensaje: 'La hora de egreso debe ser posterior a la hora de admisión'
+        });
+      }
+    }
+    
+    const resultado = await patientsService.registrarEgresoPaciente(egresoData);
+    
+    res.json({
+      success: true,
+      mensaje: 'Egreso registrado con éxito',
+      data: resultado
+    });
+  } catch (error) {
+    console.error('Error al registrar egreso:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al registrar el egreso'
+    });
+  }
+};
+
+
+
 module.exports = {
   obtenerPacientes,
   buscarPacientes,
   obtenerPacientePorId,
   crearPaciente,
   actualizarPaciente,
-  eliminarPaciente
+  eliminarPaciente,
+  obtenerVisitaPorNumero,
+  registrarEgresoPaciente
 };
