@@ -20,6 +20,9 @@ router.get('/visitas/:numeroVisita', patientsController.obtenerVisitaPorNumero);
 // Rutas generales de pacientes
 router.get('/', patientsController.obtenerPacientes);
 router.get('/search', patientsController.buscarPacientes);
+
+// Obtiene las tablas de referencia (sexo, raza, provincia, etc.)
+router.get('/reference-tables', patientsController.obtenerTablasReferencia);
 router.get('/:id', patientsController.obtenerPacientePorId);
 router.post('/', patientsController.crearPaciente);
 router.put('/:id', patientsController.actualizarPaciente);
