@@ -15,6 +15,7 @@ const patientsRoutes = require('./routes/patients.routes');
 const empresaRoutes = require('./routes/empresa.routes');
 const catalogsRoutes = require('./routes/catalogs.routes');
 const sexoRoutes = require('./routes/sexo.routes');
+const estadosAmbulatoriosRoutes = require('./routes/estadosAmbulatorios');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -47,6 +48,7 @@ app.use('/api/patients', patientsRoutes);
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
 app.use('/api/sexo', sexoRoutes);
+app.use('/api/estados-ambulatorios', estadosAmbulatoriosRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
