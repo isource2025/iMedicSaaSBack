@@ -173,8 +173,116 @@ const obtenerMovimientosVisita = async (req, res) => {
   }
 };
 
+/**
+ * Mueve un paciente de una cama a otra
+ * @param {Object} req - Objeto de solicitud Express
+ * @param {Object} res - Objeto de respuesta Express
+ */
+const moverPacienteACamaVacia = async (req, res) => {
+  try {
+    const numeroVisita = req.params.numeroVisita;
+    const datosMover = req.body;
+    
+    console.log('=== MOVER PACIENTE A NUEVA CAMA ===');
+    console.log(`Parámetro numeroVisita: '${numeroVisita}'`);
+    console.log('Datos recibidos:', JSON.stringify(datosMover, null, 2));
+    console.log('================================');
+
+    if (!numeroVisita) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'Se requiere el número de visita'
+      });
+    }
+
+    // Validar número de visita
+    const numeroVisitaInt = parseInt(numeroVisita, 10);
+    if (isNaN(numeroVisitaInt)) {
+      return res.status(400).json({
+        success: false,
+        mensaje: `El número de visita '${numeroVisita}' no es un número válido`
+      });
+    }
+
+    // Validar datos requeridos
+    const camposRequeridos = [
+      'FechaAdmision', 'HoraAdmision', 'FechaEgreso', 'HoraEgreso',
+      'EstadoAmbulatorio', 'bedId', 'Operador', 'FechaCarga', 'HoraCarga'
+    ];
+    
+    const camposFaltantes = camposRequeridos.filter(campo => !datosMover[campo]);
+    
+    if (camposFaltantes.length > 0) {
+      return res.status(400).json({
+        success: false,
+        mensaje: `Faltan los siguientes campos requeridos: ${camposFaltantes.join(', ')}`
+      });
+    }
+
+    // Llamar al servicio para mover al paciente
+    const resultado = await visitaMovimientosService.moverPacienteACamaVacia(numeroVisitaInt, datosMover);
+
+    res.json({
+      success: true,
+      mensaje: 'Paciente trasladado correctamente',
+      data: resultado.data
+    });
+  } catch (error) {
+    console.error('Error al mover paciente a nueva cama:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al mover al paciente a la nueva cama',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Intercambia las camas entre dos pacientes
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+const intercambiarCamasPacientes = async (req, res) => {
+  try {
+    const { numeroVisita1, numeroVisita2 } = req.params;
+    const datos = req.body;
+
+    // Validar datos requeridos
+    const camposRequeridos = [
+      'FechaEgreso', 'HoraEgreso', 'FechaAdmision', 'HoraAdmision',
+      'EstadoAmbulatorio', 'Operador', 'FechaCarga', 'HoraCarga'
+    ];
+
+    const camposFaltantes = camposRequeridos.filter(campo => !datos[campo]);
+    if (camposFaltantes.length > 0) {
+      return res.status(400).json({
+        success: false,
+        mensaje: `Faltan campos requeridos: ${camposFaltantes.join(', ')}`
+      });
+    }
+
+    // Realizar el intercambio
+    const resultado = await visitaMovimientosService.intercambiarCamasPacientes(
+      numeroVisita1,
+      numeroVisita2,
+      datos
+    );
+
+    res.json(resultado);
+  } catch (error) {
+    console.error('Error al intercambiar camas:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al intercambiar las camas entre pacientes',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
-  obtenerMovimientosVisita
+  obtenerMovimientosVisita,
+  moverPacienteACamaVacia,
+  intercambiarCamasPacientes
 };

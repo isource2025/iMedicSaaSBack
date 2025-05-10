@@ -22,9 +22,9 @@ const obtenerEstadosCama = async (req, res) => {
 
 const obtenerCamaPorId = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) {
-      return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+    const id = req.params.id; // Usar el ID tal como viene, sin convertir a entero
+    if (!id) {
+      return res.status(400).json({ success: false, mensaje: 'ID inválido o no proporcionado' });
     }
 
     const cama = await bedsService.obtenerCamaPorId(id);
@@ -41,11 +41,11 @@ const obtenerCamaPorId = async (req, res) => {
 
 const actualizarEstadoCama = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = req.params.id; // Usar el ID tal como viene, sin convertir a entero
     const { estado } = req.body;
 
-    if (isNaN(id)) {
-      return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+    if (!id) {
+      return res.status(400).json({ success: false, mensaje: 'ID inválido o no proporcionado' });
     }
 
     const estadosValidos = ['disponible', 'ocupada', 'mantenimiento'];

@@ -11,6 +11,12 @@ router.get('/visitas/:numeroVisita/movimientos/ultimo', visitaMovimientosControl
 router.put('/visitas/:numeroVisita/movimientos/ultimo', visitaMovimientosController.actualizarUltimoMovimientoVisita);
 router.get('/visitas/:numeroVisita/movimientos', visitaMovimientosController.obtenerMovimientosVisita);
 
+// Ruta para mover un paciente a una nueva cama
+router.put('/visitas/:numeroVisita/mover-cama', visitaMovimientosController.moverPacienteACamaVacia);
+
+// Ruta para intercambiar camas entre dos pacientes
+router.put('/visitas/:numeroVisita1/intercambiar-cama/:numeroVisita2', visitaMovimientosController.intercambiarCamasPacientes);
+
 // Ruta para registrar egreso (específica)
 router.post('/visitas/egreso', patientsController.registrarEgresoPaciente);
 

@@ -398,6 +398,7 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
     const query = `
       SELECT 
         v.NumeroVisita,
+        v.FechaAdmisionS AS fechaAdmisionS,
         CONVERT(VARCHAR(10), v.FechaAdmisionS, 23) AS fechaAdmision,
         CONVERT(VARCHAR(5), v.FechaAdmisionS, 108) AS horaAdmision,
         dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS fechaEgreso,
