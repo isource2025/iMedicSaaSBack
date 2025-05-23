@@ -14,6 +14,7 @@ const bedsRoutes = require('./routes/beds.routes');
 const patientsRoutes = require('./routes/patients.routes');
 const empresaRoutes = require('./routes/empresa.routes');
 const catalogsRoutes = require('./routes/catalogs.routes');
+const localidadesRoutes = require('./routes/localidades.routes');
 const sexoRoutes = require('./routes/sexo.routes');
 const estadosAmbulatoriosRoutes = require('./routes/estadosAmbulatorios');
 
@@ -47,6 +48,7 @@ app.use('/api/beds', bedsRoutes);
 app.use('/api/patients', patientsRoutes);
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
+app.use('/api/localidad', localidadesRoutes);
 app.use('/api/sexo', sexoRoutes);
 app.use('/api/estados-ambulatorios', estadosAmbulatoriosRoutes);
 
