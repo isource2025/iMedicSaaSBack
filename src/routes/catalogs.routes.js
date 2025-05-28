@@ -32,4 +32,6 @@ router.get('/diagnosticos/buscar', catalogsController.buscarDiagnosticosCie10);
  */
 router.get('/diagnosticos/:id', catalogsController.getDiagnosticoPorId);
 
+
+
 module.exports = router;

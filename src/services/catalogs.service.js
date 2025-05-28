@@ -12,6 +12,8 @@ const DEFAULT_DISPOSICIONES = [
  * Servicio para gestionar los catálogos del sistema
  */
 const catalogsService = {
+
+  
   /**
    * Obtiene los registros de la tabla imdisposicionegreso
    * @returns {Promise} Promesa con los resultados de la consulta

@@ -16,7 +16,6 @@ const obtenerInfoEmpresa = async () => {
         descripcion,
         DESCRIPCION as razonSocial,
         nro_cuit,
-        dbo.getDireccionEmpresa(idEmpresa) as direccion,
         TEEmpresa,
         email
       FROM 

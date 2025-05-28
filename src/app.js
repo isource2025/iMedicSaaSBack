@@ -4,9 +4,9 @@
  */
 const express = require('express');
 const dotenv = require('dotenv');
-
+const cors = require('cors');
 // Importar middlewares
-const { configureCors } = require('./middlewares/cors.middleware');
+// const { configureCors } = require('./middlewares/cors.middleware');
 
 // Importar rutas
 const authRoutes = require('./routes/auth.routes');
@@ -15,7 +15,9 @@ const patientsRoutes = require('./routes/patients.routes');
 const empresaRoutes = require('./routes/empresa.routes');
 const catalogsRoutes = require('./routes/catalogs.routes');
 const sexoRoutes = require('./routes/sexo.routes');
+const localidadRoutes = require('./routes/localidad.routes');
 const estadosAmbulatoriosRoutes = require('./routes/estadosAmbulatorios');
+const opcGrdRoutes = require('./routes/opcGrd.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -38,7 +40,10 @@ connectDB()
   });
 
 // Configurar middlewares
-configureCors(app); // Configuración CORS
+// configureCors(app); // Configuración CORS
+//Permitir solo desde tu Frontend (opcion recomendada)
+app.use(cors())
+
 app.use(express.json()); // Parseo de JSON
 
 // Configurar rutas
@@ -48,7 +53,9 @@ app.use('/api/patients', patientsRoutes);
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
 app.use('/api/sexo', sexoRoutes);
+app.use('/api/localidad', localidadRoutes);
 app.use('/api/estados-ambulatorios', estadosAmbulatoriosRoutes);
+app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 
 // Ruta de prueba
 app.get('/', (req, res) => {
