@@ -12,6 +12,7 @@ const obtenerPacientes = async () => {
   try {
     const query = `
       SELECT 
+<<<<<<< HEAD
         IDPaciente,
         ApellidoyNombre,
         Domicilio,
@@ -22,6 +23,20 @@ const obtenerPacientes = async () => {
         EstadoCivil
       FROM impacientes
       ORDER BY ApellidoyNombre
+=======
+        p.IDPaciente,
+        p.Numerodocumento,
+        p.ApellidoyNombre,
+        p.Domicilio,
+        p.Sexo,
+        p.NumeroHC,
+        p.FechaNacimiento,
+        p.EstadoCivil,
+        c.RazonSocial as Cobertura
+      FROM impacientes p
+      LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+      ORDER BY p.ApellidoyNombre
+>>>>>>> 512b411af8220d9627fe45f02fffe425e1310743
     `;
     
     const result = await executeQuery(query);
@@ -33,35 +48,48 @@ const obtenerPacientes = async () => {
 };
 
 /**
- * Busca pacientes por nombre o número de documento
- * @param {string} searchTerm - Término de búsqueda (nombre o número de documento)
+ * Busca pacientes por ID, nombre, número de documento o historia clínica
+ * @param {string|number} searchTerm - Término de búsqueda (ID, nombre, documento o historia clínica)
  * @returns {Promise<Array>} Promise con la lista de pacientes
  */
 const buscarPacientes = async (searchTerm) => {
   try {
+    // Convertir el término de búsqueda a string para asegurar compatibilidad
+    const searchTermStr = String(searchTerm).trim();
+    
+    // Construir la consulta SQL con el término de búsqueda directamente en la consulta
+    // Nota: Esta no es la mejor práctica desde el punto de vista de seguridad,
+    // pero es una solución temporal mientras se resuelve el problema con los parámetros
     const query = `
       SELECT 
-        IDPaciente,
-        ApellidoyNombre,
-        Domicilio,
-        Sexo,
-        NumeroDocumento,
-        NumeroHC,
-        FechaNacimiento,
-        EstadoCivil
-      FROM impacientes
-      WHERE ApellidoyNombre LIKE @p0
-      ORDER BY ApellidoyNombre
+        p.IDPaciente,
+        p.Numerodocumento,
+        p.ApellidoyNombre,
+        p.Domicilio,
+        p.Sexo,
+        p.NumeroHC,
+        p.FechaNacimiento,
+        p.EstadoCivil,
+        c.RazonSocial as Cobertura
+      FROM impacientes p
+      LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+      WHERE 
+        CAST(p.IDPaciente AS VARCHAR) LIKE '%${searchTermStr}%' OR
+        CAST(p.NumeroDocumento AS VARCHAR) LIKE '%${searchTermStr}%' OR
+        p.ApellidoyNombre LIKE '%${searchTermStr}%' OR
+        CAST(p.NumeroHC AS VARCHAR) LIKE '%${searchTermStr}%'
+      ORDER BY p.ApellidoyNombre
     `;
     
-    const parametros = [{ value: `%${searchTerm}%` }];
-    const result = await executeQuery(query, parametros);
+    // Ejecutar la consulta sin parámetros
+    const result = await executeQuery(query);
     return result;
   } catch (error) {
     console.error('Error al buscar pacientes:', error);
     throw error;
   }
 };
+
 
 /**
  * Obtiene un paciente por su ID
@@ -73,6 +101,7 @@ const obtenerPacientePorId = async (id) => {
     const query = `
       SELECT 
         IDPaciente,
+        Numerodocumento,
         ApellidoyNombre,
         Domicilio,
         Sexo,

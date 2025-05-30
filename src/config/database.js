@@ -3,124 +3,74 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+const DB_PORT = parseInt(process.env.DB_PORT, 10);
+
+const server = process.env.DB_INSTANCE
+  ? `${process.env.DB_SERVER}\\${process.env.DB_INSTANCE}`
+  : process.env.DB_SERVER;
+
+const sqlAuthConfig = {
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  server: process.env.DB_SERVER,
+  port: DB_PORT || 1433,
+  options: {
+    encrypt: false,
+    trustServerCertificate: true,
+    enableArithAbort: true
+  },
+  connectionTimeout: 30000,
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000
+  }
+};
+
+let connectionPool;
+
 /**
- * Connect to database with fallback from SQL authentication to Windows authentication
- * @returns {Promise<object>} SQL connection object
+ * Establece la conexión a la base de datos si no está conectada.
+ * @returns {Promise<sql.ConnectionPool>}
  */
 async function connectDB() {
+  if (connectionPool && connectionPool.connected) {
+    return connectionPool;
+  }
+
   try {
-    // Build connection string
-    const server = process.env.DB_INSTANCE 
-      ? `${process.env.DB_SERVER}\\${process.env.DB_INSTANCE}`
-      : process.env.DB_SERVER;
-    
-    // Configure connection options first trying SQL authentication
-    const connectionString = {
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
-      server: server,
-      options: {
-        encrypt: false, // For local connections in private network
-        trustServerCertificate: true,
-        enableArithAbort: true
-      },
-      connectionTimeout: 30000,
-      pool: {
-        max: 10,
-        min: 0,
-        idleTimeoutMillis: 30000
-      }
-    };
-    
-    console.log(`Intentando conectar a: ${server}, Base de datos: ${process.env.DB_NAME}`);
-    console.log('Credenciales: Usuario:', process.env.DB_USER);
-    console.log('Configuración de conexión:', JSON.stringify({
-      server: connectionString.server,
-      database: connectionString.database,
-      options: connectionString.options
-    }, null, 2));
-    
-    try {
-      // Try SQL Server authentication
-      await sql.connect(connectionString);
-      console.log('Conexión exitosa a SQL Server usando autenticación SQL');
-    } catch (sqlError) {
-      console.error('Error al conectar con autenticación SQL:', sqlError.message);
-      console.error('Código de error:', sqlError.code);
-      console.error('Detalles:', JSON.stringify(sqlError, null, 2));
-      
-      // If it fails, try Windows authentication
-      console.log('Intentando conectar con autenticación Windows...');
-      
-      const windowsAuth = {
-        database: process.env.DB_NAME,
-        server: server,
-        options: {
-          encrypt: false,
-          trustServerCertificate: true,
-          enableArithAbort: true,
-          trustedConnection: true,
-          integratedSecurity: true
-        },
-        connectionTimeout: 30000
-      };
-      
-      await sql.connect(windowsAuth);
-      console.log('Conexión exitosa a SQL Server usando autenticación Windows');
-    }
-    
-    return sql;
+    console.log(`Conectando a SQL Server en ${sqlAuthConfig.server}:${sqlAuthConfig.port}`);
+    connectionPool = await sql.connect(sqlAuthConfig);
+    console.log('✅ Conexión establecida correctamente con autenticación SQL');
+    return connectionPool;
   } catch (err) {
-    console.error('Error al conectar a SQL Server:', err.message);
-    console.error('Código de error:', err.code);
-    console.error('Número de error:', err.number);
-    console.error('Estado:', err.state);
-    console.error('Clase:', err.class);
-    console.error('Detalles completos:', JSON.stringify(err, null, 2));
+    console.error('❌ Error al conectar con SQL Server:', err.message);
     throw err;
   }
 }
 
 /**
- * Ejecuta una consulta SQL con parámetros opcionales
- * @param {string} query - Consulta SQL a ejecutar
- * @param {Array} params - Parámetros opcionales para la consulta
- * @returns {Promise<Array>} - Resultado de la consulta
+ * Ejecuta una consulta SQL.
+ * @param {string} query - Consulta SQL.
+ * @param {Array} params - Parámetros opcionales.
+ * @returns {Promise<Array>} Resultados.
  */
 async function executeQuery(query, params = []) {
   try {
-    // Asegúrate de que la conexión esté establecida
-    if (!sql.connected) {
-      await connectDB();
-    }
-    
-    // Preparar la solicitud
-    const request = new sql.Request();
-    
-    // Agregar parámetros a la solicitud
-    if (params && params.length > 0) {
-      params.forEach((param, index) => {
-        request.input(`p${index}`, param);
-      });
-    }
-    
-    console.log(`Ejecutando consulta: ${query}`);
-    
-    // Ejecutar la consulta
+    const pool = await connectDB();
+    const request = pool.request();
+
+    params.forEach((param, i) => {
+      request.input(`p${i}`, param);
+    });
+
     const result = await request.query(query);
-    
-    console.log(`Consulta ejecutada. Filas afectadas: ${result.rowsAffected[0]}`);
-    console.log(`Registros obtenidos: ${result.recordset ? result.recordset.length : 0}`);
-    
-    // Devolver los resultados
     return result.recordset || [];
-  } catch (error) {
-    console.error('Error al ejecutar consulta SQL:', error.message);
+  } catch (err) {
+    console.error('❌ Error ejecutando consulta SQL:', err.message);
     console.error('Consulta:', query);
-    console.error('Parámetros:', JSON.stringify(params));
-    console.error('Detalles del error:', JSON.stringify(error, null, 2));
-    throw new Error(`Error ejecutando consulta: ${error.message}`);
+    throw err;
   }
 }
 

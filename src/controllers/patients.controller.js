@@ -23,7 +23,7 @@ const obtenerPacientes = async (req, res) => {
 };
 
 /**
- * Busca pacientes por nombre o documento
+ * Busca pacientes por ID, nombre, documento o número de historia clínica
  * @param {Object} req - Objeto de solicitud Express
  * @param {Object} res - Objeto de respuesta Express
  */
@@ -31,13 +31,15 @@ const buscarPacientes = async (req, res) => {
   try {
     const { searchTerm } = req.query;
     
-    if (!searchTerm || searchTerm.trim() === '') {
+    // Verificar que el término de búsqueda exista y no esté vacío
+    if (searchTerm === undefined || searchTerm === null || String(searchTerm).trim() === '') {
       return res.status(400).json({
         success: false,
         mensaje: 'Se requiere un término de búsqueda'
       });
     }
     
+    // Buscar pacientes usando el servicio (ahora acepta números y strings)
     const pacientes = await patientsService.buscarPacientes(searchTerm);
     res.json({
       success: true,

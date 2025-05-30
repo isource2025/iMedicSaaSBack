@@ -207,7 +207,7 @@ const moverPacienteACamaVacia = async (req, res) => {
     // Validar datos requeridos
     const camposRequeridos = [
       'FechaAdmision', 'HoraAdmision', 'FechaEgreso', 'HoraEgreso',
-      'EstadoAmbulatorio', 'bedId', 'Operador', 'FechaCarga', 'HoraCarga'
+      'EstadoAmbulatorio', 'bedId', 'ValorSector', 'Operador', 'FechaCarga', 'HoraCarga'
     ];
     
     const camposFaltantes = camposRequeridos.filter(campo => !datosMover[campo]);
