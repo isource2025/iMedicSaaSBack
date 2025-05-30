@@ -9,17 +9,7 @@ const LocalidadesController = {
 
     getLocalidades: async (req, res) => {
         try {
-            const { idProvincia } = req.params;
-        
-            if (!idProvincia) {
-                return res.status(400).json({
-                    success: false,
-                    data: null,
-                    message: 'Se requiere un ID de provincia'
-                });
-            }
-
-            const data = await LocalidadesService.getLocalidades(idProvincia);
+            const data = await LocalidadesService.getLocalidades();
             
             res.json({
                 success: true,

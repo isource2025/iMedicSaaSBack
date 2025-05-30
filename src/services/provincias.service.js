@@ -1,31 +1,34 @@
 const { executeQuery } = require('../models/db');
 
-const LocalidadesService = {
+const ProvinciasService = {
     /**
    * Obtiene todos los registros de la tabla Localidades
    * @returns {Promise<Array>} Promesa con los resultados de la consulta
    */
 
-    getLocalidades: async () => {
+    getProvinciaPorLetra: async (letraProvincia) => {
     try {
       const query = `
         SELECT 
           Valor as valor, 
-          NombreLocalidad as descripcion,
-          ValorProvincia as valorProvincia
+          Descripcion as descripcion
         FROM 
-          imLocalidades 
+          imProvincia 
+        WHERE
+            LetraProvincia = @p0
         ORDER BY 
           Descripcion
       `;
       
-      const result = await executeQuery(query);
+      const result = await executeQuery(query, [
+        { value: letraProvincia }
+      ]);
       return result || [];
     } catch (error) {
-      console.error('Error al obtener las localidades:', error);
+      console.error('Error al obtener la provincia:', error);
       throw error;
     }
   },
 }
 
-module.exports = LocalidadesService;
+module.exports = ProvinciasService;

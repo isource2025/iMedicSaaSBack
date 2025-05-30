@@ -16,6 +16,7 @@ const obtenerPacientes = async () => {
         ApellidoyNombre,
         Domicilio,
         Sexo,
+        NumeroDocumento,
         NumeroHC,
         FechaNacimiento,
         EstadoCivil
@@ -44,6 +45,7 @@ const buscarPacientes = async (searchTerm) => {
         ApellidoyNombre,
         Domicilio,
         Sexo,
+        NumeroDocumento,
         NumeroHC,
         FechaNacimiento,
         EstadoCivil
@@ -74,9 +76,20 @@ const obtenerPacientePorId = async (id) => {
         ApellidoyNombre,
         Domicilio,
         Sexo,
+        NumeroDocumento,
         NumeroHC,
         FechaNacimiento,
-        EstadoCivil
+        EstadoCivil,
+        TipoDocumento,
+        ValorLocalidad,
+        Provincia,
+        Nacionalidad,
+        CUIT,
+        TelefonoParticular,
+        TelefonoNegocio,
+        Mail,
+        NumeroCuenta,
+        NumeroSSN
       FROM impacientes
       WHERE IDPaciente = @p0
     `;

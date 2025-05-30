@@ -16,13 +16,11 @@ const obtenerInfoEmpresa = async () => {
         descripcion,
         DESCRIPCION as razonSocial,
         nro_cuit,
-        dbo.getDireccionEmpresa(idEmpresa) as direccion,
+        CONCAT( calle, calle_nro, Depto, piso, localidad ) as direccion,
         TEEmpresa,
         email
       FROM 
         empresas
-   
-    
     `;
     
     const resultado = await executeQuery(consulta);
