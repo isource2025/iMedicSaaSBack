@@ -66,9 +66,21 @@ const buscarPacientes = async (searchTerm) => {
         p.NumeroHC,
         DATEADD(DAY, p.FechaNacimiento - 2, '19000101') AS FechaNacimiento,
         p.EstadoCivil,
-        c.RazonSocial as Cobertura
+        c.RazonSocial as Cobertura,
+        p.ValorLocalidad,
+        l.ValorProvincia as Provincia,
+        n.Descripcion as Nacionalidad,
+        p.CUIT,
+        p.TelefonoParticular,
+        p.TelefonoNegocio,
+        p.Mail,
+        p.NumeroCuenta,
+        p.NumeroSSN
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
+      LEFT JOIN imProvincia as pr ON pr.LetraProvincia = l.ValorProvincia
+      LEFT JOIN imNacionalidad as n ON n.Valor = pr.ValorNacionalidad
       WHERE 
         CAST(p.IDPaciente AS VARCHAR) LIKE '%${searchTermStr}%' OR
         CAST(p.NumeroDocumento AS VARCHAR) LIKE '%${searchTermStr}%' OR
@@ -107,7 +119,7 @@ const obtenerPacientePorId = async (id) => {
         EstadoCivil,
         TipoDocumento,
         ValorLocalidad,
-        Provincia,
+        l.ValorProvincia as Provincia,
         Nacionalidad,
         CUIT,
         TelefonoParticular,
