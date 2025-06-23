@@ -12,31 +12,27 @@ const obtenerPacientes = async () => {
   try {
     const query = `
       SELECT 
-<<<<<<< HEAD
-        IDPaciente,
-        ApellidoyNombre,
-        Domicilio,
-        Sexo,
-        NumeroDocumento,
-        NumeroHC,
-        FechaNacimiento,
-        EstadoCivil
-      FROM impacientes
-      ORDER BY ApellidoyNombre
-=======
         p.IDPaciente,
         p.Numerodocumento,
         p.ApellidoyNombre,
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        p.FechaNacimiento,
+        CAST(p.FechaNacimiento AS DATETIME) AS FechaNacimiento,        
         p.EstadoCivil,
-        c.RazonSocial as Cobertura
+        c.RazonSocial as Cobertura,
+        p.ValorLocalidad,
+        p.Provincia,
+        p.Nacionalidad,
+        p.CUIT,
+        p.TelefonoParticular,
+        p.TelefonoNegocio,
+        p.Mail,
+        p.NumeroCuenta,
+        p.NumeroSSN
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
       ORDER BY p.ApellidoyNombre
->>>>>>> 512b411af8220d9627fe45f02fffe425e1310743
     `;
     
     const result = await executeQuery(query);
@@ -68,7 +64,7 @@ const buscarPacientes = async (searchTerm) => {
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        p.FechaNacimiento,
+        DATEADD(DAY, p.FechaNacimiento - 2, '19000101') AS FechaNacimiento,
         p.EstadoCivil,
         c.RazonSocial as Cobertura
       FROM impacientes p
@@ -120,6 +116,7 @@ const obtenerPacientePorId = async (id) => {
         NumeroCuenta,
         NumeroSSN
       FROM impacientes
+      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
       WHERE IDPaciente = @p0
     `;
     
