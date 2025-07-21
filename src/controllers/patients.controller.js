@@ -238,6 +238,15 @@ const actualizarPaciente = async (req, res) => {
       });
     }
     
+    // Convertir hora de formato HH:MM a HHMM (entero)
+    let horaInt = null;
+    if (HoraNacimiento) {
+      const [horas, minutos] = HoraNacimiento.split(':').map(Number);
+      if (!isNaN(horas) && !isNaN(minutos)) {
+        horaInt = horas * 100 + minutos;
+      }
+    }
+
     // Preparar datos para la BD
     const pacienteData = {
       ApellidoyNombre,
@@ -251,7 +260,7 @@ const actualizarPaciente = async (req, res) => {
       Sexo,
       NumeroHC,
       FechaNacimiento: convertirFechaAClarion(FechaNacimiento),
-      Hora: patientsService.timeToInt(HoraNacimiento),
+      Hora: horaInt,
       CUIT: CUIT,
       EstadoCivil,
       Religion,

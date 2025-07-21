@@ -59,7 +59,7 @@ const buscarPacientes = async (searchTerm) => {
     const query = `
       SELECT 
         p.IDPaciente,
-        p.Numerodocumento,
+        p.NumeroDocumento,
         p.ApellidoyNombre,
         p.Domicilio,
         p.Sexo,
@@ -400,7 +400,7 @@ const actualizarPaciente = async (id, pacienteData) => {
       { value: sanitizedData.Mail },
       { value: sanitizedData.NumeroSSN }
     ];
-    
+
     const result = await executeQuery(query, parametros);
     return result[0];
   } catch (error) {

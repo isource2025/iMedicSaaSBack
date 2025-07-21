@@ -22,7 +22,7 @@ async function executeQuery(consulta, parametros = []) {
         const nombreParametro = `param${indice}`;
         console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value);
         request.input(nombreParametro, parametro.value);
-        consulta = consulta.replace(`@p${indice}`, `@${nombreParametro}`);
+        consulta = consulta.replaceAll(`@p${indice}`, `@${nombreParametro}`);
       });
     }
     
