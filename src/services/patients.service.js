@@ -306,6 +306,18 @@ const actualizarPaciente = async (id, pacienteData) => {
       return str.toString().substring(0, maxLength);
     };
 
+    const getNacionalidadQuery = `
+      SELECT Valor
+      FROM imNacionalidad
+      WHERE Descripcion = @p0
+    `;
+
+    const parametrosNacionalidad = [
+      {value: pacienteData.Nacionalidad}
+    ];
+
+    const nacionalidad = await executeQuery(getNacionalidadQuery, parametrosNacionalidad);
+
     // Sanitizar los datos antes de enviarlos a la BD
     const sanitizedData = {
       ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
@@ -314,7 +326,7 @@ const actualizarPaciente = async (id, pacienteData) => {
       Domicilio: limitLength(pacienteData.Domicilio, 100) || '',
       ValorLocalidad: pacienteData.ValorLocalidad || null,
       Provincia: isNaN(pacienteData.Provincia) ? null : pacienteData.Provincia,
-      Nacionalidad: limitLength(pacienteData.Nacionalidad, 50) || '',
+      Nacionalidad: limitLength(nacionalidad[0].Valor, 50) || '',
       Sexo: limitLength(pacienteData.Sexo, 1) || '',
       NumeroHC: limitLength(pacienteData.NumeroHC, 20) || '',
       FechaNacimiento: pacienteData.FechaNacimiento || null,

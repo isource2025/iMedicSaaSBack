@@ -10,14 +10,16 @@ const ProvinciasService = {
     try {
       const query = `
         SELECT 
-          Valor as valor, 
-          Descripcion as descripcion
+          p.Valor as valor, 
+          p.Descripcion as descripcion,
+          n.Descripcion as nacionalidad
         FROM 
-          imProvincia 
+          imProvincia as p
+        INNER JOIN imNacionalidad as n ON n.Valor = p.ValorNacionalidad
         WHERE
-            LetraProvincia = @p0
+            p.LetraProvincia = @p0
         ORDER BY 
-          Descripcion
+          p.Descripcion
       `;
       
       const result = await executeQuery(query, [
