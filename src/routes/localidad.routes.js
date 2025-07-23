@@ -18,6 +18,14 @@ router.get('/', localidadController.getLocalidades);
 router.get('/:valor', localidadController.getLocalidadByValor);
 
 /**
+ * Ruta para obtener un registro específico de la tabla imLocalidades por su descripción
+ * @route GET /api/localidad/:valor
+ * @param {string} localidad - Valor de la localidad (path parameter)
+ * @returns {Object} Respuesta JSON con el registro encontrado
+ */
+router.get('/search-by-localidad/:localidad', localidadController.getLocalidadByDescripcion);
+
+/**
  * Ruta para crear un nuevo registro en la tabla imLocalidades
  * @route POST /api/localidad
  * @param {Object} body - Datos del registro a crear

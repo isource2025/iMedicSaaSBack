@@ -20,6 +20,7 @@ const sexoRoutes = require('./routes/sexo.routes');
 const localidadRoutes = require('./routes/localidad.routes');
 const estadosAmbulatoriosRoutes = require('./routes/estadosAmbulatorios');
 const opcGrdRoutes = require('./routes/opcGrd.routes');
+const renaperRoutes = require('./routes/renaper.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -54,12 +55,12 @@ app.use('/api/beds', bedsRoutes);
 app.use('/api/patients', patientsRoutes);
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
-app.use('/api/localidad', localidadesRoutes);
 app.use('/api/provincias', provinciaRoutes);
 app.use('/api/sexo', sexoRoutes);
 app.use('/api/localidad', localidadRoutes);
 app.use('/api/estados-ambulatorios', estadosAmbulatoriosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
+app.use('/api/renaper', renaperRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

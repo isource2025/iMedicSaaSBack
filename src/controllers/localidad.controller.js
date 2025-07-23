@@ -70,6 +70,46 @@ const localidadController = {
     }
   },
 
+   /**
+   * Obtiene un registro de la tabla imLocalidades por su descrpción
+   * @param {Object} req - Objeto de solicitud HTTP
+   * @param {Object} res - Objeto de respuesta HTTP
+   */
+  getLocalidadByDescripcion: async (req, res) => {
+    try {
+      const { localidad } = req.params;
+
+      if (!localidad) {
+        return res.status(400).json({
+          success: false,
+          data: null,
+          message: 'Se requiere una descripción de localidad'
+        });
+      }
+
+      const valor = await localidadService.getLocalidadByDescripcion(localidad);
+
+      if (!valor) {
+        return res.status(404).json({
+          success: false,
+          data: null,
+          message: `No se encontró registro con descripción ${localidad}`
+        });
+      }
+      
+      res.json({
+        data: valor,
+      });
+    } catch (error) {
+      console.error('Error en controlador de localidad por descripción:', error);
+      res.status(500).json({
+        success: false,
+        data: null,
+        message: error.message || 'Error al obtener registro de localidad'
+      });
+    }
+  },
+
   /**
    * Crea un nuevo registro en la tabla imLocalidades
    * @param {Object} req - Objeto de solicitud HTTP
