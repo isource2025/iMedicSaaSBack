@@ -18,7 +18,10 @@ const obtenerPacientes = async () => {
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        DATEADD(DAY, p.FechaNacimiento - 2, '19000101') AS FechaNacimiento,        
+        CASE 
+          WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
+          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+        END AS FechaNacimiento,
         p.EstadoCivil,
         c.RazonSocial as Cobertura,
         p.ValorLocalidad,
@@ -64,7 +67,10 @@ const buscarPacientes = async (searchTerm) => {
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        DATEADD(DAY, p.FechaNacimiento - 2, '19000101') AS FechaNacimiento,
+        CASE 
+          WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
+          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+        END AS FechaNacimiento,
         p.EstadoCivil,
         c.RazonSocial as Cobertura,
         p.ValorLocalidad,
@@ -115,7 +121,10 @@ const obtenerPacientePorId = async (id) => {
         Sexo,
         NumeroDocumento,
         NumeroHC,
-        DATEADD(DAY, FechaNacimiento - 2, '19000101') AS FechaNacimiento,
+        CASE 
+          WHEN FechaNacimiento IS NULL OR FechaNacimiento <= 0 OR FechaNacimiento > 2958465 THEN NULL
+          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaNacimiento - 2, '19000101'))
+        END AS FechaNacimiento,
         EstadoCivil,
         TipoDocumento,
         ValorLocalidad,
