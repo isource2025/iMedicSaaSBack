@@ -115,9 +115,9 @@ const crearPaciente = async (req, res) => {
       Religion, 
       Raza,
       TelefonoParticular,
-      TelefonoCelular,
-      Email,
-      CUITCUIL,
+      TelefonoNegocio,
+      Mail,
+      CUIT,
       NumeroAfiliado
     } = req.body;
 
@@ -151,13 +151,13 @@ const crearPaciente = async (req, res) => {
       NumeroHC,
       FechaNacimiento: convertirFechaAClarion(FechaNacimiento), // <-- Transformación crítica
       Hora: horaInt,
-      CUIT: CUITCUIL,
+      CUIT,
       EstadoCivil,
       Religion,
       Raza: Raza ? parseInt(Raza) : null,
       TelefonoParticular,
-      TelefonoNegocio: TelefonoCelular,
-      Mail: Email,
+      TelefonoNegocio: TelefonoNegocio,
+      Mail: Mail,
       NumeroSSN: NumeroAfiliado
     };
 
@@ -203,9 +203,9 @@ const actualizarPaciente = async (req, res) => {
       Religion, 
       Raza,
       TelefonoParticular,
-      TelefonoCelular,
-      Email,
-      CUITCUIL,
+      TelefonoNegocio,
+      Mail,
+      CUIT,
       CoberturaMedica,
       NumeroAfiliado,
       ApellidoMadre,
@@ -238,6 +238,15 @@ const actualizarPaciente = async (req, res) => {
       });
     }
     
+    // Convertir hora de formato HH:MM a HHMM (entero)
+    let horaInt = null;
+    if (HoraNacimiento) {
+      const [horas, minutos] = HoraNacimiento.split(':').map(Number);
+      if (!isNaN(horas) && !isNaN(minutos)) {
+        horaInt = horas * 100 + minutos;
+      }
+    }
+
     // Preparar datos para la BD
     const pacienteData = {
       ApellidoyNombre,
@@ -250,15 +259,15 @@ const actualizarPaciente = async (req, res) => {
       Nacionalidad,
       Sexo,
       NumeroHC,
-      FechaNacimiento,
-      Hora: patientsService.timeToInt(HoraNacimiento),
-      CUIT: CUITCUIL,
+      FechaNacimiento: convertirFechaAClarion(FechaNacimiento),
+      Hora: horaInt,
+      CUIT: CUIT,
       EstadoCivil,
       Religion,
       Raza: Raza ? parseInt(Raza) : null,
       TelefonoParticular,
-      TelefonoNegocio: TelefonoCelular,
-      Mail: Email,
+      TelefonoNegocio: TelefonoNegocio,
+      Mail: Mail,
       NumeroSSN: NumeroAfiliado,
       GrupoSangre,
       FactorSangre,

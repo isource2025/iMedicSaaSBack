@@ -12,7 +12,7 @@ const localidadService = {
     try {
       const query = `
         SELECT 
-          valor, 
+          Valor, 
           NombreLocalidad,
           Localidad,
           CodigoPostal,
@@ -52,6 +52,32 @@ const localidadService = {
       return result && result.length > 0 ? result[0] : null;
     } catch (error) {
       console.error(`Error al obtener localidad con valor ${valor}:`, error);
+      throw new Error(`Error al obtener localidad: ${error.message}`);
+    }
+  },
+
+  /**
+   * Obtiene un registro de la tabla imLocalidades por su descripción
+   * @param {string} localidad - Valor de la localidad a buscar
+   * @returns {Promise<Object|null>} Promesa con el resultado de la consulta
+   */
+
+  getLocalidadByDescripcion: async (localidad) => {
+    try {
+      const query = `
+        SELECT 
+          Valor,
+          ValorProvincia
+        FROM 
+          imLocalidades 
+        WHERE 
+          NombreLocalidad = '${localidad}'
+      `;
+      
+      const result = await executeQuery(query, [localidad]);
+      return result && result.length > 0 ? result[0] : null;
+    } catch (error) {
+      console.error(`Error al obtener localidad con descripcion ${localidad}:`, error);
       throw new Error(`Error al obtener localidad: ${error.message}`);
     }
   },

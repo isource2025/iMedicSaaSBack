@@ -18,9 +18,18 @@ const obtenerPacientes = async () => {
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        p.FechaNacimiento,
+        CAST(p.FechaNacimiento AS DATETIME) AS FechaNacimiento,        
         p.EstadoCivil,
-        c.RazonSocial as Cobertura
+        c.RazonSocial as Cobertura,
+        p.ValorLocalidad,
+        p.Provincia,
+        p.Nacionalidad,
+        p.CUIT,
+        p.TelefonoParticular,
+        p.TelefonoNegocio,
+        p.Mail,
+        p.NumeroCuenta,
+        p.NumeroSSN
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
       ORDER BY p.ApellidoyNombre
@@ -50,16 +59,28 @@ const buscarPacientes = async (searchTerm) => {
     const query = `
       SELECT 
         p.IDPaciente,
-        p.Numerodocumento,
+        p.NumeroDocumento,
         p.ApellidoyNombre,
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        p.FechaNacimiento,
+        DATEADD(DAY, p.FechaNacimiento - 2, '19000101') AS FechaNacimiento,
         p.EstadoCivil,
-        c.RazonSocial as Cobertura
+        c.RazonSocial as Cobertura,
+        p.ValorLocalidad,
+        l.ValorProvincia as Provincia,
+        n.Descripcion as Nacionalidad,
+        p.CUIT,
+        p.TelefonoParticular,
+        p.TelefonoNegocio,
+        p.Mail,
+        p.NumeroCuenta,
+        p.NumeroSSN
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
+      LEFT JOIN imProvincia as pr ON pr.LetraProvincia = l.ValorProvincia
+      LEFT JOIN imNacionalidad as n ON n.Valor = pr.ValorNacionalidad
       WHERE 
         CAST(p.IDPaciente AS VARCHAR) LIKE '%${searchTermStr}%' OR
         CAST(p.NumeroDocumento AS VARCHAR) LIKE '%${searchTermStr}%' OR
@@ -92,10 +113,22 @@ const obtenerPacientePorId = async (id) => {
         ApellidoyNombre,
         Domicilio,
         Sexo,
+        NumeroDocumento,
         NumeroHC,
         FechaNacimiento,
-        EstadoCivil
+        EstadoCivil,
+        TipoDocumento,
+        ValorLocalidad,
+        l.ValorProvincia as Provincia,
+        Nacionalidad,
+        CUIT,
+        TelefonoParticular,
+        TelefonoNegocio,
+        Mail,
+        NumeroCuenta,
+        NumeroSSN
       FROM impacientes
+      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
       WHERE IDPaciente = @p0
     `;
     
@@ -273,6 +306,18 @@ const actualizarPaciente = async (id, pacienteData) => {
       return str.toString().substring(0, maxLength);
     };
 
+    const getNacionalidadQuery = `
+      SELECT Valor
+      FROM imNacionalidad
+      WHERE Descripcion = @p0
+    `;
+
+    const parametrosNacionalidad = [
+      {value: pacienteData.Nacionalidad}
+    ];
+
+    const nacionalidad = await executeQuery(getNacionalidadQuery, parametrosNacionalidad);
+
     // Sanitizar los datos antes de enviarlos a la BD
     const sanitizedData = {
       ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
@@ -281,7 +326,7 @@ const actualizarPaciente = async (id, pacienteData) => {
       Domicilio: limitLength(pacienteData.Domicilio, 100) || '',
       ValorLocalidad: pacienteData.ValorLocalidad || null,
       Provincia: isNaN(pacienteData.Provincia) ? null : pacienteData.Provincia,
-      Nacionalidad: limitLength(pacienteData.Nacionalidad, 50) || '',
+      Nacionalidad: limitLength(nacionalidad[0].Valor, 50) || '',
       Sexo: limitLength(pacienteData.Sexo, 1) || '',
       NumeroHC: limitLength(pacienteData.NumeroHC, 20) || '',
       FechaNacimiento: pacienteData.FechaNacimiento || null,
@@ -367,7 +412,7 @@ const actualizarPaciente = async (id, pacienteData) => {
       { value: sanitizedData.Mail },
       { value: sanitizedData.NumeroSSN }
     ];
-    
+
     const result = await executeQuery(query, parametros);
     return result[0];
   } catch (error) {

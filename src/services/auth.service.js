@@ -64,9 +64,9 @@ const obtenerSectoresPorUsuario = async (username) => {
       INNER JOIN 
         imSectores s ON ps.idSector = s.Valor
       INNER JOIN 
-        impassword pw ON ps.idPersonal = pw.valorpersonal
+        impassword pw ON ps.idPersonal = pw.ValorPersonal
       WHERE 
-        pw.nombrered = @p0
+        pw.NombreRed = @p0
     `;
     
     const parametros = [{ value: username }];

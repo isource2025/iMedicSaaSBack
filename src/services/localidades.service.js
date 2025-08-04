@@ -6,23 +6,20 @@ const LocalidadesService = {
    * @returns {Promise<Array>} Promesa con los resultados de la consulta
    */
 
-    getLocalidades: async (idProvincia) => {
+    getLocalidades: async () => {
     try {
       const query = `
         SELECT 
-          IdLocalidad as valor, 
-          Descripcion as descripcion
+          Valor as valor, 
+          NombreLocalidad as descripcion,
+          ValorProvincia as valorProvincia
         FROM 
-          Localidades 
-        WHERE
-            IdProvincia = @p0
+          imLocalidades 
         ORDER BY 
           Descripcion
       `;
       
-      const result = await executeQuery(query, [
-        { value: idProvincia }
-      ]);
+      const result = await executeQuery(query);
       return result || [];
     } catch (error) {
       console.error('Error al obtener las localidades:', error);
