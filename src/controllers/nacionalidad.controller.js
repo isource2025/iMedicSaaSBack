@@ -1,39 +1,42 @@
-const localidadService = require('../services/localidad.service');
+/**
+ * Controlador para gestionar la tabla de nacionalidades (imNacionalidad)
+ */
+const nacionalidadService = require('../services/nacionalidad.service');
 
 /**
- * Controlador para gestionar la tabla imLocalidades
+ * Controlador para gestionar las peticiones HTTP relacionadas con nacionalidades
  */
-const localidadController = {
+const nacionalidadController = {
   /**
-   * Obtiene todos los registros de la tabla imLocalidades
+   * Obtiene todas las nacionalidades
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
-  getLocalidades: async (req, res) => {
+  getNacionalidades: async (req, res) => {
     try {
-      const data = await localidadService.getLocalidades();
+      const data = await nacionalidadService.getNacionalidades();
       
       res.json({
         success: true,
         data,
-        message: 'Registros de localidades obtenidos correctamente'
+        message: 'Registros de nacionalidades obtenidos correctamente'
       });
     } catch (error) {
-      console.error('Error en controlador de localidades:', error);
+      console.error('Error en controlador de nacionalidades:', error);
       res.status(500).json({
         success: false,
         data: [],
-        message: error.message || 'Error al obtener registros de localidades'
+        message: error.message || 'Error al obtener registros de nacionalidades'
       });
     }
   },
 
   /**
-   * Obtiene un registro de la tabla imLocalidades por su valor
+   * Obtiene una nacionalidad por su valor
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
-  getLocalidadByValor: async (req, res) => {
+  getNacionalidadByValor: async (req, res) => {
     try {
       const { valor } = req.params;
       
@@ -41,13 +44,13 @@ const localidadController = {
         return res.status(400).json({
           success: false,
           data: null,
-          message: 'Se requiere un valor de localidad'
+          message: 'Se requiere un valor de nacionalidad'
         });
       }
       
-      const localidad = await localidadService.getLocalidadByValor(valor);
+      const nacionalidad = await nacionalidadService.getNacionalidadByValor(valor);
       
-      if (!localidad) {
+      if (!nacionalidad) {
         return res.status(404).json({
           success: false,
           data: null,
@@ -57,59 +60,51 @@ const localidadController = {
       
       res.json({
         success: true,
-        data: localidad,
-        message: 'Registro de localidad obtenido correctamente'
+        data: nacionalidad,
+        message: 'Registro de nacionalidad obtenido correctamente'
       });
     } catch (error) {
-      console.error('Error en controlador de localidad por valor:', error);
+      console.error('Error en controlador de nacionalidad por valor:', error);
       res.status(500).json({
         success: false,
         data: null,
-        message: error.message || 'Error al obtener registro de localidad'
+        message: error.message || 'Error al obtener registro de nacionalidad'
       });
     }
   },
-
+  
   /**
-   * Crea un nuevo registro en la tabla imLocalidades
+   * Crea un nuevo registro en la tabla imNacionalidad
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
-  createLocalidad: async (req, res) => {
+  createNacionalidad: async (req, res) => {
     try {
-      const { Valor, CodigoPostal, NombreLocalidad, ValorProvincia } = req.body;
+      const { Valor, Descripcion } = req.body;
       
       // Validar datos requeridos
-      if (Valor === undefined || Valor === null) {
+      if (!Valor) {
         return res.status(400).json({
           success: false,
           message: 'El campo Valor es obligatorio'
         });
       }
       
-      if (!NombreLocalidad) {
+      if (!Descripcion) {
         return res.status(400).json({
           success: false,
-          message: 'El nombre de la localidad es obligatorio'
+          message: 'El campo Descripcion es obligatorio'
         });
       }
       
-      // Construir el objeto localidad
-      const localidadData = {
-        Valor,
-        CodigoPostal,
-        NombreLocalidad,
-        ValorProvincia
-      };
-      
-      const result = await localidadService.createLocalidad(localidadData);
+      const result = await nacionalidadService.createNacionalidad({ Valor, Descripcion });
       
       res.status(201).json({
         success: true,
-        message: 'Registro de localidad creado correctamente'
+        message: 'Registro de nacionalidad creado correctamente'
       });
     } catch (error) {
-      console.error('Error en controlador de creación de localidad:', error);
+      console.error('Error en controlador de creación de nacionalidad:', error);
       
       // Si ya existe un registro con el mismo valor
       if (error.message.includes('Ya existe un registro')) {
@@ -121,51 +116,44 @@ const localidadController = {
       
       res.status(500).json({
         success: false,
-        message: error.message || 'Error al crear registro de localidad'
+        message: error.message || 'Error al crear registro de nacionalidad'
       });
     }
   },
-
+  
   /**
-   * Actualiza un registro existente en la tabla imLocalidades
+   * Actualiza un registro existente en la tabla imNacionalidad
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
-  updateLocalidad: async (req, res) => {
+  updateNacionalidad: async (req, res) => {
     try {
       const { valor } = req.params;
-      const { CodigoPostal, NombreLocalidad, ValorProvincia } = req.body;
+      const { Descripcion } = req.body;
       
       if (!valor) {
         return res.status(400).json({
           success: false,
-          message: 'Se requiere un valor de localidad'
+          message: 'Se requiere un valor de nacionalidad'
         });
       }
       
       // Validar los datos requeridos
-      if (!NombreLocalidad) {
+      if (!Descripcion) {
         return res.status(400).json({
           success: false,
-          message: 'El nombre de la localidad es obligatorio'
+          message: 'La descripción es obligatoria'
         });
       }
       
-      // Construir el objeto con los datos a actualizar
-      const localidadData = {
-        CodigoPostal,
-        NombreLocalidad,
-        ValorProvincia
-      };
-      
-      const result = await localidadService.updateLocalidad(valor, localidadData);
+      const result = await nacionalidadService.updateNacionalidad(valor, { Descripcion });
       
       res.json({
         success: true,
-        message: 'Registro de localidad actualizado correctamente'
+        message: 'Registro de nacionalidad actualizado correctamente'
       });
     } catch (error) {
-      console.error('Error en controlador de actualización de localidad:', error);
+      console.error('Error en controlador de actualización de nacionalidad:', error);
       
       // Si no existe el registro
       if (error.message.includes('No existe un registro')) {
@@ -177,35 +165,35 @@ const localidadController = {
       
       res.status(500).json({
         success: false,
-        message: error.message || 'Error al actualizar registro de localidad'
+        message: error.message || 'Error al actualizar registro de nacionalidad'
       });
     }
   },
-
+  
   /**
-   * Elimina un registro de la tabla imLocalidades
+   * Elimina un registro de la tabla imNacionalidad
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
-  deleteLocalidad: async (req, res) => {
+  deleteNacionalidad: async (req, res) => {
     try {
       const { valor } = req.params;
       
       if (!valor) {
         return res.status(400).json({
           success: false,
-          message: 'Se requiere un valor de localidad'
+          message: 'Se requiere un valor de nacionalidad'
         });
       }
       
-      const result = await localidadService.deleteLocalidad(valor);
+      const result = await nacionalidadService.deleteNacionalidad(valor);
       
       res.json({
         success: true,
-        message: 'Registro de localidad eliminado correctamente'
+        message: 'Registro de nacionalidad eliminado correctamente'
       });
     } catch (error) {
-      console.error('Error en controlador de eliminación de localidad:', error);
+      console.error('Error en controlador de eliminación de nacionalidad:', error);
       
       // Si no existe el registro
       if (error.message.includes('No existe un registro')) {
@@ -217,10 +205,10 @@ const localidadController = {
       
       res.status(500).json({
         success: false,
-        message: error.message || 'Error al eliminar registro de localidad'
+        message: error.message || 'Error al eliminar registro de nacionalidad'
       });
     }
   }
 };
 
-module.exports = localidadController;
+module.exports = nacionalidadController;
