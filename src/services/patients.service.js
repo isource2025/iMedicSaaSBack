@@ -1,59 +1,68 @@
 /**
- * Servicio para gestión de pacientes
+ * Servicio para gestión de pacientes (versión modernizada con FotoURL y baseUrl)
  */
 const { executeQuery } = require('../models/db');
-const { v4: uuidv4 } = require('uuid'); // si querés generar un GUID
+const { v4: uuidv4 } = require('uuid');
 
-// Asegura que la columna FotoURL exista (idempotente)
+// Garantiza la existencia de la columna FotoURL (idempotente)
 const ensureFotoURLColumn = async () => {
 	try {
-		const ddl = `IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'impacientes' AND COLUMN_NAME = 'FotoURL') 
-    BEGIN
-      ALTER TABLE impacientes ADD FotoURL NVARCHAR(255) NULL;
-    END`;
+		const ddl = `IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'impacientes' AND COLUMN_NAME = 'FotoURL')
+		BEGIN
+			ALTER TABLE impacientes ADD FotoURL NVARCHAR(255) NULL;
+		END`;
 		await executeQuery(ddl);
 	} catch (err) {
 		console.error('No se pudo verificar/crear columna FotoURL:', err.message);
 	}
 };
 
-/**
- * Obtiene todos los pacientes de la tabla impacientes 
- * @returns {Promise<Array>} Promise con la lista de pacientes
- */
-const obtenerPacientes = async () => {
+// Normaliza un resultado (o lista) agregando baseUrl a FotoURL relativa
+const mapFotoURL = (rows, baseUrl) => {
+	if (!baseUrl) return rows;
+	return rows.map((r) => ({
+		...r,
+		FotoURL:
+			r.FotoURL && !/^https?:\/\//i.test(r.FotoURL)
+				? `${baseUrl}${r.FotoURL}`
+				: r.FotoURL,
+	}));
+};
+
+/** Lista pacientes */
+const obtenerPacientes = async (baseUrl) => {
 	try {
+		await ensureFotoURLColumn();
 		const query = `
-      SELECT 
-        p.IDPaciente,
-        p.NumeroDocumento,
-        p.ApellidoyNombre,
-        p.Domicilio,
-        p.Sexo,
-        p.NumeroHC,
+			SELECT 
+				p.IDPaciente,
+				p.NumeroDocumento,
+				p.ApellidoyNombre,
+				p.Domicilio,
+				p.Sexo,
+				p.NumeroHC,
 				CONVERT(VARCHAR(10), 
 					CASE 
 						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
 						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
 					END, 23) AS FechaNacimiento,
-        p.EstadoCivil,
-        c.RazonSocial as Cobertura,
-        p.ValorLocalidad,
-        p.Provincia,
-        p.Nacionalidad,
-        p.CUIT,
-        p.TelefonoParticular,
-        p.TelefonoNegocio,
-        p.Mail,
-        p.NumeroCuenta,
-        p.NumeroSSN,
-        p.FotoURL
-      FROM impacientes p
-      LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-      ORDER BY p.ApellidoyNombre
-    `;
-
-		const result = await executeQuery(query);
+				p.EstadoCivil,
+				c.RazonSocial as Cobertura,
+				p.ValorLocalidad,
+				p.Provincia,
+				p.Nacionalidad,
+				p.CUIT,
+				p.TelefonoParticular,
+				p.TelefonoNegocio,
+				p.Mail,
+				p.NumeroCuenta,
+				p.NumeroSSN,
+				p.FotoURL
+			FROM impacientes p
+			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			ORDER BY p.ApellidoyNombre`;
+		let result = await executeQuery(query);
+		result = mapFotoURL(result, baseUrl);
 		return result;
 	} catch (error) {
 		console.error('Error al obtener pacientes de la base de datos:', error);
@@ -61,143 +70,116 @@ const obtenerPacientes = async () => {
 	}
 };
 
-/**
- * Obtiene un paciente por su ID
- * @param {number} id - ID del paciente
- * @returns {Promise<Object|null>} Promise con el paciente encontrado o null si no existe
- */
-const buscarPacientes = async (searchTerm) => {
+/** Paciente por ID */
+const obtenerPacientePorId = async (id, baseUrl) => {
 	try {
-		// Convertir el término de búsqueda a string para asegurar compatibilidad
-		const searchTermStr = String(searchTerm).trim();
-
-		// Construir la consulta SQL con el término de búsqueda directamente en la consulta
-		// Nota: Esta no es la mejor práctica desde el punto de vista de seguridad,
-		// pero es una solución temporal mientras se resuelve el problema con los parámetros
+		await ensureFotoURLColumn();
 		const query = `
-      SELECT 
-        p.IDPaciente,
-        p.NumeroDocumento,
-        p.ApellidoyNombre,
-        p.Domicilio,
-        p.Sexo,
-        p.NumeroHC,
+			SELECT 
+				p.IDPaciente,
+				p.NumeroDocumento,
+				p.ApellidoyNombre,
+				p.Domicilio,
+				p.Sexo,
+				p.NumeroHC,
 				CONVERT(VARCHAR(10), 
 					CASE 
 						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
 						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
 					END, 23) AS FechaNacimiento,
-        p.EstadoCivil,
-        c.RazonSocial as Cobertura,
-        p.ValorLocalidad,
-        p.Provincia,
-        p.Nacionalidad,
-        p.CUIT,
-        p.TelefonoParticular,
-        p.TelefonoNegocio,
-        p.Mail,
-        p.NumeroCuenta,
-        p.NumeroSSN,
-        p.FotoURL
-      FROM impacientes p
-      LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-      WHERE 
-        CAST(p.IDPaciente AS VARCHAR) LIKE @p0 OR
-        CAST(p.NumeroDocumento AS VARCHAR) LIKE @p1 OR
-        p.ApellidoyNombre LIKE @p2 OR
-        CAST(p.NumeroHC AS VARCHAR) LIKE @p3
-      ORDER BY p.ApellidoyNombre
-    `;
-
-		// Ejecutar la consulta sin parámetros
-		const result = await executeQuery(query);
-		return result;
-	} catch (error) {
-		console.error('Error al buscar pacientes:', error);
-		throw error;
-	}
-};
-
-/**
- * Obtiene un paciente por su ID
- * @param {number} id - ID del paciente
- * @returns {Promise<Object|null>} Promise con el paciente encontrado o null si no existe
- */
-const obtenerPacientePorId = async (id) => {
-	try { 
-		const query = `
-      SELECT 
-        IDPaciente,
-        Numerodocumento,
-        ApellidoyNombre,
-        Domicilio,
-        Sexo,
-        NumeroDocumento,
-        NumeroHC,
-        CASE 
-          WHEN FechaNacimiento IS NULL OR FechaNacimiento <= 0 OR FechaNacimiento > 2958465 THEN NULL
-          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaNacimiento - 2, '19000101'))
-        END AS FechaNacimiento,
-        EstadoCivil,
-        TipoDocumento,
-        ValorLocalidad,
-        l.ValorProvincia as Provincia,
-        Nacionalidad,
-        CUIT,
-        TelefonoParticular,
-        TelefonoNegocio,
-        Mail,
-        NumeroCuenta,
-        NumeroSSN
-      FROM impacientes
-      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
-      WHERE IDPaciente = @p0
-    `;
-
+				p.EstadoCivil,
+				p.TipoDocumento,
+				p.ValorLocalidad,
+				p.Provincia,
+				p.Nacionalidad,
+				p.CUIT,
+				p.TelefonoParticular,
+				p.TelefonoNegocio,
+				p.Mail,
+				p.NumeroCuenta,
+				p.NumeroSSN,
+				p.FotoURL
+			FROM impacientes p
+			WHERE p.IDPaciente = @p0`;
 		const parametros = [{ value: id }];
-		const result = await executeQuery(query, parametros);
-
-		if (result.length === 0) {
-			return null;
-		}
-
-		return result[0];
+		const rows = await executeQuery(query, parametros);
+		if (!rows.length) return null;
+		return mapFotoURL(rows, baseUrl)[0];
 	} catch (error) {
 		console.error(`Error al obtener paciente con ID ${id}:`, error);
 		throw error;
 	}
 };
 
-/**
- * Crea un nuevo paciente en la tabla impacientes,
- * convirtiendo nombre de nacionalidad y estado civil en sus códigos FK.
- * @param {Object} pacienteData - Datos enviados desde el front
- * @returns {Promise<Object>} - El paciente recién insertado
- */
-const crearPaciente = async (pacienteData) => {
-	try { 
-		// Helper para recortar strings
-		const limitLength = (str, max) => {
-			if (str == null) return null;
-			return str.toString().substring(0, max);
-		};
+/** Búsqueda parametrizada */
+const buscarPacientes = async (searchTerm = '', baseUrl) => {
+	try {
+		if (!searchTerm || String(searchTerm).trim() === '') {
+			return await obtenerPacientes(baseUrl);
+		}
+		await ensureFotoURLColumn();
+		const likeValue = `%${searchTerm}%`;
+		const query = `
+			SELECT 
+				p.IDPaciente,
+				p.NumeroDocumento,
+				p.ApellidoyNombre,
+				p.Domicilio,
+				p.Sexo,
+				p.NumeroHC,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
+				p.EstadoCivil,
+				c.RazonSocial as Cobertura,
+				p.ValorLocalidad,
+				p.Provincia,
+				p.Nacionalidad,
+				p.CUIT,
+				p.TelefonoParticular,
+				p.TelefonoNegocio,
+				p.Mail,
+				p.NumeroCuenta,
+				p.NumeroSSN,
+				p.FotoURL
+			FROM impacientes p
+			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			WHERE 
+				CAST(p.IDPaciente AS VARCHAR) LIKE @p0 OR
+				CAST(p.NumeroDocumento AS VARCHAR) LIKE @p1 OR
+				p.ApellidoyNombre LIKE @p2 OR
+				CAST(p.NumeroHC AS VARCHAR) LIKE @p3
+			ORDER BY p.ApellidoyNombre`;
+		const params = [
+			{ value: likeValue },
+			{ value: likeValue },
+			{ value: likeValue },
+			{ value: likeValue },
+		];
+		let rows = await executeQuery(query, params);
+		rows = mapFotoURL(rows, baseUrl);
+		return rows;
+	} catch (error) {
+		console.error('Error al buscar pacientes:', error);
+		throw error;
+	}
+};
 
-		// 1) Sanitizar datos
+/** Crear paciente */
+const crearPaciente = async (pacienteData) => {
+	try {
+		await ensureFotoURLColumn();
+		const limitLength = (str, max) => (str == null ? null : str.toString().substring(0, max));
 		const sd = {
 			ListaIDPaciente: limitLength(pacienteData.ListaIDPaciente ?? uuidv4(), 80),
-			IDPacienteAlt:
-				pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0, // Valor por defecto 0 para IDPacienteAlt
+			IDPacienteAlt: pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0,
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 40) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 3) || null,
-			NumeroDocumento:
-				pacienteData.NumeroDocumento != null
-					? Number(pacienteData.NumeroDocumento)
-					: null,
+			NumeroDocumento: pacienteData.NumeroDocumento != null ? Number(pacienteData.NumeroDocumento) : null,
 			Domicilio: limitLength(pacienteData.Domicilio, 80) || null,
-			ValorLocalidad:
-				pacienteData.ValorLocalidad != null
-					? Number(pacienteData.ValorLocalidad)
-					: null,
+			ValorLocalidad: pacienteData.ValorLocalidad != null ? Number(pacienteData.ValorLocalidad) : null,
 			Provincia: pacienteData.Provincia != null ? Number(pacienteData.Provincia) : null,
 			Nacionalidad: limitLength(pacienteData.Nacionalidad, 2) || null,
 			Sexo: limitLength(pacienteData.Sexo, 1) || null,
@@ -212,217 +194,77 @@ const crearPaciente = async (pacienteData) => {
 			TelefonoNegocio: limitLength(pacienteData.TelefonoNegocio, 20) || null,
 			Mail: limitLength(pacienteData.Mail, 80) || null,
 			NumeroSSN: limitLength(pacienteData.NumeroSSN, 40) || null,
+			FotoURL: limitLength(pacienteData.FotoURL, 255) || null,
 		};
 
-		// 2) Query (ahora incluye ListaIDPaciente e IDPacienteAlt)
-		const query = `
-      INSERT INTO impacientes (
-        ListaIDPaciente,
-        IDPacienteAlt,
-        ApellidoyNombre,
-        TipoDocumento,
-        NumeroDocumento,
-        Domicilio,
-        ValorLocalidad,
-        Provincia,
-        Nacionalidad,
-        Sexo,
-        NumeroHC,
-        FechaNacimiento,
-        Hora,
-        CUIT,
-        EstadoCivil,
-        Religion,
-        Raza,
-        TelefonoParticular,
-        TelefonoNegocio,
-        Mail,
-        NumeroSSN
-      )
-      VALUES (
-        @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9,
-        @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20
-      );
-      SELECT SCOPE_IDENTITY() AS IDPaciente;
-    `;
-
-		const insertParams = [
-			{ value: sd.ListaIDPaciente }, // @p0
-			{ value: sd.IDPacienteAlt }, // @p1
-			{ value: sd.ApellidoyNombre }, // @p2 
-			{ value: sd.TipoDocumento }, // @p3
-			{ value: sd.NumeroDocumento }, // @p4
-			{ value: sd.Domicilio }, // @p5
-			{ value: sd.ValorLocalidad }, // @p6
-			{ value: sd.Provincia }, // @p7
-			{ value: sd.Nacionalidad }, // @p8
-			{ value: sd.Sexo }, // @p9
-			{ value: sd.NumeroHC }, // @p10
-			{ value: sd.FechaNacimiento }, // @p11
-			{ value: sd.Hora }, // @p12
-			{ value: sd.CUIT }, // @p13
-			{ value: sd.EstadoCivil }, // @p14
-			{ value: sd.Religion }, // @p15
-			{ value: sd.Raza }, // @p16
-			{ value: sd.TelefonoParticular }, // @p17
-			{ value: sd.TelefonoNegocio }, // @p18
-			{ value: sd.Mail }, // @p19
-			{ value: sd.NumeroSSN }, // @p20
-			{ value: sd.Foto }, // @p21  <<--- NUEVO
-		];
-
-		const inserted = await executeQuery(insertPacienteQuery, insertParams);
-		const newId = Number(inserted?.[0]?.IDPaciente);
-
-		// 3) (Opcional) Insertar Trabajos si vienen 
-		if (
-			Array.isArray(pacienteData.Trabajos) &&
-			pacienteData.Trabajos.length > 0 &&
-			newId
-		) {
-			for (const t of pacienteData.Trabajos) {
-				const sanitize = (s, m) => (s == null ? null : s.toString().substring(0, m));
-
-				const w = {
-					Ocupacion: sanitize(t.Ocupacion, 80),
-					DocumentoEmpresa: sanitize(t.DocumentoEmpresa, 40),
-					RazonSocial: sanitize(t.RazonSocial, 120),
-					DomicilioEmpresa: sanitize(t.DomicilioEmpresa, 120),
-					TelefonoEmpresa: sanitize(t.TelefonoEmpresa, 30),
-					CuitEmpresa: sanitize(t.CuitEmpresa, 20),
-					SituacionLaboral: sanitize(t.SituacionLaboral, 10),
-					NivelEstudios: sanitize(t.NivelEstudios, 10),
-				};
-
-				const insertTrabajoQuery = `
-          INSERT INTO imtrabajos (
-            IDPaciente, Ocupacion, DocumentoEmpresa, RazonSocial,
-            DomicilioEmpresa, TelefonoEmpresa, CuitEmpresa,
-            SituacionLaboral, NivelEstudios
-          )
-          VALUES (
-            @idp, @o, @doc, @rz,
-            @dom, @tel, @cuit,
-            @sit, @niv
-          );
-        `;
-				const trabajoParams = [
-					{ value: newId }, // @idp
-					{ value: w.Ocupacion }, // @o
-					{ value: w.DocumentoEmpresa }, // @doc
-					{ value: w.RazonSocial }, // @rz
-					{ value: w.DomicilioEmpresa }, // @dom
-					{ value: w.TelefonoEmpresa }, // @tel
-					{ value: w.CuitEmpresa }, // @cuit
-					{ value: w.SituacionLaboral }, // @sit
-					{ value: w.NivelEstudios }, // @niv
-				];
-
-				// Nota: sin transacción compartida, si falla aquí no se revierte el insert del paciente.
-				await executeQuery(insertTrabajoQuery, trabajoParams);
-			}
-		}
-
-		// 4) Devolver el paciente recién creado (incluye Foto)
-		const selectQuery = `
-      SELECT
-        IDPaciente,
-        ListaIDPaciente,
-        IDPacienteAlt,
-        ApellidoyNombre,
-        TipoDocumento,
-        NumeroDocumento,
-        Domicilio,
-        ValorLocalidad,
-        Provincia,
-        Nacionalidad,
-        Sexo,
-        NumeroHC,
+		const insert = `
+			INSERT INTO impacientes (
+				ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
+				Domicilio, ValorLocalidad, Provincia, Nacionalidad, Sexo,
+				NumeroHC, FechaNacimiento, Hora, CUIT, EstadoCivil,
+				Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail,
+				NumeroSSN, FotoURL
+			) VALUES (
+				@p0,@p1,@p2,@p3,@p4,@p5,@p6,@p7,@p8,@p9,
+				@p10,@p11,@p12,@p13,@p14,@p15,@p16,@p17,@p18,@p19,@p20,@p21
+			);
+			SELECT 
+				IDPaciente, ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
+				Domicilio, ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
 				CONVERT(VARCHAR(10), 
-					CASE 
-						WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
-						ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28')
-					END, 23) AS FechaNacimiento,
-        Hora,
-        CUIT,
-        EstadoCivil,
-        Religion,
-        Raza,
-        TelefonoParticular,
-        TelefonoNegocio,
-        Mail,
-        NumeroSSN
-      FROM impacientes
-      WHERE IDPaciente = @p0;
-    `;
+					CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
+							 ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
+				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, FotoURL
+			FROM impacientes WHERE IDPaciente = SCOPE_IDENTITY();`;
 
-		// 3) Parámetros
 		const params = [
-			{ value: sd.ListaIDPaciente }, // @p0
-			{ value: sd.IDPacienteAlt }, // @p1 
-			{ value: sd.ApellidoyNombre }, // @p2
-			{ value: sd.TipoDocumento }, // @p3
-			{ value: sd.NumeroDocumento }, // @p4
-			{ value: sd.Domicilio }, // @p5
-			{ value: sd.ValorLocalidad }, // @p6
-			{ value: sd.Provincia }, // @p7
-			{ value: sd.Nacionalidad }, // @p8
-			{ value: sd.Sexo }, // @p9
-			{ value: sd.NumeroHC }, // @p10
-			{ value: sd.FechaNacimiento }, // @p11
-			{ value: sd.Hora }, // @p12
-			{ value: sd.CUIT }, // @p13
-			{ value: sd.EstadoCivil }, // @p14
-			{ value: sd.Religion }, // @p15
-			{ value: sd.Raza }, // @p16
-			{ value: sd.TelefonoParticular }, // @p17
-			{ value: sd.TelefonoNegocio }, // @p18
-			{ value: sd.Mail }, // @p19
-			{ value: sd.NumeroSSN }, // @p20
+			{ value: sd.ListaIDPaciente },
+			{ value: sd.IDPacienteAlt },
+			{ value: sd.ApellidoyNombre },
+			{ value: sd.TipoDocumento },
+			{ value: sd.NumeroDocumento },
+			{ value: sd.Domicilio },
+			{ value: sd.ValorLocalidad },
+			{ value: sd.Provincia },
+			{ value: sd.Nacionalidad },
+			{ value: sd.Sexo },
+			{ value: sd.NumeroHC },
+			{ value: sd.FechaNacimiento },
+			{ value: sd.Hora },
+			{ value: sd.CUIT },
+			{ value: sd.EstadoCivil },
+			{ value: sd.Religion },
+			{ value: sd.Raza },
+			{ value: sd.TelefonoParticular },
+			{ value: sd.TelefonoNegocio },
+			{ value: sd.Mail },
+			{ value: sd.NumeroSSN },
+			{ value: sd.FotoURL },
 		];
-
-		// 4) Ejecutar y retornar
-		const [nuevo] = await executeQuery(query, params);
+		const [nuevo] = await executeQuery(insert, params);
 		return nuevo;
 	} catch (error) {
 		console.error('Error al crear paciente:', error);
-		throw error; 
+		throw error;
 	}
 };
 
-/**
- * Actualiza un paciente existente
- * @param {number} id - ID del paciente
- * @param {Object} pacienteData - Datos del paciente
- * @returns {Promise<Object>} Promise con el paciente actualizado
- */
+/** Actualizar paciente */
 const actualizarPaciente = async (id, pacienteData) => {
-	try { 
-		// Función para limitar la longitud de un string
-		const limitLength = (str, maxLength) => {
-			if (!str) return '';
-			return str.toString().substring(0, maxLength);
-		};
-
-		const getNacionalidadQuery = `
-      SELECT Valor
-      FROM imNacionalidad
-      WHERE Descripcion = @p0
-    `;
-
-		const parametrosNacionalidad = [{ value: pacienteData.Nacionalidad }];
-
-		const nacionalidad = await executeQuery(getNacionalidadQuery, parametrosNacionalidad);
-
-		// Sanitizar los datos antes de enviarlos a la BD
-		const sanitizedData = {
+	try {
+		await ensureFotoURLColumn();
+		const limitLength = (s, m) => (s == null ? '' : s.toString().substring(0, m));
+		const getNacQuery = `SELECT Valor FROM imNacionalidad WHERE Descripcion = @p0`;
+		const nacRows = await executeQuery(getNacQuery, [{ value: pacienteData.Nacionalidad }]);
+		const nacionalidad = nacRows[0]?.Valor || null;
+		const sd = {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 10) || '',
 			NumeroDocumento: limitLength(pacienteData.NumeroDocumento, 20) || '',
 			Domicilio: limitLength(pacienteData.Domicilio, 100) || '',
 			ValorLocalidad: pacienteData.ValorLocalidad || null,
 			Provincia: isNaN(pacienteData.Provincia) ? null : pacienteData.Provincia,
-			Nacionalidad: limitLength(nacionalidad[0].Valor, 50) || '',
+			Nacionalidad: limitLength(nacionalidad, 50) || null,
 			Sexo: limitLength(pacienteData.Sexo, 1) || '',
 			NumeroHC: limitLength(pacienteData.NumeroHC, 20) || '',
 			FechaNacimiento: pacienteData.FechaNacimiento || null,
@@ -435,114 +277,61 @@ const actualizarPaciente = async (id, pacienteData) => {
 			TelefonoNegocio: limitLength(pacienteData.TelefonoNegocio, 20) || '',
 			Mail: limitLength(pacienteData.Mail, 100) || '',
 			NumeroSSN: limitLength(pacienteData.NumeroSSN, 20) || '',
+			FotoURL: pacienteData.FotoURL ? limitLength(pacienteData.FotoURL, 255) : null,
 		};
-
+		const setFoto = sd.FotoURL ? ', FotoURL = @p20' : '';
+		const selectFoto = ', FotoURL';
 		const query = `
-      UPDATE impacientes
-      SET 
-        ApellidoyNombre = @p1,
-        TipoDocumento = @p2,
-        NumeroDocumento = @p3,
-        Domicilio = @p4,
-        ValorLocalidad = @p5,
-        Provincia = @p6,
-        Nacionalidad = @p7,
-        Sexo = @p8,
-        NumeroHC = @p9,
-        FechaNacimiento = @p10,
-        Hora = @p11,
-        CUIT = @p12,
-        EstadoCivil = @p13,
-        Religion = @p14,
-        Raza = @p15,
-        TelefonoParticular = @p16,
-        TelefonoNegocio = @p17,
-        Mail = @p18,
-        NumeroSSN = @p19${setFoto}
-      WHERE IDPaciente = @p0;
-      
-      SELECT 
-        IDPaciente,
-        ApellidoyNombre,
-        TipoDocumento,
-        NumeroDocumento,
-        Domicilio,
-        ValorLocalidad,
-        Provincia,
-        Nacionalidad,
-        Sexo,
-        NumeroHC,
-				CONVERT(VARCHAR(10), 
-					CASE 
-						WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
-						ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28')
-					END, 23) AS FechaNacimiento,
-        Hora,
-        CUIT,
-        EstadoCivil,
-        Religion,
-        Raza,
-        TelefonoParticular,
-        TelefonoNegocio,
-        Mail,
-        NumeroSSN${selectFoto}
-      FROM impacientes
-      WHERE IDPaciente = @p0;
-    `;
-
-		const parametros = [
+			UPDATE impacientes SET
+				ApellidoyNombre=@p1, TipoDocumento=@p2, NumeroDocumento=@p3,
+				Domicilio=@p4, ValorLocalidad=@p5, Provincia=@p6, Nacionalidad=@p7,
+				Sexo=@p8, NumeroHC=@p9, FechaNacimiento=@p10, Hora=@p11, CUIT=@p12,
+				EstadoCivil=@p13, Religion=@p14, Raza=@p15, TelefonoParticular=@p16,
+				TelefonoNegocio=@p17, Mail=@p18, NumeroSSN=@p19${setFoto}
+			WHERE IDPaciente=@p0;
+			SELECT IDPaciente, ApellidoyNombre, TipoDocumento, NumeroDocumento, Domicilio,
+				ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
+				CONVERT(VARCHAR(10), CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
+				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN${selectFoto}
+			FROM impacientes WHERE IDPaciente=@p0;`;
+		const params = [
 			{ value: id },
-			{ value: sanitizedData.ApellidoyNombre },
-			{ value: sanitizedData.TipoDocumento },
-			{ value: sanitizedData.NumeroDocumento },
-			{ value: sanitizedData.Domicilio },
-			{ value: sanitizedData.ValorLocalidad },
-			{ value: sanitizedData.Provincia },
-			{ value: sanitizedData.Nacionalidad },
-			{ value: sanitizedData.Sexo },
-			{ value: sanitizedData.NumeroHC },
-			{ value: sanitizedData.FechaNacimiento },
-			{ value: sanitizedData.Hora },
-			{ value: sanitizedData.CUIT },
-			{ value: sanitizedData.EstadoCivil },
-			{ value: sanitizedData.Religion },
-			{ value: sanitizedData.Raza },
-			{ value: sanitizedData.TelefonoParticular },
-			{ value: sanitizedData.TelefonoNegocio },
-			{ value: sanitizedData.Mail },
-			{ value: sanitizedData.NumeroSSN },
+			{ value: sd.ApellidoyNombre },
+			{ value: sd.TipoDocumento },
+			{ value: sd.NumeroDocumento },
+			{ value: sd.Domicilio },
+			{ value: sd.ValorLocalidad },
+			{ value: sd.Provincia },
+			{ value: sd.Nacionalidad },
+			{ value: sd.Sexo },
+			{ value: sd.NumeroHC },
+			{ value: sd.FechaNacimiento },
+			{ value: sd.Hora },
+			{ value: sd.CUIT },
+			{ value: sd.EstadoCivil },
+			{ value: sd.Religion },
+			{ value: sd.Raza },
+			{ value: sd.TelefonoParticular },
+			{ value: sd.TelefonoNegocio },
+			{ value: sd.Mail },
+			{ value: sd.NumeroSSN },
 		];
-
-		const result = await executeQuery(query, parametros);
-		return result[0];
+		if (sd.FotoURL) params.push({ value: sd.FotoURL });
+		const rows = await executeQuery(query, params);
+		return rows[0];
 	} catch (error) {
-		console.error('Error al actualizar paciente:', error); 
+		console.error('Error al actualizar paciente:', error);
 		throw error;
 	}
 };
 
-/**
- * Elimina un paciente
- * @param {number} id - ID del paciente
- * @returns {Promise<boolean>} Promise con true si se eliminó o false si no existe
- */
+/** Eliminar paciente */
 const eliminarPaciente = async (id) => {
-	try { 
-		// Primero verificamos si el paciente existe
-		const pacienteExistente = await obtenerPacientePorId(id);
-
-		if (!pacienteExistente) {
-			return false;
-		}
-
-		const query = `
-      DELETE FROM impacientes
-      WHERE IDPaciente = @p0
-    `;
-
-		const parametros = [{ value: id }];
-		await executeQuery(query, parametros);
-
+	try {
+		const existente = await obtenerPacientePorId(id);
+		if (!existente) return false;
+		const query = 'DELETE FROM impacientes WHERE IDPaciente = @p0';
+		await executeQuery(query, [{ value: id }]);
 		return true;
 	} catch (error) {
 		console.error(`Error al eliminar paciente con ID ${id}:`, error);
@@ -550,45 +339,29 @@ const eliminarPaciente = async (id) => {
 	}
 };
 
-/**
- * Obtiene los datos de una visita por su número de visita
- * @param {string|number} numeroVisita - Número de visita a consultar
- * @returns {Promise<Object|null>} Promise con los datos de la visita o null si no existe
- */
+/** Visita por número */
 const obtenerVisitaPorNumero = async (numeroVisita) => {
-	console.log('Numero de visita en servicio:' + numeroVisita); 
 	try {
 		const query = `
-      SELECT 
-        v.NumeroVisita,
-        v.FechaAdmisionS AS fechaAdmisionS,
-        CONVERT(VARCHAR(10), v.FechaAdmisionS, 23) AS fechaAdmision,
-        CONVERT(VARCHAR(5), v.FechaAdmisionS, 108) AS horaAdmision,
-        dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS fechaEgreso,
-        dbo.fn_ClarionTIME2SQL(v.HoraEgreso) AS horaEgreso,
-        v.DisposicionEgreso AS disposicionEgreso,
-        v.DiagnosticoEgreso AS diagnosticoEgreso,
-        p.IDPaciente AS idPaciente,
-        p.ApellidoyNombre AS nombrePaciente,
-        h.ValorHabitacionCama AS habitacionCama,
-        h.Observaciones AS descripcionHabitacionCama
-      FROM 
-        imvisita v
-      LEFT JOIN 
-        impacientes p ON v.IDPaciente = p.IDPaciente
-      LEFT JOIN 
-        imhabitacioncamas h ON v.NumeroVisita = h.NumeroVisita
-      WHERE 
-        v.NumeroVisita = @p0
-    `;
-
-		const parametros = [{ value: numeroVisita }];
-		const result = await executeQuery(query, parametros);
-
-		if (result.length === 0) {
-			return null;
-		}
-
+			SELECT 
+				v.NumeroVisita,
+				v.FechaAdmisionS AS fechaAdmisionS,
+				CONVERT(VARCHAR(10), v.FechaAdmisionS, 23) AS fechaAdmision,
+				CONVERT(VARCHAR(5), v.FechaAdmisionS, 108) AS horaAdmision,
+				dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS fechaEgreso,
+				dbo.fn_ClarionTIME2SQL(v.HoraEgreso) AS horaEgreso,
+				v.DisposicionEgreso AS disposicionEgreso,
+				v.DiagnosticoEgreso AS diagnosticoEgreso,
+				p.IDPaciente AS idPaciente,
+				p.ApellidoyNombre AS nombrePaciente,
+				h.ValorHabitacionCama AS habitacionCama,
+				h.Observaciones AS descripcionHabitacionCama
+			FROM imvisita v
+			LEFT JOIN impacientes p ON v.IDPaciente = p.IDPaciente
+			LEFT JOIN imhabitacioncamas h ON v.NumeroVisita = h.NumeroVisita
+			WHERE v.NumeroVisita = @p0`;
+		const result = await executeQuery(query, [{ value: numeroVisita }]);
+		if (!result.length) return null;
 		return result[0];
 	} catch (error) {
 		console.error(`Error al obtener visita con número ${numeroVisita}:`, error);
@@ -596,38 +369,23 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
 	}
 };
 
-/**
- * Registra el egreso de un paciente
- * @param {Object} egresoData - Datos del egreso
- * @returns {Promise<Object>} Promise con los datos del egreso registrado
- */
+/** Registrar egreso */
 const registrarEgresoPaciente = async (egresoData) => {
-	try { 
-		// Actualizar la visita con los datos de egreso
+	try {
 		const queryUpdateVisita = `
-      UPDATE imvisitas
-      SET 
-        FechaEgreso = @p1,
-        HoraEgreso = @p2,
-        DisposicionEgreso = @p3,
-        DiagnosticoEgreso = @p4,
-        CodOperadorEgreso = @p5
-      WHERE NumeroVisita = @p0;
-      
-      -- Retornar la visita actualizada
-      SELECT 
-        NumeroVisita,
-        CONVERT(VARCHAR(10), FechaAdmision, 23) AS fechaAdmision,
-        CONVERT(VARCHAR(5), HoraAdmision, 108) AS horaAdmision,
-        CONVERT(VARCHAR(10), FechaEgreso, 23) AS fechaEgreso,
-        CONVERT(VARCHAR(5), HoraEgreso, 108) AS horaEgreso,
-        DisposicionEgreso AS disposicionEgreso,
-        DiagnosticoEgreso AS diagnosticoEgreso
-      FROM imvisitas
-      WHERE NumeroVisita = @p0;
-    `;
-
-		const parametrosVisita = [
+			UPDATE imvisitas SET 
+				FechaEgreso=@p1, HoraEgreso=@p2, DisposicionEgreso=@p3,
+				DiagnosticoEgreso=@p4, CodOperadorEgreso=@p5
+			WHERE NumeroVisita=@p0;
+			SELECT NumeroVisita,
+				CONVERT(VARCHAR(10), FechaAdmision, 23) AS fechaAdmision,
+				CONVERT(VARCHAR(5), HoraAdmision, 108) AS horaAdmision,
+				CONVERT(VARCHAR(10), FechaEgreso, 23) AS fechaEgreso,
+				CONVERT(VARCHAR(5), HoraEgreso, 108) AS horaEgreso,
+				DisposicionEgreso AS disposicionEgreso,
+				DiagnosticoEgreso AS diagnosticoEgreso
+			FROM imvisitas WHERE NumeroVisita=@p0;`;
+		const paramsVisita = [
 			{ value: egresoData.numeroVisita },
 			{ value: egresoData.fechaEgreso },
 			{ value: egresoData.horaEgreso },
@@ -635,29 +393,14 @@ const registrarEgresoPaciente = async (egresoData) => {
 			{ value: egresoData.diagnosticoEgreso || null },
 			{ value: egresoData.codOperador || null },
 		];
-
-		const resultVisita = await executeQuery(queryUpdateVisita, parametrosVisita);
-
-		// Si se proporcionó un bedId, actualizar el estado de la cama
-		if (egresoData.bedId) { 
-			const queryUpdateCama = `
-        UPDATE imhabitacioncamastmp
-        SET 
-          EstadoCama = 'DISPONIBLE',
-          IDPaciente = NULL
-        WHERE ValorHabitacionCama = @p0;
-      `;
-
-			const parametrosCama = [{ value: egresoData.bedId }];
-			await executeQuery(queryUpdateCama, parametrosCama);
+		const visitaRows = await executeQuery(queryUpdateVisita, paramsVisita);
+		if (egresoData.bedId) {
+			const qBed = `UPDATE imhabitacioncamastmp SET EstadoCama='DISPONIBLE', IDPaciente=NULL WHERE ValorHabitacionCama=@p0`;
+			await executeQuery(qBed, [{ value: egresoData.bedId }]);
 		}
-
-		return resultVisita[0];
+		return visitaRows[0];
 	} catch (error) {
-		console.error(
-			`Error al registrar egreso para visita ${egresoData.numeroVisita}:`, 
-			error,
-		);
+		console.error(`Error al registrar egreso para visita ${egresoData.numeroVisita}:`, error);
 		throw error;
 	}
 };
