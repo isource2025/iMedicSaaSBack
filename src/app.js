@@ -5,6 +5,8 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 // Importar middlewares
 // const { configureCors } = require('./middlewares/cors.middleware');
 
@@ -47,6 +49,15 @@ connectDB()
 app.use(cors());
 
 app.use(express.json()); // Parseo de JSON
+// Soporte para formularios multipart (lo maneja multer en las rutas específicas)
+
+// Asegurar carpeta de uploads
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+	fs.mkdirSync(uploadsDir, { recursive: true });
+}
+// Servir archivos estáticos de fotos
+app.use('/uploads', express.static(uploadsDir));
 
 // Configurar rutas
 app.use('/api/auth', authRoutes);

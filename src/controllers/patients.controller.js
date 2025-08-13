@@ -8,7 +8,8 @@ const patientsService = require('../services/patients.service');
  */
 const obtenerPacientes = async (req, res) => {
 	try {
-		const pacientes = await patientsService.obtenerPacientes();
+		const baseUrl = `${req.protocol}://${req.get('host')}`;
+		const pacientes = await patientsService.obtenerPacientes(baseUrl);
 
 		res.json({
 			success: true,
@@ -45,7 +46,8 @@ const buscarPacientes = async (req, res) => {
 		}
 
 		// Buscar pacientes usando el servicio (ahora acepta números y strings)
-		const pacientes = await patientsService.buscarPacientes(searchTerm);
+		const baseUrl = `${req.protocol}://${req.get('host')}`;
+		const pacientes = await patientsService.buscarPacientes(searchTerm, baseUrl);
 		res.json({
 			success: true,
 			data: pacientes,
@@ -75,7 +77,8 @@ const obtenerPacientePorId = async (req, res) => {
 			});
 		}
 
-		const paciente = await patientsService.obtenerPacientePorId(id);
+		const baseUrl = `${req.protocol}://${req.get('host')}`;
+		const paciente = await patientsService.obtenerPacientePorId(id, baseUrl);
 
 		if (!paciente) {
 			return res.status(404).json({
@@ -104,6 +107,16 @@ const obtenerPacientePorId = async (req, res) => {
  */
 const crearPaciente = async (req, res) => {
 	try {
+		// Helper para armar URL absoluta
+		const buildAbsolute = (relativePath) => {
+			if (!relativePath) return null;
+			if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+				return relativePath;
+			}
+			const protocol = req.protocol;
+			const host = req.get('host');
+			return `${protocol}://${host}${relativePath}`;
+		};
 		const {
 			ApellidoyNombre,
 			TipoDocumento,
@@ -167,7 +180,16 @@ const crearPaciente = async (req, res) => {
 			NumeroSSN: NumeroAfiliado,
 		};
 
+		// Manejo de foto subida
+		if (req.file) {
+			const relativePath = `/uploads/${req.file.filename}`;
+			pacienteData.FotoURL = relativePath;
+		}
+
 		const nuevoPaciente = await patientsService.crearPaciente(pacienteData);
+		if (nuevoPaciente && nuevoPaciente.FotoURL) {
+			nuevoPaciente.FotoURL = buildAbsolute(nuevoPaciente.FotoURL);
+		}
 
 		res.status(201).json({
 			success: true,
@@ -191,6 +213,15 @@ const crearPaciente = async (req, res) => {
  */
 const actualizarPaciente = async (req, res) => {
 	try {
+		const buildAbsolute = (relativePath) => {
+			if (!relativePath) return null;
+			if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+				return relativePath;
+			}
+			const protocol = req.protocol;
+			const host = req.get('host');
+			return `${protocol}://${host}${relativePath}`;
+		};
 		const id = parseInt(req.params.id);
 		const {
 			ApellidoyNombre,
@@ -291,6 +322,12 @@ const actualizarPaciente = async (req, res) => {
 
 		const pacienteActualizado = await patientsService.actualizarPaciente(id, pacienteData);
 
+		if (req.file) {
+			pacienteActualizado.FotoURL = buildAbsolute(`/uploads/${req.file.filename}`);
+		} else if (pacienteActualizado && pacienteActualizado.FotoURL) {
+			pacienteActualizado.FotoURL = buildAbsolute(pacienteActualizado.FotoURL);
+		}
+
 		if (!pacienteActualizado) {
 			return res.status(404).json({
 				success: false,
@@ -380,10 +417,10 @@ const obtenerTablasReferencia = async (req, res) => {
 const obtenerVisitaPorNumero = async (req, res) => {
 	try {
 		const numeroVisita = req.params.numeroVisita;
-		console.log('Solicitando visita con número:', numeroVisita);
+		// Eliminado console.log de debug: 'Solicitando visita con número'
 
 		if (!numeroVisita) {
-			console.log('Error: No se proporcionó número de visita');
+			// Eliminado console.log de debug para número de visita faltante
 			return res.status(400).json({
 				success: false,
 				mensaje: 'Se requiere el número de visita',
@@ -403,10 +440,6 @@ const obtenerVisitaPorNumero = async (req, res) => {
 		}
 
 		const visita = await patientsService.obtenerVisitaPorNumero(numeroVisitaInt);
-		console.log(
-			'Resultado de consulta de visita:',
-			visita ? 'Encontrada' : 'No encontrada',
-		);
 
 		if (!visita) {
 			return res.status(404).json({
@@ -415,7 +448,7 @@ const obtenerVisitaPorNumero = async (req, res) => {
 			});
 		}
 
-		console.log('Enviando datos de visita:', JSON.stringify(visita));
+		// Eliminado console.log de debug: 'Enviando datos de visita'
 		res.json({
 			success: true,
 			data: visita,

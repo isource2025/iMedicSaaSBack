@@ -4,6 +4,19 @@
 const { executeQuery } = require('../models/db');
 const { v4: uuidv4 } = require('uuid'); // si querés generar un GUID
 
+// Asegura que la columna FotoURL exista (idempotente)
+const ensureFotoURLColumn = async () => {
+	try {
+		const ddl = `IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'impacientes' AND COLUMN_NAME = 'FotoURL')
+    BEGIN
+      ALTER TABLE impacientes ADD FotoURL NVARCHAR(255) NULL;
+    END`;
+		await executeQuery(ddl);
+	} catch (err) {
+		console.error('No se pudo verificar/crear columna FotoURL:', err.message);
+	}
+};
+
 /**
  * Obtiene todos los pacientes de la tabla impacientes
  * @returns {Promise<Array>} Promise con la lista de pacientes
@@ -13,15 +26,16 @@ const obtenerPacientes = async () => {
 		const query = `
       SELECT 
         p.IDPaciente,
-        p.Numerodocumento,
+        p.NumeroDocumento,
         p.ApellidoyNombre,
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        CASE 
-          WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
-        END AS FechaNacimiento,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
         p.EstadoCivil,
         c.RazonSocial as Cobertura,
         p.ValorLocalidad,
@@ -32,7 +46,8 @@ const obtenerPacientes = async () => {
         p.TelefonoNegocio,
         p.Mail,
         p.NumeroCuenta,
-        p.NumeroSSN
+        p.NumeroSSN,
+        p.FotoURL
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
       ORDER BY p.ApellidoyNombre
@@ -47,9 +62,9 @@ const obtenerPacientes = async () => {
 };
 
 /**
- * Busca pacientes por ID, nombre, número de documento o historia clínica
- * @param {string|number} searchTerm - Término de búsqueda (ID, nombre, documento o historia clínica)
- * @returns {Promise<Array>} Promise con la lista de pacientes
+ * Obtiene un paciente por su ID
+ * @param {number} id - ID del paciente
+ * @returns {Promise<Object|null>} Promise con el paciente encontrado o null si no existe
  */
 const buscarPacientes = async (searchTerm) => {
 	try {
@@ -67,31 +82,30 @@ const buscarPacientes = async (searchTerm) => {
         p.Domicilio,
         p.Sexo,
         p.NumeroHC,
-        CASE 
-          WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
-        END AS FechaNacimiento,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
         p.EstadoCivil,
         c.RazonSocial as Cobertura,
         p.ValorLocalidad,
-        l.ValorProvincia as Provincia,
-        n.Descripcion as Nacionalidad,
+        p.Provincia,
+        p.Nacionalidad,
         p.CUIT,
         p.TelefonoParticular,
         p.TelefonoNegocio,
         p.Mail,
         p.NumeroCuenta,
-        p.NumeroSSN
+        p.NumeroSSN,
+        p.FotoURL
       FROM impacientes p
       LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-      LEFT JOIN imLocalidades as l ON l.Valor = ValorLocalidad
-      LEFT JOIN imProvincia as pr ON pr.LetraProvincia = l.ValorProvincia
-      LEFT JOIN imNacionalidad as n ON n.Valor = pr.ValorNacionalidad
       WHERE 
-        CAST(p.IDPaciente AS VARCHAR) LIKE '%${searchTermStr}%' OR
-        CAST(p.NumeroDocumento AS VARCHAR) LIKE '%${searchTermStr}%' OR
-        p.ApellidoyNombre LIKE '%${searchTermStr}%' OR
-        CAST(p.NumeroHC AS VARCHAR) LIKE '%${searchTermStr}%'
+        CAST(p.IDPaciente AS VARCHAR) LIKE @p0 OR
+        CAST(p.NumeroDocumento AS VARCHAR) LIKE @p1 OR
+        p.ApellidoyNombre LIKE @p2 OR
+        CAST(p.NumeroHC AS VARCHAR) LIKE @p3
       ORDER BY p.ApellidoyNombre
     `;
 
@@ -162,14 +176,17 @@ const obtenerPacientePorId = async (id) => {
  */
 const crearPaciente = async (pacienteData) => {
 	try {
-		const limitLength = (str, max) =>
-			str == null ? null : str.toString().substring(0, max);
+		// Helper para recortar strings
+		const limitLength = (str, max) => {
+			if (str == null) return null;
+			return str.toString().substring(0, max);
+		};
 
 		// 1) Sanitizar datos
 		const sd = {
 			ListaIDPaciente: limitLength(pacienteData.ListaIDPaciente ?? uuidv4(), 80),
 			IDPacienteAlt:
-				pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0,
+				pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0, // Valor por defecto 0 para IDPacienteAlt
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 40) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 3) || null,
 			NumeroDocumento:
@@ -195,24 +212,36 @@ const crearPaciente = async (pacienteData) => {
 			TelefonoNegocio: limitLength(pacienteData.TelefonoNegocio, 20) || null,
 			Mail: limitLength(pacienteData.Mail, 80) || null,
 			NumeroSSN: limitLength(pacienteData.NumeroSSN, 40) || null,
-			Foto: limitLength(pacienteData.Foto, 255) || null, // <<--- NUEVO
 		};
 
-		// 2) Insert paciente (agregamos Foto) y devolvemos el ID
-		const insertPacienteQuery = `
+		// 2) Query (ahora incluye ListaIDPaciente e IDPacienteAlt)
+		const query = `
       INSERT INTO impacientes (
-        ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
-        Domicilio, ValorLocalidad, Provincia, Nacionalidad, Sexo,
-        NumeroHC, FechaNacimiento, Hora, CUIT, EstadoCivil,
-        Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail,
-        NumeroSSN, Foto
+        ListaIDPaciente,
+        IDPacienteAlt,
+        ApellidoyNombre,
+        TipoDocumento,
+        NumeroDocumento,
+        Domicilio,
+        ValorLocalidad,
+        Provincia,
+        Nacionalidad,
+        Sexo,
+        NumeroHC,
+        FechaNacimiento,
+        Hora,
+        CUIT,
+        EstadoCivil,
+        Religion,
+        Raza,
+        TelefonoParticular,
+        TelefonoNegocio,
+        Mail,
+        NumeroSSN
       )
       VALUES (
-        @p0, @p1, @p2, @p3, @p4,
-        @p5, @p6, @p7, @p8, @p9,
-        @p10, @p11, @p12, @p13, @p14,
-        @p15, @p16, @p17, @p18, @p19,
-        @p20, @p21
+        @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9,
+        @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20
       );
       SELECT SCOPE_IDENTITY() AS IDPaciente;
     `;
@@ -309,7 +338,11 @@ const crearPaciente = async (pacienteData) => {
         Nacionalidad,
         Sexo,
         NumeroHC,
-        FechaNacimiento,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
         Hora,
         CUIT,
         EstadoCivil,
@@ -318,12 +351,38 @@ const crearPaciente = async (pacienteData) => {
         TelefonoParticular,
         TelefonoNegocio,
         Mail,
-        NumeroSSN,
-        Foto
+        NumeroSSN
       FROM impacientes
       WHERE IDPaciente = @p0;
     `;
-		const [nuevo] = await executeQuery(selectQuery, [{ value: newId }]);
+
+		// 3) Parámetros
+		const params = [
+			{ value: sd.ListaIDPaciente }, // @p0
+			{ value: sd.IDPacienteAlt }, // @p1
+			{ value: sd.ApellidoyNombre }, // @p2
+			{ value: sd.TipoDocumento }, // @p3
+			{ value: sd.NumeroDocumento }, // @p4
+			{ value: sd.Domicilio }, // @p5
+			{ value: sd.ValorLocalidad }, // @p6
+			{ value: sd.Provincia }, // @p7
+			{ value: sd.Nacionalidad }, // @p8
+			{ value: sd.Sexo }, // @p9
+			{ value: sd.NumeroHC }, // @p10
+			{ value: sd.FechaNacimiento }, // @p11
+			{ value: sd.Hora }, // @p12
+			{ value: sd.CUIT }, // @p13
+			{ value: sd.EstadoCivil }, // @p14
+			{ value: sd.Religion }, // @p15
+			{ value: sd.Raza }, // @p16
+			{ value: sd.TelefonoParticular }, // @p17
+			{ value: sd.TelefonoNegocio }, // @p18
+			{ value: sd.Mail }, // @p19
+			{ value: sd.NumeroSSN }, // @p20
+		];
+
+		// 4) Ejecutar y retornar
+		const [nuevo] = await executeQuery(query, params);
 		return nuevo;
 	} catch (error) {
 		console.error('Error al crear paciente:', error);
@@ -399,7 +458,7 @@ const actualizarPaciente = async (id, pacienteData) => {
         TelefonoParticular = @p16,
         TelefonoNegocio = @p17,
         Mail = @p18,
-        NumeroSSN = @p19
+        NumeroSSN = @p19${setFoto}
       WHERE IDPaciente = @p0;
       
       SELECT 
@@ -413,7 +472,11 @@ const actualizarPaciente = async (id, pacienteData) => {
         Nacionalidad,
         Sexo,
         NumeroHC,
-        FechaNacimiento,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
         Hora,
         CUIT,
         EstadoCivil,
@@ -422,7 +485,7 @@ const actualizarPaciente = async (id, pacienteData) => {
         TelefonoParticular,
         TelefonoNegocio,
         Mail,
-        NumeroSSN
+        NumeroSSN${selectFoto}
       FROM impacientes
       WHERE IDPaciente = @p0;
     `;
