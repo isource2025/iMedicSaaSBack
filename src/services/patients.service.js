@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid'); // si querés generar un GUID
 // Asegura que la columna FotoURL exista (idempotente)
 const ensureFotoURLColumn = async () => {
 	try {
-		const ddl = `IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'impacientes' AND COLUMN_NAME = 'FotoURL')
+		const ddl = `IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'impacientes' AND COLUMN_NAME = 'FotoURL') 
     BEGIN
       ALTER TABLE impacientes ADD FotoURL NVARCHAR(255) NULL;
     END`;
@@ -18,7 +18,7 @@ const ensureFotoURLColumn = async () => {
 };
 
 /**
- * Obtiene todos los pacientes de la tabla impacientes
+ * Obtiene todos los pacientes de la tabla impacientes 
  * @returns {Promise<Array>} Promise con la lista de pacientes
  */
 const obtenerPacientes = async () => {
@@ -124,7 +124,7 @@ const buscarPacientes = async (searchTerm) => {
  * @returns {Promise<Object|null>} Promise con el paciente encontrado o null si no existe
  */
 const obtenerPacientePorId = async (id) => {
-	try {
+	try { 
 		const query = `
       SELECT 
         IDPaciente,
@@ -175,7 +175,7 @@ const obtenerPacientePorId = async (id) => {
  * @returns {Promise<Object>} - El paciente recién insertado
  */
 const crearPaciente = async (pacienteData) => {
-	try {
+	try { 
 		// Helper para recortar strings
 		const limitLength = (str, max) => {
 			if (str == null) return null;
@@ -249,7 +249,7 @@ const crearPaciente = async (pacienteData) => {
 		const insertParams = [
 			{ value: sd.ListaIDPaciente }, // @p0
 			{ value: sd.IDPacienteAlt }, // @p1
-			{ value: sd.ApellidoyNombre }, // @p2
+			{ value: sd.ApellidoyNombre }, // @p2 
 			{ value: sd.TipoDocumento }, // @p3
 			{ value: sd.NumeroDocumento }, // @p4
 			{ value: sd.Domicilio }, // @p5
@@ -274,7 +274,7 @@ const crearPaciente = async (pacienteData) => {
 		const inserted = await executeQuery(insertPacienteQuery, insertParams);
 		const newId = Number(inserted?.[0]?.IDPaciente);
 
-		// 3) (Opcional) Insertar Trabajos si vienen
+		// 3) (Opcional) Insertar Trabajos si vienen 
 		if (
 			Array.isArray(pacienteData.Trabajos) &&
 			pacienteData.Trabajos.length > 0 &&
@@ -359,7 +359,7 @@ const crearPaciente = async (pacienteData) => {
 		// 3) Parámetros
 		const params = [
 			{ value: sd.ListaIDPaciente }, // @p0
-			{ value: sd.IDPacienteAlt }, // @p1
+			{ value: sd.IDPacienteAlt }, // @p1 
 			{ value: sd.ApellidoyNombre }, // @p2
 			{ value: sd.TipoDocumento }, // @p3
 			{ value: sd.NumeroDocumento }, // @p4
@@ -386,7 +386,7 @@ const crearPaciente = async (pacienteData) => {
 		return nuevo;
 	} catch (error) {
 		console.error('Error al crear paciente:', error);
-		throw error;
+		throw error; 
 	}
 };
 
@@ -397,7 +397,7 @@ const crearPaciente = async (pacienteData) => {
  * @returns {Promise<Object>} Promise con el paciente actualizado
  */
 const actualizarPaciente = async (id, pacienteData) => {
-	try {
+	try { 
 		// Función para limitar la longitud de un string
 		const limitLength = (str, maxLength) => {
 			if (!str) return '';
@@ -516,7 +516,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 		const result = await executeQuery(query, parametros);
 		return result[0];
 	} catch (error) {
-		console.error('Error al actualizar paciente:', error);
+		console.error('Error al actualizar paciente:', error); 
 		throw error;
 	}
 };
@@ -527,7 +527,7 @@ const actualizarPaciente = async (id, pacienteData) => {
  * @returns {Promise<boolean>} Promise con true si se eliminó o false si no existe
  */
 const eliminarPaciente = async (id) => {
-	try {
+	try { 
 		// Primero verificamos si el paciente existe
 		const pacienteExistente = await obtenerPacientePorId(id);
 
@@ -556,7 +556,7 @@ const eliminarPaciente = async (id) => {
  * @returns {Promise<Object|null>} Promise con los datos de la visita o null si no existe
  */
 const obtenerVisitaPorNumero = async (numeroVisita) => {
-	console.log('Numero de visita en servicio:' + numeroVisita);
+	console.log('Numero de visita en servicio:' + numeroVisita); 
 	try {
 		const query = `
       SELECT 
@@ -602,7 +602,7 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
  * @returns {Promise<Object>} Promise con los datos del egreso registrado
  */
 const registrarEgresoPaciente = async (egresoData) => {
-	try {
+	try { 
 		// Actualizar la visita con los datos de egreso
 		const queryUpdateVisita = `
       UPDATE imvisitas
@@ -639,7 +639,7 @@ const registrarEgresoPaciente = async (egresoData) => {
 		const resultVisita = await executeQuery(queryUpdateVisita, parametrosVisita);
 
 		// Si se proporcionó un bedId, actualizar el estado de la cama
-		if (egresoData.bedId) {
+		if (egresoData.bedId) { 
 			const queryUpdateCama = `
         UPDATE imhabitacioncamastmp
         SET 
@@ -655,7 +655,7 @@ const registrarEgresoPaciente = async (egresoData) => {
 		return resultVisita[0];
 	} catch (error) {
 		console.error(
-			`Error al registrar egreso para visita ${egresoData.numeroVisita}:`,
+			`Error al registrar egreso para visita ${egresoData.numeroVisita}:`, 
 			error,
 		);
 		throw error;
