@@ -87,6 +87,7 @@ const obtenerPacientePorId = async (req, res) => {
 			});
 		}
 
+		console.log('[obtenerPacientePorId][debug] paciente:', paciente);
 		res.json({
 			success: true,
 			data: paciente,
@@ -134,10 +135,40 @@ const crearPaciente = async (req, res) => {
 			Raza,
 			TelefonoParticular,
 			TelefonoNegocio,
+			TelefonoCelular,
 			Mail,
 			CUIT,
 			NumeroAfiliado,
+			nAfiliado,
+			NumeroCuenta,
+			Cobertura,
+			LicenciaConducir,
+			DadorOrganos,
+			OrdenNacimiento,
+			LugarNacimiento,
+			FechaDefuncion,
+			HoraDefuncion,
+			IdiomaPrimario,
+			Idioma, // posible alias del front
+			GrupoEtnico,
+			EstadoMilitar,
+			Ciudadania,
 		} = req.body;
+
+		// Log de depuración de campos recibidos (clave=valor tipo)
+		try {
+			console.log('[crearPaciente][debug] keys:', Object.keys(req.body));
+		} catch (_) {}
+
+		// Parseo seguro de Trabajos si viene como string (multipart/form-data)
+		if (req.body && typeof req.body.Trabajos === 'string') {
+			try {
+				const parsed = JSON.parse(req.body.Trabajos);
+				if (Array.isArray(parsed)) req.body.Trabajos = parsed;
+			} catch (e) {
+				console.warn('No se pudo parsear Trabajos (create):', e.message);
+			}
+		}
 
 		// Validación básica
 		if (!ApellidoyNombre || !Sexo || !NumeroHC) {
@@ -158,6 +189,21 @@ const crearPaciente = async (req, res) => {
 		}
 
 		// Preparar datos para la BD
+		// Normalizaciones y alias
+		const numeroSSNIn = NumeroAfiliado || nAfiliado || req.body.NumeroSSN || null;
+		const numeroCuentaIn =
+			NumeroCuenta ||
+			Cobertura ||
+			req.body.CoberturaMedica ||
+			(Array.isArray(req.body.Trabajos) ? req.body.Trabajos[0]?.RazonSocial : null) ||
+			null;
+		const telefonoNegocioIn = TelefonoNegocio || TelefonoCelular || null;
+		let idiomaPrimarioIn = IdiomaPrimario || Idioma || null;
+		if (idiomaPrimarioIn === 'undefined' || idiomaPrimarioIn === '')
+			idiomaPrimarioIn = null;
+		// Sanitizar strings 'undefined'
+		const sane = (v) => (v === 'undefined' ? null : v);
+
 		const pacienteData = {
 			ApellidoyNombre,
 			TipoDocumento,
@@ -168,17 +214,31 @@ const crearPaciente = async (req, res) => {
 			Nacionalidad,
 			Sexo,
 			NumeroHC,
-			FechaNacimiento: convertirFechaAClarion(FechaNacimiento), // <-- Transformación crítica
-			Hora: horaInt,
+			FechaNacimiento: FechaNacimiento ? convertirFechaAClarion(FechaNacimiento) : null, // seguro
+			Hora: horaInt != null ? horaInt : null,
 			CUIT,
 			EstadoCivil,
 			Religion,
 			Raza: Raza ? parseInt(Raza) : null,
 			TelefonoParticular,
-			TelefonoNegocio: TelefonoNegocio,
+			TelefonoNegocio: telefonoNegocioIn,
 			Mail: Mail,
-			NumeroSSN: NumeroAfiliado,
+			NumeroSSN: numeroSSNIn,
+			NumeroCuenta: numeroCuentaIn,
+			LicenciaConducir,
+			DadorOrganos,
+			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
+			LugarNacimiento,
+			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
+			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			IdiomaPrimario: idiomaPrimarioIn,
+			GrupoEtnico: GrupoEtnico ? parseInt(GrupoEtnico) : null,
+			EstadoMilitar: sane(EstadoMilitar),
+			Ciudadania: sane(Ciudadania),
 		};
+		if (Array.isArray(req.body.Trabajos)) {
+			pacienteData.Trabajos = req.body.Trabajos;
+		}
 
 		// Manejo de foto subida (nueva estructura)
 		if (req.file) {
@@ -189,6 +249,29 @@ const crearPaciente = async (req, res) => {
 		}
 
 		const nuevoPaciente = await patientsService.crearPaciente(pacienteData);
+		// Asegurar que Trabajos se incluyan si no se cargaron (ej. si inserción falló silenciosamente)
+		if (
+			nuevoPaciente &&
+			(!nuevoPaciente.Trabajos || !Array.isArray(nuevoPaciente.Trabajos))
+		) {
+			try {
+				const { getJobsByPatient } = require('../services/patientJobs.service');
+				nuevoPaciente.Trabajos = await getJobsByPatient(nuevoPaciente.IDPaciente);
+			} catch (e) {
+				console.warn('No se pudo refrescar Trabajos después de crear:', e.message);
+			}
+		}
+		// Añadir alias en respuesta para consistencia con front
+		if (nuevoPaciente) {
+			if (!nuevoPaciente.TelefonoCelular && nuevoPaciente.TelefonoNegocio)
+				nuevoPaciente.TelefonoCelular = nuevoPaciente.TelefonoNegocio;
+			if (nuevoPaciente.NumeroSSN && !nuevoPaciente.nAfiliado)
+				nuevoPaciente.nAfiliado = nuevoPaciente.NumeroSSN;
+			if (nuevoPaciente.NumeroCuenta && !nuevoPaciente.Cobertura)
+				nuevoPaciente.Cobertura = nuevoPaciente.NumeroCuenta;
+			if (nuevoPaciente.IdiomaPrimario && !nuevoPaciente.Idioma)
+				nuevoPaciente.Idioma = nuevoPaciente.IdiomaPrimario;
+		}
 		if (nuevoPaciente && nuevoPaciente.FotoURL) {
 			nuevoPaciente.FotoURL = buildAbsolute(nuevoPaciente.FotoURL);
 		}
@@ -242,10 +325,14 @@ const actualizarPaciente = async (req, res) => {
 			Raza,
 			TelefonoParticular,
 			TelefonoNegocio,
+			TelefonoCelular,
 			Mail,
 			CUIT,
 			CoberturaMedica,
 			NumeroAfiliado,
+			nAfiliado,
+			Cobertura,
+			NumeroCuenta,
 			ApellidoMadre,
 			GrupoSangre,
 			FactorSangre,
@@ -256,10 +343,39 @@ const actualizarPaciente = async (req, res) => {
 			NivelDeEstudios,
 			DadorOrganos,
 			IdiomaPrimario,
+			Idioma,
 			GrupoEtnico,
 			Ciudadania,
 			EstadoMilitar,
+			LicenciaConducir,
+			OrdenNacimiento,
+			FechaDefuncion,
+			HoraDefuncion,
 		} = req.body;
+
+		// Parseo seguro de Trabajos si viene como string (multipart/form-data)
+		if (req.body && typeof req.body.Trabajos === 'string') {
+			try {
+				const parsed = JSON.parse(req.body.Trabajos);
+				if (Array.isArray(parsed)) req.body.Trabajos = parsed;
+			} catch (e) {
+				console.warn('No se pudo parsear Trabajos (update):', e.message);
+			}
+		}
+
+		// Alias / normalizaciones
+		const numeroSSNIn = NumeroAfiliado || nAfiliado || req.body.NumeroSSN || null;
+		const numeroCuentaIn =
+			NumeroCuenta ||
+			Cobertura ||
+			CoberturaMedica ||
+			(Array.isArray(req.body.Trabajos) ? req.body.Trabajos[0]?.RazonSocial : null) ||
+			null;
+		const telefonoNegocioIn = TelefonoNegocio || TelefonoCelular || null;
+		let idiomaPrimarioIn = IdiomaPrimario || Idioma || null;
+		if (idiomaPrimarioIn === 'undefined' || idiomaPrimarioIn === '')
+			idiomaPrimarioIn = null;
+		const sane = (v) => (v === 'undefined' ? null : v);
 
 		if (isNaN(id)) {
 			return res.status(400).json({
@@ -298,16 +414,17 @@ const actualizarPaciente = async (req, res) => {
 			Nacionalidad,
 			Sexo,
 			NumeroHC,
-			FechaNacimiento: convertirFechaAClarion(FechaNacimiento),
-			Hora: horaInt,
+			FechaNacimiento: FechaNacimiento ? convertirFechaAClarion(FechaNacimiento) : null,
+			Hora: horaInt != null ? horaInt : null,
 			CUIT: CUIT,
 			EstadoCivil,
 			Religion,
 			Raza: Raza ? parseInt(Raza) : null,
 			TelefonoParticular,
-			TelefonoNegocio: TelefonoNegocio,
+			TelefonoNegocio: telefonoNegocioIn,
 			Mail: Mail,
-			NumeroSSN: NumeroAfiliado,
+			NumeroSSN: numeroSSNIn,
+			NumeroCuenta: numeroCuentaIn,
 			GrupoSangre,
 			FactorSangre,
 			LugarNacimiento,
@@ -316,13 +433,30 @@ const actualizarPaciente = async (req, res) => {
 			SituacionLaboral,
 			NivelDeEstudios,
 			DadorOrganos,
-			IdiomaPrimario,
+			IdiomaPrimario: idiomaPrimarioIn,
 			GrupoEtnico,
-			Ciudadania,
-			EstadoMilitar,
+			Ciudadania: sane(Ciudadania),
+			EstadoMilitar: sane(EstadoMilitar),
+			LicenciaConducir,
+			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
+			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
+			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
 		};
+		if (Array.isArray(req.body.Trabajos)) {
+			pacienteData.Trabajos = req.body.Trabajos;
+		}
 
 		const pacienteActualizado = await patientsService.actualizarPaciente(id, pacienteData);
+		if (pacienteActualizado) {
+			if (!pacienteActualizado.TelefonoCelular && pacienteActualizado.TelefonoNegocio)
+				pacienteActualizado.TelefonoCelular = pacienteActualizado.TelefonoNegocio;
+			if (pacienteActualizado.NumeroSSN && !pacienteActualizado.nAfiliado)
+				pacienteActualizado.nAfiliado = pacienteActualizado.NumeroSSN;
+			if (pacienteActualizado.NumeroCuenta && !pacienteActualizado.Cobertura)
+				pacienteActualizado.Cobertura = pacienteActualizado.NumeroCuenta;
+			if (pacienteActualizado.IdiomaPrimario && !pacienteActualizado.Idioma)
+				pacienteActualizado.Idioma = pacienteActualizado.IdiomaPrimario;
+		}
 
 		if (req.file) {
 			pacienteActualizado.FotoURL = buildAbsolute(

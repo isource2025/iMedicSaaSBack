@@ -22,6 +22,13 @@ const sexoRoutes = require('./routes/sexo.routes');
 const localidadRoutes = require('./routes/localidad.routes');
 const opcGrdRoutes = require('./routes/opcGrd.routes');
 const renaperRoutes = require('./routes/renaper.routes');
+// Catálogos individuales
+const razaRoutes = require('./routes/raza.routes');
+const idiomasISORoutes = require('./routes/idiomasISO.routes');
+const religionRoutes = require('./routes/religion.routes');
+const grupoEtnicoRoutes = require('./routes/grupoEtnico.routes');
+const estadoMilitarRoutes = require('./routes/estadoMilitar.routes');
+const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -70,6 +77,12 @@ app.use('/api/catalogs', catalogsRoutes);
 app.use('/api/provincias', provinciaRoutes);
 app.use('/api/sexo', sexoRoutes);
 app.use('/api/localidad', localidadRoutes);
+app.use('/api/raza', razaRoutes);
+app.use('/api/idiomas-iso', idiomasISORoutes);
+app.use('/api/religion', religionRoutes);
+app.use('/api/grupo-etnico', grupoEtnicoRoutes);
+app.use('/api/estado-militar', estadoMilitarRoutes);
+app.use('/api/dador-organos', dadorOrganosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 app.use('/api/renaper', renaperRoutes);
 
