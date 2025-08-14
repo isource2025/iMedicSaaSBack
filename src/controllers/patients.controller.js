@@ -180,10 +180,12 @@ const crearPaciente = async (req, res) => {
 			NumeroSSN: NumeroAfiliado,
 		};
 
-		// Manejo de foto subida
+		// Manejo de foto subida (nueva estructura)
 		if (req.file) {
-			const relativePath = `/uploads/${req.file.filename}`;
-			pacienteData.FotoURL = relativePath;
+			// Guardado físico en /uploads/patient-photos/<filename>
+			// Ruta pública expuesta en /media/patients
+			const relativePath = `/media/patients/${req.file.filename}`;
+			pacienteData.FotoURL = relativePath; // se almacena la ruta pública para simplificar
 		}
 
 		const nuevoPaciente = await patientsService.crearPaciente(pacienteData);
@@ -323,7 +325,9 @@ const actualizarPaciente = async (req, res) => {
 		const pacienteActualizado = await patientsService.actualizarPaciente(id, pacienteData);
 
 		if (req.file) {
-			pacienteActualizado.FotoURL = buildAbsolute(`/uploads/${req.file.filename}`);
+			pacienteActualizado.FotoURL = buildAbsolute(
+				`/media/patients/${req.file.filename}`,
+			);
 		} else if (pacienteActualizado && pacienteActualizado.FotoURL) {
 			pacienteActualizado.FotoURL = buildAbsolute(pacienteActualizado.FotoURL);
 		}

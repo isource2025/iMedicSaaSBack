@@ -7,12 +7,13 @@ const path = require('path');
 // Configuración de almacenamiento para fotos de pacientes
 const storage = multer.diskStorage({
 	destination: function (req, file, cb) {
-		cb(null, path.join(__dirname, '..', '..', 'uploads'));
+		cb(null, path.join(__dirname, '..', '..', 'uploads', 'patient-photos'));
 	},
 	filename: function (req, file, cb) {
-		const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-		const ext = path.extname(file.originalname) || '.jpg';
-		cb(null, 'paciente-' + uniqueSuffix + ext);
+		// nombre ofuscado: timestamp-random + hash parcial original
+		const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9).toString(36);
+		const ext = (path.extname(file.originalname) || '.jpg').toLowerCase();
+		cb(null, uniqueSuffix + ext);
 	},
 });
 

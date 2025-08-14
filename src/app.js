@@ -51,13 +51,15 @@ app.use(cors());
 app.use(express.json()); // Parseo de JSON
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)
 
-// Asegurar carpeta de uploads
+// Asegurar carpetas de uploads
 const uploadsDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-	fs.mkdirSync(uploadsDir, { recursive: true });
+const patientPhotosDir = path.join(uploadsDir, 'patient-photos');
+for (const dir of [uploadsDir, patientPhotosDir]) {
+	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
-// Servir archivos estáticos de fotos
-app.use('/uploads', express.static(uploadsDir));
+// Rutas estáticas (compatibilidad + nueva ruta "segura")
+app.use('/uploads', express.static(uploadsDir)); // legado
+app.use('/media/patients', express.static(patientPhotosDir));
 
 // Configurar rutas
 app.use('/api/auth', authRoutes);

@@ -22,10 +22,17 @@ const mapFotoURL = (rows, baseUrl) => {
 	if (!baseUrl) return rows;
 	return rows.map((r) => ({
 		...r,
-		FotoURL:
-			r.FotoURL && !/^https?:\/\//i.test(r.FotoURL)
+		// Normalizamos rutas antiguas que apuntaban a /uploads/<archivo> cuando ahora servimos /media/patients
+		FotoURL: r.FotoURL
+			? /^https?:\/\//i.test(r.FotoURL)
+				? r.FotoURL
+				: r.FotoURL.startsWith('/media/patients/')
 				? `${baseUrl}${r.FotoURL}`
-				: r.FotoURL,
+				: r.FotoURL.startsWith('/uploads/')
+				? // Compatibilidad: si quedó en carpeta vieja pero queremos servirla igual
+				  `${baseUrl}${r.FotoURL.replace('/uploads/', '/media/patients/')}`
+				: `${baseUrl}${r.FotoURL}`
+			: null,
 	}));
 };
 
@@ -171,15 +178,23 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 const crearPaciente = async (pacienteData) => {
 	try {
 		await ensureFotoURLColumn();
-		const limitLength = (str, max) => (str == null ? null : str.toString().substring(0, max));
+		const limitLength = (str, max) =>
+			str == null ? null : str.toString().substring(0, max);
 		const sd = {
 			ListaIDPaciente: limitLength(pacienteData.ListaIDPaciente ?? uuidv4(), 80),
-			IDPacienteAlt: pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0,
+			IDPacienteAlt:
+				pacienteData.IDPacienteAlt != null ? Number(pacienteData.IDPacienteAlt) : 0,
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 40) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 3) || null,
-			NumeroDocumento: pacienteData.NumeroDocumento != null ? Number(pacienteData.NumeroDocumento) : null,
+			NumeroDocumento:
+				pacienteData.NumeroDocumento != null
+					? Number(pacienteData.NumeroDocumento)
+					: null,
 			Domicilio: limitLength(pacienteData.Domicilio, 80) || null,
-			ValorLocalidad: pacienteData.ValorLocalidad != null ? Number(pacienteData.ValorLocalidad) : null,
+			ValorLocalidad:
+				pacienteData.ValorLocalidad != null
+					? Number(pacienteData.ValorLocalidad)
+					: null,
 			Provincia: pacienteData.Provincia != null ? Number(pacienteData.Provincia) : null,
 			Nacionalidad: limitLength(pacienteData.Nacionalidad, 2) || null,
 			Sexo: limitLength(pacienteData.Sexo, 1) || null,
@@ -255,7 +270,9 @@ const actualizarPaciente = async (id, pacienteData) => {
 		await ensureFotoURLColumn();
 		const limitLength = (s, m) => (s == null ? '' : s.toString().substring(0, m));
 		const getNacQuery = `SELECT Valor FROM imNacionalidad WHERE Descripcion = @p0`;
-		const nacRows = await executeQuery(getNacQuery, [{ value: pacienteData.Nacionalidad }]);
+		const nacRows = await executeQuery(getNacQuery, [
+			{ value: pacienteData.Nacionalidad },
+		]);
 		const nacionalidad = nacRows[0]?.Valor || null;
 		const sd = {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
@@ -400,7 +417,10 @@ const registrarEgresoPaciente = async (egresoData) => {
 		}
 		return visitaRows[0];
 	} catch (error) {
-		console.error(`Error al registrar egreso para visita ${egresoData.numeroVisita}:`, error);
+		console.error(
+			`Error al registrar egreso para visita ${egresoData.numeroVisita}:`,
+			error,
+		);
 		throw error;
 	}
 };
