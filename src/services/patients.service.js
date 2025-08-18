@@ -5,8 +5,33 @@ const { executeQuery } = require('../models/db');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const { v4: uuidv4 } = require('uuid');
 
+// Flags de cache para evitar repetir DDL constantemente
+let searchIndexesEnsured = false;
+let extraColumnsEnsured = false;
+
+// Crea índices básicos si no existen para acelerar búsquedas (solo primera vez)
+const ensureSearchIndexes = async () => {
+	if (searchIndexesEnsured) return;
+	try {
+		const ddl = `
+		IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_impacientes_NumeroDocumento')
+			CREATE INDEX IX_impacientes_NumeroDocumento ON impacientes(NumeroDocumento);
+		IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_impacientes_NumeroHC')
+			CREATE INDEX IX_impacientes_NumeroHC ON impacientes(NumeroHC);
+		IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_impacientes_ApellidoyNombre')
+			CREATE INDEX IX_impacientes_ApellidoyNombre ON impacientes(ApellidoyNombre);
+		`;
+		await executeQuery(ddl);
+	} catch (e) {
+		console.warn('No se pudieron crear/verificar índices de búsqueda:', e.message);
+	} finally {
+		searchIndexesEnsured = true;
+	}
+};
+
 // Garantiza la existencia de columnas requeridas (idempotente)
 const ensureExtraColumns = async () => {
+	if (extraColumnsEnsured) return;
 	try {
 		const columns = [
 			{ name: 'FotoURL', type: 'NVARCHAR(255) NULL' },
@@ -17,7 +42,8 @@ const ensureExtraColumns = async () => {
 			{ name: 'FechaDefuncion', type: 'INT NULL' },
 			{ name: 'HoraDefuncion', type: 'INT NULL' },
 			{ name: 'IdiomaPrimario', type: 'NVARCHAR(10) NULL' },
-			{ name: 'GrupoEtnico', type: 'INT NULL' },
+			// GrupoEtnico: catálogo usa códigos de 1 carácter (letra), cambiar a NVARCHAR(1)
+			{ name: 'GrupoEtnico', type: 'NVARCHAR(1) NULL' },
 			{ name: 'EstadoMilitar', type: 'NVARCHAR(5) NULL' },
 			{ name: 'Ciudadania', type: 'NVARCHAR(40) NULL' },
 			{ name: 'SituacionLaboral', type: 'NVARCHAR(5) NULL' },
@@ -42,10 +68,35 @@ const ensureExtraColumns = async () => {
 						console.warn('No se pudo ampliar IdiomaPrimario:', e.message);
 					}
 				}
+			} else if (col.name === 'GrupoEtnico') {
+				// Convertir a NVARCHAR(1) si actualmente es numérico (int)
+				try {
+					const typeRows = await executeQuery(
+						`SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH AS len FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='impacientes' AND COLUMN_NAME='GrupoEtnico'`,
+					);
+					const dtype = typeRows[0]?.DATA_TYPE?.toLowerCase();
+					if (dtype && dtype !== 'nvarchar') {
+						try {
+							await executeQuery(
+								`ALTER TABLE impacientes ALTER COLUMN GrupoEtnico NVARCHAR(1) NULL`,
+							);
+							console.log('Columna GrupoEtnico convertida a NVARCHAR(1)');
+						} catch (e2) {
+							console.warn(
+								'No se pudo convertir GrupoEtnico a NVARCHAR(1):',
+								e2.message,
+							);
+						}
+					}
+				} catch (eg) {
+					console.warn('Chequeo/upgrade GrupoEtnico falló:', eg.message);
+				}
 			}
 		}
 	} catch (err) {
 		console.error('No se pudo verificar/crear columnas extra:', err.message);
+	} finally {
+		extraColumnsEnsured = true;
 	}
 
 	// Upgrades de tipos para teléfonos (evitar overflow al intentar convertir a INT en tablas antiguas)
@@ -116,11 +167,12 @@ const mapFotoURL = (rows, baseUrl) => {
 };
 
 /** Lista pacientes */
-const obtenerPacientes = async (baseUrl) => {
+const obtenerPacientes = async (baseUrl, { limit = 200 } = {}) => {
 	try {
 		await ensureExtraColumns();
+		const safeLimit = isNaN(limit) ? 200 : Math.min(Math.max(parseInt(limit), 1), 1000);
 		const query = `
-			SELECT 
+			SELECT TOP (${safeLimit})
 				p.IDPaciente,
 				p.NumeroDocumento,
 				p.ApellidoyNombre,
@@ -153,6 +205,7 @@ const obtenerPacientes = async (baseUrl) => {
 				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
 				p.HoraDefuncion,
 				p.IdiomaPrimario,
+				p.IdiomaPrimario AS Idioma,
 				p.GrupoEtnico,
 				p.EstadoMilitar,
 				p.Ciudadania,
@@ -241,65 +294,52 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 /** Búsqueda parametrizada */
 const buscarPacientes = async (searchTerm = '', baseUrl) => {
 	try {
-		if (!searchTerm || String(searchTerm).trim() === '') {
-			return await obtenerPacientes(baseUrl);
-		}
+		const term = String(searchTerm).trim();
+		if (!term) return await obtenerPacientes(baseUrl);
 		await ensureExtraColumns();
-		const likeValue = `%${searchTerm}%`;
-		const query = `
-			SELECT 
-				p.IDPaciente,
-				p.NumeroDocumento,
-				p.ApellidoyNombre,
-				p.Domicilio,
-				p.Sexo,
-				p.NumeroHC,
-				CONVERT(VARCHAR(10), 
-					CASE 
-						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
-						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
-					END, 23) AS FechaNacimiento,
-				p.EstadoCivil,
-				c.RazonSocial as Cobertura,
-				p.ValorLocalidad,
-				p.Provincia,
-				p.Nacionalidad,
-				p.CUIT,
-				p.TelefonoParticular,
-				p.TelefonoNegocio,
-				p.TelefonoNegocio AS TelefonoCelular,
-				p.Mail,
-				p.NumeroCuenta,
-				p.NumeroSSN,
-				p.NumeroSSN AS nAfiliado,
-				p.FotoURL,
-				p.LicenciaConducir,
-				p.DadorOrganos,
-				p.OrdenNacimiento,
-				p.LugarNacimiento,
+		// Crear índices si no existen (solo primera vez)
+		await ensureSearchIndexes();
+		const isNumeric = /^\d+$/.test(term);
+		let query;
+		let params = [];
+		if (isNumeric) {
+			// Búsqueda específica numérica usando igualdad (aprovecha índices) + opcional nombre
+			query = `SELECT TOP 100
+				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaNacimiento,'1800-12-28') END,23) AS FechaNacimiento,
+				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
+				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
+				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
+				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
-				p.HoraDefuncion,
-				p.IdiomaPrimario,
-				p.GrupoEtnico,
-				p.EstadoMilitar,
-				p.Ciudadania,
-				p.SituacionLaboral,
-				p.NivelDeEstudios,
-				p.NivelDeEstudios AS NivelEstudios
+				p.HoraDefuncion, p.IdiomaPrimario, p.GrupoEtnico, p.EstadoMilitar, p.Ciudadania,
+				p.SituacionLaboral, p.NivelDeEstudios, p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
 			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-			WHERE 
-				CAST(p.IDPaciente AS VARCHAR) LIKE @p0 OR
-				CAST(p.NumeroDocumento AS VARCHAR) LIKE @p1 OR
-				p.ApellidoyNombre LIKE @p2 OR
-				CAST(p.NumeroHC AS VARCHAR) LIKE @p3
+			WHERE p.IDPaciente = @p0 OR p.NumeroDocumento = @p0 OR p.NumeroHC = @p0 OR p.ApellidoyNombre LIKE @p1
+			ORDER BY p.IDPaciente DESC`;
+			params = [{ value: Number(term) }, { value: `%${term}%` }];
+		} else {
+			// Texto: solo sobre nombre + LIKE en documento/historia si empieza por dígitos (sin CAST)
+			const digitsPrefix = term.match(/^(\d{3,})/); // prefijo numérico útil
+			query = `SELECT TOP 100
+				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaNacimiento,'1800-12-28') END,23) AS FechaNacimiento,
+				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
+				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
+				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
+				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
+				p.HoraDefuncion, p.IdiomaPrimario, p.GrupoEtnico, p.EstadoMilitar, p.Ciudadania,
+				p.SituacionLaboral, p.NivelDeEstudios, p.NivelDeEstudios AS NivelEstudios
+			FROM impacientes p
+			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			WHERE p.ApellidoyNombre LIKE @p0
+			${digitsPrefix ? ' OR p.NumeroDocumento LIKE @p1 OR p.NumeroHC LIKE @p1' : ''}
 			ORDER BY p.ApellidoyNombre`;
-		const params = [
-			{ value: likeValue },
-			{ value: likeValue },
-			{ value: likeValue },
-			{ value: likeValue },
-		];
+			params.push({ value: `%${term}%` });
+			if (digitsPrefix) params.push({ value: `${digitsPrefix[1]}%` });
+		}
 		let rows = await executeQuery(query, params);
 		rows = mapFotoURL(rows, baseUrl);
 		return rows;
@@ -327,7 +367,8 @@ const crearPaciente = async (pacienteData) => {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 40) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 3) || null,
 			NumeroDocumento:
-				pacienteData.NumeroDocumento != null
+				pacienteData.NumeroDocumento != null &&
+				/^\d+$/.test(String(pacienteData.NumeroDocumento))
 					? Number(pacienteData.NumeroDocumento)
 					: null,
 			Domicilio: limitLength(pacienteData.Domicilio, 80) || null,
@@ -363,7 +404,9 @@ const crearPaciente = async (pacienteData) => {
 			IdiomaPrimario:
 				limitLength(pacienteData.IdiomaPrimario || pacienteData.Idioma, 10) || null,
 			GrupoEtnico:
-				pacienteData.GrupoEtnico != null ? Number(pacienteData.GrupoEtnico) : null,
+				pacienteData.GrupoEtnico != null
+					? limitLength(String(pacienteData.GrupoEtnico).trim(), 1)
+					: null,
 			EstadoMilitar: limitLength(pacienteData.EstadoMilitar, 5) || null,
 			Ciudadania: limitLength(pacienteData.Ciudadania, 40) || null,
 			SituacionLaboral: limitLength(pacienteData.SituacionLaboral, 5) || null,
@@ -473,7 +516,12 @@ const actualizarPaciente = async (id, pacienteData) => {
 		const sd = {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 10) || '',
-			NumeroDocumento: limitLength(pacienteData.NumeroDocumento, 20) || '',
+			// Forzar Documento numérico; si no es dígitos válidos -> null para evitar error de conversión
+			NumeroDocumento:
+				pacienteData.NumeroDocumento != null &&
+				/^\d+$/.test(String(pacienteData.NumeroDocumento))
+					? Number(pacienteData.NumeroDocumento)
+					: null,
 			Domicilio: limitLength(pacienteData.Domicilio, 100) || '',
 			ValorLocalidad: pacienteData.ValorLocalidad || null,
 			Provincia: isNaN(pacienteData.Provincia) ? null : pacienteData.Provincia,
@@ -503,7 +551,10 @@ const actualizarPaciente = async (id, pacienteData) => {
 			HoraDefuncion: pacienteData.HoraDefuncion || null,
 			IdiomaPrimario:
 				limitLength(pacienteData.IdiomaPrimario || pacienteData.Idioma, 10) || null,
-			GrupoEtnico: isNaN(pacienteData.GrupoEtnico) ? null : pacienteData.GrupoEtnico,
+			GrupoEtnico:
+				pacienteData.GrupoEtnico != null
+					? limitLength(String(pacienteData.GrupoEtnico).trim(), 1)
+					: null,
 			EstadoMilitar: limitLength(pacienteData.EstadoMilitar, 5) || null,
 			Ciudadania: limitLength(pacienteData.Ciudadania, 40) || null,
 			SituacionLaboral: limitLength(pacienteData.SituacionLaboral, 5) || null,
@@ -569,6 +620,15 @@ const actualizarPaciente = async (id, pacienteData) => {
 		];
 		const rows = await executeQuery(query, params);
 		const actualizado = rows[0];
+		try {
+			console.log(
+				'[actualizarPaciente][debug] post-update IdiomaPrimario, GrupoEtnico:',
+				{
+					IdiomaPrimario: actualizado?.IdiomaPrimario,
+					GrupoEtnico: actualizado?.GrupoEtnico,
+				},
+			);
+		} catch (_) {}
 		// Reemplazar trabajos si se envían
 		if (pacienteData.Trabajos && Array.isArray(pacienteData.Trabajos)) {
 			try {

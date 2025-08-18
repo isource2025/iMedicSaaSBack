@@ -9,7 +9,9 @@ const patientsService = require('../services/patients.service');
 const obtenerPacientes = async (req, res) => {
 	try {
 		const baseUrl = `${req.protocol}://${req.get('host')}`;
-		const pacientes = await patientsService.obtenerPacientes(baseUrl);
+		// Permitir ?limit= param para controlar tamaño (default 200)
+		const limit = req.query.limit ? parseInt(req.query.limit) : 200;
+		const pacientes = await patientsService.obtenerPacientes(baseUrl, { limit });
 
 		res.json({
 			success: true,
@@ -230,7 +232,10 @@ const crearPaciente = async (req, res) => {
 			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
 			IdiomaPrimario: idiomaPrimarioIn,
 			Idioma: idiomaPrimarioIn,
-			GrupoEtnico: numOrNull(GrupoEtnico),
+			GrupoEtnico:
+				GrupoEtnico && String(GrupoEtnico).trim() !== ''
+					? String(GrupoEtnico).trim().substring(0, 1).toUpperCase()
+					: null,
 			EstadoMilitar: cleanUndefined(EstadoMilitar),
 			Ciudadania: cleanUndefined(Ciudadania),
 			SituacionLaboral: strOrNull(SituacionLaboral),
@@ -345,6 +350,7 @@ const actualizarPaciente = async (req, res) => {
 			OrdenNacimiento,
 			FechaDefuncion,
 			HoraDefuncion,
+			FotoURL,
 		} = req.body;
 
 		// Parseo seguro de Trabajos si viene como string (multipart/form-data)
@@ -359,12 +365,7 @@ const actualizarPaciente = async (req, res) => {
 
 		// Alias / normalizaciones
 		const numeroSSNIn = NumeroAfiliado || nAfiliado || req.body.NumeroSSN || null;
-		const numeroCuentaIn =
-			NumeroCuenta ||
-			Cobertura ||
-			CoberturaMedica ||
-			(Array.isArray(req.body.Trabajos) ? req.body.Trabajos[0]?.RazonSocial : null) ||
-			null;
+		const numeroCuentaIn = NumeroCuenta || Cobertura || CoberturaMedica || null;
 		const telefonoNegocioIn = TelefonoNegocio || TelefonoCelular || null;
 		let idiomaPrimarioIn = IdiomaPrimario || Idioma || null;
 		if (idiomaPrimarioIn === 'undefined' || idiomaPrimarioIn === '')
@@ -379,13 +380,15 @@ const actualizarPaciente = async (req, res) => {
 		}
 
 		// Validación básica
-		if (!ApellidoyNombre || !Sexo || !NumeroHC) {
+		const nombreValUpd = (ApellidoyNombre || '').trim();
+		const sexoValUpd = (Sexo || '').trim();
+		if (!nombreValUpd || !sexoValUpd) {
 			return res.status(400).json({
 				success: false,
-				mensaje:
-					'Faltan campos obligatorios (nombre, sexo y número de historia clínica)',
+				mensaje: 'Faltan campos obligatorios (ApellidoyNombre y Sexo)',
 			});
 		}
+		// NumeroHC ahora es opcional en update (coherente con create). Si viene string vacía la normalizamos a null/'' según servicio.
 
 		// Convertir hora de formato HH:MM a HHMM (entero)
 		let horaInt = null;
@@ -394,6 +397,14 @@ const actualizarPaciente = async (req, res) => {
 			if (!isNaN(horas) && !isNaN(minutos)) {
 				horaInt = horas * 100 + minutos;
 			}
+		}
+
+		// Validación de NumeroDocumento si viene con caracteres no numéricos (politica: rechazar)
+		if (NumeroDocumento && !/^\d+$/.test(String(NumeroDocumento))) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'NumeroDocumento debe ser numérico (solo dígitos)',
+			});
 		}
 
 		// Preparar datos para la BD
@@ -435,7 +446,39 @@ const actualizarPaciente = async (req, res) => {
 			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
 			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			FotoURL: FotoURL && FotoURL !== 'undefined' ? FotoURL : null,
 		};
+
+		// Normalizar GrupoEtnico ahora código de 1 carácter (no numérico)
+		if (pacienteData.GrupoEtnico !== undefined && pacienteData.GrupoEtnico !== null) {
+			let ge = String(pacienteData.GrupoEtnico).trim();
+			if (ge === '' || ge.toLowerCase() === 'undefined') ge = null;
+			else ge = ge.substring(0, 1).toUpperCase();
+			pacienteData.GrupoEtnico = ge;
+		}
+		if (pacienteData.Raza !== undefined && pacienteData.Raza !== null) {
+			const rz = parseInt(pacienteData.Raza);
+			pacienteData.Raza = isNaN(rz) ? null : rz;
+		}
+		if (
+			pacienteData.ValorLocalidad !== undefined &&
+			pacienteData.ValorLocalidad !== null
+		) {
+			const vl = parseInt(pacienteData.ValorLocalidad);
+			pacienteData.ValorLocalidad = isNaN(vl) ? null : vl;
+		}
+
+		// Si se sube nueva foto en esta actualización, sobrescribir FotoURL antes de llamar al servicio
+		if (req.file) {
+			pacienteData.FotoURL = `/media/patients/${req.file.filename}`;
+		}
+		// Asegurar alias coherente para NivelDeEstudios
+		if (!pacienteData.NivelDeEstudios && pacienteData.NivelEstudios) {
+			pacienteData.NivelDeEstudios = pacienteData.NivelEstudios;
+		}
+		try {
+			console.log('[actualizarPaciente][in] FotoURL body:', FotoURL);
+		} catch (_) {}
 		if (Array.isArray(req.body.Trabajos)) {
 			pacienteData.Trabajos = req.body.Trabajos;
 		}
@@ -474,6 +517,16 @@ const actualizarPaciente = async (req, res) => {
 			mensaje: 'Paciente actualizado con éxito',
 			data: pacienteActualizado,
 		});
+		try {
+			console.log('[actualizarPaciente][response]', {
+				IDPaciente: pacienteActualizado?.IDPaciente,
+				IdiomaPrimario: pacienteActualizado?.IdiomaPrimario,
+				GrupoEtnico: pacienteActualizado?.GrupoEtnico,
+				SituacionLaboral: pacienteActualizado?.SituacionLaboral,
+				NivelDeEstudios: pacienteActualizado?.NivelDeEstudios,
+				FotoURL: pacienteActualizado?.FotoURL,
+			});
+		} catch (_) {}
 	} catch (error) {
 		console.error('Error al actualizar paciente:', error);
 		res.status(500).json({
