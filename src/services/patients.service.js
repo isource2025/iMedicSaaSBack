@@ -167,23 +167,23 @@ const mapFotoURL = (rows, baseUrl) => {
 };
 
 /** Lista pacientes */
-const obtenerPacientes = async (baseUrl, { limit = 200 } = {}) => {
+const obtenerPacientes = async (baseUrl, { limit = 200, simple = false } = {}) => {
 	try {
 		await ensureExtraColumns();
-		const safeLimit = isNaN(limit) ? 200 : Math.min(Math.max(parseInt(limit), 1), 1000);
-		const query = `
-			SELECT TOP (${safeLimit})
+		let query;
+		if (limit === null || limit === undefined) {
+			// Sin límite explícito
+			query = `${
+				simple
+					? `SELECT p.IDPaciente, p.ApellidoyNombre`
+					: `SELECT 
 				p.IDPaciente,
 				p.NumeroDocumento,
 				p.ApellidoyNombre,
 				p.Domicilio,
 				p.Sexo,
 				p.NumeroHC,
-				CONVERT(VARCHAR(10), 
-					CASE 
-						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
-						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
-					END, 23) AS FechaNacimiento,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
 				p.EstadoCivil,
 				c.RazonSocial as Cobertura,
 				p.ValorLocalidad,
@@ -211,10 +211,59 @@ const obtenerPacientes = async (baseUrl, { limit = 200 } = {}) => {
 				p.Ciudadania,
 				p.SituacionLaboral,
 				p.NivelDeEstudios,
-				p.NivelDeEstudios AS NivelEstudios
+				p.NivelDeEstudios AS NivelEstudios`
+			}
 			FROM impacientes p
 			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
 			ORDER BY p.ApellidoyNombre`;
+		} else {
+			const safeLimit = isNaN(limit)
+				? 200
+				: Math.min(Math.max(parseInt(limit), 1), 5000);
+			query = `${
+				simple
+					? `SELECT TOP (${safeLimit}) p.IDPaciente, p.ApellidoyNombre`
+					: `SELECT TOP (${safeLimit})
+				p.IDPaciente,
+				p.NumeroDocumento,
+				p.ApellidoyNombre,
+				p.Domicilio,
+				p.Sexo,
+				p.NumeroHC,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
+				p.EstadoCivil,
+				c.RazonSocial as Cobertura,
+				p.ValorLocalidad,
+				p.Provincia,
+				p.Nacionalidad,
+				p.CUIT,
+				p.TelefonoParticular,
+				p.TelefonoNegocio,
+				p.TelefonoNegocio AS TelefonoCelular,
+				p.Mail,
+				p.NumeroCuenta,
+				p.NumeroSSN,
+				p.NumeroSSN AS nAfiliado,
+				p.FotoURL,
+				p.LicenciaConducir,
+				p.DadorOrganos,
+				p.OrdenNacimiento,
+				p.LugarNacimiento,
+				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
+				p.HoraDefuncion,
+				p.IdiomaPrimario,
+				p.IdiomaPrimario AS Idioma,
+				p.GrupoEtnico,
+				p.EstadoMilitar,
+				p.Ciudadania,
+				p.SituacionLaboral,
+				p.NivelDeEstudios,
+				p.NivelDeEstudios AS NivelEstudios`
+			}
+			FROM impacientes p
+			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			ORDER BY p.ApellidoyNombre`;
+		}
 		let result = await executeQuery(query);
 		result = mapFotoURL(result, baseUrl);
 		return result;

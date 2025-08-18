@@ -2,21 +2,31 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 
 /**
- * Obtiene todos los pacientes
- * @param {Object} req - Objeto de solicitud Express
- * @param {Object} res - Objeto de respuesta Express
+ * Obtiene pacientes (soporta modo simple y "all" sin límite)
+ * Query params:
+ *  - limit: número máximo (default 200, tope 5000)
+ *  - mode=all | full=1/true => sin límite
+ *  - simple=1/true => columnas reducidas para carga rápida
  */
 const obtenerPacientes = async (req, res) => {
 	try {
 		const baseUrl = `${req.protocol}://${req.get('host')}`;
-		// Permitir ?limit= param para controlar tamaño (default 200)
-		const limit = req.query.limit ? parseInt(req.query.limit) : 200;
-		const pacientes = await patientsService.obtenerPacientes(baseUrl, { limit });
+		const { limit, mode, full, simple } = req.query;
 
-		res.json({
-			success: true,
-			data: pacientes,
+		let parsedLimit = 200; // default
+		if (limit) {
+			const l = parseInt(limit, 10);
+			if (!isNaN(l) && l > 0) parsedLimit = Math.min(l, 5000);
+		}
+		if (mode === 'all' || full === 'true' || full === '1') parsedLimit = null; // sin TOP
+		const simpleFlag = simple === 'true' || simple === '1';
+
+		const pacientes = await patientsService.obtenerPacientes(baseUrl, {
+			limit: parsedLimit,
+			simple: simpleFlag,
 		});
+
+		res.json({ success: true, data: pacientes });
 	} catch (error) {
 		console.error('Error al obtener pacientes:', error);
 		res.status(500).json({
@@ -34,26 +44,15 @@ const obtenerPacientes = async (req, res) => {
 const buscarPacientes = async (req, res) => {
 	try {
 		const { searchTerm } = req.query;
-
-		// Verificar que el término de búsqueda exista y no esté vacío
-		if (
-			searchTerm === undefined ||
-			searchTerm === null ||
-			String(searchTerm).trim() === ''
-		) {
+		if (!searchTerm || !String(searchTerm).trim()) {
 			return res.status(400).json({
 				success: false,
 				mensaje: 'Se requiere un término de búsqueda',
 			});
 		}
-
-		// Buscar pacientes usando el servicio (ahora acepta números y strings)
 		const baseUrl = `${req.protocol}://${req.get('host')}`;
 		const pacientes = await patientsService.buscarPacientes(searchTerm, baseUrl);
-		res.json({
-			success: true,
-			data: pacientes,
-		});
+		res.json({ success: true, data: pacientes });
 	} catch (error) {
 		console.error('Error al buscar pacientes:', error);
 		res.status(500).json({
