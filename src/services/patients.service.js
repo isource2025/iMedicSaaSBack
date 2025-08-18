@@ -20,6 +20,8 @@ const ensureExtraColumns = async () => {
 			{ name: 'GrupoEtnico', type: 'INT NULL' },
 			{ name: 'EstadoMilitar', type: 'NVARCHAR(5) NULL' },
 			{ name: 'Ciudadania', type: 'NVARCHAR(40) NULL' },
+			{ name: 'SituacionLaboral', type: 'NVARCHAR(5) NULL' },
+			{ name: 'NivelDeEstudios', type: 'NVARCHAR(5) NULL' },
 		];
 		for (const col of columns) {
 			// Crear si no existe
@@ -153,7 +155,10 @@ const obtenerPacientes = async (baseUrl) => {
 				p.IdiomaPrimario,
 				p.GrupoEtnico,
 				p.EstadoMilitar,
-				p.Ciudadania
+				p.Ciudadania,
+				p.SituacionLaboral,
+				p.NivelDeEstudios,
+				p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
 			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
 			ORDER BY p.ApellidoyNombre`;
@@ -209,7 +214,10 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.Religion,
 				p.GrupoEtnico,
 				p.EstadoMilitar,
-				p.Ciudadania
+				p.Ciudadania,
+				p.SituacionLaboral,
+				p.NivelDeEstudios,
+				p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
 			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
 			WHERE p.IDPaciente = @p0`;
@@ -274,7 +282,10 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.IdiomaPrimario,
 				p.GrupoEtnico,
 				p.EstadoMilitar,
-				p.Ciudadania
+				p.Ciudadania,
+				p.SituacionLaboral,
+				p.NivelDeEstudios,
+				p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
 			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
 			WHERE 
@@ -355,6 +366,10 @@ const crearPaciente = async (pacienteData) => {
 				pacienteData.GrupoEtnico != null ? Number(pacienteData.GrupoEtnico) : null,
 			EstadoMilitar: limitLength(pacienteData.EstadoMilitar, 5) || null,
 			Ciudadania: limitLength(pacienteData.Ciudadania, 40) || null,
+			SituacionLaboral: limitLength(pacienteData.SituacionLaboral, 5) || null,
+			NivelDeEstudios:
+				limitLength(pacienteData.NivelDeEstudios || pacienteData.NivelEstudios, 5) ||
+				null,
 		};
 
 		try {
@@ -368,12 +383,12 @@ const crearPaciente = async (pacienteData) => {
 				NumeroHC, FechaNacimiento, Hora, CUIT, EstadoCivil,
 				Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail,
 				NumeroSSN, NumeroCuenta, FotoURL, LicenciaConducir, DadorOrganos, OrdenNacimiento,
-				LugarNacimiento, FechaDefuncion, HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania
+				LugarNacimiento, FechaDefuncion, HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, SituacionLaboral, NivelDeEstudios
 			) VALUES (
 				@p0,@p1,@p2,@p3,@p4,@p5,@p6,@p7,@p8,@p9,
 				@p10,@p11,@p12,@p13,@p14,@p15,@p16,@p17,@p18,@p19,
 				@p20,@p21,@p22,@p23,@p24,@p25,@p26,@p27,@p28,@p29,
-				@p30,@p31,@p32
+				@p30,@p31,@p32,@p33,@p34
 			);
 			SELECT 
 				IDPaciente, ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
@@ -384,7 +399,7 @@ const crearPaciente = async (pacienteData) => {
 				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
 				LicenciaConducir, DadorOrganos, OrdenNacimiento, LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN FechaDefuncion IS NULL OR FechaDefuncion < 0 OR FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY, FechaDefuncion, '1800-12-28') END, 23) AS FechaDefuncion,
-				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania
+				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, SituacionLaboral, NivelDeEstudios, NivelDeEstudios AS NivelEstudios
 			FROM impacientes WHERE IDPaciente = SCOPE_IDENTITY();`;
 
 		const params = [
@@ -421,6 +436,8 @@ const crearPaciente = async (pacienteData) => {
 			{ value: sd.GrupoEtnico },
 			{ value: sd.EstadoMilitar },
 			{ value: sd.Ciudadania },
+			{ value: sd.SituacionLaboral },
+			{ value: sd.NivelDeEstudios },
 		];
 		const [nuevo] = await executeQuery(insert, params);
 		// Insertar trabajos si vienen
@@ -449,6 +466,10 @@ const actualizarPaciente = async (id, pacienteData) => {
 			{ value: pacienteData.Nacionalidad },
 		]);
 		const nacionalidad = nacRows[0]?.Valor || null;
+		// Alias de campos que pueden venir con otros nombres desde el front
+		const telefonoNegocioIn = pacienteData.TelefonoNegocio ?? pacienteData.TelefonoCelular;
+		const numeroSSNIn = pacienteData.NumeroSSN ?? pacienteData.nAfiliado;
+		const numeroCuentaIn = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
 		const sd = {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 10) || '',
@@ -485,6 +506,10 @@ const actualizarPaciente = async (id, pacienteData) => {
 			GrupoEtnico: isNaN(pacienteData.GrupoEtnico) ? null : pacienteData.GrupoEtnico,
 			EstadoMilitar: limitLength(pacienteData.EstadoMilitar, 5) || null,
 			Ciudadania: limitLength(pacienteData.Ciudadania, 40) || null,
+			SituacionLaboral: limitLength(pacienteData.SituacionLaboral, 5) || null,
+			NivelDeEstudios:
+				limitLength(pacienteData.NivelDeEstudios || pacienteData.NivelEstudios, 5) ||
+				null,
 		};
 		const setFoto = sd.FotoURL ? ', FotoURL = @p20' : '';
 		// Reescritura: siempre incluimos @p20 y usamos COALESCE para no borrar FotoURL si viene null
@@ -496,7 +521,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 				EstadoCivil=@p13, Religion=@p14, Raza=@p15, TelefonoParticular=@p16,
 				TelefonoNegocio=@p17, Mail=@p18, NumeroSSN=@p19, NumeroCuenta=@p20, FotoURL=COALESCE(@p21, FotoURL),
 				LicenciaConducir=@p22, DadorOrganos=@p23, OrdenNacimiento=@p24, LugarNacimiento=@p25,
-				FechaDefuncion=@p26, HoraDefuncion=@p27, IdiomaPrimario=@p28, GrupoEtnico=@p29, EstadoMilitar=@p30, Ciudadania=@p31
+				FechaDefuncion=@p26, HoraDefuncion=@p27, IdiomaPrimario=@p28, GrupoEtnico=@p29, EstadoMilitar=@p30, Ciudadania=@p31, SituacionLaboral=@p32, NivelDeEstudios=@p33
 			WHERE IDPaciente=@p0;
 			SELECT IDPaciente, ApellidoyNombre, TipoDocumento, NumeroDocumento, Domicilio,
 				ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
@@ -504,7 +529,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
 				LicenciaConducir, DadorOrganos, OrdenNacimiento, LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN FechaDefuncion IS NULL OR FechaDefuncion < 0 OR FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY, FechaDefuncion, '1800-12-28') END, 23) AS FechaDefuncion,
-				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania
+				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, SituacionLaboral, NivelDeEstudios, NivelDeEstudios AS NivelEstudios
 			FROM impacientes WHERE IDPaciente=@p0;`;
 		const params = [
 			{ value: id },
@@ -539,6 +564,8 @@ const actualizarPaciente = async (id, pacienteData) => {
 			{ value: sd.GrupoEtnico },
 			{ value: sd.EstadoMilitar },
 			{ value: sd.Ciudadania },
+			{ value: sd.SituacionLaboral },
+			{ value: sd.NivelDeEstudios },
 		];
 		const rows = await executeQuery(query, params);
 		const actualizado = rows[0];

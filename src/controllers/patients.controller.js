@@ -108,16 +108,30 @@ const obtenerPacientePorId = async (req, res) => {
  */
 const crearPaciente = async (req, res) => {
 	try {
-		// Helper para armar URL absoluta
+		// --- Helpers & sanitización mínima (solo para creación) ---
+		const strOrNull = (v) =>
+			v === undefined || v === null || v === '' ? null : String(v);
+		const numOrNull = (v) =>
+			v === undefined || v === null || v === '' || isNaN(v) ? null : Number(v);
+		const trimOrNull = (v) => (v ? String(v).trim() : null);
+		const cleanUndefined = (v) => (v === 'undefined' ? null : v);
 		const buildAbsolute = (relativePath) => {
 			if (!relativePath) return null;
-			if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
-				return relativePath;
-			}
-			const protocol = req.protocol;
-			const host = req.get('host');
-			return `${protocol}://${host}${relativePath}`;
+			if (/^https?:\/\//i.test(relativePath)) return relativePath;
+			return `${req.protocol}://${req.get('host')}${relativePath}`;
 		};
+
+		// Parseo seguro de Trabajos (multipart)
+		if (typeof req.body.Trabajos === 'string') {
+			try {
+				const p = JSON.parse(req.body.Trabajos);
+				if (Array.isArray(p)) req.body.Trabajos = p;
+			} catch (e) {
+				console.warn('[crearPaciente] Trabajos inválido, se ignora:', e.message);
+			}
+		}
+
+		// Destructuring principal
 		const {
 			ApellidoyNombre,
 			TipoDocumento,
@@ -149,131 +163,110 @@ const crearPaciente = async (req, res) => {
 			FechaDefuncion,
 			HoraDefuncion,
 			IdiomaPrimario,
-			Idioma, // posible alias del front
+			Idioma,
 			GrupoEtnico,
 			EstadoMilitar,
 			Ciudadania,
+			SituacionLaboral,
+			NivelEstudios,
 		} = req.body;
 
-		// Log de depuración de campos recibidos (clave=valor tipo)
-		try {
-			console.log('[crearPaciente][debug] keys:', Object.keys(req.body));
-		} catch (_) {}
-
-		// Parseo seguro de Trabajos si viene como string (multipart/form-data)
-		if (req.body && typeof req.body.Trabajos === 'string') {
-			try {
-				const parsed = JSON.parse(req.body.Trabajos);
-				if (Array.isArray(parsed)) req.body.Trabajos = parsed;
-			} catch (e) {
-				console.warn('No se pudo parsear Trabajos (create):', e.message);
-			}
-		}
-
-		// Validación básica
-		if (!ApellidoyNombre || !Sexo || !NumeroHC) {
+		// Validación mínima requerida (NumeroHC ahora opcional)
+		const nombreVal = (ApellidoyNombre || '').trim();
+		const sexoVal = (Sexo || '').trim();
+		const numeroHCVal = (NumeroHC || '').trim();
+		if (!nombreVal || !sexoVal) {
 			return res.status(400).json({
 				success: false,
-				mensaje:
-					'Faltan campos obligatorios (nombre, sexo y número de historia clínica)',
+				mensaje: 'Faltan campos obligatorios (ApellidoyNombre y Sexo)',
 			});
 		}
 
-		// Convertir hora de formato HH:MM a HHMM (entero)
+		// Hora en formato HH:MM a entero HHMM
 		let horaInt = null;
-		if (HoraNacimiento) {
-			const [horas, minutos] = HoraNacimiento.split(':').map(Number);
-			if (!isNaN(horas) && !isNaN(minutos)) {
-				horaInt = horas * 100 + minutos;
-			}
+		if (HoraNacimiento && /^\d{1,2}:\d{2}$/.test(HoraNacimiento)) {
+			const [h, m] = HoraNacimiento.split(':').map(Number);
+			if (!isNaN(h) && !isNaN(m)) horaInt = h * 100 + m;
 		}
 
-		// Preparar datos para la BD
-		// Normalizaciones y alias
-		const numeroSSNIn = NumeroAfiliado || nAfiliado || req.body.NumeroSSN || null;
-		const numeroCuentaIn =
-			NumeroCuenta ||
-			Cobertura ||
-			req.body.CoberturaMedica ||
-			(Array.isArray(req.body.Trabajos) ? req.body.Trabajos[0]?.RazonSocial : null) ||
-			null;
-		const telefonoNegocioIn = TelefonoNegocio || TelefonoCelular || null;
-		let idiomaPrimarioIn = IdiomaPrimario || Idioma || null;
-		if (idiomaPrimarioIn === 'undefined' || idiomaPrimarioIn === '')
-			idiomaPrimarioIn = null;
-		// Sanitizar strings 'undefined'
-		const sane = (v) => (v === 'undefined' ? null : v);
+		// Alias / derivaciones
+		const numeroSSNIn = strOrNull(NumeroAfiliado || nAfiliado || req.body.NumeroSSN);
+		const numeroCuentaIn = strOrNull(
+			NumeroCuenta || Cobertura || req.body.CoberturaMedica,
+		);
+		const telNegocioIn = strOrNull(TelefonoNegocio || TelefonoCelular);
+		let idiomaPrimarioIn = cleanUndefined(IdiomaPrimario || Idioma);
+		if (idiomaPrimarioIn === '') idiomaPrimarioIn = null;
 
 		const pacienteData = {
-			ApellidoyNombre,
-			TipoDocumento,
-			NumeroDocumento,
-			Domicilio,
-			ValorLocalidad: ValorLocalidad ? parseInt(ValorLocalidad) : null,
-			Provincia: Provincia ? parseInt(Provincia) : null,
-			Nacionalidad,
-			Sexo,
-			NumeroHC,
-			FechaNacimiento: FechaNacimiento ? convertirFechaAClarion(FechaNacimiento) : null, // seguro
-			Hora: horaInt != null ? horaInt : null,
-			CUIT,
-			EstadoCivil,
-			Religion,
-			Raza: Raza ? parseInt(Raza) : null,
-			TelefonoParticular,
-			TelefonoNegocio: telefonoNegocioIn,
-			Mail: Mail,
+			ApellidoyNombre: nombreVal,
+			TipoDocumento: strOrNull(TipoDocumento),
+			NumeroDocumento: numOrNull(NumeroDocumento),
+			Domicilio: trimOrNull(Domicilio),
+			ValorLocalidad: numOrNull(ValorLocalidad),
+			Provincia: numOrNull(Provincia),
+			Nacionalidad: strOrNull(Nacionalidad),
+			Sexo: sexoVal,
+			NumeroHC: numeroHCVal || null,
+			FechaNacimiento: FechaNacimiento ? convertirFechaAClarion(FechaNacimiento) : null,
+			Hora: horaInt,
+			CUIT: strOrNull(CUIT),
+			EstadoCivil: strOrNull(EstadoCivil),
+			Religion: strOrNull(Religion),
+			Raza: numOrNull(Raza),
+			TelefonoParticular: strOrNull(TelefonoParticular),
+			TelefonoNegocio: telNegocioIn,
+			TelefonoCelular: telNegocioIn, // espejo para front
+			Mail: strOrNull(Mail),
 			NumeroSSN: numeroSSNIn,
+			nAfiliado: numeroSSNIn,
 			NumeroCuenta: numeroCuentaIn,
-			LicenciaConducir,
-			DadorOrganos,
-			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
-			LugarNacimiento,
+			Cobertura: numeroCuentaIn,
+			LicenciaConducir: strOrNull(LicenciaConducir),
+			DadorOrganos: strOrNull(DadorOrganos),
+			OrdenNacimiento: numOrNull(OrdenNacimiento),
+			LugarNacimiento: strOrNull(LugarNacimiento),
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
 			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
 			IdiomaPrimario: idiomaPrimarioIn,
-			GrupoEtnico: GrupoEtnico ? parseInt(GrupoEtnico) : null,
-			EstadoMilitar: sane(EstadoMilitar),
-			Ciudadania: sane(Ciudadania),
+			Idioma: idiomaPrimarioIn,
+			GrupoEtnico: numOrNull(GrupoEtnico),
+			EstadoMilitar: cleanUndefined(EstadoMilitar),
+			Ciudadania: cleanUndefined(Ciudadania),
+			SituacionLaboral: strOrNull(SituacionLaboral),
+			NivelDeEstudios: strOrNull(NivelEstudios),
+			NivelEstudios: strOrNull(NivelEstudios),
 		};
-		if (Array.isArray(req.body.Trabajos)) {
-			pacienteData.Trabajos = req.body.Trabajos;
+
+		if (Array.isArray(req.body.Trabajos)) pacienteData.Trabajos = req.body.Trabajos;
+
+		// Foto subida
+		if (req.file) {
+			pacienteData.FotoURL = `/media/patients/${req.file.filename}`;
+		} else if (req.body.FotoURL) {
+			pacienteData.FotoURL = req.body.FotoURL; // ya absoluta o relativa
 		}
 
-		// Manejo de foto subida (nueva estructura)
-		if (req.file) {
-			// Guardado físico en /uploads/patient-photos/<filename>
-			// Ruta pública expuesta en /media/patients
-			const relativePath = `/media/patients/${req.file.filename}`;
-			pacienteData.FotoURL = relativePath; // se almacena la ruta pública para simplificar
-		}
+		try {
+			console.log('[crearPaciente][in] keys:', Object.keys(req.body));
+		} catch (_) {}
+		try {
+			console.log('[crearPaciente][normalized]', pacienteData);
+		} catch (_) {}
 
 		const nuevoPaciente = await patientsService.crearPaciente(pacienteData);
-		// Asegurar que Trabajos se incluyan si no se cargaron (ej. si inserción falló silenciosamente)
-		if (
-			nuevoPaciente &&
-			(!nuevoPaciente.Trabajos || !Array.isArray(nuevoPaciente.Trabajos))
-		) {
-			try {
-				const { getJobsByPatient } = require('../services/patientJobs.service');
-				nuevoPaciente.Trabajos = await getJobsByPatient(nuevoPaciente.IDPaciente);
-			} catch (e) {
-				console.warn('No se pudo refrescar Trabajos después de crear:', e.message);
-			}
-		}
-		// Añadir alias en respuesta para consistencia con front
+
 		if (nuevoPaciente) {
-			if (!nuevoPaciente.TelefonoCelular && nuevoPaciente.TelefonoNegocio)
-				nuevoPaciente.TelefonoCelular = nuevoPaciente.TelefonoNegocio;
-			if (nuevoPaciente.NumeroSSN && !nuevoPaciente.nAfiliado)
-				nuevoPaciente.nAfiliado = nuevoPaciente.NumeroSSN;
-			if (nuevoPaciente.NumeroCuenta && !nuevoPaciente.Cobertura)
-				nuevoPaciente.Cobertura = nuevoPaciente.NumeroCuenta;
-			if (nuevoPaciente.IdiomaPrimario && !nuevoPaciente.Idioma)
-				nuevoPaciente.Idioma = nuevoPaciente.IdiomaPrimario;
-		}
-		if (nuevoPaciente && nuevoPaciente.FotoURL) {
-			nuevoPaciente.FotoURL = buildAbsolute(nuevoPaciente.FotoURL);
+			// Asegurar alias de salida
+			nuevoPaciente.TelefonoCelular =
+				nuevoPaciente.TelefonoCelular || nuevoPaciente.TelefonoNegocio;
+			nuevoPaciente.nAfiliado = nuevoPaciente.nAfiliado || nuevoPaciente.NumeroSSN;
+			nuevoPaciente.Cobertura = nuevoPaciente.Cobertura || nuevoPaciente.NumeroCuenta;
+			nuevoPaciente.Idioma = nuevoPaciente.Idioma || nuevoPaciente.IdiomaPrimario;
+			nuevoPaciente.NivelEstudios =
+				nuevoPaciente.NivelEstudios || nuevoPaciente.NivelDeEstudios;
+			if (nuevoPaciente.FotoURL)
+				nuevoPaciente.FotoURL = buildAbsolute(nuevoPaciente.FotoURL);
 		}
 
 		res.status(201).json({
@@ -340,7 +333,8 @@ const actualizarPaciente = async (req, res) => {
 			Ocupacion,
 			Observaciones,
 			SituacionLaboral,
-			NivelDeEstudios,
+			NivelDeEstudios, // puede venir ya con este nombre
+			NivelEstudios, // alias del front
 			DadorOrganos,
 			IdiomaPrimario,
 			Idioma,
@@ -431,7 +425,7 @@ const actualizarPaciente = async (req, res) => {
 			Ocupacion: Ocupacion ? parseInt(Ocupacion) : null,
 			Observaciones,
 			SituacionLaboral,
-			NivelDeEstudios,
+			NivelDeEstudios: NivelDeEstudios || NivelEstudios || null,
 			DadorOrganos,
 			IdiomaPrimario: idiomaPrimarioIn,
 			GrupoEtnico,
@@ -456,6 +450,8 @@ const actualizarPaciente = async (req, res) => {
 				pacienteActualizado.Cobertura = pacienteActualizado.NumeroCuenta;
 			if (pacienteActualizado.IdiomaPrimario && !pacienteActualizado.Idioma)
 				pacienteActualizado.Idioma = pacienteActualizado.IdiomaPrimario;
+			if (pacienteActualizado.NivelDeEstudios && !pacienteActualizado.NivelEstudios)
+				pacienteActualizado.NivelEstudios = pacienteActualizado.NivelDeEstudios;
 		}
 
 		if (req.file) {
