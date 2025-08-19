@@ -70,7 +70,7 @@ router.get('/search', patientsController.buscarPacientes);
 
 // Obtiene las tablas de referencia (sexo, raza, provincia, etc.)
 router.get('/reference-tables', patientsController.obtenerTablasReferencia);
-router.get('/situacion-laboral', patientsController.obtenerSituacionLaboralList);
+router.get('/catalogo-laboral', patientsController.obtenerCatalogosLaborales);
 router.get('/:id', patientsController.obtenerPacientePorId);
 router.post('/', upload.single('Foto'), patientsController.crearPaciente);
 router.put('/:id', upload.single('Foto'), patientsController.actualizarPaciente);

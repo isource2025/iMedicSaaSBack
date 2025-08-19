@@ -727,18 +727,24 @@ const registrarEgresoPaciente = async (req, res) => {
 	}
 };
 
-const obtenerSituacionLaboralList = async (req, res) => {
+// Nuevo: devuelve las tres listas en paralelo (SituacionLaboral, NivelEstudios, Ocupacion)
+const obtenerCatalogosLaborales = async (req, res) => {
 	try {
-		const situacionLaboralList = await patientsService.imPacientesSituacionLaborarList();
+		const { situaciones, niveles, ocupaciones } =
+			await patientsService.getLaboralCatalogs();
 		res.json({
 			success: true,
-			data: situacionLaboralList,
+			data: {
+				situacionLaboral: situaciones,
+				nivelesEstudios: niveles,
+				ocupaciones,
+			},
 		});
 	} catch (error) {
-		console.error('Error al obtener datos del paciente:', error);
+		console.error('Error al obtener catálogos laborales:', error);
 		res.status(500).json({
 			success: false,
-			mensaje: 'Error al obtener los datos del paciente',
+			mensaje: 'Error al obtener los catálogos laborales',
 		});
 	}
 };
@@ -752,5 +758,5 @@ module.exports = {
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
 	obtenerTablasReferencia,
-	obtenerSituacionLaboralList,
+	obtenerCatalogosLaborales,
 };

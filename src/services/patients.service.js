@@ -779,15 +779,20 @@ const registrarEgresoPaciente = async (egresoData) => {
 	}
 };
 
-const imPacientesSituacionLaborarList = async () => {
+// Consulta combinada en paralelo de SituacionLaboral, NivelEstudios y Ocupacion
+const getLaboralCatalogs = async () => {
 	try {
-		const result = await executeQuery(
-			'SELECT Valor, Descripcion FROM imPacientesSituacionLaborar',
+		const queries = [
+			`SELECT Valor, Descripcion FROM imPacientesSituacionLaborar ORDER BY Descripcion`,
+			`SELECT Valor, Descripcion FROM imPacienteNivelEstudio ORDER BY Descripcion`,
+			`SELECT Valor, Descripcion FROM imOcupacion ORDER BY Descripcion`,
+		];
+		const [situaciones, niveles, ocupaciones] = await Promise.all(
+			queries.map((q) => executeQuery(q)),
 		);
-		console.log('[imPacientesSituacionLaborarList] resultado:', result);
-		return result;
+		return { situaciones, niveles, ocupaciones };
 	} catch (error) {
-		console.error('[imPacientesSituacionLaborarList] error:', error);
+		console.error('[getLaboralCatalogs] error:', error);
 		throw error;
 	}
 };
@@ -801,5 +806,5 @@ module.exports = {
 	eliminarPaciente,
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
-	imPacientesSituacionLaborarList,
+	getLaboralCatalogs,
 };
