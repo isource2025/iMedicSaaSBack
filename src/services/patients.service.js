@@ -783,9 +783,9 @@ const registrarEgresoPaciente = async (egresoData) => {
 const getLaboralCatalogs = async () => {
 	try {
 		const queries = [
-			`SELECT Valor, Descripcion FROM imPacientesSituacionLaborar ORDER BY Descripcion`,
-			`SELECT Valor, Descripcion FROM imPacienteNivelEstudio ORDER BY Descripcion`,
-			`SELECT Valor, Descripcion FROM imOcupacion ORDER BY Descripcion`,
+			`SELECT SituacionLaboral FROM imPacienteSituacionLaboral`,
+			`SELECT NivelDeEstudios FROM imPacienteNivelDeEstudios`,
+			`SELECT Valor, Descripcion FROM imOcupacion ORDER BY Valor`,
 		];
 		const [situaciones, niveles, ocupaciones] = await Promise.all(
 			queries.map((q) => executeQuery(q)),
