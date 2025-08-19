@@ -170,6 +170,7 @@ const crearPaciente = async (req, res) => {
 			Ciudadania,
 			SituacionLaboral,
 			NivelEstudios,
+			Ocupacion, // NUEVO: se guarda directamente en impacientes
 		} = req.body;
 
 		// Validación mínima requerida (NumeroHC ahora opcional)
@@ -240,9 +241,20 @@ const crearPaciente = async (req, res) => {
 			SituacionLaboral: strOrNull(SituacionLaboral),
 			NivelDeEstudios: strOrNull(NivelEstudios),
 			NivelEstudios: strOrNull(NivelEstudios),
+			Ocupacion: strOrNull(Ocupacion),
 		};
 
 		if (Array.isArray(req.body.Trabajos)) pacienteData.Trabajos = req.body.Trabajos;
+
+		// Normalización de claves de trabajos (el front puede enviar RazonSocialEmpresa)
+		if (Array.isArray(pacienteData.Trabajos)) {
+			pacienteData.Trabajos = pacienteData.Trabajos.map((t) => ({
+				RazonSocial: t.RazonSocial || t.RazonSocialEmpresa || null,
+				CuitEmpresa: t.CuitEmpresa || t.CUITEmpresa || null,
+				DomicilioEmpresa: t.DomicilioEmpresa || t.DireccionEmpresa || null,
+				TelefonoEmpresa: t.TelefonoEmpresa || t.TelEmpresa || null,
+			}));
+		}
 
 		// Foto subida
 		if (req.file) {
@@ -480,6 +492,16 @@ const actualizarPaciente = async (req, res) => {
 		} catch (_) {}
 		if (Array.isArray(req.body.Trabajos)) {
 			pacienteData.Trabajos = req.body.Trabajos;
+		}
+		// Normalizar claves de trabajos también en update
+		if (Array.isArray(pacienteData.Trabajos)) {
+			pacienteData.Trabajos = pacienteData.Trabajos.map((t) => ({
+				ID: t.ID, // mantener si viene para reemplazo (el servicio hará delete+insert, se ignora)
+				RazonSocial: t.RazonSocial || t.RazonSocialEmpresa || null,
+				CuitEmpresa: t.CuitEmpresa || t.CUITEmpresa || null,
+				DomicilioEmpresa: t.DomicilioEmpresa || t.DireccionEmpresa || null,
+				TelefonoEmpresa: t.TelefonoEmpresa || t.TelEmpresa || null,
+			}));
 		}
 
 		const pacienteActualizado = await patientsService.actualizarPaciente(id, pacienteData);
