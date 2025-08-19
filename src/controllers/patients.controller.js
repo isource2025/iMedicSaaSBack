@@ -727,6 +727,21 @@ const registrarEgresoPaciente = async (req, res) => {
 	}
 };
 
+const obtenerSituacionLaboralList = async (req, res) => {
+	try {
+		const situacionLaboralList = await patientsService.imPacientesSituacionLaborarList();
+		res.json({
+			success: true,
+			data: situacionLaboralList,
+		});
+	} catch (error) {
+		console.error('Error al obtener datos del paciente:', error);
+		res.status(500).json({
+			success: false,
+			mensaje: 'Error al obtener los datos del paciente',
+		});
+	}
+};
 module.exports = {
 	obtenerPacientes,
 	buscarPacientes,
@@ -737,4 +752,5 @@ module.exports = {
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
 	obtenerTablasReferencia,
+	obtenerSituacionLaboralList,
 };

@@ -144,9 +144,6 @@ const ensureExtraColumns = async () => {
 	}
 };
 
-// Alias para compatibilidad con nombre anterior
-const ensureFotoURLColumn = ensureExtraColumns;
-
 // Normaliza un resultado (o lista) agregando baseUrl a FotoURL relativa
 const mapFotoURL = (rows, baseUrl) => {
 	if (!baseUrl) return rows;
@@ -782,6 +779,19 @@ const registrarEgresoPaciente = async (egresoData) => {
 	}
 };
 
+const imPacientesSituacionLaborarList = async () => {
+	try {
+		const result = await executeQuery(
+			'SELECT Valor, Descripcion FROM imPacientesSituacionLaborar',
+		);
+		console.log('[imPacientesSituacionLaborarList] resultado:', result);
+		return result;
+	} catch (error) {
+		console.error('[imPacientesSituacionLaborarList] error:', error);
+		throw error;
+	}
+};
+
 module.exports = {
 	obtenerPacientes,
 	buscarPacientes,
@@ -791,4 +801,5 @@ module.exports = {
 	eliminarPaciente,
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
+	imPacientesSituacionLaborarList,
 };
