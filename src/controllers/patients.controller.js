@@ -2,30 +2,29 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 
 /**
- * Obtiene pacientes (soporta modo simple y "all" sin límite)
+ * Lista pacientes optimizado.
  * Query params:
- *  - limit: número máximo (default 200, tope 5000)
- *  - mode=all | full=1/true => sin límite
- *  - simple=1/true => columnas reducidas para carga rápida
+ *  - limit: número de pacientes (default 200, max 5000) SIEMPRE se aplica
+ *  - simple=1|true => columnas reducidas (backward compatible)
+ *  - mode=complete | complete=1 => columnas completas (equivalente a simple=false)
+ *  - withCount=1 => agrega totalCount (COUNT(*) separado)
+ *  - order=name|id (default name)
  */
 const obtenerPacientes = async (req, res) => {
 	try {
-		const baseUrl = `${req.protocol}://${req.get('host')}`;
-		const { limit, mode, full, simple } = req.query;
-
-		let parsedLimit = 200; // default
+		const { limit, withCount } = req.query;
+		let parsedLimit = 200;
 		if (limit) {
 			const l = parseInt(limit, 10);
 			if (!isNaN(l) && l > 0) parsedLimit = Math.min(l, 5000);
 		}
-		if (mode === 'all' || full === 'true' || full === '1') parsedLimit = null; // sin TOP
-		const simpleFlag = simple === 'true' || simple === '1';
 
-		const pacientes = await patientsService.obtenerPacientes(baseUrl, {
-			limit: parsedLimit,
-			simple: simpleFlag,
-		});
+		const pacientes = await patientsService.obtenerPacientes();
 
+		if (withCount === '1' || withCount === 'true') {
+			const totalCount = await patientsService.contarPacientes();
+			return res.json({ success: true, totalCount, data: pacientes });
+		}
 		res.json({ success: true, data: pacientes });
 	} catch (error) {
 		console.error('Error al obtener pacientes:', error);

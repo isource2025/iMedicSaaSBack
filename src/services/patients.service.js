@@ -187,112 +187,64 @@ const mapFotoURL = (rows, baseUrl) => {
 	}));
 };
 
-/** Lista pacientes */
-const obtenerPacientes = async (baseUrl, { limit = 200, simple = false } = {}) => {
+// Intenta resolver NumeroCuenta (cobertura) cuando llega como descripción (p.ej. 'ACA SALUD')
+const resolveNumeroCuenta = async (input) => {
+	if (input == null) return null;
+	const raw = String(input).trim();
+	if (!raw) return null;
+	// Si ya es numérico devolver número
+	if (/^\d+$/.test(raw)) return Number(raw);
+	// Buscar coincidencia exacta en RazonSocial
+	try {
+		const exact = await executeQuery(
+			'SELECT TOP 1 Valor FROM imClientes WHERE RazonSocial = @p0',
+			[{ value: raw }],
+		);
+		if (exact.length) return exact[0].Valor;
+		// Buscar por LIKE si no hay exacto
+		const like = await executeQuery(
+			'SELECT TOP 1 Valor FROM imClientes WHERE RazonSocial LIKE @p0 ORDER BY RazonSocial',
+			[{ value: `%${raw}%` }],
+		);
+		if (like.length) return like[0].Valor;
+	} catch (e) {
+		console.warn('[resolveNumeroCuenta] fallo buscando cobertura:', e.message);
+	}
+	return null; // No se encontró
+};
+
+/** Lista pacientes (siempre limitado) */
+const obtenerPacientes = async () => {
 	try {
 		await ensureExtraColumns();
-		let query;
-		if (limit === null || limit === undefined) {
-			// Sin límite explícito
-			query = `${
-				simple
-					? `SELECT p.IDPaciente, p.ApellidoyNombre`
-					: `SELECT 
-				p.IDPaciente,
-				p.NumeroDocumento,
+		const query = `
+			SELECT 
+				p.IdPaciente as IDPaciente,
 				p.ApellidoyNombre,
-				p.Domicilio,
-				p.Sexo,
-				p.NumeroHC,
-				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
-				p.EstadoCivil,
-				c.RazonSocial as Cobertura,
-				p.ValorLocalidad,
-				p.Provincia,
-				p.Nacionalidad,
-				p.CUIT,
-				p.TelefonoParticular,
-				p.TelefonoNegocio,
-				p.TelefonoNegocio AS TelefonoCelular,
-				p.Mail,
-				p.NumeroCuenta,
-				p.NumeroSSN,
-				p.NumeroSSN AS nAfiliado,
-				p.FotoURL,
-				p.LicenciaConducir,
-				p.DadorOrganos,
-				p.OrdenNacimiento,
-				p.LugarNacimiento,
-				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
-				p.HoraDefuncion,
-				p.IdiomaPrimario,
-				p.IdiomaPrimario AS Idioma,
-				p.GrupoEtnico,
-				p.EstadoMilitar,
-				p.Ciudadania,
-				p.Ocupacion,
-				p.SituacionLaboral,
-				p.NivelDeEstudios,
-				p.NivelDeEstudios AS NivelEstudios`
-			}
-			FROM impacientes p
-			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-			ORDER BY p.ApellidoyNombre`;
-		} else {
-			const safeLimit = isNaN(limit)
-				? 200
-				: Math.min(Math.max(parseInt(limit), 1), 5000);
-			query = `${
-				simple
-					? `SELECT TOP (${safeLimit}) p.IDPaciente, p.ApellidoyNombre`
-					: `SELECT TOP (${safeLimit})
-				p.IDPaciente,
 				p.NumeroDocumento,
-				p.ApellidoyNombre,
-				p.Domicilio,
-				p.Sexo,
 				p.NumeroHC,
-				CONVERT(VARCHAR(10), CASE WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
-				p.EstadoCivil,
-				c.RazonSocial as Cobertura,
-				p.ValorLocalidad,
-				p.Provincia,
-				p.Nacionalidad,
-				p.CUIT,
-				p.TelefonoParticular,
-				p.TelefonoNegocio,
-				p.TelefonoNegocio AS TelefonoCelular,
-				p.Mail,
-				p.NumeroCuenta,
-				p.NumeroSSN,
-				p.NumeroSSN AS nAfiliado,
-				p.FotoURL,
-				p.LicenciaConducir,
-				p.DadorOrganos,
-				p.OrdenNacimiento,
-				p.LugarNacimiento,
-				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
-				p.HoraDefuncion,
-				p.IdiomaPrimario,
-				p.IdiomaPrimario AS Idioma,
-				p.GrupoEtnico,
-				p.EstadoMilitar,
-				p.Ciudadania,
-				p.Ocupacion,
-				p.SituacionLaboral,
-				p.NivelDeEstudios,
-				p.NivelDeEstudios AS NivelEstudios`
-			}
-			FROM impacientes p
-			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
-			ORDER BY p.ApellidoyNombre`;
-		}
-		let result = await executeQuery(query);
-		result = mapFotoURL(result, baseUrl);
-		return result;
+				p.Domicilio,
+				p.FechaNacimiento,
+				c.RazonSocial as Cobertura
+			FROM imPacientes p
+			LEFT JOIN imClientes c ON p.IdPaciente = c.Valor
+			ORDER BY p.ApellidoyNombre
+		`;
+		let rows = await executeQuery(query);
+		return rows;
 	} catch (error) {
 		console.error('Error al obtener pacientes de la base de datos:', error);
 		throw error;
+	}
+};
+
+const contarPacientes = async () => {
+	try {
+		const r = await executeQuery('SELECT COUNT(1) AS total FROM impacientes');
+		return r[0]?.total || 0;
+	} catch (e) {
+		console.error('Error al contar pacientes:', e);
+		return 0;
 	}
 };
 
@@ -344,8 +296,8 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.SituacionLaboral,
 				p.NivelDeEstudios,
 				p.NivelDeEstudios AS NivelEstudios
-			FROM impacientes p
-			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			FROM imPacientes p
+			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
 			WHERE p.IDPaciente = @p0`;
 		const parametros = [{ value: id }];
 		const rows = await executeQuery(query, parametros);
@@ -357,6 +309,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 		} catch (e) {
 			console.warn('No se pudieron obtener trabajos del paciente', e.message);
 		}
+		console.log('[Paciente obtenido]', paciente);
 		return paciente;
 	} catch (error) {
 		console.error(`Error al obtener paciente con ID ${id}:`, error);
@@ -388,7 +341,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.HoraDefuncion, p.IdiomaPrimario, p.GrupoEtnico, p.EstadoMilitar, p.Ciudadania,
 				p.Ocupacion, p.SituacionLaboral, p.NivelDeEstudios, p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
-			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
 			WHERE p.IDPaciente = @p0 OR p.NumeroDocumento = @p0 OR p.NumeroHC = @p0 OR p.ApellidoyNombre LIKE @p1
 			ORDER BY p.IDPaciente DESC`;
 			params = [{ value: Number(term) }, { value: `%${term}%` }];
@@ -406,7 +359,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.HoraDefuncion, p.IdiomaPrimario, p.GrupoEtnico, p.EstadoMilitar, p.Ciudadania,
 				p.Ocupacion, p.SituacionLaboral, p.NivelDeEstudios, p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
-			LEFT JOIN imclientes c ON p.NumeroCuenta = c.Valor
+			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
 			WHERE p.ApellidoyNombre LIKE @p0
 			${digitsPrefix ? ' OR p.NumeroDocumento LIKE @p1 OR p.NumeroHC LIKE @p1' : ''}
 			ORDER BY p.ApellidoyNombre`;
@@ -431,7 +384,8 @@ const crearPaciente = async (pacienteData) => {
 		// Fallbacks alias del front (acepta TelefonoCelular, nAfiliado, Cobertura)
 		const telefonoNegocioIn = pacienteData.TelefonoNegocio ?? pacienteData.TelefonoCelular;
 		const numeroSSNIn = pacienteData.NumeroSSN ?? pacienteData.nAfiliado;
-		const numeroCuentaIn = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
+		const numeroCuentaRaw = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
+		const numeroCuentaIn = await resolveNumeroCuenta(numeroCuentaRaw);
 
 		const sd = {
 			ListaIDPaciente: limitLength(pacienteData.ListaIDPaciente ?? uuidv4(), 80),
@@ -587,7 +541,8 @@ const actualizarPaciente = async (id, pacienteData) => {
 		// Alias de campos que pueden venir con otros nombres desde el front
 		const telefonoNegocioIn = pacienteData.TelefonoNegocio ?? pacienteData.TelefonoCelular;
 		const numeroSSNIn = pacienteData.NumeroSSN ?? pacienteData.nAfiliado;
-		const numeroCuentaIn = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
+		const numeroCuentaRaw = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
+		const numeroCuentaIn = await resolveNumeroCuenta(numeroCuentaRaw);
 		const sd = {
 			ApellidoyNombre: limitLength(pacienteData.ApellidoyNombre, 100) || '',
 			TipoDocumento: limitLength(pacienteData.TipoDocumento, 10) || '',
@@ -706,6 +661,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 			);
 		} catch (_) {}
 		// Reemplazar trabajos si se envían
+		console.log('[Tabajo enviados]', pacienteData.Trabajos);
 		if (pacienteData.Trabajos && Array.isArray(pacienteData.Trabajos)) {
 			try {
 				await replaceJobs(id, pacienteData.Trabajos);
@@ -837,4 +793,5 @@ module.exports = {
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
 	getLaboralCatalogs,
+	contarPacientes,
 };
