@@ -4,7 +4,7 @@ const coberturaService = require('../services/cobertura.service');
 async function getCobertura(req, res) {
 	try {
 		const data = await coberturaService.getCobertura();
-		console.log('Cobertura obtenida:', data);
+
 		res.json(data);
 	} catch (error) {
 		console.error('Error al obtener cobertura:', error);

@@ -6,7 +6,7 @@ const insertJobs = async (idPaciente, trabajos = []) => {
 
 	const inserted = [];
 	for (const t of trabajos) {
-		const q = `INSERT INTO imPacientesTrabajos (IDPaciente, RazonSocial, CuitEmpresa, DomicilioEmpresa, TelefonoEmpresa)
+		const q = `INSERT INTO imPacientesTrabajos (IDPaciente, RazonSocialEmpresa, CuitEmpresa, DomicilioEmpresa, TelefonoEmpresa)
                VALUES (@p0,@p1,@p2,@p3,@p4);
                SELECT SCOPE_IDENTITY() AS ID;`;
 		const params = [
@@ -23,9 +23,15 @@ const insertJobs = async (idPaciente, trabajos = []) => {
 };
 
 const getJobsByPatient = async (idPaciente) => {
-	const q = `SELECT ID, IDPaciente, RazonSocial, CuitEmpresa, DomicilioEmpresa, TelefonoEmpresa
-             FROM imPacientesTrabajos WHERE IDPaciente=@p0 ORDER BY ID`;
-	return await executeQuery(q, [{ value: idPaciente }]);
+	const q = `SELECT IDPaciente, RazonSocialEmpresa as RazonSocial, CuitEmpresa, DomicilioEmpresa, TelefonoEmpresa FROM imPacientesTrabajos WHERE IDPaciente=@p0`;
+
+	let trabajos;
+	try {
+		trabajos = await executeQuery(q, [{ value: idPaciente }]);
+	} catch (error) {
+		console.error('[Error al obtener trabajos]', error);
+	}
+	return trabajos;
 };
 
 const replaceJobs = async (idPaciente, trabajos = []) => {

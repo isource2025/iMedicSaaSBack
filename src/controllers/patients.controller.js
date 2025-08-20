@@ -260,6 +260,40 @@ const crearPaciente = async (req, res) => {
 			pacienteData.FotoURL = `/media/patients/${req.file.filename}`;
 		} else if (req.body.FotoURL) {
 			pacienteData.FotoURL = req.body.FotoURL; // ya absoluta o relativa
+		} else if (req.body.FotoBase64) {
+			// Guardar imagen enviada como base64 (data URI o puro)
+			try {
+				const fs = require('fs');
+				const path = require('path');
+				let b64 = String(req.body.FotoBase64).trim();
+				let mime = 'image/jpeg';
+				const dataUriMatch = b64.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+				if (dataUriMatch) {
+					mime = dataUriMatch[1];
+					b64 = dataUriMatch[2];
+				}
+				// Validar base64
+				if (/^[A-Za-z0-9+/=]+$/.test(b64)) {
+					const ext = mime.split('/')[1] || 'jpg';
+					const fname = `${Date.now()}-${Math.round(Math.random() * 1e9).toString(
+						36,
+					)}.${ext}`;
+					const destDir = path.join(
+						__dirname,
+						'..',
+						'..',
+						'uploads',
+						'patient-photos',
+					);
+					if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+					fs.writeFileSync(path.join(destDir, fname), Buffer.from(b64, 'base64'));
+					pacienteData.FotoURL = `/media/patients/${fname}`;
+				} else {
+					console.warn('[crearPaciente] FotoBase64 inválida, se ignora');
+				}
+			} catch (e) {
+				console.warn('[crearPaciente] error procesando FotoBase64:', e.message);
+			}
 		}
 
 		try {
@@ -481,6 +515,39 @@ const actualizarPaciente = async (req, res) => {
 		// Si se sube nueva foto en esta actualización, sobrescribir FotoURL antes de llamar al servicio
 		if (req.file) {
 			pacienteData.FotoURL = `/media/patients/${req.file.filename}`;
+		} else if (req.body.FotoBase64 && !pacienteData.FotoURL) {
+			// Procesar base64 solo si no vino archivo. Si ya había FotoURL no la reemplazamos a menos que quieras forzar.
+			try {
+				const fs = require('fs');
+				const path = require('path');
+				let b64 = String(req.body.FotoBase64).trim();
+				let mime = 'image/jpeg';
+				const dataUriMatch = b64.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+				if (dataUriMatch) {
+					mime = dataUriMatch[1];
+					b64 = dataUriMatch[2];
+				}
+				if (/^[A-Za-z0-9+/=]+$/.test(b64)) {
+					const ext = mime.split('/')[1] || 'jpg';
+					const fname = `${Date.now()}-${Math.round(Math.random() * 1e9).toString(
+						36,
+					)}.${ext}`;
+					const destDir = path.join(
+						__dirname,
+						'..',
+						'..',
+						'uploads',
+						'patient-photos',
+					);
+					if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+					fs.writeFileSync(path.join(destDir, fname), Buffer.from(b64, 'base64'));
+					pacienteData.FotoURL = `/media/patients/${fname}`;
+				} else {
+					console.warn('[actualizarPaciente] FotoBase64 inválida, se ignora');
+				}
+			} catch (e) {
+				console.warn('[actualizarPaciente] error procesando FotoBase64:', e.message);
+			}
 		}
 		// Asegurar alias coherente para NivelDeEstudios
 		if (!pacienteData.NivelDeEstudios && pacienteData.NivelEstudios) {
