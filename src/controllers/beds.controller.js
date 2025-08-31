@@ -118,6 +118,28 @@ const obtenerSectores = async (req, res) => {
 };
 
 /**
+ * Obtener el total de camas y estadísticas
+ * @param {Object} req Request
+ * @param {Object} res Response
+ */
+const obtenerTotalCamas = async (req, res) => {
+  try {
+    const estadisticas = await bedsService.obtenerTotalCamas();
+    res.json({
+      success: true,
+      data: estadisticas
+    });
+  } catch (error) {
+    console.error('Error al obtener total de camas:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener el total de camas',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Obtener los registros de control frecuente por número de visita
  * @param {Object} req Request
  * @param {Object} res Response
@@ -146,6 +168,7 @@ module.exports = {
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
+  obtenerTotalCamas,
   obtenerControlesFrecuentesPorVisita,
   actualizarEstadoCama
 };

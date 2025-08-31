@@ -229,6 +229,36 @@ const obtenerSectores = async () => {
 };
 
 /**
+ * Obtener el total de camas desde imHabitacionCamas
+ * @returns {Promise<Object>} Objeto con estadísticas de camas
+ */
+const obtenerTotalCamas = async () => {
+  const consulta = `
+    SELECT 
+      COUNT(*) as totalCamas,
+      SUM(CASE WHEN ec.Valor IN ('U', 'A', 'H') THEN 1 ELSE 0 END) as camasDisponibles,
+      SUM(CASE WHEN ec.Valor = 'O' THEN 1 ELSE 0 END) as camasOcupadas,
+      SUM(CASE WHEN ec.Valor IN ('C', 'R', 'I') THEN 1 ELSE 0 END) as camasNoDisponibles
+    FROM 
+      imHabitacionCamas hc
+    LEFT JOIN 
+      imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
+  `;
+  try {
+    const resultado = await executeQuery(consulta);
+    return resultado.length > 0 ? resultado[0] : {
+      totalCamas: 0,
+      camasDisponibles: 0,
+      camasOcupadas: 0,
+      camasNoDisponibles: 0
+    };
+  } catch (error) {
+    console.error('Error al obtener total de camas:', error);
+    throw error;
+  }
+};
+
+/**
  * Obtener los registros de control frecuente por número de visita
  * @param {number} numeroVisita Número de visita para filtrar
  * @returns {Promise<Array>} Lista de registros de control frecuente
@@ -275,5 +305,6 @@ module.exports = {
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
+  obtenerTotalCamas,
   obtenerControlesFrecuentesPorVisita,
 };
