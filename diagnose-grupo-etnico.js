@@ -1,8 +1,11 @@
 // Usar fetch nativo disponible en Node.js moderno
+require('dotenv').config();
+
+const API_URL = process.env.API_URL || 'http://localhost:5006/api';
 
 async function fetchGruposEtnicos() {
   try {
-    const response = await fetch('http://localhost:5006/api/grupos-etnicos');
+    const response = await fetch(`${API_URL}/grupos-etnicos`);
     
     // Verifiquemos el Content-Type
     console.log('Content-Type:', response.headers.get('content-type'));

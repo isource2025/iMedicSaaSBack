@@ -108,8 +108,47 @@ const obtenerIndicadoresPorFecha = async (tipoIndicador = 'Ingresos', fechaInici
   }
 };
 
+/**
+ * Obtiene un resumen de pacientes para el día actual y lo compara con el día anterior.
+ * @returns {Object} Objeto con el total de hoy, y la comparación con el día anterior.
+ */
+const obtenerResumenPacientesHoy = async () => {
+  try {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const formatDate = (date) => date.toISOString().split('T')[0];
+
+    const fechaHoy = formatDate(today);
+    const fechaAyer = formatDate(yesterday);
+
+    const resumenHoy = await obtenerResumenIndicadores('Ingresos', fechaHoy, fechaHoy);
+    const resumenAyer = await obtenerResumenIndicadores('Ingresos', fechaAyer, fechaAyer);
+
+    const totalHoy = resumenHoy.totalGeneral || 0;
+    const totalAyer = resumenAyer.totalGeneral || 0;
+
+    let porcentajeCambio = 0;
+    if (totalAyer > 0) {
+      porcentajeCambio = ((totalHoy - totalAyer) / totalAyer) * 100;
+    } else if (totalHoy > 0) {
+      porcentajeCambio = 100; // Si ayer fue 0 y hoy hay pacientes, es un 100% de aumento
+    }
+
+    return {
+      totalHoy,
+      porcentajeCambio: parseFloat(porcentajeCambio.toFixed(1)),
+    };
+  } catch (error) {
+    console.error('Error al obtener el resumen de pacientes de hoy:', error);
+    throw new Error('Error al obtener el resumen de pacientes de hoy');
+  }
+};
+
 module.exports = {
   obtenerIndicadores,
   obtenerResumenIndicadores,
-  obtenerIndicadoresPorFecha
+  obtenerIndicadoresPorFecha,
+  obtenerResumenPacientesHoy
 };

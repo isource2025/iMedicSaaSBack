@@ -142,8 +142,29 @@ const obtenerIndicadoresPorFecha = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene un resumen de pacientes para el día actual y lo compara con el día anterior.
+ */
+const obtenerResumenPacientesHoy = async (req, res) => {
+  try {
+    const resumen = await indicadoresService.obtenerResumenPacientesHoy();
+    res.json({
+      success: true,
+      data: resumen
+    });
+  } catch (error) {
+    console.error('Error en obtenerResumenPacientesHoy:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   obtenerIndicadores,
   obtenerResumenIndicadores,
-  obtenerIndicadoresPorFecha
+  obtenerIndicadoresPorFecha,
+  obtenerResumenPacientesHoy
 };
