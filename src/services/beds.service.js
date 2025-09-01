@@ -32,7 +32,7 @@ const obtenerCamas = async () => {
     LEFT JOIN
       imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
     LEFT JOIN
-      imClientes c ON v.Contrato = c.Valor
+      imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     ORDER BY
@@ -83,17 +83,23 @@ const filtrarCamasPorEstado = async (estadoValor) => {
     LEFT JOIN
       imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
     LEFT JOIN
-      imClientes c ON v.Contrato = c.Valor
+      imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     WHERE 
-      ec.valor = @p0
+      ec.valor = @param0
     ORDER BY
       hc.ValorHabitacionCama ASC
   `;
   
   const parametros = [{ value: estadoValor }];
-  return await executeQuery(consulta, parametros);
+  try {
+    return await executeQuery(consulta, parametros);
+  } catch (error) {
+    console.error('Error al filtrar camas por estado:', error);
+    console.error('Parámetros:', JSON.stringify(parametros));
+    throw error;
+  }
 };
 
 /**
@@ -119,13 +125,19 @@ const obtenerCamaPorId = async (id) => {
     LEFT JOIN
       imSexo sx ON p.Sexo = sx.Valor
     LEFT JOIN
-      imClientes c ON v.Contrato = c.Valor
+      imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.id = @p0`;
+    WHERE hc.ValorHabitacionCama = @param0`;
   const parametros = [{ value: id }];
-  const resultado = await executeQuery(consulta, parametros);
-  return resultado.length > 0 ? resultado[0] : null;
+  try {
+    const resultado = await executeQuery(consulta, parametros);
+    return resultado.length > 0 ? resultado[0] : null;
+  } catch (error) {
+    console.error('Error al obtener cama por ID:', error);
+    console.error('Parámetros:', JSON.stringify(parametros));
+    throw error;
+  }
 };
 
 /**
@@ -135,10 +147,28 @@ const obtenerCamaPorId = async (id) => {
  * @returns {Promise<Object>} Cama actualizada
  */
 const actualizarEstadoCama = async (id, estado) => {
+  // Mapear estados descriptivos a valores de la tabla imEstadoCama
+  let valorEstado;
+  switch(estado) {
+    case 'disponible':
+      valorEstado = 'U'; // Libre
+      break;
+    case 'ocupada':
+      valorEstado = 'O'; // Ocupada
+      break;
+    case 'mantenimiento':
+      valorEstado = 'M'; // Mantenimiento
+      break;
+    default:
+      valorEstado = estado; // Usar el valor directamente si no es uno de los predefinidos
+  }
+
+  console.log(`Actualizando cama ID ${id} a estado: ${estado}, valor en DB: ${valorEstado}`);
+
   const consulta = `
     UPDATE imHabitacionCamas
-    SET ValorEstadoCama = @p1
-    WHERE id = @p0;
+    SET ValorEstadoCama = @param1
+    WHERE ValorHabitacionCama = @param0;
 
     SELECT 
       hc.*,
@@ -156,18 +186,25 @@ const actualizarEstadoCama = async (id, estado) => {
     LEFT JOIN
       imSexo sx ON p.Sexo = sx.Valor
     LEFT JOIN
-      imClientes c ON v.Contrato = c.Valor
+      imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.id = @p0;
+    WHERE hc.ValorHabitacionCama = @param0;
   `;
+  
   const parametros = [
     { value: id },
-    { value: estado }
+    { value: valorEstado }
   ];
 
-  const resultado = await executeQuery(consulta, parametros);
-  return resultado.length > 0 ? resultado[0] : null;
+  try {
+    const resultado = await executeQuery(consulta, parametros);
+    return resultado.length > 0 ? resultado[0] : null;
+  } catch (error) {
+    console.error('Error al actualizar estado de cama:', error);
+    console.error('Parámetros:', JSON.stringify(parametros));
+    throw error;
+  }
 };
 
 /**
@@ -189,6 +226,36 @@ const obtenerSectores = async () => {
       s.Descripcion
   `;
   return await executeQuery(consulta);
+};
+
+/**
+ * Obtener el total de camas desde imHabitacionCamas
+ * @returns {Promise<Object>} Objeto con estadísticas de camas
+ */
+const obtenerTotalCamas = async () => {
+  const consulta = `
+    SELECT 
+      COUNT(*) as totalCamas,
+      SUM(CASE WHEN ec.Valor IN ('U', 'A', 'H') THEN 1 ELSE 0 END) as camasDisponibles,
+      SUM(CASE WHEN ec.Valor = 'O' THEN 1 ELSE 0 END) as camasOcupadas,
+      SUM(CASE WHEN ec.Valor IN ('C', 'R', 'I') THEN 1 ELSE 0 END) as camasNoDisponibles
+    FROM 
+      imHabitacionCamas hc
+    LEFT JOIN 
+      imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
+  `;
+  try {
+    const resultado = await executeQuery(consulta);
+    return resultado.length > 0 ? resultado[0] : {
+      totalCamas: 0,
+      camasDisponibles: 0,
+      camasOcupadas: 0,
+      camasNoDisponibles: 0
+    };
+  } catch (error) {
+    console.error('Error al obtener total de camas:', error);
+    throw error;
+  }
 };
 
 /**
@@ -216,13 +283,19 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita) => {
     FROM 
       imInterCtrlFrecuente icf
     WHERE 
-      icf.NumeroVisita = @p0
+      icf.NumeroVisita = @param0
     ORDER BY 
       icf.FechaControl DESC, icf.HoraControl DESC
   `;
   
   const parametros = [{ value: numeroVisita }];
-  return await executeQuery(consulta, parametros);
+  try {
+    return await executeQuery(consulta, parametros);
+  } catch (error) {
+    console.error('Error al obtener controles frecuentes por visita:', error);
+    console.error('Parámetros:', JSON.stringify(parametros));
+    throw error;
+  }
 };
 
 module.exports = {
@@ -232,5 +305,6 @@ module.exports = {
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
+  obtenerTotalCamas,
   obtenerControlesFrecuentesPorVisita,
 };

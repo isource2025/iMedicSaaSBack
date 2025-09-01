@@ -1,0 +1,31 @@
+/**
+ * Controlador para gestionar la información de la empresa
+ */
+const empresaService = require('../services/empresa.service');
+
+/**
+ * Obtener la información de la empresa
+ * @param {Object} req Request
+ * @param {Object} res Response
+ */
+const obtenerInfoEmpresa = async (req, res) => {
+  try {
+    const empresaInfo = await empresaService.obtenerInfoEmpresa();
+    
+    res.json({
+      success: true,
+      data: empresaInfo
+    });
+  } catch (error) {
+    console.error('Error al obtener información de la empresa:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener información de la empresa',
+      error: error.message
+    });
+  }
+};
+
+module.exports = {
+  obtenerInfoEmpresa
+};

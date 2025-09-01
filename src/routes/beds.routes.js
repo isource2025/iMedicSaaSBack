@@ -11,11 +11,11 @@ router.get('/estados', bedsController.obtenerEstadosCama);
 // Obtiene todos los sectores de la tabla imSectores
 router.get('/sectores', bedsController.obtenerSectores);
 
+// Obtiene el total de camas y estadísticas
+router.get('/total', bedsController.obtenerTotalCamas);
+
 // Filtra camas por su relación con estados en imestadocama
 router.get('/filtrar/:estado', bedsController.filtrarCamasPorEstado);
-
-// Obtiene todos los sectores de la tabla imSectores
-router.get('/sectores', bedsController.obtenerSectores);
 
 // Obtiene los controles frecuentes por número de visita
 router.get('/controles-frecuentes/:numeroVisita', bedsController.obtenerControlesFrecuentesPorVisita);

@@ -1,7 +1,33 @@
 const authService = require('../services/auth.service');
+const jwt = require('jsonwebtoken');
+
+// Clave secreta para firmar los tokens JWT
+// En un entorno de producción, esto debería estar en variables de entorno
+const JWT_SECRET = 'iMedicWs_secret_key_2025';
+const TOKEN_EXPIRATION = '24h'; // El token expira en 24 horas
+
+/**
+ * Genera un token JWT con la información del usuario
+ * @param {Object} userData - Datos del usuario para incluir en el token
+ * @returns {string} Token JWT generado
+ */
+const generarToken = (userData) => {
+  const payload = {
+    usuario: {
+      id: userData.ValorPersonal,
+      username: userData.NombreRed,
+      nombre: userData.Nombres,
+      apellido: userData.Apellido,
+      codOperador: userData.CodOperador
+    },
+    // La fecha de emisión se incluye automáticamente (iat)
+  };
+
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION });
+};
 
 const inicioSesion = async (req, res) => {
-  const { username, password, sector, idsector } = req.body;
+  const { username, password, sector, idSector } = req.body;
   
   try {
     console.log(`Intento de inicio de sesión con usuario: ${username}`);
@@ -9,6 +35,7 @@ const inicioSesion = async (req, res) => {
     // Intentar autenticación SQL primero, luego recurrir a credenciales temporales si es necesario
     try {
       const usuario = await authService.autenticarUsuario(username, password);
+      console.log("Usuario autenticado: ", usuario);
       
       if (usuario) {
         console.log(`Inicio de sesión exitoso para usuario ${username} desde SQL Server`);
@@ -16,40 +43,43 @@ const inicioSesion = async (req, res) => {
         // Obtener información del sector seleccionado
         let sectorInfo = null;
         
-        if (idsector) {
-          // Si se recibió el idsector directamente, lo usamos para obtener la descripción
-          console.log(`Usando idsector proporcionado: ${idsector}`);
+        if (idSector) {
+          // Si se recibió el idSector directamente, lo usamos para obtener la descripción
+          console.log(`Usando idSector proporcionado: ${idSector}`);
           
-          // Consultar la descripción del sector basado en el idsector
-          const sectorDesc = await authService.obtenerDescripcionSector(idsector);
+          // Consultar la descripción del sector basado en el idSector
+          const sectorDesc = await authService.obtenerDescripcionSector(idSector);
+          console.log("Sector Descripción: ", sectorDesc);
           
           sectorInfo = {
-            idpersonal: sector,
-            idsector: idsector,
+            idPersonal: sector,
+            idSector: idSector,
             descripcion: sectorDesc ? sectorDesc.descripcion : 'Sector Desconocido'
           };
         } else {
-          // Método anterior: obtener el idsector desde el idpersonal
-          console.log(`Usando método anterior con sector/idpersonal: ${sector}`);
+          // Método anterior: obtener el idSector desde el idPersonal
+          console.log(`Usando método anterior con sector/idPersonal: ${sector}`);
           sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
         }
+        
+        // Generar token JWT con la información del usuario
+        const token = generarToken(usuario);
         
         return res.json({
           success: true,
           mensaje: 'Inicio de sesión exitoso',
           usuario: {
-            id: usuario.id || 1,
-            nombreUsuario: usuario.nombrered,
-            nombre: usuario.nombre || 'Usuario',
-            rol: usuario.rol || 'usuario',
-            valorpersonal: usuario.valorpersonal || ''
+            idCodOperador: usuario.CodOperador,
+            idValorpersonal: usuario.ValorPersonal,
+            nombre: usuario.Nombres,
+            apellido: usuario.Apellido,
           },
           sectorSeleccionado: {
-            idpersonal: sector,
-            idsector: sectorInfo ? sectorInfo.idsector : '',
+            idPersonal: sector,
+            idSector: sectorInfo ? sectorInfo.idSector : '',
             descripcion: sectorInfo ? sectorInfo.descripcion : ''
           },
-          token: 'token-simulado',
+          token: token,
           fuente: 'db'
         });
       }
@@ -58,22 +88,6 @@ const inicioSesion = async (req, res) => {
       console.log('Continuando con verificación de credenciales temporales...');
     }
     
-    // Si la conexión a la base de datos falló o el usuario no existe, verificar credenciales temporales
-    // if (await authService.autenticarConCredencialesTemporales(username, password)) {
-    //   console.log('Inicio de sesión exitoso con credenciales temporales');
-    //   return res.json({
-    //     success: true,
-    //     mensaje: 'Inicio de sesión exitoso (modo de contingencia)',
-    //     usuario: {
-    //       id: 1,
-    //       nombreUsuario: 'admin',
-    //       nombre: 'Administrador',
-    //       rol: 'admin'
-    //     },
-    //     token: 'token-simulado',
-    //     fuente: 'temp'
-    //   });
-    // }
     
     // Si llegamos aquí, las credenciales son inválidas
     res.status(401).json({
