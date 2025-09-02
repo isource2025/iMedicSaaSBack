@@ -117,8 +117,6 @@ const obtenerSectores = async (req, res) => {
   }
 };
 
-<<<<<<< HEAD
-=======
 /**
  * Obtener el total de camas y estadísticas
  * @param {Object} req Request
@@ -141,7 +139,6 @@ const obtenerTotalCamas = async (req, res) => {
   }
 };
 
->>>>>>> humberto-3-8
 /**
  * Obtener los registros de control frecuente por número de visita
  * @param {Object} req Request
@@ -171,10 +168,7 @@ module.exports = {
   obtenerEstadosCama,
   filtrarCamasPorEstado,
   obtenerSectores,
-<<<<<<< HEAD
-=======
   obtenerTotalCamas,
->>>>>>> humberto-3-8
   obtenerControlesFrecuentesPorVisita,
   actualizarEstadoCama
 };
