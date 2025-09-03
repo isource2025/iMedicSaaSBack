@@ -13,7 +13,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
       iim.NroAdicional,
       CASE
         WHEN FechaCarga IS NULL OR FechaCarga <= 0 OR FechaCarga > 2958465 THEN NULL
-        ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
+        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
       END AS FechaCarga,
       CASE
         WHEN HoraCarga IS NULL OR HoraCarga < 0 OR HoraCarga > 8639999 THEN NULL
@@ -31,7 +31,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
       iim.Observaciones,
       CASE
         WHEN FechaExpiro IS NULL OR FechaExpiro <= 0 OR FechaExpiro > 2958465 THEN NULL
-        ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
+        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
       END AS FechaExpiro,
       CASE
         WHEN HoraExpiro IS NULL OR HoraExpiro < 0 OR HoraExpiro > 8639999 THEN NULL
@@ -77,7 +77,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       iim.NroAdicional,
       CASE
         WHEN FechaCarga IS NULL OR FechaCarga <= 0 OR FechaCarga > 2958465 THEN NULL
-        ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
+        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
       END AS FechaCarga,
       CASE
         WHEN HoraCarga IS NULL OR HoraCarga < 0 OR HoraCarga > 8639999 THEN NULL
@@ -95,7 +95,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       iim.Observaciones,
       CASE
         WHEN FechaExpiro IS NULL OR FechaExpiro <= 0 OR FechaExpiro > 2958465 THEN NULL
-        ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
+        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
       END AS FechaExpiro,
       CASE
         WHEN HoraExpiro IS NULL OR HoraExpiro < 0 OR HoraExpiro > 8639999 THEN NULL
