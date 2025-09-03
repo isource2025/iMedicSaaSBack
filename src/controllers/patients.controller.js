@@ -139,7 +139,7 @@ const crearPaciente = async (req, res) => {
 			Sexo,
 			NumeroHC,
 			FechaNacimiento,
-			HoraNacimiento,
+			Hora,
 			Domicilio,
 			ValorLocalidad,
 			Provincia,
@@ -185,9 +185,15 @@ const crearPaciente = async (req, res) => {
 
 		// Hora en formato HH:MM a entero HHMM
 		let horaInt = null;
-		if (HoraNacimiento && /^\d{1,2}:\d{2}$/.test(HoraNacimiento)) {
-			const [h, m] = HoraNacimiento.split(':').map(Number);
+		if (Hora && /^\d{1,2}:\d{2}$/.test(Hora)) {
+			const [h, m] = Hora.split(':').map(Number);
 			if (!isNaN(h) && !isNaN(m)) horaInt = h * 100 + m;
+		}
+
+		let horaIntDefuncion = null;
+		if (HoraDefuncion && /^\d{1,2}:\d{2}$/.test(HoraDefuncion)) {
+			const [h, m] = HoraDefuncion.split(':').map(Number);
+			if (!isNaN(h) && !isNaN(m)) horaIntDefuncion = h * 100 + m;
 		}
 
 		// Alias / derivaciones
@@ -228,7 +234,7 @@ const crearPaciente = async (req, res) => {
 			OrdenNacimiento: numOrNull(OrdenNacimiento),
 			LugarNacimiento: strOrNull(LugarNacimiento),
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
-			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			HoraDefuncion: horaIntDefuncion,
 			IdiomaPrimario: idiomaPrimarioIn,
 			Idioma: idiomaPrimarioIn,
 			GrupoEtnico:
@@ -357,7 +363,7 @@ const actualizarPaciente = async (req, res) => {
 			Sexo,
 			NumeroHC,
 			FechaNacimiento,
-			HoraNacimiento,
+			Hora,
 			Domicilio,
 			ValorLocalidad,
 			Provincia,
@@ -436,11 +442,17 @@ const actualizarPaciente = async (req, res) => {
 
 		// Convertir hora de formato HH:MM a HHMM (entero)
 		let horaInt = null;
-		if (HoraNacimiento) {
-			const [horas, minutos] = HoraNacimiento.split(':').map(Number);
+		if (Hora) {
+			const [horas, minutos] = Hora.split(':').map(Number);
 			if (!isNaN(horas) && !isNaN(minutos)) {
 				horaInt = horas * 100 + minutos;
 			}
+		}
+
+		let horaIntDefuncion = null;
+		if (HoraDefuncion) {
+			const [h, m] = HoraDefuncion.split(':').map(Number);
+			if (!isNaN(h) && !isNaN(m)) horaIntDefuncion = h * 100 + m;
 		}
 
 		// Validación de NumeroDocumento si viene con caracteres no numéricos (politica: rechazar)
@@ -489,7 +501,7 @@ const actualizarPaciente = async (req, res) => {
 			LicenciaConducir,
 			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
-			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			HoraDefuncion: horaIntDefuncion,
 			FotoURL: FotoURL && FotoURL !== 'undefined' ? FotoURL : null,
 		};
 

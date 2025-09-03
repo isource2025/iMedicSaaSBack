@@ -1,3 +1,6 @@
+const CLARION_EPOCH_UTC = Date.UTC(1800, 11, 28);
+const DAY_MS = 86400000;
+
 /**
  * Utilidades para manejo de fechas y horas en formato Clarion
  * @module utils/dateUtils
@@ -10,14 +13,39 @@
  * @returns {number} ClarionDate
  */
 // Clarion DATE: días transcurridos desde 28/12/1800 (date 0 = 28/12/1800)
+
+// ACEPTA: Date, 'YYYY-MM-DD', 'dd/mm/yyyy' o cualquier fecha parseable por Date.
+// DEVUELVE: días Clarion (number) SIN corrimientos por zona horaria.
 function convertirFechaAClarion(fecha) {
 	if (!fecha) return null;
-	const epoch = Date.UTC(1800, 11, 28); // 28 Dec 1800
-	const d = fecha instanceof Date ? fecha : new Date(fecha);
-	if (isNaN(d)) throw new Error('Fecha inválida para conversión a Clarion');
-	const utc = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-	const diff = Math.floor((utc - epoch) / 86400000);
-	return diff; // sin offset adicional
+
+	let Y, M, D;
+
+	if (fecha instanceof Date) {
+		// Tomamos los componentes UTC para evitar corrimientos
+		Y = fecha.getUTCFullYear();
+		M = fecha.getUTCMonth();
+		D = fecha.getUTCDate();
+	} else if (typeof fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+		const [y, m, d] = fecha.split('-').map(Number);
+		Y = y;
+		M = m - 1;
+		D = d;
+	} else if (typeof fecha === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(fecha)) {
+		const [d, m, y] = fecha.split('/').map(Number);
+		Y = y;
+		M = m - 1;
+		D = d;
+	} else {
+		const d = new Date(fecha);
+		if (isNaN(d)) throw new Error('Fecha inválida para conversión a Clarion');
+		Y = d.getUTCFullYear();
+		M = d.getUTCMonth();
+		D = d.getUTCDate();
+	}
+
+	const utcMidnight = Date.UTC(Y, M, D);
+	return Math.floor((utcMidnight - CLARION_EPOCH_UTC) / DAY_MS);
 }
 
 /**
@@ -41,10 +69,23 @@ function convertirHoraAClarion(hora) {
  */
 function convertirFechaDesdeFormatoClarion(fechaClarion) {
 	if (fechaClarion == null) return null;
-	const s = String(fechaClarion).padStart(6, '0');
-	const dd = s.slice(0, 2),
-		mm = s.slice(2, 4),
-		yy = s.slice(4, 6);
+
+	const s = String(fechaClarion).trim();
+	const soloDigitos = /^\d+$/.test(s);
+
+	// Si NO son exactamente 6 dígitos, lo tratamos como "días Clarion"
+	if (soloDigitos && s.length !== 6) {
+		const days = Number(s);
+		const ms = CLARION_EPOCH_UTC + days * DAY_MS;
+		// toISOString es UTC; slice(0,10) evita desfaces por huso horario
+		return new Date(ms).toISOString().slice(0, 10);
+	}
+
+	// Caso ddmmyy (6 dígitos)
+	const padded = s.padStart(6, '0'); // ddmmyy
+	const dd = padded.slice(0, 2);
+	const mm = padded.slice(2, 4);
+	const yy = padded.slice(4, 6);
 	const yyyy = parseInt(yy, 10) < 50 ? `20${yy}` : `19${yy}`;
 	return `${yyyy}-${mm}-${dd}`;
 }

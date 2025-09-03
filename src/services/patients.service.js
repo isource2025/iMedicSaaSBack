@@ -237,7 +237,6 @@ const obtenerPacientes = async () => {
 		throw error;
 	}
 };
-
 const contarPacientes = async () => {
 	try {
 		const r = await executeQuery('SELECT COUNT(1) AS total FROM impacientes');
@@ -265,6 +264,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
 						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
 					END, 23) AS FechaNacimiento,
+				p.Hora,
 				p.EstadoCivil,
 				p.TipoDocumento,
 				p.ValorLocalidad,
@@ -278,7 +278,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.NumeroCuenta,
 				p.NumeroSSN,
 				p.NumeroSSN AS nAfiliado,
-				c.RazonSocial AS Cobertura,
+				c.Valor AS Cobertura,
 				p.FotoURL,
 				p.LicenciaConducir,
 				p.DadorOrganos,
@@ -586,7 +586,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 					: null,
 			EstadoMilitar: limitLength(pacienteData.EstadoMilitar, 5) || null,
 			Ciudadania: limitLength(pacienteData.Ciudadania, 40) || null,
-			Ocupacion: limitLength(pacienteData.Ocupacion, 40) || null,
+			Ocupacion: pacienteData.Ocupacion || null,
 			SituacionLaboral: limitLength(pacienteData.SituacionLaboral, 40) || null,
 			NivelDeEstudios:
 				limitLength(pacienteData.NivelDeEstudios || pacienteData.NivelEstudios, 40) ||
