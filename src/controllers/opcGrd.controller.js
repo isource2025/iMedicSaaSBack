@@ -1,4 +1,4 @@
-const opcGrdService = require('../services/opcgrd.service');
+const opcGrdService = require('../services/opcGrd.service');
 
 /**
  * Controlador para gestionar las operaciones CRUD de la tabla imOpcGrd
