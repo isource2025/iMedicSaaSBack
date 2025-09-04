@@ -1,17 +1,40 @@
-const opcGrdService = require('../services/opcGrd.service');
+const opcGrdService = require('../services/opcgrd.service');
 
 /**
  * Controlador para gestionar las operaciones CRUD de la tabla imOpcGrd
  */
 const opcGrdController = {
   /**
-   * Obtiene todas las opciones de grilla
+   * Obtiene opciones de grilla con paginación y búsqueda
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
   getAllOpcGrd: async (req, res) => {
     try {
-      const data = await opcGrdService.getAllOpcGrd();
+      const { page = 1, limit = 50, search = '', withCount } = req.query;
+      
+      const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+      const searchTerm = search ? String(search).trim() : '';
+
+      const data = await opcGrdService.getAllOpcGrd(parsedPage, parsedLimit, searchTerm);
+
+      if (withCount === '1' || withCount === 'true') {
+        const totalCount = await opcGrdService.contarOpcGrd(searchTerm);
+        const totalPages = Math.ceil(totalCount / parsedLimit);
+
+        return res.json({
+          success: true,
+          data,
+          pagination: {
+            currentPage: parsedPage,
+            totalPages,
+            totalCount,
+            limit: parsedLimit
+          },
+          message: 'Opciones de grilla obtenidas correctamente'
+        });
+      }
       
       res.json({
         success: true,

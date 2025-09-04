@@ -2,28 +2,36 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 
 /**
- * Lista pacientes optimizado.
+ * Lista pacientes con paginación optimizada.
  * Query params:
- *  - limit: número de pacientes (default 200, max 5000) SIEMPRE se aplica
- *  - simple=1|true => columnas reducidas (backward compatible)
- *  - mode=complete | complete=1 => columnas completas (equivalente a simple=false)
- *  - withCount=1 => agrega totalCount (COUNT(*) separado)
- *  - order=name|id (default name)
+ *  - page: número de página (default 1)
+ *  - limit: registros por página (default 30, max 100)
+ *  - search: término de búsqueda opcional
+ *  - withCount=1 => agrega totalCount y totalPages
  */
 const obtenerPacientes = async (req, res) => {
 	try {
-		const { limit, withCount } = req.query;
-		let parsedLimit = 200;
-		if (limit) {
-			const l = parseInt(limit, 10);
-			if (!isNaN(l) && l > 0) parsedLimit = Math.min(l, 5000);
-		}
+		const { page = 1, limit = 30, search = '', withCount } = req.query;
+		
+		const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+		const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 30));
+		const searchTerm = search ? String(search).trim() : '';
 
-		const pacientes = await patientsService.obtenerPacientes();
+		const pacientes = await patientsService.obtenerPacientes(parsedPage, parsedLimit, searchTerm);
 
 		if (withCount === '1' || withCount === 'true') {
-			const totalCount = await patientsService.contarPacientes();
-			return res.json({ success: true, totalCount, data: pacientes });
+			const totalCount = await patientsService.contarPacientes(searchTerm);
+			const totalPages = Math.ceil(totalCount / parsedLimit);
+			return res.json({ 
+				success: true, 
+				data: pacientes,
+				pagination: {
+					currentPage: parsedPage,
+					totalPages,
+					totalCount,
+					limit: parsedLimit
+				}
+			});
 		}
 		res.json({ success: true, data: pacientes });
 	} catch (error) {

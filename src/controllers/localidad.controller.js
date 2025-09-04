@@ -5,25 +5,47 @@ const localidadService = require('../services/localidad.service');
  */
 const localidadController = {
   /**
-   * Obtiene todos los registros de la tabla imLocalidades
+   * Obtiene registros de la tabla imLocalidades con paginación y búsqueda
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP
    */
   getLocalidades: async (req, res) => {
     try {
-      const data = await localidadService.getLocalidades();
+      const { page = 1, limit = 50, search = '', withCount } = req.query;
       
-      res.json({
+      const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+      const searchTerm = search ? String(search).trim() : '';
+
+      const localidades = await localidadService.getLocalidades(parsedPage, parsedLimit, searchTerm);
+
+      if (withCount === '1' || withCount === 'true') {
+        const totalCount = await localidadService.contarLocalidades(searchTerm);
+        const totalPages = Math.ceil(totalCount / parsedLimit);
+
+        return res.status(200).json({
+          success: true,
+          data: localidades,
+          pagination: {
+            currentPage: parsedPage,
+            totalPages,
+            totalCount,
+            limit: parsedLimit
+          },
+          message: 'Localidades obtenidas exitosamente'
+        });
+      }
+      
+      res.status(200).json({
         success: true,
-        data,
-        message: 'Registros de localidades obtenidos correctamente'
+        data: localidades,
+        message: 'Localidades obtenidas exitosamente'
       });
     } catch (error) {
-      console.error('Error en controlador de localidades:', error);
+      console.error('Error en getLocalidades:', error);
       res.status(500).json({
         success: false,
-        data: [],
-        message: error.message || 'Error al obtener registros de localidades'
+        message: error.message || 'Error interno del servidor'
       });
     }
   },

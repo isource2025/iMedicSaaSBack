@@ -5,11 +5,29 @@ const { executeQuery } = require('../models/db');
  */
 const localidadService = {
   /**
-   * Obtiene todos los registros de la tabla imLocalidades
+   * Obtiene registros de la tabla imLocalidades con paginación y búsqueda
+   * @param {number} page - Número de página (por defecto 1)
+   * @param {number} limit - Límite de registros por página (por defecto 50, máximo 200)
+   * @param {string} search - Término de búsqueda opcional
    * @returns {Promise<Array>} Promesa con los resultados de la consulta
    */
-  getLocalidades: async () => {
+  getLocalidades: async (page = 1, limit = 50, search = '') => {
     try {
+      const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+      const offset = (parsedPage - 1) * parsedLimit;
+      
+      let whereClause = '';
+      const params = [];
+      
+      if (search && search.trim()) {
+        whereClause = 'WHERE Localidad LIKE @p0 OR NombreLocalidad LIKE @p0';
+        params.push({ value: `%${search.trim()}%` });
+      }
+      
+      const offsetParam = `@p${params.length}`;
+      const limitParam = `@p${params.length + 1}`;
+      
       const query = `
         SELECT 
           Valor, 
@@ -19,15 +37,46 @@ const localidadService = {
           ValorProvincia
         FROM 
           imLocalidades 
+        ${whereClause}
         ORDER BY 
           Localidad
+        OFFSET ${offsetParam} ROWS FETCH NEXT ${limitParam} ROWS ONLY
       `;
       
-      const result = await executeQuery(query);
+      params.push(
+        { value: offset },
+        { value: parsedLimit }
+      );
+      
+      const result = await executeQuery(query, params);
       return result || [];
     } catch (error) {
       console.error('Error al obtener localidades:', error);
       throw new Error('Error al obtener localidades: ' + error.message);
+    }
+  },
+
+  /**
+   * Cuenta el total de localidades (con filtro opcional)
+   * @param {string} search - Término de búsqueda opcional
+   * @returns {Promise<number>} Promesa con el conteo total
+   */
+  contarLocalidades: async (search = '') => {
+    try {
+      let whereClause = '';
+      const params = [];
+      
+      if (search && search.trim()) {
+        whereClause = 'WHERE Localidad LIKE @p0 OR NombreLocalidad LIKE @p0';
+        params.push({ value: `%${search.trim()}%` });
+      }
+      
+      const query = `SELECT COUNT(*) as total FROM imLocalidades ${whereClause}`;
+      const result = await executeQuery(query, params);
+      return result[0]?.total || 0;
+    } catch (error) {
+      console.error('Error al contar localidades:', error);
+      throw new Error('Error al contar localidades: ' + error.message);
     }
   },
 

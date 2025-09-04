@@ -213,24 +213,58 @@ const resolveNumeroCuenta = async (input) => {
 	return null; // No se encontró
 };
 
-/** Lista pacientes (siempre limitado) */
-const obtenerPacientes = async () => {
+/** Lista pacientes con paginación */
+const obtenerPacientes = async (page = 1, limit = 30, searchTerm = '') => {
 	try {
 		await ensureExtraColumns();
+		await ensureSearchIndexes();
+		
+		const offset = (page - 1) * limit;
+		const maxLimit = Math.min(limit, 100); // Máximo 100 registros por página
+		
+		let whereClause = '';
+		let params = [];
+		
+		if (searchTerm && searchTerm.trim()) {
+			const term = searchTerm.trim();
+			const isNumeric = /^\d+$/.test(term);
+			
+			if (isNumeric) {
+				whereClause = `WHERE (p.IDPaciente = @p0 OR p.NumeroDocumento = @p0 OR p.NumeroHC = @p0 OR p.ApellidoyNombre LIKE @p1)`;
+				params = [{ value: Number(term) }, { value: `%${term}%` }];
+			} else {
+				whereClause = `WHERE p.ApellidoyNombre LIKE @p0`;
+				params = [{ value: `%${term}%` }];
+			}
+		}
+		
+		let paramIndex = params.length;
+		const offsetParam = `@p${paramIndex}`;
+		const limitParam = `@p${paramIndex + 1}`;
+		
 		const query = `
 			SELECT 
-				p.IdPaciente as IDPaciente,
+				p.IDPaciente,
 				p.ApellidoyNombre,
 				p.NumeroDocumento,
 				p.NumeroHC,
 				p.Domicilio,
-				p.FechaNacimiento,
+				p.Sexo,
+				CONVERT(VARCHAR(10), 
+					CASE 
+						WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento < 0 OR p.FechaNacimiento > 1000000 THEN NULL
+						ELSE DATEADD(DAY, p.FechaNacimiento, '1800-12-28')
+					END, 23) AS FechaNacimiento,
 				c.RazonSocial as Cobertura
 			FROM imPacientes p
-			LEFT JOIN imClientes c ON p.IdPaciente = c.Valor
+			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
+			${whereClause}
 			ORDER BY p.ApellidoyNombre
+			OFFSET ${offsetParam} ROWS FETCH NEXT ${limitParam} ROWS ONLY
 		`;
-		let rows = await executeQuery(query);
+		
+		params.push({ value: offset }, { value: maxLimit });
+		let rows = await executeQuery(query, params);
 		return rows;
 	} catch (error) {
 		console.error('Error al obtener pacientes de la base de datos:', error);
@@ -238,9 +272,26 @@ const obtenerPacientes = async () => {
 	}
 };
 
-const contarPacientes = async () => {
+const contarPacientes = async (searchTerm = '') => {
 	try {
-		const r = await executeQuery('SELECT COUNT(1) AS total FROM impacientes');
+		let whereClause = '';
+		let params = [];
+		
+		if (searchTerm && searchTerm.trim()) {
+			const term = searchTerm.trim();
+			const isNumeric = /^\d+$/.test(term);
+			
+			if (isNumeric) {
+				whereClause = `WHERE (IDPaciente = @p0 OR NumeroDocumento = @p0 OR NumeroHC = @p0 OR ApellidoyNombre LIKE @p1)`;
+				params = [{ value: Number(term) }, { value: `%${term}%` }];
+			} else {
+				whereClause = `WHERE ApellidoyNombre LIKE @p0`;
+				params = [{ value: `%${term}%` }];
+			}
+		}
+		
+		const query = `SELECT COUNT(1) AS total FROM impacientes ${whereClause}`;
+		const r = await executeQuery(query, params);
 		return r[0]?.total || 0;
 	} catch (e) {
 		console.error('Error al contar pacientes:', e);

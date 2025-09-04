@@ -5,11 +5,29 @@ const { executeQuery } = require('../models/db');
  */
 const opcGrdService = {
   /**
-   * Obtiene todos los registros de la tabla imOpcGrd
+   * Obtiene registros de la tabla imOpcGrd con paginación y búsqueda
+   * @param {number} page - Número de página (por defecto 1)
+   * @param {number} limit - Límite de registros por página (por defecto 50, máximo 200)
+   * @param {string} search - Término de búsqueda opcional
    * @returns {Promise} Promesa con los resultados de la consulta
    */
-  getAllOpcGrd: async () => {
+  getAllOpcGrd: async (page = 1, limit = 50, search = '') => {
     try {
+      const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+      const offset = (parsedPage - 1) * parsedLimit;
+      
+      let whereClause = '';
+      const params = [];
+      
+      if (search && search.trim()) {
+        whereClause = 'WHERE rubro LIKE @p0 OR descripcion LIKE @p0';
+        params.push({ value: `%${search.trim()}%` });
+      }
+      
+      const offsetParam = `@p${params.length}`;
+      const limitParam = `@p${params.length + 1}`;
+      
       const query = `
         SELECT 
           rubro,
@@ -18,12 +36,19 @@ const opcGrdService = {
           orden
         FROM 
           imOpcGrd 
+        ${whereClause}
         ORDER BY 
-          rubro
+          rubro, orden
+        OFFSET ${offsetParam} ROWS FETCH NEXT ${limitParam} ROWS ONLY
       `;
       
-      console.log('Ejecutando consulta para obtener opciones de grilla:', query);
-      const result = await executeQuery(query);
+      params.push(
+        { value: offset },
+        { value: parsedLimit }
+      );
+      
+      console.log('Ejecutando consulta paginada para opciones de grilla');
+      const result = await executeQuery(query, params);
       
       if (result && result.length > 0) {
         console.log(`Opciones de grilla encontradas: ${result.length}`);
@@ -35,6 +60,30 @@ const opcGrdService = {
     } catch (error) {
       console.error('Error al consultar opciones de grilla:', error);
       throw error;
+    }
+  },
+
+  /**
+   * Cuenta el total de opciones de grilla (con filtro opcional)
+   * @param {string} search - Término de búsqueda opcional
+   * @returns {Promise<number>} Promesa con el conteo total
+   */
+  contarOpcGrd: async (search = '') => {
+    try {
+      let whereClause = '';
+      const params = [];
+      
+      if (search && search.trim()) {
+        whereClause = 'WHERE rubro LIKE @p0 OR descripcion LIKE @p0';
+        params.push({ value: `%${search.trim()}%` });
+      }
+      
+      const query = `SELECT COUNT(*) as total FROM imOpcGrd ${whereClause}`;
+      const result = await executeQuery(query, params);
+      return result[0]?.total || 0;
+    } catch (error) {
+      console.error('Error al contar opciones de grilla:', error);
+      throw new Error('Error al contar opciones de grilla: ' + error.message);
     }
   },
 
