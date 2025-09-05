@@ -2,30 +2,34 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 
 /**
- * Lista pacientes optimizado.
+ * Lista pacientes con paginación real.
  * Query params:
- *  - limit: número de pacientes (default 200, max 5000) SIEMPRE se aplica
- *  - simple=1|true => columnas reducidas (backward compatible)
- *  - mode=complete | complete=1 => columnas completas (equivalente a simple=false)
- *  - withCount=1 => agrega totalCount (COUNT(*) separado)
- *  - order=name|id (default name)
+ *  - page: número de página (default 1)
+ *  - limit: número de pacientes por página (default 30, max 100)
+ *  - search: término de búsqueda opcional
  */
 const obtenerPacientes = async (req, res) => {
 	try {
-		const { limit, withCount } = req.query;
-		let parsedLimit = 200;
-		if (limit) {
-			const l = parseInt(limit, 10);
-			if (!isNaN(l) && l > 0) parsedLimit = Math.min(l, 5000);
-		}
+		const { page = 1, limit = 30, search = '' } = req.query;
+		
+		// Validar y limitar parámetros
+		const pageNum = Math.max(1, parseInt(page, 10) || 1);
+		const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 30));
+		const searchTerm = String(search || '').trim();
 
-		const pacientes = await patientsService.obtenerPacientes();
-
-		if (withCount === '1' || withCount === 'true') {
-			const totalCount = await patientsService.contarPacientes();
-			return res.json({ success: true, totalCount, data: pacientes });
-		}
-		res.json({ success: true, data: pacientes });
+		// Usar servicio de búsqueda paginada
+		const result = await patientsService.buscarPacientesPaginados(pageNum, limitNum, searchTerm);
+		
+		res.json({
+			success: true,
+			data: result.data,
+			pagination: {
+				currentPage: pageNum,
+				totalPages: result.totalPages,
+				totalCount: result.totalCount,
+				limit: limitNum
+			}
+		});
 	} catch (error) {
 		console.error('Error al obtener pacientes:', error);
 		res.status(500).json({

@@ -247,6 +247,96 @@ const contarPacientes = async () => {
 	}
 };
 
+/** Buscar pacientes con paginación real */
+const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') => {
+	try {
+		await ensureExtraColumns();
+		await ensureSearchIndexes();
+		
+		// Calcular offset
+		const offset = (page - 1) * limit;
+		
+		// Construir WHERE clause para búsqueda
+		let whereClause = '';
+		let params = [];
+		
+		if (searchTerm && searchTerm.length >= 3) {
+			whereClause = `
+				WHERE (
+					p.ApellidoyNombre LIKE ? 
+					OR p.NumeroDocumento LIKE ? 
+					OR p.NumeroHC LIKE ?
+				)
+			`;
+			const searchPattern = `%${searchTerm}%`;
+			params = [searchPattern, searchPattern, searchPattern];
+		}
+		
+		// Query principal con paginación
+		const query = `
+			SELECT 
+				p.IdPaciente as IDPaciente,
+				p.ApellidoyNombre,
+				p.NumeroDocumento,
+				p.NumeroHC,
+				p.Domicilio,
+				CASE 
+					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
+					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+				END AS FechaNacimiento,
+				c.RazonSocial as Cobertura
+			FROM imPacientes p
+			LEFT JOIN imClientes c ON p.IdPaciente = c.Valor
+			${whereClause}
+			ORDER BY p.ApellidoyNombre
+			OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+		`;
+		
+		// Query de conteo
+		const countQuery = `
+			SELECT COUNT(1) as total 
+			FROM imPacientes p
+			${whereClause}
+		`;
+		
+		// Preparar parámetros para executeQuery (formato esperado por db.js)
+		const queryParams = [...params, offset, limit].map(value => ({ value }));
+		const countParams = params.map(value => ({ value }));
+		
+		// Reemplazar ? con @p0, @p1, etc. para SQL Server
+		let finalQuery = query;
+		let finalCountQuery = countQuery;
+		
+		// Reemplazar placeholders en query principal
+		let paramIndex = 0;
+		finalQuery = finalQuery.replace(/\?/g, () => `@p${paramIndex++}`);
+		
+		// Reemplazar placeholders en query de conteo
+		paramIndex = 0;
+		finalCountQuery = finalCountQuery.replace(/\?/g, () => `@p${paramIndex++}`);
+		
+		// Ejecutar ambas queries
+		const [data, countResult] = await Promise.all([
+			executeQuery(finalQuery, queryParams),
+			executeQuery(finalCountQuery, countParams)
+		]);
+		
+		const totalCount = countResult[0]?.total || 0;
+		const totalPages = Math.ceil(totalCount / limit);
+		
+		return {
+			data: data || [],
+			totalCount,
+			totalPages,
+			currentPage: page,
+			limit
+		};
+	} catch (error) {
+		console.error('Error al buscar pacientes paginados:', error);
+		throw error;
+	}
+};
+
 /** Paciente por ID */
 const obtenerPacientePorId = async (id, baseUrl) => {
 	try {
@@ -786,6 +876,7 @@ const getLaboralCatalogs = async () => {
 module.exports = {
 	obtenerPacientes,
 	buscarPacientes,
+	buscarPacientesPaginados,
 	obtenerPacientePorId,
 	crearPaciente,
 	actualizarPaciente,
