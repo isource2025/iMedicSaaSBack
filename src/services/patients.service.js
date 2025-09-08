@@ -225,8 +225,8 @@ const obtenerPacientes = async () => {
     p.NumeroHC,
     p.Domicilio,
     CASE 
-					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '18000101'))
+					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento, '1800-12-28'))
 				END AS FechaNacimiento,
     c.RazonSocial AS Cobertura,
 	p.NumeroCuenta
@@ -286,8 +286,8 @@ const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') =
 				p.NumeroHC,
 				p.Domicilio,
 				CASE 
-					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '18000101'))
+					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento, '1800-12-28'))
 				END AS FechaNacimiento,
 				c.RazonSocial as Cobertura
 			FROM imPacientes p
