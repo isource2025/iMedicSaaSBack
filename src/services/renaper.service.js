@@ -1,4 +1,3 @@
-// renaper.service.js
 const https = require('https');
 
 const RENAPER_BASE = 'https://federador.msal.gob.ar/masterfile-federacion-service';
@@ -6,21 +5,28 @@ const LOGIN_URL = `${RENAPER_BASE}/api/usuarios/aplicacion/login`;
 const PERSONA_URL = `${RENAPER_BASE}/api/personas/renaper`;
 const COD_DOMINIO = '2.16.840.1.113883.2.10.43';
 
+// Credenciales provistas (mismas que en Clarion)
 const CRED_NOMBRE = 'HQgdGgMcFxMaCl4SEh8FDFwCHBcCCBYdBA0B';
 const CRED_CLAVE = 'IVQARl0wWyBBFQkLBEclO0M=';
 
 const DEFAULT_TIMEOUT_MS = 30000;
-const EXP_SKEW_MS = 5000; // margen de 5s para evitar llegar justo al exp
+const EXP_SKEW_MS = 5000; // margen para exp
+const PROACTIVE_TTL_MS = 60000; // refrescar si restan ≤60s
 
 const agent = new https.Agent({ keepAlive: true, rejectUnauthorized: true });
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 
+/* ------------------------ utilidades base ------------------------ */
+
 function withTimeout(fetcher, ms = DEFAULT_TIMEOUT_MS) {
 	const ctrl = new AbortController();
 	const timer = setTimeout(() => ctrl.abort(), ms);
-	return { signal: ctrl.signal, run: fetcher(ctrl).finally(() => clearTimeout(timer)) };
+	return {
+		signal: ctrl.signal,
+		run: fetcher(ctrl).finally(() => clearTimeout(timer)),
+	};
 }
 
 async function fetchJSON(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -54,8 +60,9 @@ function normalizePayload(payload) {
 	try {
 		if (payload == null) return payload;
 		if (typeof payload === 'string') return JSON.parse(payload.trim());
-		if (Array.isArray(payload) && typeof payload[0] === 'string')
+		if (Array.isArray(payload) && typeof payload[0] === 'string') {
 			return JSON.parse(payload[0]);
+		}
 		return payload;
 	} catch {
 		return payload;
@@ -72,8 +79,10 @@ function decodeJwtExpMs(token) {
 		const payload = JSON.parse(json);
 		if (typeof payload.exp === 'number') return payload.exp * 1000;
 	} catch {}
-	return null; // si no hay exp, devolvemos null
+	return null;
 }
+
+/* ------------------------ token handling ------------------------ */
 
 async function getFreshToken() {
 	const body = { nombre: CRED_NOMBRE, clave: CRED_CLAVE, codDominio: COD_DOMINIO };
@@ -86,27 +95,58 @@ async function getFreshToken() {
 	const token = data?.token || data?.Token || data?.access_token || null;
 	if (!token) throw new Error(`No se encontró 'token' en login: ${JSON.stringify(data)}`);
 
-	// calcular expiración real desde el JWT
 	const expMs = decodeJwtExpMs(token);
 	const now = Date.now();
-	// si no pudimos leer exp, forzamos TTL muy corto (20s)
-	cachedTokenExpiresAt = expMs ? expMs - EXP_SKEW_MS : now + 20000;
+	cachedTokenExpiresAt = expMs ? expMs - EXP_SKEW_MS : now + 20000; // fallback 20s si no hay exp
 	cachedToken = token;
 	return token;
+}
+
+async function ensureTokenFresh(minTtlMs = PROACTIVE_TTL_MS) {
+	const now = Date.now();
+	if (!cachedToken || cachedTokenExpiresAt - now <= minTtlMs) {
+		await getFreshToken();
+	}
+	return cachedToken;
 }
 
 async function getToken() {
 	const now = Date.now();
 	if (cachedToken && now < cachedTokenExpiresAt) return cachedToken;
-	return await getFreshToken();
+	return getFreshToken();
 }
 
-async function searchOnce(NumeroDocumento, Sexo, headers, idSexo, debug = false) {
-	const url = new URL(PERSONA_URL);
-	url.searchParams.set('nroDocumento', String(NumeroDocumento).trim());
-	url.searchParams.set('idSexo', idSexo);
+/* ------------------------ búsqueda persona ------------------------ */
 
-	if (debug) console.log('[RENAPER][attempt]', { url: url.toString(), headers });
+// Acepta codigoError: 0 (OK) y, si allowSigned=true, también 99 (DNI/PAS Firmado)
+function isValidResult(res, allowSigned = true) {
+	if (!res || typeof res !== 'object') return false;
+
+	if (typeof res.codigoError === 'number') {
+		if (res.codigoError === 0) {
+			return !!(res.numeroDocumento || res.apellido || res.nombres);
+		}
+		if (res.codigoError === 99 && allowSigned) {
+			return !!(res.numeroDocumento || res.apellido || res.nombres);
+		}
+		return false;
+	}
+
+	return !!(res.numeroDocumento || res.apellido || res.nombres);
+}
+
+async function searchOnce(nroDocumento, idSexo, headers, debug = false) {
+	const url = new URL(PERSONA_URL);
+	url.searchParams.set('nroDocumento', String(nroDocumento).trim());
+	url.searchParams.set('idSexo', String(idSexo));
+
+	if (debug) {
+		const hlog = { ...headers };
+		if (hlog.token) hlog.token = hlog.token.slice(0, 16) + '…';
+		if (hlog.Authorization)
+			hlog.Authorization = 'Bearer ' + hlog.Authorization.slice(7, 23) + '…';
+		console.log('[RENAPER][attempt]', { url: url.toString(), headers: hlog });
+	}
 
 	const data = await fetchJSON(url.toString(), { method: 'GET', headers });
 	const normalized = normalizePayload(normalizePayload(data));
@@ -114,87 +154,121 @@ async function searchOnce(NumeroDocumento, Sexo, headers, idSexo, debug = false)
 	return normalized;
 }
 
+// Intenta con header `token` y sexo reportado + flip 1↔2
+async function tryAttemptsWithToken(nroDocumento, sexoNum, token, debug, allowSigned = true) {
+	const results = [];
+
+	// 1) sexoNum tal cual
+	try {
+		const res = await searchOnce(
+			nroDocumento,
+			sexoNum,
+			{ token, codDominio: COD_DOMINIO },
+			debug,
+		);
+		if (isValidResult(res, allowSigned)) {
+			return { ok: true, data: res, meta: { signed: res?.codigoError === 99 } };
+		}
+		results.push(res);
+		if (debug) console.warn('[RENAPER][attempt:invalid] token + idSexo=', sexoNum, res);
+	} catch (err) {
+		const msg = String(err?.message || '');
+		if (debug) console.warn('[RENAPER][attempt:fail] token + idSexo=', sexoNum, msg);
+		if (msg.includes('HTTP 401')) throw err;
+	}
+
+	// 2) flip 1↔2 (muchas veces necesario)
+	const flipped = sexoNum === 1 ? 2 : sexoNum === 2 ? 1 : 0;
+	if (flipped) {
+		try {
+			const res2 = await searchOnce(
+				nroDocumento,
+				flipped,
+				{ token, codDominio: COD_DOMINIO },
+				debug,
+			);
+			if (isValidResult(res2, allowSigned)) {
+				return { ok: true, data: res2, meta: { signed: res2?.codigoError === 99 } };
+			}
+			results.push(res2);
+			if (debug)
+				console.warn(
+					'[RENAPER][attempt:invalid] token + idSexo(flip)=',
+					flipped,
+					res2,
+				);
+		} catch (err2) {
+			const msg2 = String(err2?.message || '');
+			if (debug)
+				console.warn('[RENAPER][attempt:fail] token + idSexo(flip)=', flipped, msg2);
+			if (msg2.includes('HTTP 401')) throw err2;
+		}
+	}
+
+	return { ok: false, reason: 'not_found', attempts: results };
+}
+
+/* ------------------------ API pública ------------------------ */
+
 const renaperService = {
+	// mantiene el nombre público que ya usas
 	async getToken() {
 		return getToken();
 	},
 
-	async search(NumeroDocumento, Sexo, opts = { debug: false }) {
-		let token = await getToken();
+	/**
+	 * Busca persona en RENAPER.
+	 * @param {string|number} NumeroDocumento
+	 * @param {'M'|'F'|1|2|number|string} Sexo  (M/F o 1/2)
+	 * @param {{debug?: boolean, allowSigned?: boolean}} opts
+	 * @returns {Promise<{ok:true, data:any, meta?:{signed?:boolean}} | {ok:false, reason:'not_found'}>}
+	 * @throws Error ante errores 4xx/5xx distintos de 401
+	 */
+	async search(NumeroDocumento, Sexo, opts = { debug: false, allowSigned: true }) {
+		const debug = !!opts.debug;
+		const allowSigned = opts.allowSigned !== false; // por defecto true
+		await ensureTokenFresh(PROACTIVE_TTL_MS);
+		let token = cachedToken;
 
 		const sexoStr = String(Sexo).trim().toUpperCase();
 		const sexoNum = sexoStr === 'F' ? 1 : sexoStr === 'M' ? 2 : Number(Sexo) || 0;
 
-		const attempts = (tok) => [
-			{
-				name: 'token-header + idSexo(num)',
-				headers: { token: tok, codDominio: COD_DOMINIO },
-				idSexo: String(sexoNum),
-			},
-			{
-				name: 'bearer + idSexo(num)',
-				headers: { Authorization: `Bearer ${tok}`, codDominio: COD_DOMINIO },
-				idSexo: String(sexoNum),
-			},
-			{
-				name: 'bearer + idSexo(F/M)',
-				headers: { Authorization: `Bearer ${tok}`, codDominio: COD_DOMINIO },
-				idSexo: sexoStr,
-			},
-		];
-
-		// Ejecuta los intentos con el token actual
 		try {
-			let lastErr = null;
-			for (const attempt of attempts(token)) {
-				try {
-					return await searchOnce(
-						NumeroDocumento,
-						Sexo,
-						attempt.headers,
-						attempt.idSexo,
-						opts.debug,
-					);
-				} catch (err) {
-					lastErr = err;
-					if (opts.debug)
-						console.warn('[RENAPER][attempt:fail]', attempt.name, String(err));
-					// Si no es 401, no seguimos probando combinaciones
-					if (!String(err?.message || '').includes('HTTP 401')) continue;
-				}
-			}
-			// Si llegamos aquí, o no hubo 200 o todo fue 401: caemos a refresh
-			throw lastErr || new Error('Fallaron los intentos con el token actual.');
+			const first = await tryAttemptsWithToken(
+				NumeroDocumento,
+				sexoNum,
+				token,
+				debug,
+				allowSigned,
+			);
+			if (first.ok) return first;
+			return { ok: false, reason: 'not_found' };
 		} catch (err) {
-			// Si el error fue 401 (ExpiredToken/InsufficientAuthentication), refresca y reintenta una vez
 			const msg = String(err?.message || '');
-			if (msg.includes('HTTP 401')) {
-				if (opts.debug)
-					console.warn(
-						'[RENAPER] 401 detectado, refrescando token y reintentando...',
-					);
-				token = await getFreshToken();
+			if (!msg.includes('HTTP 401')) throw err;
+			if (debug) console.warn('[RENAPER] 401; refrescando token y reintentando…');
+		}
 
-				let lastErr2 = null;
-				for (const attempt of attempts(token)) {
-					try {
-						return await searchOnce(
-							NumeroDocumento,
-							Sexo,
-							attempt.headers,
-							attempt.idSexo,
-							opts.debug,
-						);
-					} catch (err2) {
-						lastErr2 = err2;
-						if (opts.debug)
-							console.warn('[RENAPER][retry:fail]', attempt.name, String(err2));
-					}
-				}
-				throw lastErr2 || new Error('Reintentos con token fresco fallaron.');
+		// Sólo si hubo 401: refresh y reintento único
+		token = await getFreshToken();
+		try {
+			const second = await tryAttemptsWithToken(
+				NumeroDocumento,
+				sexoNum,
+				token,
+				debug,
+				allowSigned,
+			);
+			if (second.ok) return second;
+			return { ok: false, reason: 'not_found' };
+		} catch (err2) {
+			const msg2 = String(err2?.message || '');
+			if (debug) console.warn('[RENAPER][retry:fail]', msg2);
+			if (msg2.includes('HTTP 401')) {
+				// degradamos a not_found para no romper el flujo arriba
+				return { ok: false, reason: 'not_found' };
 			}
-			// Propaga otros errores (400/500 reales)
-			throw err;
+			throw err2;
 		}
 	},
 };

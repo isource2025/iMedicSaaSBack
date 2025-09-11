@@ -28,7 +28,7 @@ const search = async (req, res) => {
 		});
 	}
 
-	// El sexo puede venir como "1/2" o "F/M"; no lo fuerces a número todavía
+	// El sexo puede venir como "1/2" o "F/M"
 	const Sexo = String(rawSexo).trim().toUpperCase();
 	if (!/^(F|M|1|2)$/.test(Sexo)) {
 		return res.status(400).json({
@@ -39,26 +39,26 @@ const search = async (req, res) => {
 	}
 
 	try {
-		// Activa debug durante el diagnóstico; luego puedes poner false
-		const data = await renaperService.search(NumeroDocumento, Sexo, { debug: true });
+		// consulta al servicio
+		const result = await renaperService.search(NumeroDocumento, Sexo, { debug: true });
 
-		// Normaliza: a veces viene { persona }, otras el objeto directo
-		const persona =
-			data?.persona ??
-			(data && (data.apellido || data.nombres || data.numeroDocumento) ? data : null);
-
-		if (!persona) {
-			// Puede venir un mensaje de error del upstream (p.ej. descripcionError)
+		if (!result.ok) {
 			return res.status(404).json({
 				success: false,
 				message: 'No se encontraron datos en RENAPER',
-				raw: data,
+				reason: result.reason,
+				raw: result.attempts || null,
 			});
 		}
 
-		return res.json({ persona });
+		// Datos válidos
+		const persona = result.data;
+
+		return res.json({
+			success: true,
+			persona,
+		});
 	} catch (error) {
-		// Si renaperService.fetchJSON lanzó con "HTTP <code> ..." lo reexpone como 502 (bad gateway)
 		console.error('[RENAPER][search] ERROR:', {
 			doc: NumeroDocumento,
 			sexo: Sexo,
