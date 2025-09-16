@@ -162,9 +162,95 @@ const obtenerResumenPacientesHoy = async (req, res) => {
   }
 };
 
+const obtenerEstadoActualCamas = async (req, res) => {
+  try {
+    const data = await indicadoresService.obtenerEstadoActualCamas();
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error en obtenerEstadoActualCamas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   obtenerIndicadores,
   obtenerResumenIndicadores,
   obtenerIndicadoresPorFecha,
   obtenerResumenPacientesHoy
 };
+
+/**
+ * ============================
+ *  ANALÍTICA DE CAMAS (Camas)
+ * ============================
+ */
+
+const validarRangoFechas = (req, res) => {
+  const { fechaInicio, fechaFin } = req.query;
+  if (!fechaInicio || !fechaFin) {
+    res.status(400).json({ success: false, message: 'Los parámetros fechaInicio y fechaFin son requeridos' });
+    return null;
+  }
+  const fi = new Date(fechaInicio);
+  const ff = new Date(fechaFin);
+  if (isNaN(fi.getTime()) || isNaN(ff.getTime())) {
+    res.status(400).json({ success: false, message: 'Formato de fecha inválido. Use YYYY-MM-DD' });
+    return null;
+  }
+  if (fi > ff) {
+    res.status(400).json({ success: false, message: 'La fecha de inicio no puede ser mayor que la fecha de fin' });
+    return null;
+  }
+  return { fechaInicio, fechaFin };
+};
+
+const obtenerOcupacionCamas = async (req, res) => {
+  try {
+    const params = validarRangoFechas(req, res);
+    if (!params) return;
+    const { sector } = req.query;
+    const data = await indicadoresService.obtenerOcupacionCamas(params.fechaInicio, params.fechaFin, sector);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error en obtenerOcupacionCamas:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+  }
+};
+
+const obtenerResumenOcupacionCamas = async (req, res) => {
+  try {
+    const params = validarRangoFechas(req, res);
+    if (!params) return;
+    const { sector } = req.query;
+    const data = await indicadoresService.obtenerResumenOcupacionCamas(params.fechaInicio, params.fechaFin, sector);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error en obtenerResumenOcupacionCamas:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+  }
+};
+
+const obtenerOcupacionCamasPorFecha = async (req, res) => {
+  try {
+    const params = validarRangoFechas(req, res);
+    if (!params) return;
+    const { sector } = req.query;
+    const data = await indicadoresService.obtenerOcupacionCamasPorFecha(params.fechaInicio, params.fechaFin, sector);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error en obtenerOcupacionCamasPorFecha:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+  }
+};
+
+module.exports.obtenerOcupacionCamas = obtenerOcupacionCamas;
+module.exports.obtenerResumenOcupacionCamas = obtenerResumenOcupacionCamas;
+module.exports.obtenerOcupacionCamasPorFecha = obtenerOcupacionCamasPorFecha;
+module.exports.obtenerEstadoActualCamas = obtenerEstadoActualCamas;
