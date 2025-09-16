@@ -5,6 +5,8 @@ const bedsController = require('../controllers/beds.controller');
 // Obtiene todas las camas
 router.get('/', bedsController.obtenerCamas);
 
+router.get('/:id', bedsController.obtenerCamaPorId);
+
 // Obtiene todos los estados de cama de la tabla imEstadoCama
 router.get('/estados', bedsController.obtenerEstadosCama);
 
@@ -18,7 +20,10 @@ router.get('/total', bedsController.obtenerTotalCamas);
 router.get('/filtrar/:estado', bedsController.filtrarCamasPorEstado);
 
 // Obtiene los controles frecuentes por número de visita
-router.get('/controles-frecuentes/:numeroVisita', bedsController.obtenerControlesFrecuentesPorVisita);
+router.get(
+	'/controles-frecuentes/:numeroVisita',
+	bedsController.obtenerControlesFrecuentesPorVisita,
+);
 
 // Obtiene una cama específica por su ID
 router.get('/:id', bedsController.obtenerCamaPorId);
