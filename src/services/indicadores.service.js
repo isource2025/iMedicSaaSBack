@@ -150,12 +150,18 @@ const obtenerResumenPacientesHoy = async () => {
     let porcentajeCambio = 0;
     if (totalAyer > 0) {
       porcentajeCambio = ((totalHoy - totalAyer) / totalAyer) * 100;
-    } else if (totalHoy > 0) {
-      porcentajeCambio = 100; // Si ayer fue 0 y hoy hay pacientes, es un 100% de aumento
+    } else if (totalHoy > 0 && totalAyer === 0) {
+      // Cuando ayer fue 0 y hoy hay pacientes, mostrar la cantidad exacta como porcentaje
+      // 0 a 3 = +300%, 0 a 4 = +400%, etc.
+      porcentajeCambio = totalHoy * 100;
+    } else if (totalHoy === 0 && totalAyer > 0) {
+      porcentajeCambio = -100; // Si hoy es 0 y ayer había pacientes, es -100%
     }
+    // Si ambos son 0, porcentajeCambio permanece en 0
 
     return {
       totalHoy,
+      totalAyer,
       porcentajeCambio: parseFloat(porcentajeCambio.toFixed(1)),
     };
   } catch (error) {
