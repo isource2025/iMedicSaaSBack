@@ -3,7 +3,7 @@
  * @module services/visitaMovimientos.service
  */
 const { executeQuery } = require('../models/db');
-const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/dateUtils');
+const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString } = require('../utils/dateUtils');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -652,10 +652,75 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   }
 }
 
+/**
+ * Obtiene los movimientos de internación más recientes para el dashboard
+ * @param {number} limite - Número máximo de registros a devolver (default: 10)
+ * @returns {Promise<Array>} - Array con los movimientos recientes
+ */
+async function obtenerMovimientosRecientes(limite = 10) {
+  const sql = `
+    SELECT TOP (@p0)
+      vm.NumeroVisita,
+      vm.FechaAdmision,
+      vm.HoraAdmision,
+      vm.FechaEgreso,
+      vm.HoraEgreso,
+      vm.ValorHabitacionCama,
+      vm.ValorSector,
+      vm.EstadoCama,
+      v.IDPaciente,
+      p.ApellidoyNombre,
+      p.NumeroDocumento,
+      s.Descripcion as SectorDescripcion,
+      CASE 
+        WHEN vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0 THEN 'Ingreso'
+        ELSE 'Egreso'
+      END as TipoMovimiento
+    FROM imVisitaMovimiento vm
+    INNER JOIN imVisita v ON vm.NumeroVisita = v.NumeroVisita
+    INNER JOIN imPacientes p ON v.IDPaciente = p.IDPaciente
+    LEFT JOIN imSectores s ON vm.ValorSector = s.Valor
+    WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
+    ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
+  `;
+  
+  try {
+    const result = await executeQuery(sql, [{ value: limite }]);
+    
+    // Convertir fechas y horas Clarion usando las funciones de dateUtils
+    const resultadoConFechas = result.map(row => {
+      const fechaAdmision = convertirFechaClarionADate(row.FechaAdmision);
+      const fechaEgreso = row.FechaEgreso && row.FechaEgreso > 0 
+        ? convertirFechaClarionADate(row.FechaEgreso) 
+        : null;
+      
+      const horaAdmision = convertirHoraClarionAString(row.HoraAdmision);
+      const horaEgreso = row.HoraEgreso && row.HoraEgreso > 0
+        ? convertirHoraClarionAString(row.HoraEgreso)
+        : null;
+      
+      return {
+        ...row,
+        FechaAdmisionFormateada: fechaAdmision ? fechaAdmision.toISOString() : null,
+        FechaEgresoFormateada: fechaEgreso ? fechaEgreso.toISOString() : null,
+        HoraAdmisionFormateada: horaAdmision,
+        HoraEgresoFormateada: horaEgreso
+      };
+    });
+    
+    return resultadoConFechas || [];
+  } catch (error) {
+    console.error('Error al obtener movimientos recientes:', error);
+    throw new Error('Error al obtener los movimientos recientes de internación');
+  }
+}
+
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
-  intercambiarCamasPacientes
+  intercambiarCamasPacientes,
+  obtenerMovimientosRecientes
 };

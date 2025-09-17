@@ -63,9 +63,70 @@ function convertirHoraDesdeFormatoClarion(horaClarion) {
 	return `${hh}:${mm}:${ss}`;
 }
 
+/**
+ * Convierte un Clarion DATE (días desde 28/12/1800) a fecha JavaScript
+ * @param {number} fechaClarion - Días desde el epoch Clarion
+ * @returns {Date|null} - Objeto Date o null
+ */
+function convertirFechaClarionADate(fechaClarion) {
+	if (!fechaClarion || fechaClarion <= 0) return null;
+	
+	try {
+		// Epoch Clarion: 28/12/1800
+		const epochClarion = new Date(1800, 11, 28); // 28 Dec 1800
+		const fecha = new Date(epochClarion.getTime() + (fechaClarion * 24 * 60 * 60 * 1000));
+		return fecha;
+	} catch (error) {
+		console.error('Error al convertir fecha Clarion:', error);
+		return null;
+	}
+}
+
+/**
+ * Convierte un Clarion TIME a HH:MM:SS
+ * Basado en el comentario SQL: dateadd(ms, (ClarionTIME-1)*10, 0)
+ * @param {number} horaClarion - Valor TIME de Clarion
+ * @returns {string|null} - Hora en formato HH:MM:SS o null
+ */
+function convertirHoraClarionAString(horaClarion) {
+	if (!horaClarion || horaClarion <= 0) return null;
+	
+	try {
+		// Según el comentario en dateUtils: dateadd(ms, (ClarionTIME-1)*10, 0)
+		// Esto significa: milisegundos = (horaClarion - 1) * 10
+		const milisegundosTotales = (horaClarion - 1) * 10;
+		
+		// Convertir milisegundos a horas, minutos y segundos
+		const horas = Math.floor(milisegundosTotales / 3600000);
+		const minutos = Math.floor((milisegundosTotales % 3600000) / 60000);
+		const segundos = Math.floor((milisegundosTotales % 60000) / 1000);
+		
+		// Validar que los valores estén en rangos correctos
+		if (horas >= 24 || minutos >= 60 || segundos >= 60) {
+			console.warn(`Hora Clarion fuera de rango: ${horaClarion} -> ${horas}:${minutos}:${segundos}`);
+			// Intentar interpretación alternativa: podría ser formato HHMMSSCC (hora, minuto, segundo, centésimas)
+			const str = horaClarion.toString().padStart(8, '0');
+			const h = parseInt(str.substring(0, 2), 10);
+			const m = parseInt(str.substring(2, 4), 10);
+			const s = parseInt(str.substring(4, 6), 10);
+			
+			if (h < 24 && m < 60 && s < 60) {
+				return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+			}
+		}
+		
+		return `${horas.toString().padStart(2, '0')}:${minutos.toString().padStart(2, '0')}:${segundos.toString().padStart(2, '0')}`;
+	} catch (error) {
+		console.error('Error al convertir hora Clarion:', error);
+		return null;
+	}
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
 	convertirFechaDesdeFormatoClarion,
 	convertirHoraDesdeFormatoClarion,
+	convertirFechaClarionADate,
+	convertirHoraClarionAString,
 };

@@ -279,10 +279,45 @@ const intercambiarCamasPacientes = async (req, res) => {
   }
 };
 
+/**
+ * Obtiene los movimientos de internación más recientes para el dashboard
+ * @param {Object} req - Objeto de solicitud Express
+ * @param {Object} res - Objeto de respuesta Express
+ */
+const obtenerMovimientosRecientes = async (req, res) => {
+  try {
+    const limite = parseInt(req.query.limite) || 10;
+    
+    if (limite > 50) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'El límite máximo es 50 registros'
+      });
+    }
+
+    const movimientos = await visitaMovimientosService.obtenerMovimientosRecientes(limite);
+
+    res.json({
+      success: true,
+      data: movimientos,
+      count: movimientos.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error al obtener movimientos recientes:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener los movimientos recientes de internación',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
-  intercambiarCamasPacientes
+  intercambiarCamasPacientes,
+  obtenerMovimientosRecientes
 };
