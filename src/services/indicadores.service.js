@@ -1,5 +1,4 @@
-const sql = require('mssql');
-const { connectDB } = require('../config/database');
+const { executeQuery, sql } = require('../models/db');
 
 /**
  * Obtiene indicadores de pacientes usando la función fn_GetIndicadores
@@ -10,24 +9,24 @@ const { connectDB } = require('../config/database');
  */
 const obtenerIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio, fechaFin) => {
   try {
-    const pool = await connectDB();
-    
     const query = `
       SELECT 
         Fecha,
         ClasePaciente,
         TotalIngresos
-      FROM dbo.fn_GetIndicadores(@tipoIndicador, @fechaInicio, @fechaFin)
+      FROM dbo.fn_GetIndicadores(@p0, @p1, @p2)
       ORDER BY Fecha DESC, ClasePaciente
     `;
     
-    const result = await pool.request()
-      .input('tipoIndicador', sql.VarChar(50), tipoIndicador)
-      .input('fechaInicio', sql.Date, fechaInicio)
-      .input('fechaFin', sql.Date, fechaFin)
-      .query(query);
+    const params = [
+      { value: tipoIndicador },
+      { value: fechaInicio },
+      { value: fechaFin }
+    ];
     
-    return result.recordset;
+    const result = await executeQuery(query, params);
+    
+    return result;
   } catch (error) {
     console.error('Error al obtener indicadores:', error);
     throw new Error('Error al obtener indicadores de pacientes');

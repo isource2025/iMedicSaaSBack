@@ -2,7 +2,7 @@
  * estadoCivil.controller.js
  * Controlador para las operaciones CRUD de la tabla imEstadoCivil
  */
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 // Obtener todos los estados civiles
 const getEstadosCiviles = async (req, res) => {

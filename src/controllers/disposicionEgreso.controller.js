@@ -1,4 +1,4 @@
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Controlador para obtener todas las disposiciones de egreso

@@ -2,7 +2,7 @@
  * Servicio para manejar operaciones relacionadas con diagnósticos CIE10 (tabla imdiagnosticos)
  * @module services/diagnosticos.service
  */
-const { executeQuery, sql } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Obtiene todos los diagnósticos CIE10 de la tabla imdiagnosticos
