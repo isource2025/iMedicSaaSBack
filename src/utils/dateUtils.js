@@ -11,15 +11,13 @@
  */
 // Clarion DATE: días transcurridos desde 28/12/1800 (date 0 = 28/12/1800)
 function convertirFechaAClarion(fecha) {
-	if (!fecha) return null;
-	const epoch = Date.UTC(1800, 11, 28); // 28 Dec 1800
+	const base = Date.UTC(1801, 0, 1);
 	const d = fecha instanceof Date ? fecha : new Date(fecha);
 	if (isNaN(d)) throw new Error('Fecha inválida para conversión a Clarion');
-	const utc = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-	const diff = Math.floor((utc - epoch) / 86400000);
-	return diff; // sin offset adicional
+	const utcFecha = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+	const diffDias = Math.floor((utcFecha - base) / 86400000);
+	return diffDias + 5;
 }
-
 /**
  * Convierte una hora HH:MM o HH:MM:SS al Clarion TIME (int)
  *      SQL: dateadd(ms, (ClarionTIME-1)*10, 0)
