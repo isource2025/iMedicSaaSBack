@@ -1,4 +1,5 @@
 const { executeQuery, sql } = require('../models/db');
+const { connectDB } = require('../config/database');
 
 /**
  * Obtiene indicadores de pacientes usando la función fn_GetIndicadores
@@ -195,12 +196,11 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
   console.log(`🔍 [CAMAS] Iniciando consulta - Rango: ${fechaInicio} a ${fechaFin}, Sector: ${sector || 'TODOS'}`);
   
   try {
-    const pool = await connectDB();
     console.log(`⏱️ [CAMAS] Conexión DB establecida en ${Date.now() - startTime}ms`);
     
     const query = `
       SELECT *
-      FROM dbo.fn_OcupacionPromedioCamas(@fechaInicio, @fechaFin)
+      FROM dbo.fn_OcupacionPromedioCamas(@p0, @p1)
       ORDER BY ValorSector, Periodo
     `;
     
@@ -213,17 +213,16 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
     });
     
     const queryStartTime = Date.now();
-    const result = await pool
-      .request()
-      .input('fechaInicio', sql.Date, fechaInicio)
-      .input('fechaFin', sql.Date, fechaFin)
-      .query(query);
+    const result = await executeQuery(query, [
+      { value: fechaInicio },
+      { value: fechaFin }
+    ]);
 
     const queryTime = Date.now() - queryStartTime;
     console.log(`✅ [CAMAS] Query SQL completada en ${queryTime}ms`);
-    console.log(`📊 [CAMAS] Registros obtenidos: ${result.recordset?.length || 0}`);
+    console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
     
-    let datos = result.recordset || [];
+    let datos = result || [];
     
     // Log de muestra de datos
     if (datos.length > 0) {
@@ -485,7 +484,6 @@ const obtenerEstadoActualCamas = async () => {
   console.log(`🔍 [ESTADO-ACTUAL] Iniciando consulta de estado actual en tiempo real`);
   
   try {
-    const pool = await connectDB();
     console.log(`⏱️ [ESTADO-ACTUAL] Conexión DB establecida en ${Date.now() - startTime}ms`);
     
     // Query para obtener estado actual real de camas ocupadas HOY
@@ -501,12 +499,12 @@ const obtenerEstadoActualCamas = async () => {
     console.log(`📋 [ESTADO-ACTUAL] Ejecutando query de estado real`);
     
     const queryStartTime = Date.now();
-    const result = await pool.request().query(query);
+    const result = await executeQuery(query);
     
     const queryTime = Date.now() - queryStartTime;
     console.log(`✅ [ESTADO-ACTUAL] Query completada en ${queryTime}ms`);
     
-    const datos = result.recordset[0];
+    const datos = result[0];
     console.log(`📊 [ESTADO-ACTUAL] Datos obtenidos:`, {
       TotalCamas: datos.TotalCamas,
       CamasOcupadas: datos.CamasOcupadas,
