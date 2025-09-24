@@ -6,6 +6,11 @@ const indicacionesController = require('../controllers/indicaciones.controller')
 router.get('/ultima/:numeroVisita', indicacionesController.obtenerUltimaIndicacionPorVisita);
 
 // Últimas N indicaciones por número de visita (?limit=3 por defecto)
-router.get('/ultimas/:numeroVisita', indicacionesController.obtenerUltimasIndicacionesPorVisita);
+router.get(
+	'/ultimas/:numeroVisita',
+	indicacionesController.obtenerUltimasIndicacionesPorVisita,
+);
+
+router.get('/:numeroVisita/byDate', indicacionesController.byDate);
 
 module.exports = router;

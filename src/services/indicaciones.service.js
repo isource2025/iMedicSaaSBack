@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { convertirFechaDesdeFormatoClarion } = require('../utils/dateUtils');
 
 /**
  * Obtener la última indicación por número de visita
@@ -6,7 +7,7 @@ const { executeQuery } = require('../models/db');
  * @returns {Promise<Object>} Última indicación para la visita
  */
 const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
-  const consulta = `
+	const consulta = `
     SELECT TOP 1
       iim.NumeroVisita,
       iim.NroIndicacion,
@@ -53,14 +54,14 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
     WHERE iim.NumeroVisita = @param0
     ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
-  const parametros = [{ value: numeroVisita }];
-  try {
-    return await executeQuery(consulta, parametros);
-  } catch (error) {
-    console.error('Error al obtener última indicación por visita:', error);
-    console.error('Parámetros:', JSON.stringify(parametros));
-    throw error;
-  }
+	const parametros = [{ value: numeroVisita }];
+	try {
+		return await executeQuery(consulta, parametros);
+	} catch (error) {
+		console.error('Error al obtener última indicación por visita:', error);
+		console.error('Parámetros:', JSON.stringify(parametros));
+		throw error;
+	}
 };
 
 /**
@@ -70,7 +71,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
  * @returns {Promise<Array>} Lista de indicaciones ordenadas por más recientes
  */
 const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
-  const consulta = `
+	const consulta = `
     SELECT TOP (@param1)
       iim.NumeroVisita,
       iim.NroIndicacion,
@@ -117,17 +118,65 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
     WHERE iim.NumeroVisita = @param0
     ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
-  const parametros = [{ value: numeroVisita }, { value: limit }];
-  try {
-    return await executeQuery(consulta, parametros);
-  } catch (error) {
-    console.error('Error al obtener últimas indicaciones por visita:', error);
-    console.error('Parámetros:', JSON.stringify(parametros));
-    throw error;
-  }
+	const parametros = [{ value: numeroVisita }, { value: limit }];
+	try {
+		return await executeQuery(consulta, parametros);
+	} catch (error) {
+		console.error('Error al obtener últimas indicaciones por visita:', error);
+		console.error('Parámetros:', JSON.stringify(parametros));
+		throw error;
+	}
+};
+
+async function getByVisitaAndDate(numeroVisita, ymdDate) {
+	const sql = `
+    SELECT
+      iim.NroIndicacion,
+      iim.Cantidad,
+      iim.ProfesionalAsiste,
+      iim.Frecuencia,
+      iim.Observaciones,
+      iim.FechaProximo,
+      iim.FechaRevision,
+      iim.FechaCarga,
+      iim.IdSector,
+      iim.AliasMedicamento
+    FROM dbo.imInterIndMedicas AS iim
+    WHERE iim.NumeroVisita = @param0
+      AND CONVERT(date, DATEADD(day, iim.FechaCarga, '1800-12-28')) = @param1
+    ORDER BY iim.FechaCarga DESC, iim.NroIndicacion DESC
+  `;
+
+	const params = [
+		{ value: numeroVisita },
+		{ value: ymdDate }, // 'YYYY-MM-DD'
+	];
+
+	const rows = await executeQuery(sql, params);
+
+	return rows.map((r) => ({
+		id: String(r.NroIndicacion),
+		cantidad: r.Cantidad,
+		descripcion: r.AliasMedicamento,
+		profesional: r.ProfesionalAsiste,
+		frecuencia: r.Frecuencia,
+		observaciones: r.Observaciones,
+		// 🔽 Aquí usamos TU utilidad
+		proximo: convertirFechaDesdeFormatoClarion(r.FechaProximo),
+		anterior: convertirFechaDesdeFormatoClarion(r.FechaRevision),
+		vigenteDesde: convertirFechaDesdeFormatoClarion(r.FechaCarga),
+		nro: r.NroIndicacion,
+		idSector: r.IdSector,
+		medicamento: r.AliasMedicamento,
+	}));
+}
+
+module.exports = {
+	getByVisitaAndDate,
 };
 
 module.exports = {
-  obtenerUltimaIndicacionPorVisita,
-  obtenerUltimasIndicacionesPorVisita,
+	obtenerUltimaIndicacionPorVisita,
+	obtenerUltimasIndicacionesPorVisita,
+	getByVisitaAndDate,
 };
