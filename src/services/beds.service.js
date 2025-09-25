@@ -108,6 +108,7 @@ const filtrarCamasPorEstado = async (estadoValor) => {
  * @returns {Promise<Object|null>} Cama encontrada o null
  */
 const obtenerCamaPorId = async (id) => {
+	const [ValorSector, ValorHabitacionCama] = id.split('-');
 	const consulta = `
     SELECT 
       hc.*,
@@ -129,8 +130,8 @@ const obtenerCamaPorId = async (id) => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.ValorHabitacionCama = @param0`;
-	const parametros = [{ value: id }];
+    WHERE hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param1`;
+	const parametros = [{ value: ValorHabitacionCama }, { value: ValorSector }];
 	try {
 		const resultado = await executeQuery(consulta, parametros);
 		return resultado.length > 0 ? resultado[0] : null;
