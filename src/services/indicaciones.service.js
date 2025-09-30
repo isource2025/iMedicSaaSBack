@@ -171,12 +171,109 @@ async function getByVisitaAndDate(numeroVisita, ymdDate) {
 	}));
 }
 
-module.exports = {
-	getByVisitaAndDate,
+/**
+ * Obtener datos para el formulario de creación de indicaciones
+ * @returns {Promise<Object>} Objeto con todos los catálogos necesarios
+ */
+const obtenerDatosFormulario = async () => {
+	try {
+		// Consultar todas las tablas en paralelo para mejor rendimiento
+		const [
+			tiposIndicacion,
+			vademecum,
+			tiposDieta,
+			tiposControles,
+			controlesAsistenciales,
+			unidadesMedida,
+			frecuenciasAdmin,
+		] = await Promise.all([
+			// imInterTipoIndicacion - Tipos de indicaciones
+			executeQuery(`
+				SELECT
+					TipoIndicacion AS id,
+					Descripcion AS nombre
+				FROM dbo.imInterTipoIndicacion
+				ORDER BY Descripcion
+			`),
+
+			// imVademecum - Medicamentos
+			executeQuery(`
+				SELECT
+					Codigo AS id,
+					Descripcion AS nombre,
+					Presentacion,
+					Concentracion
+				FROM dbo.imVademecum
+				WHERE Activo = 1
+				ORDER BY Descripcion
+			`),
+
+			// imTipoDieta - Tipos de dieta
+			executeQuery(`
+				SELECT
+					TipoDieta AS id,
+					Descripcion AS nombre
+				FROM dbo.imTipoDieta
+				ORDER BY Descripcion
+			`),
+
+			// imInterTipoControles - Tipos de controles
+			executeQuery(`
+				SELECT
+					TipoControl AS id,
+					Descripcion AS nombre
+				FROM dbo.imInterTipoControles
+				ORDER BY Descripcion
+			`),
+
+			// imInterCtrlAsistenciales - Controles asistenciales
+			executeQuery(`
+				SELECT
+					CodControl AS id,
+					Descripcion AS nombre,
+					TipoControl
+				FROM dbo.imInterCtrlAsistenciales
+				ORDER BY Descripcion
+			`),
+
+			// imTipoUnidadMedida - Unidades de medida
+			executeQuery(`
+				SELECT
+					TipoUnidad AS id,
+					Descripcion AS nombre
+				FROM dbo.imTipoUnidadMedida
+				ORDER BY Descripcion
+			`),
+
+			// imFrecuenciasAdmin - Frecuencias de administración
+			executeQuery(`
+				SELECT
+					Frecuencia AS id,
+					Descripcion AS nombre,
+					CantidadHoras
+				FROM dbo.imFrecuenciasAdmin
+				ORDER BY CantidadHoras, Descripcion
+			`),
+		]);
+
+		return {
+			tiposIndicacion: tiposIndicacion || [],
+			vademecum: vademecum || [],
+			tiposDieta: tiposDieta || [],
+			tiposControles: tiposControles || [],
+			controlesAsistenciales: controlesAsistenciales || [],
+			unidadesMedida: unidadesMedida || [],
+			frecuenciasAdmin: frecuenciasAdmin || [],
+		};
+	} catch (error) {
+		console.error('Error al obtener datos del formulario:', error);
+		throw error;
+	}
 };
 
 module.exports = {
 	obtenerUltimaIndicacionPorVisita,
 	obtenerUltimasIndicacionesPorVisita,
 	getByVisitaAndDate,
+	obtenerDatosFormulario,
 };

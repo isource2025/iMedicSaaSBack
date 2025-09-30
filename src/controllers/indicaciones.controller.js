@@ -96,8 +96,30 @@ const byDate = async (req, res) => {
 	}
 };
 
+/**
+ * Obtener datos para el formulario de creación de indicaciones
+ */
+const obtenerDatosFormulario = async (req, res) => {
+	try {
+		const datos = await indicacionesService.obtenerDatosFormulario();
+
+		res.json({
+			success: true,
+			data: datos,
+		});
+	} catch (error) {
+		console.error('Error al obtener datos del formulario:', error);
+		res.status(500).json({
+			success: false,
+			mensaje: 'Error al obtener los datos del formulario',
+			error: error.message,
+		});
+	}
+};
+
 module.exports = {
 	obtenerUltimaIndicacionPorVisita,
 	obtenerUltimasIndicacionesPorVisita,
 	byDate,
+	obtenerDatosFormulario,
 };
