@@ -190,69 +190,66 @@ const obtenerDatosFormulario = async () => {
 			// imInterTipoIndicacion - Tipos de indicaciones
 			executeQuery(`
 				SELECT
-					TipoIndicacion AS id,
-					Descripcion AS nombre
-				FROM dbo.imInterTipoIndicacion
+					Valor,
+					Descripcion,
+					Tipo,
+					Orden as OrdenMedicacion
+				FROM imInterTipoIndicacion
 				ORDER BY Descripcion
 			`),
 
-			// imVademecum - Medicamentos
+			// // imVademecum - Medicamentos
 			executeQuery(`
 				SELECT
-					Codigo AS id,
-					Descripcion AS nombre,
-					Presentacion,
-					Concentracion
-				FROM dbo.imVademecum
-				WHERE Activo = 1
+					Troquel as Valor,
+					Nombre,
+					Descripcion
+				FROM imVademecum
+				ORDER BY Nombre
+			`),
+
+			// // imTipoDieta - Tipos de dieta
+			executeQuery(`
+				SELECT
+					Valor,
+					Descripcion
+				FROM imTipoDieta
 				ORDER BY Descripcion
 			`),
 
-			// imTipoDieta - Tipos de dieta
+			// // imInterTipoControles - Tipos de controles
 			executeQuery(`
 				SELECT
-					TipoDieta AS id,
-					Descripcion AS nombre
-				FROM dbo.imTipoDieta
+					Valor,
+					Descripcion
+				FROM imInterTipoControles
 				ORDER BY Descripcion
 			`),
 
-			// imInterTipoControles - Tipos de controles
+			// // imInterCtrlAsistenciales - Controles asistenciales
 			executeQuery(`
 				SELECT
-					TipoControl AS id,
-					Descripcion AS nombre
-				FROM dbo.imInterTipoControles
+					Valor,
+					Descripcion
+				FROM imInterCtrlAsistenciales
 				ORDER BY Descripcion
 			`),
 
-			// imInterCtrlAsistenciales - Controles asistenciales
+			// // imTipoUnidadMedida - Unidades de medida
 			executeQuery(`
 				SELECT
-					CodControl AS id,
-					Descripcion AS nombre,
-					TipoControl
-				FROM dbo.imInterCtrlAsistenciales
+					Valor,
+					Descripcion
+				FROM imTipoUnidadMedida
 				ORDER BY Descripcion
 			`),
 
-			// imTipoUnidadMedida - Unidades de medida
+			// // imFrecuenciasAdmin - Frecuencias de administración
 			executeQuery(`
 				SELECT
-					TipoUnidad AS id,
-					Descripcion AS nombre
-				FROM dbo.imTipoUnidadMedida
-				ORDER BY Descripcion
-			`),
-
-			// imFrecuenciasAdmin - Frecuencias de administración
-			executeQuery(`
-				SELECT
-					Frecuencia AS id,
-					Descripcion AS nombre,
-					CantidadHoras
-				FROM dbo.imFrecuenciasAdmin
-				ORDER BY CantidadHoras, Descripcion
+					Valor,
+					Intervalo
+				FROM imFrecuenciasAdmin
 			`),
 		]);
 
