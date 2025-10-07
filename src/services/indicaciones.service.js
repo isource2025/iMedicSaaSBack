@@ -202,9 +202,10 @@ const obtenerDatosFormulario = async () => {
 			executeQuery(`
 				SELECT
 					Troquel as Valor,
-					Nombre,
+					Alias as Nombre,
 					Descripcion
 				FROM imVademecum
+				WHERE Alias <> ''
 				ORDER BY Nombre
 			`),
 
