@@ -32,6 +32,7 @@ const grupoEtnicoRoutes = require('./routes/grupoEtnico.routes');
 const estadoMilitarRoutes = require('./routes/estadoMilitar.routes');
 const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 const coberturaRoutes = require('./routes/cobertura.routes');
+const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
 const estadosCivilesRoutes = require('./routes/estadoCivil.routes.js');
 
 // Importar conexión a la base de datos
@@ -93,6 +94,7 @@ app.use('/api/dador-organos', dadorOrganosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 app.use('/api/renaper', renaperRoutes);
 app.use('/api/cobertura', coberturaRoutes);
+app.use('/api/visita-movimientos', visitaMovimientosRoutes);
 app.use('/api/estados-civiles', estadosCivilesRoutes);
 
 // Ruta de prueba

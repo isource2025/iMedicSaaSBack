@@ -147,10 +147,30 @@ const obtenerIndicadoresPorFecha = async (req, res) => {
  */
 const obtenerResumenPacientesHoy = async (req, res) => {
   try {
+    // Usar zona horaria de Argentina (UTC-3)
+    const today = new Date();
+    const argentinaOffset = -3 * 60; // UTC-3 en minutos
+    const localTime = new Date(today.getTime() + (argentinaOffset * 60 * 1000));
+    const fechaHoy = localTime.toISOString().split('T')[0];
+    
+    console.log(`[DEBUG] Fecha UTC: ${today.toISOString().split('T')[0]}`);
+    console.log(`[DEBUG] Fecha Argentina (UTC-3): ${fechaHoy}`);
+    
+    // Debug: Obtener datos raw para hoy
+    const datosHoy = await indicadoresService.obtenerIndicadores('Ingresos', fechaHoy, fechaHoy);
+    console.log(`[DEBUG] Datos para hoy (${fechaHoy}):`, datosHoy);
+    
     const resumen = await indicadoresService.obtenerResumenPacientesHoy();
+    console.log(`[DEBUG] Resumen calculado:`, resumen);
+    
     res.json({
       success: true,
-      data: resumen
+      data: resumen,
+      debug: {
+        fechaConsultada: fechaHoy,
+        datosRaw: datosHoy,
+        totalRegistros: datosHoy.length
+      }
     });
   } catch (error) {
     console.error('Error en obtenerResumenPacientesHoy:', error);

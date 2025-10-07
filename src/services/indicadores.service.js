@@ -132,14 +132,19 @@ const obtenerIndicadoresPorFecha = async (tipoIndicador = 'Ingresos', fechaInici
  */
 const obtenerResumenPacientesHoy = async () => {
   try {
-    const today = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
+    // Usar zona horaria de Argentina (UTC-3)
+    const argentinaOffset = -3 * 60; // UTC-3 en minutos
+    const now = new Date();
+    const today = new Date(now.getTime() + (argentinaOffset * 60 * 1000));
+    const yesterday = new Date(today.getTime() - (24 * 60 * 60 * 1000));
 
     const formatDate = (date) => date.toISOString().split('T')[0];
 
     const fechaHoy = formatDate(today);
     const fechaAyer = formatDate(yesterday);
+    
+    console.log(`[DEBUG SERVICE] Fecha hoy (Argentina): ${fechaHoy}`);
+    console.log(`[DEBUG SERVICE] Fecha ayer (Argentina): ${fechaAyer}`);
 
     const resumenHoy = await obtenerResumenIndicadores('Ingresos', fechaHoy, fechaHoy);
     const resumenAyer = await obtenerResumenIndicadores('Ingresos', fechaAyer, fechaAyer);
