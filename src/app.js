@@ -7,6 +7,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { configureCors } = require('./middlewares/cors.middleware'); // ✅ ACTIVADO
 // Importar middlewares
 // const { configureCors } = require('./middlewares/cors.middleware');
 
@@ -56,7 +57,7 @@ connectDB()
 	});
 
 // Configurar middlewares
-// configureCors(app); // Configuración CORS
+configureCors(app); // Configuración CORS
 //Permitir solo desde tu Frontend (opcion recomendada)
 app.use(cors());
 
