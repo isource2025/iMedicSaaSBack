@@ -16,4 +16,7 @@ router.get(
 
 router.get('/:numeroVisita/byDate', indicacionesController.byDate);
 
+//Nueva indicación
+router.post('/', indicacionesController.nuevaIndicacion);
+
 module.exports = router;

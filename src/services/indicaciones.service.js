@@ -269,9 +269,16 @@ const obtenerDatosFormulario = async () => {
 	}
 };
 
+//Crear - Insertar nueva indicación
+
+const nuevaIndicacion = async (data) => {
+	console.log('Este es la data:', data);
+};
+
 module.exports = {
 	obtenerUltimaIndicacionPorVisita,
 	obtenerUltimasIndicacionesPorVisita,
 	getByVisitaAndDate,
 	obtenerDatosFormulario,
+	nuevaIndicacion,
 };

@@ -117,9 +117,82 @@ const obtenerDatosFormulario = async (req, res) => {
 	}
 };
 
+const nuevaIndicacion = async (req, res) => {
+	const data = req.body;
+	try {
+		// === Validación básica de payload ===
+		const requiredTypes = {
+			NumeroVisita: ['number', 'null'],
+			NroAdicional: ['number', 'null'],
+			FechaCarga: ['string', 'null'],
+			HoraCarga: ['string', 'null'],
+			OperadorCarga: ['number', 'null'],
+			ProfesionalAsiste: ['number', 'null'],
+			FechaCumplido: ['string', 'null'],
+			HoraCumplido: ['string', 'null'],
+			FechaProximo: ['string', 'null'],
+			HoraProximo: ['string', 'null'],
+			FechaRevision: ['string', 'null'],
+			HoraRevision: ['string', 'null'],
+			TipoIndicacion: ['number', 'null'],
+			Codigo: ['number', 'null'],
+			Cantidad: ['number', 'null'],
+			TipoUnidad: ['string', 'null'],
+			Frecuencia: ['string', 'null'],
+			Observaciones: ['string', 'null'],
+			FechaExpiro: ['string', 'null'],
+			HoraExpiro: ['string', 'null'],
+			CantidadIndicada: ['number', 'null'],
+			Orden: ['number', 'null'],
+			Estado: ['string', 'null'],
+			CantidadPorTurno: ['number', 'null'],
+			CantidadEntregada: ['number', 'null'],
+			ParaFechaEntrega: ['string', 'null'],
+			FormaAdicional: ['string', 'null'],
+			NroIndicacionAnterior: ['number', 'null'],
+			IdSector: ['string', 'null'],
+			AliasMedicamento: ['string', 'null'],
+			ExcluidoDeEntrega: ['boolean', 'null'],
+		};
+
+		const invalidFields = [];
+
+		for (const [key, allowedTypes] of Object.entries(requiredTypes)) {
+			const value = data[key];
+			const type = value === null ? 'null' : typeof value;
+			if (!allowedTypes.includes(type)) {
+				invalidFields.push({ campo: key, recibido: type, permitido: allowedTypes });
+			}
+		}
+
+		if (invalidFields.length > 0) {
+			return res.status(400).json({
+				message: 'Error de validación en los datos enviados',
+				success: false,
+				invalidFields,
+			});
+		}
+
+		// === Llamada al servicio ===
+		const result = await indicacionesService.nuevaIndicacion(data);
+		res.status(201).json({
+			message: 'Indicación creada correctamente',
+			success: true,
+			data: result,
+		});
+	} catch (err) {
+		res.status(500).json({
+			message: 'Error interno al intentar crear una indicación',
+			success: false,
+			error: err,
+		});
+	}
+};
+
 module.exports = {
 	obtenerUltimaIndicacionPorVisita,
 	obtenerUltimasIndicacionesPorVisita,
 	byDate,
 	obtenerDatosFormulario,
+	nuevaIndicacion,
 };
