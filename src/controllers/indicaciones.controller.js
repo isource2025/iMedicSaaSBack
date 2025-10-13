@@ -231,6 +231,65 @@ const deleteIndicacion = async (req, res) => {
     }
 };
 
+const getIndicacionById = async (req, res) => {
+    try {
+        const { nroIndicacion } = req.params;
+        const nroIndicacionInt = parseInt(nroIndicacion);
+        if (isNaN(nroIndicacionInt)) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Número de indicación inválido",
+            });
+        }
+        const indicacion = await indicacionesService.getIndicacionById(
+            nroIndicacionInt
+        );
+        if (!indicacion) {
+            return res.status(404).json({
+                success: false,
+                mensaje: "Indicacion no encontrada",
+            });
+        }
+        res.json({
+            success: true,
+            data: indicacion,
+        });
+    } catch (error) {
+        console.error("Error al obtener indicación por ID:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: "Error al obtener la indicación",
+            error: error.message,
+        });
+    }
+};
+
+const updateIndicacion = async (req, res) => {
+    try {
+        const { nroIndicacion } = req.params;
+        const nroIndicacionInt = parseInt(nroIndicacion);
+        if (isNaN(nroIndicacionInt)) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Número de indicación inválido",
+            });
+        }
+        const data = req.body;
+        await indicacionesService.updateIndicacion(nroIndicacionInt, data);
+        res.json({
+            success: true,
+            mensaje: "Indicacion actualizada correctamente",
+        });
+    } catch (error) {
+        console.error("Error al actualizar indicación:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: "Error al actualizar la indicación",
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -238,4 +297,6 @@ module.exports = {
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,
+    getIndicacionById,
+    updateIndicacion,
 };

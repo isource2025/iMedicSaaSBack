@@ -24,4 +24,8 @@ router.post("/", indicacionesController.nuevaIndicacion);
 
 router.delete("/:nroIndicacion", indicacionesController.deleteIndicacion);
 
+router.get("/:nroIndicacion", indicacionesController.getIndicacionById);
+
+router.put("/:nroIndicacion", indicacionesController.updateIndicacion);
+
 module.exports = router;

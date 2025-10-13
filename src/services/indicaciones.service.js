@@ -442,6 +442,213 @@ WHERE NroIndicacion = @param0
     await executeQuery(sql, params);
 };
 
+const getIndicacionById = async (nroIndicacion) => {
+    const sql = `
+SELECT 
+    NroIndicacion,
+    NumeroVisita,
+    NroAdicional,
+    CONVERT(varchar(10), DATEADD(DAY, CAST(FechaCarga AS int), '1800-12-29'), 23) AS FechaCarga,
+    CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,    
+    OperadorCarga,
+    ProfesionalAsiste,
+    CONVERT(varchar(10), DATEADD(DAY, FechaCumplido, '1800-12-29'), 23) AS FechaCumplido,
+    CONVERT(varchar(8), DATEADD(SECOND, HoraCumplido / 100, '00:00:00'), 108) AS HoraCumplido, 
+   
+    CONVERT(varchar(10), DATEADD(DAY, FechaProximo, '1800-12-29'), 23) AS FechaProximo,
+    CONVERT(varchar(8), DATEADD(SECOND, HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
+
+    CONVERT(varchar(10), DATEADD(DAY, FechaRevision, '1800-12-29'), 23) AS FechaRevision,
+    CONVERT(varchar(8), DATEADD(SECOND, HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
+    TipoIndicacion,
+    Codigo,
+    CantidadIndicada,
+    TipoUnidad,
+    Frecuencia,      
+    Cantidad,
+    Observaciones,
+    FechaExpiro,     
+    HoraExpiro,       
+    Orden,
+    Estado,
+    CantidadPorTurno,
+    CantidadEntregada,
+    ParaFechaEntrega,
+    FormaAdicional,
+    NroIndicacionAnterior,
+    IdSector,
+    AliasMedicamento,
+    ExcluidoDeEntrega
+FROM imInterIndMedicas
+WHERE NroIndicacion = @param0
+`;
+    const params = [{ value: nroIndicacion }];
+    const rows = await executeQuery(sql, params);
+    return rows[0] || null;
+};
+
+const updateIndicacion = async (nroIndicacion, data) => {
+    const sd = {
+        // ===== mismos campos que en nuevaIndicacion =====
+        NumeroVisita: toNumberOrNull(data.NumeroVisita),
+        NroAdicional: toNumberOrNull(data.NroAdicional),
+
+        FechaCarga: data.FechaCarga
+            ? convertirFechaAClarion(data.FechaCarga)
+            : null,
+        HoraCarga: data.HoraCarga
+            ? convertirHoraAClarion(data.HoraCarga)
+            : null,
+        OperadorCarga: toNumberOrNull(data.OperadorCarga),
+        ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
+
+        FechaCumplido: data.FechaCumplido
+            ? convertirFechaAClarion(data.FechaCumplido)
+            : null,
+        HoraCumplido: data.HoraCumplido
+            ? convertirHoraAClarion(data.HoraCumplido)
+            : null,
+        FechaProximo: data.FechaProximo
+            ? convertirFechaAClarion(data.FechaProximo)
+            : null,
+        HoraProximo: data.HoraProximo
+            ? convertirHoraAClarion(data.HoraProximo)
+            : null,
+        FechaRevision: data.FechaRevision
+            ? convertirFechaAClarion(data.FechaRevision)
+            : null,
+        HoraRevision: data.HoraRevision
+            ? convertirHoraAClarion(data.HoraRevision)
+            : null,
+
+        TipoIndicacion: toNumberOrNull(data.TipoIndicacion),
+        Codigo: toNumberOrNull(data.Codigo),
+
+        Cantidad: data.Cantidad == null ? null : Number(data.Cantidad),
+        TipoUnidad: limitLength(data.TipoUnidad, 5), // char(5)
+        Frecuencia: limitLength(data.Frecuencia, 20), // varchar(20)
+        Observaciones: limitLength(data.Observaciones, 255), // varchar(255)
+
+        FechaExpiro: data.FechaExpiro
+            ? convertirFechaAClarion(data.FechaExpiro)
+            : null,
+        HoraExpiro: data.HoraExpiro
+            ? convertirHoraAClarion(data.HoraExpiro)
+            : null,
+
+        CantidadIndicada:
+            data.CantidadIndicada == null
+                ? null
+                : Number(data.CantidadIndicada),
+        Orden: toNumberOrNull(data.Orden), // smallint
+        Estado: limitLength(data.Estado, 1), // char(1)
+        CantidadPorTurno:
+            data.CantidadPorTurno == null
+                ? null
+                : Number(data.CantidadPorTurno),
+        CantidadEntregada:
+            data.CantidadEntregada == null
+                ? null
+                : Number(data.CantidadEntregada),
+
+        // En tu INSERT, ParaFechaEntrega se guarda como DATE (YYYY-MM-DD)
+        ParaFechaEntrega: data.ParaFechaEntrega || null,
+
+        FormaAdicional: limitLength(data.FormaAdicional, 15),
+        NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior),
+        IdSector: limitLength(data.IdSector, 4),
+        AliasMedicamento: limitLength(data.AliasMedicamento, 50),
+        ExcluidoDeEntrega: toBitOrNull(data.ExcluidoDeEntrega), // bit
+    };
+
+    const sql = `
+UPDATE imInterIndMedicas
+SET
+  NumeroVisita        = @p0,
+  NroAdicional        = @p1,
+  FechaCarga          = @p2,
+  HoraCarga           = @p3,
+  OperadorCarga       = @p4,
+  ProfesionalAsiste   = @p5,
+
+  FechaCumplido       = @p6,
+  HoraCumplido        = @p7,
+  FechaProximo        = @p8,
+  HoraProximo         = @p9,
+  FechaRevision       = @p10,
+  HoraRevision        = @p11,
+
+  TipoIndicacion      = @p12,
+  Codigo              = @p13,
+  Cantidad            = @p14,
+  TipoUnidad          = @p15,
+  Frecuencia          = @p16,
+  Observaciones       = @p17,
+
+  FechaExpiro         = @p18,
+  HoraExpiro          = @p19,
+
+  CantidadIndicada    = @p20,
+  Orden               = @p21,
+  Estado              = @p22,
+  CantidadPorTurno    = @p23,
+  CantidadEntregada   = @p24,
+
+  ParaFechaEntrega    = @p25,
+  FormaAdicional      = @p26,
+  NroIndicacionAnterior = @p27,
+  IdSector            = @p28,
+  AliasMedicamento    = @p29,
+  ExcluidoDeEntrega   = @p30
+WHERE NroIndicacion = @p31
+`;
+
+    const params = [
+        { value: sd.NumeroVisita }, // @p0
+        { value: sd.NroAdicional }, // @p1
+        { value: sd.FechaCarga }, // @p2  (Clarion DATE)
+        { value: sd.HoraCarga }, // @p3  (Clarion TIME)
+        { value: sd.OperadorCarga }, // @p4
+        { value: sd.ProfesionalAsiste }, // @p5
+
+        { value: sd.FechaCumplido }, // @p6
+        { value: sd.HoraCumplido }, // @p7
+        { value: sd.FechaProximo }, // @p8
+        { value: sd.HoraProximo }, // @p9
+        { value: sd.FechaRevision }, // @p10
+        { value: sd.HoraRevision }, // @p11
+
+        { value: sd.TipoIndicacion }, // @p12
+        { value: sd.Codigo }, // @p13
+        { value: sd.Cantidad }, // @p14 (real)
+        { value: sd.TipoUnidad }, // @p15 char(5)
+        { value: sd.Frecuencia }, // @p16 varchar(20)
+        { value: sd.Observaciones }, // @p17 varchar(255)
+
+        { value: sd.FechaExpiro }, // @p18
+        { value: sd.HoraExpiro }, // @p19
+
+        { value: sd.CantidadIndicada }, // @p20 (real)
+        { value: sd.Orden }, // @p21 smallint
+        { value: sd.Estado }, // @p22 char(1)
+        { value: sd.CantidadPorTurno }, // @p23 (real)
+        { value: sd.CantidadEntregada }, // @p24 (real)
+
+        { value: sd.ParaFechaEntrega }, // @p25 date (YYYY-MM-DD)
+        { value: sd.FormaAdicional }, // @p26 varchar(15)
+        { value: sd.NroIndicacionAnterior }, // @p27
+        { value: sd.IdSector }, // @p28 varchar(4)
+        { value: sd.AliasMedicamento }, // @p29 varchar(50)
+        { value: sd.ExcluidoDeEntrega }, // @p30 bit
+
+        { value: nroIndicacion }, // @p31 WHERE
+    ];
+
+    await executeQuery(sql, params);
+    // Devuelve el registro actualizado con el mismo selector que ya usas:
+    return getIndicacionById(nroIndicacion);
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -449,4 +656,6 @@ module.exports = {
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,
+    getIndicacionById,
+    updateIndicacion,
 };
