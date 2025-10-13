@@ -433,10 +433,20 @@ const nuevaIndicacion = async (data) => {
     return nueva; // incluye NroIndicacion y los campos ISO auxiliares
 };
 
+const deleteIndicacion = async (nroIndicacion) => {
+    const sql = `
+DELETE FROM imInterIndMedicas
+WHERE NroIndicacion = @param0
+`;
+    const params = [{ value: nroIndicacion }];
+    await executeQuery(sql, params);
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
     getByVisitaAndDate,
     obtenerDatosFormulario,
     nuevaIndicacion,
+    deleteIndicacion,
 };
