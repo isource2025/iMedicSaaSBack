@@ -146,7 +146,7 @@ async function getByVisitaAndDate(numeroVisita, ymdDate) {
     const sql = `
 SELECT
   iim.NroIndicacion,
-  iim.Cantidad,
+  iim.CantidadIndicada AS Cantidad,
   iim.ProfesionalAsiste,
   iim.Frecuencia,
   iim.Observaciones,
