@@ -148,6 +148,7 @@ SELECT
   iim.NroIndicacion,
   iim.CantidadIndicada AS Cantidad,
   iim.ProfesionalAsiste,
+  p.Nombres + ' ' + p.Apellido AS FullName,
   iim.Frecuencia,
   iim.Observaciones,
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaProximo,0) - 4, '1801-01-01'), 23) AS FechaProximoISO,
@@ -156,6 +157,7 @@ SELECT
   iim.IdSector,
   iim.AliasMedicamento
 FROM dbo.imInterIndMedicas AS iim
+INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
 ORDER BY iim.NroIndicacion DESC;
@@ -174,6 +176,7 @@ ORDER BY iim.NroIndicacion DESC;
         cantidad: r.Cantidad,
         descripcion: r.AliasMedicamento,
         profesional: r.ProfesionalAsiste,
+        fullName: r.FullName,
         frecuencia: r.Frecuencia,
         observaciones: r.Observaciones,
         proximo: r.FechaProximoISO,
