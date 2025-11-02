@@ -425,7 +425,7 @@ const nuevaIndicacion = async (data) => {
         { value: sd.HoraExpiro }, // @p19
         { value: sd.CantidadIndicada }, // @p20 (real)
         { value: sd.Orden }, // @p21 smallint
-        { value: sd.Estado }, // @p22 char(1)
+        { value: 'N' }, // @p22 char(1)
         { value: sd.CantidadPorTurno }, // @p23 (real)
         { value: sd.CantidadEntregada }, // @p24 (real)
         { value: sd.ParaFechaEntrega }, // @p25 date
@@ -433,7 +433,7 @@ const nuevaIndicacion = async (data) => {
         { value: sd.NroIndicacionAnterior }, // @p27
         { value: sd.IdSector }, // @p28 varchar(4)
         { value: sd.AliasMedicamento }, // @p29 varchar(50)
-        { value: sd.ExcluidoDeEntrega }, // @p30 bit
+        { value: false }, // @p30 bit
     ];
 
     const [nueva] = await executeQuery(insert, params);
