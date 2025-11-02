@@ -158,9 +158,11 @@ SELECT
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaCarga,0)   - 4, '1801-01-01'), 23) AS FechaCargaISO,
   CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,
   iim.IdSector,
-  iim.AliasMedicamento
+  iim.AliasMedicamento,
+  tit.Tipo as TipoIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
 ORDER BY iim.NroIndicacion DESC;
@@ -188,6 +190,7 @@ ORDER BY iim.NroIndicacion DESC;
         horaAnterior: r.HoraRevision,
         vigenteDesde: r.FechaCargaISO,
         horaCarga: r.HoraCarga,
+        tipo: r.TipoIndicacion,
         nro: r.NroIndicacion,
         idSector: r.IdSector,
         medicamento: r.AliasMedicamento,
