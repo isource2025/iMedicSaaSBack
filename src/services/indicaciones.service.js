@@ -152,8 +152,11 @@ SELECT
   iim.Frecuencia,
   iim.Observaciones,
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaProximo,0) - 4, '1801-01-01'), 23) AS FechaProximoISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaRevision,0) - 4, '1801-01-01'), 23) AS FechaRevisionISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaCarga,0)   - 4, '1801-01-01'), 23) AS FechaCargaISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,
   iim.IdSector,
   iim.AliasMedicamento
 FROM dbo.imInterIndMedicas AS iim
@@ -180,8 +183,11 @@ ORDER BY iim.NroIndicacion DESC;
         frecuencia: r.Frecuencia,
         observaciones: r.Observaciones,
         proximo: r.FechaProximoISO,
+        HoraProximo: r.HoraProximo,
         anterior: r.FechaRevisionISO,
+        horaAnterior: r.HoraRevision,
         vigenteDesde: r.FechaCargaISO,
+        horaCarga: r.HoraCarga,
         nro: r.NroIndicacion,
         idSector: r.IdSector,
         medicamento: r.AliasMedicamento,
