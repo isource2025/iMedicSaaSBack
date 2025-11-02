@@ -295,6 +295,7 @@ const obtenerDatosFormulario = async () => {
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
+    console.log("[DATA A GUARDAR]",data)
     const sd = {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
         NroAdicional: toNumberOrNull(data.NroAdicional),
@@ -334,10 +335,7 @@ const nuevaIndicacion = async (data) => {
         TipoUnidad: limitLength(data.TipoUnidad, 5), // char(5)
         Frecuencia: limitLength(data.Frecuencia, 20), // varchar(20)
         Observaciones: limitLength(data.Observaciones, 255), // varchar(255)
-
-        FechaExpiro: data.FechaExpiro
-            ? convertirFechaAClarion(data.FechaExpiro)
-            : null,
+        FechaExpiro: data?.FechaExpiro === 0 ? 0 : convertirFechaAClarion(data.FechaExpiro),
         HoraExpiro: data.HoraExpiro
             ? convertirHoraAClarion(data.HoraExpiro)
             : null,
@@ -346,7 +344,7 @@ const nuevaIndicacion = async (data) => {
             data.CantidadIndicada == null
                 ? null
                 : Number(data.CantidadIndicada),
-        Orden: toNumberOrNull(data.Orden), // smallint
+        Orden: toNumberOrNull(data.Orden),
         Estado: limitLength(data.Estado, 1), // char(1)
         CantidadPorTurno:
             data.CantidadPorTurno == null
