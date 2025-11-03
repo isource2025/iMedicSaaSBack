@@ -152,12 +152,17 @@ SELECT
   iim.Frecuencia,
   iim.Observaciones,
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaProximo,0) - 4, '1801-01-01'), 23) AS FechaProximoISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaRevision,0) - 4, '1801-01-01'), 23) AS FechaRevisionISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
   CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaCarga,0)   - 4, '1801-01-01'), 23) AS FechaCargaISO,
+  CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,
   iim.IdSector,
-  iim.AliasMedicamento
+  iim.AliasMedicamento,
+  tit.Tipo as TipoIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
 ORDER BY iim.NroIndicacion DESC;
@@ -180,8 +185,12 @@ ORDER BY iim.NroIndicacion DESC;
         frecuencia: r.Frecuencia,
         observaciones: r.Observaciones,
         proximo: r.FechaProximoISO,
+        HoraProximo: r.HoraProximo,
         anterior: r.FechaRevisionISO,
+        horaAnterior: r.HoraRevision,
         vigenteDesde: r.FechaCargaISO,
+        horaCarga: r.HoraCarga,
+        tipo: r.TipoIndicacion,
         nro: r.NroIndicacion,
         idSector: r.IdSector,
         medicamento: r.AliasMedicamento,
@@ -289,6 +298,7 @@ const obtenerDatosFormulario = async () => {
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
+    console.log("[DATA A GUARDAR]",data)
     const sd = {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
         NroAdicional: toNumberOrNull(data.NroAdicional),
@@ -328,10 +338,7 @@ const nuevaIndicacion = async (data) => {
         TipoUnidad: limitLength(data.TipoUnidad, 5), // char(5)
         Frecuencia: limitLength(data.Frecuencia, 20), // varchar(20)
         Observaciones: limitLength(data.Observaciones, 255), // varchar(255)
-
-        FechaExpiro: data.FechaExpiro
-            ? convertirFechaAClarion(data.FechaExpiro)
-            : null,
+        FechaExpiro: data?.FechaExpiro === 0 ? 0 : convertirFechaAClarion(data.FechaExpiro),
         HoraExpiro: data.HoraExpiro
             ? convertirHoraAClarion(data.HoraExpiro)
             : null,
@@ -340,7 +347,7 @@ const nuevaIndicacion = async (data) => {
             data.CantidadIndicada == null
                 ? null
                 : Number(data.CantidadIndicada),
-        Orden: toNumberOrNull(data.Orden), // smallint
+        Orden: toNumberOrNull(data.Orden),
         Estado: limitLength(data.Estado, 1), // char(1)
         CantidadPorTurno:
             data.CantidadPorTurno == null
@@ -421,7 +428,7 @@ const nuevaIndicacion = async (data) => {
         { value: sd.HoraExpiro }, // @p19
         { value: sd.CantidadIndicada }, // @p20 (real)
         { value: sd.Orden }, // @p21 smallint
-        { value: sd.Estado }, // @p22 char(1)
+        { value: 'N' }, // @p22 char(1)
         { value: sd.CantidadPorTurno }, // @p23 (real)
         { value: sd.CantidadEntregada }, // @p24 (real)
         { value: sd.ParaFechaEntrega }, // @p25 date
@@ -429,7 +436,7 @@ const nuevaIndicacion = async (data) => {
         { value: sd.NroIndicacionAnterior }, // @p27
         { value: sd.IdSector }, // @p28 varchar(4)
         { value: sd.AliasMedicamento }, // @p29 varchar(50)
-        { value: sd.ExcluidoDeEntrega }, // @p30 bit
+        { value: false }, // @p30 bit
     ];
 
     const [nueva] = await executeQuery(insert, params);
