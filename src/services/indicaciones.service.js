@@ -407,7 +407,7 @@ const nuevaIndicacion = async (data) => {
 
     const params = [
         { value: sd.NumeroVisita }, // @p0
-        { value: sd.NroAdicional }, // @p1
+        { value: 0 }, // @p1
         { value: sd.FechaCarga }, // @p2 (Clarion DATE)
         { value: sd.HoraCarga }, // @p3 (Clarion TIME)
         { value: sd.OperadorCarga }, // @p4
