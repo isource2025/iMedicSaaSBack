@@ -11,7 +11,20 @@ const toNumberOrNull = (v) =>
     v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
 
 const toBitOrNull = (v) => (v == null ? null : v ? 1 : 0);
+// ✅ Helper para obtener fecha local sin problemas de zona horaria
+const getLocalDateString = (date) => {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+};
 
+// ✅ Helper para obtener hora local en formato HH:mm
+const getLocalTimeString = (date)=> {
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+};
 /**
  * Obtener la última indicación por número de visita
  * @param {number} numeroVisita - Número de visita
@@ -474,7 +487,8 @@ SELECT
     Codigo,
     CantidadIndicada,
     TipoUnidad,
-    Frecuencia,      
+    Frecuencia,
+    fa.Intervalo as Intervalo,      
     Cantidad,
     Observaciones,
     FechaExpiro,     
@@ -490,6 +504,7 @@ SELECT
     AliasMedicamento,
     ExcluidoDeEntrega
 FROM imInterIndMedicas
+LEFT JOIN imFrecuenciasAdmin fa ON imInterIndMedicas.Frecuencia = Valor
 WHERE NroIndicacion = @param0
 `;
     const params = [{ value: nroIndicacion }];
@@ -659,6 +674,155 @@ WHERE NroIndicacion = @p31
     return getIndicacionById(nroIndicacion);
 };
 
+const aplicarIndicacion = async (nroIndicacion, data) => {
+
+    console.log("[DEBUG DATA DESDE FRONT]",data);
+    try {
+    // Construir el UPDATE dinámicamente - solo campos que vienen en data
+    const fieldsToUpdate = [];
+    const params = [];
+    let paramIndex = 0;
+
+    // Siempre actualizar estos campos si vienen
+    if (data.fechaCumplido) {
+        fieldsToUpdate.push(`FechaCumplido = @p${paramIndex}`);
+        params.push({ value: convertirFechaAClarion(data.fechaCumplido) });
+        paramIndex++;
+    }
+
+    if (data.horaCumplido) {
+        fieldsToUpdate.push(`HoraCumplido = @p${paramIndex}`);
+        params.push({ value: convertirHoraAClarion(data.horaCumplido) });
+        paramIndex++;
+    }
+
+    if (data.fechaProximo) {
+        fieldsToUpdate.push(`FechaProximo = @p${paramIndex}`);
+        params.push({ value: convertirFechaAClarion(data.fechaProximo) });
+        paramIndex++;
+    }
+
+    if (data.horaProximo) {
+        fieldsToUpdate.push(`HoraProximo = @p${paramIndex}`);
+        params.push({ value: convertirHoraAClarion(data.horaProximo) });
+        paramIndex++;
+    }
+
+    if (data.observaciones !== undefined) {
+        fieldsToUpdate.push(`Observaciones = @p${paramIndex}`);
+        params.push({ value: limitLength(data.observaciones, 255) });
+        paramIndex++;
+    }
+
+    // Agregar campos adicionales si vienen
+    if (data.profesionalAsiste) {
+        fieldsToUpdate.push(`ProfesionalAsiste = @p${paramIndex}`);
+        params.push({ value: toNumberOrNull(data.profesionalAsiste) });
+        paramIndex++;
+    }
+
+    if (data.cantidadIndicada) {
+        fieldsToUpdate.push(`CantidadIndicada = @p${paramIndex}`);
+        params.push({ value: Number(data.cantidadIndicada) });
+        paramIndex++;
+    }
+
+    // Solo hacer el UPDATE si hay campos para actualizar
+    if (fieldsToUpdate.length === 0) {
+        console.log("No hay campos para actualizar en la indicación principal");
+        return;
+    }
+
+    // Agregar el WHERE al final
+    params.push({ value: nroIndicacion });
+
+    const updateIndicacion = `
+        UPDATE dbo.imInterIndMedicas 
+        SET ${fieldsToUpdate.join(', ')}
+        WHERE NroIndicacion = @p${paramIndex}
+    `;
+
+
+        await executeQuery(updateIndicacion, params);
+    } catch (error) {
+        console.error(error);
+        throw error;
+    }
+    if (data.tipoIndicacion === "C") {
+        const dateControl = new Date();
+        const controlData = {
+            NroIndicacion: nroIndicacion,
+            NumeroVisita: data.numeroVisita,
+
+            // Convertir fechas y horas a formato Clarion
+            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateControl)) : null,
+            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateControl)) : null,
+            FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
+            HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
+
+            // Campos de control - solo incluir si tienen valor
+            Pulso: data.control.pulso ? toNumberOrNull(data.control.pulso) : null,
+            Maximo: data.control.presionArterialMax ? toNumberOrNull(data.control.presionArterialMax) : null,
+            Minimo: data.control.presionArterialMin ? toNumberOrNull(data.control.presionArterialMin) : null,
+            FrecuenciaRespiratoria: data.control.frResp ? toNumberOrNull(data.control.frResp) : null,
+            Axilar: data.control.temperaturaAxilar ? parseFloat(data.control.temperaturaAxilar) : null,
+            Rectal: data.control.temperaturaRectal ? parseFloat(data.control.temperaturaRectal) : null,
+            Observaciones: limitLength(data.observaciones || '', 255),
+            Nroindicacion: nroIndicacion, // Parece que hay dos campos similares
+            Hgt: data.control.glucemia ? toNumberOrNull(data.control.glucemia) : null,
+            IdSector: limitLength(data.sector || '', 4),
+            PAMedia: data.control.presionArterialMedia ? parseFloat(data.control.presionArterialMedia) : null,
+            Saturometria: data.control.saturometria ? toNumberOrNull(data.control.saturometria) : null,
+            Peso: null, // No viene del frontend por ahora
+            Talla: null, // No viene del frontend por ahora
+            IdTurno: null, // Se puede calcular o venir de contexto
+        };
+
+        const insertControl = `
+        INSERT INTO dbo.imInterCtrlFrecuente (
+            NumeroVisita, FechaCarga, HoraCarga, FechaControl, HoraControl,
+            Pulso, Maximo, Minimo, FrecuenciaRespiratoria,
+            Axilar, Rectal, Observaciones, Nroindicacion,
+            Hgt, IdSector, PAMedia, Saturometria, Peso, Talla, IdTurno, Profesional, OperadorCarga
+        ) VALUES (
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7,
+            @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20, @p21
+        )
+    `;
+
+        const controlParams = [
+            { value: controlData.NumeroVisita },
+            { value: controlData.FechaCarga },
+            { value: controlData.HoraCarga },
+            { value: controlData.FechaControl },
+            { value: controlData.HoraControl },
+            { value: controlData.Pulso },
+            { value: controlData.Maximo },
+            { value: controlData.Minimo },
+            { value: controlData.FrecuenciaRespiratoria },
+            { value: controlData.Axilar },
+            { value: controlData.Rectal },
+            { value: controlData.Observaciones },
+            { value: controlData.Nroindicacion },
+            { value: controlData.Hgt },
+            { value: controlData.IdSector },
+            { value: controlData.PAMedia },
+            { value: controlData.Saturometria },
+            { value: controlData.Peso },
+            { value: controlData.Talla },
+            { value: controlData.IdTurno },
+            {value: data.profesionalAsiste},
+            { value: data.profesionalAsiste }
+        ];
+
+        try {
+            await executeQuery(insertControl, controlParams);
+        } catch (e){
+            console.error(e);
+            throw e;
+        }
+    }
+}
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -668,4 +832,5 @@ module.exports = {
     deleteIndicacion,
     getIndicacionById,
     updateIndicacion,
+    aplicarIndicacion,
 };
