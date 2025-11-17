@@ -676,7 +676,6 @@ WHERE NroIndicacion = @p31
 
 const aplicarIndicacion = async (nroIndicacion, data) => {
 
-    console.log("[DEBUG DATA DESDE FRONT]",data);
     try {
     // Construir el UPDATE dinámicamente - solo campos que vienen en data
     const fieldsToUpdate = [];
@@ -748,15 +747,18 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         console.error(error);
         throw error;
     }
+
+
+    const dateCarga = new Date();
+
     if (data.tipoIndicacion === "C") {
-        const dateControl = new Date();
         const controlData = {
             NroIndicacion: nroIndicacion,
             NumeroVisita: data.numeroVisita,
 
             // Convertir fechas y horas a formato Clarion
-            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateControl)) : null,
-            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateControl)) : null,
+            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateCarga)) : null,
+            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateCarga)) : null,
             FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
             HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
 
@@ -820,6 +822,59 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         } catch (e){
             console.error(e);
             throw e;
+        }
+    }
+
+    if (data.tipoIndicacion === "D"){
+        console.log("[DATA Dieta]", data);
+        const dietaData = {
+            NumeroVisita: data.numeroVisita,
+
+            // Fecha/Hora Carga (Servidor) - según tu regla
+            // Solo se graba si el front envió una fecha de cumplimiento
+            FechaCarga:  convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+
+            // Fecha/Hora Dieta (Front) - según tu regla
+            FechaDieta: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
+            HoraDieta: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
+
+            Observaciones: limitLength(data.observaciones || '', 255),
+            Profesional: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null,
+            OperadorCarga: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null, // Asumiendo que es el mismo profesional
+            Nroindicacion: nroIndicacion,
+            TipoDieta: toNumberOrNull(data.dieta.tipoDieta),
+        };
+
+        const insertDieta = `
+            INSERT INTO dbo.imInterCtrlDieta (
+                NumeroVisita, FechaCarga, HoraCarga, FechaDieta, HoraDieta,
+                Observaciones, Profesional, OperadorCarga, Nroindicacion,
+                TipoDieta
+            ) VALUES (
+                @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9
+            )
+        `;
+
+        const dietaParams = [
+            { value: dietaData.NumeroVisita },
+            { value: dietaData.FechaCarga },
+            { value: dietaData.HoraCarga },
+            { value: dietaData.FechaDieta },
+            { value: dietaData.HoraDieta },
+            { value: dietaData.Observaciones },
+            { value: dietaData.Profesional },
+            { value: dietaData.OperadorCarga },
+            { value: dietaData.Nroindicacion },
+            { value: dietaData.TipoDieta }
+        ];
+
+        try {
+            await executeQuery(insertDieta, dietaParams);
+            console.log("Registro de dieta (imInterCtrlDieta) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
 }
