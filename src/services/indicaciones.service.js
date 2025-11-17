@@ -877,6 +877,63 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
+
+    if (data.tipoIndicacion === "M"){
+        console.log("[DATA Dieta]", data);
+
+        const medicamentoData = {
+            NumeroVisita: data.numeroVisita,
+            Nroindicacion: nroIndicacion,
+            Observaciones: limitLength(data.observaciones || '', 255),
+            Profesional: data.profesionalAsiste,
+            OperadorCarga: data.profesionalAsiste,
+
+            //Fecha
+            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+            FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraControl: convertirHoraAClarion(data.horaCumplido),
+            FechaControl: convertirFechaAClarion(data.fechaCumplido),
+
+            //Data Medicamento
+            Sector: data.medicamentoCtrl.sector,
+            Cantidad: data.medicamentoCtrl.Cantidad,
+            CantidadIndicada: data.medicamentoCtrl.CantidadIndicada,
+            TipoUnidad: data.medicamentoCtrl.TipoUnidad,
+        }
+
+        const insertMedicamento = `
+        INSERT INTO dbo.imInterCtrlMedicamento (
+            NumeroVisita, Nroindicacion, Observaciones, Profesional, OperadorCarga, HoraCarga, FechaCarga, HoraControl, FechaControl,
+            Sector, Cantidad, CantidadIndicada, TipoUnidad
+        ) Values (
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12
+        )
+        `;
+
+        const medicamentoParams = [
+            { value: medicamentoData.NumeroVisita },
+            { value: medicamentoData.Nroindicacion },
+            { value: medicamentoData.Observaciones },
+            { value: medicamentoData.Profesional },
+            { value: medicamentoData.OperadorCarga },
+            { value: medicamentoData.HoraCarga },
+            { value: medicamentoData.FechaCarga },
+            { value: medicamentoData.HoraControl },
+            { value: medicamentoData.FechaControl },
+            { value: medicamentoData.Sector },
+            { value: medicamentoData.Cantidad },
+            { value: medicamentoData.CantidadIndicada },
+            { value: medicamentoData.TipoUnidad },
+        ]
+
+        try {
+            await executeQuery(insertMedicamento, medicamentoParams);
+            console.log("Registro de dieta (imInterCtrlMedicamento) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
+        }
+    }
 }
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
