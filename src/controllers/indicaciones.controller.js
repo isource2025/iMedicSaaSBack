@@ -290,6 +290,35 @@ const updateIndicacion = async (req, res) => {
     }
 };
 
+const aplicarIndicacion = async (req, res) => {
+    try {
+        const { nroIndicacion } = req.params;
+        const nroIndicacionInt = parseInt(nroIndicacion);
+
+        if (isNaN(nroIndicacionInt)) {
+            return res.status(400).json({
+                success: false,
+                message: "El numero de indicaion es invalido",
+            })
+        }
+
+        const data = req.body;
+
+        await indicacionesService.aplicarIndicacion(nroIndicacionInt, data);
+
+        res.status(200).json({
+            success: true,
+            mensaje: "Indicacion aplicada correctamente",
+        })
+    } catch (error) {
+        console.log(error.message);
+        res.status(500).json({
+            success: false,
+            mensaje: error.message
+        })
+    }
+}
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -299,4 +328,5 @@ module.exports = {
     deleteIndicacion,
     getIndicacionById,
     updateIndicacion,
+    aplicarIndicacion,
 };

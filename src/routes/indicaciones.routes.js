@@ -28,4 +28,6 @@ router.get("/:nroIndicacion", indicacionesController.getIndicacionById);
 
 router.put("/:nroIndicacion", indicacionesController.updateIndicacion);
 
+router.post("/:nroIndicacion/aplicar", indicacionesController.aplicarIndicacion);
+
 module.exports = router;
