@@ -934,6 +934,46 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
+
+    if( data.tipoIndicacion === "A" ) {
+        console.log("[DATA Dieta]", data);
+
+        const medidaAsistencialData = {
+            Numero: 0,
+            NumeroVisita: data.numeroVisita,
+            ValorSector: data.medidaAsistencial.valorSector,
+            CodOperador: data.profesionalAsiste,
+            HoraGraba: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+            FechaGraba: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            Observaciones: limitLength(data.observaciones || '', 255),
+        }
+
+        const insertMedidaAsistencial = `
+        INSERT INTO dbo.imFacPracticas (
+            Numero, NumeroVisita, ValorSector, CodOperador, HoraGraba, FechaGraba, Observaciones
+        ) VALUES (
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6
+        )`
+
+        const medidaAsistencialParams = [
+            { value: medidaAsistencialData.Numero },
+            { value: medidaAsistencialData.NumeroVisita },
+            { value: medidaAsistencialData.ValorSector},
+            { value: medidaAsistencialData.CodOperador },
+            { value: medidaAsistencialData.HoraGraba },
+            { value: medidaAsistencialData.FechaGraba },
+            { value: medidaAsistencialData.Observaciones }
+        ]
+
+
+        try {
+            await executeQuery(insertMedidaAsistencial, medidaAsistencialParams);
+            console.log("Registro de dieta (iimFacPracticas) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
+        }
+    }
 }
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
