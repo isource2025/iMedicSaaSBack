@@ -676,7 +676,6 @@ WHERE NroIndicacion = @p31
 
 const aplicarIndicacion = async (nroIndicacion, data) => {
 
-    console.log("[DEBUG DATA DESDE FRONT]",data);
     try {
     // Construir el UPDATE dinámicamente - solo campos que vienen en data
     const fieldsToUpdate = [];
@@ -748,15 +747,18 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         console.error(error);
         throw error;
     }
+
+
+    const dateCarga = new Date();
+
     if (data.tipoIndicacion === "C") {
-        const dateControl = new Date();
         const controlData = {
             NroIndicacion: nroIndicacion,
             NumeroVisita: data.numeroVisita,
 
             // Convertir fechas y horas a formato Clarion
-            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateControl)) : null,
-            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateControl)) : null,
+            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateCarga)) : null,
+            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateCarga)) : null,
             FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
             HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
 
@@ -820,6 +822,156 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         } catch (e){
             console.error(e);
             throw e;
+        }
+    }
+
+    if (data.tipoIndicacion === "D"){
+        console.log("[DATA Dieta]", data);
+        const dietaData = {
+            NumeroVisita: data.numeroVisita,
+
+            // Fecha/Hora Carga (Servidor) - según tu regla
+            // Solo se graba si el front envió una fecha de cumplimiento
+            FechaCarga:  convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+
+            // Fecha/Hora Dieta (Front) - según tu regla
+            FechaDieta: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
+            HoraDieta: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
+
+            Observaciones: limitLength(data.observaciones || '', 255),
+            Profesional: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null,
+            OperadorCarga: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null, // Asumiendo que es el mismo profesional
+            Nroindicacion: nroIndicacion,
+            TipoDieta: toNumberOrNull(data.dieta.tipoDieta),
+        };
+
+        const insertDieta = `
+            INSERT INTO dbo.imInterCtrlDieta (
+                NumeroVisita, FechaCarga, HoraCarga, FechaDieta, HoraDieta,
+                Observaciones, Profesional, OperadorCarga, Nroindicacion,
+                TipoDieta
+            ) VALUES (
+                @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9
+            )
+        `;
+
+        const dietaParams = [
+            { value: dietaData.NumeroVisita },
+            { value: dietaData.FechaCarga },
+            { value: dietaData.HoraCarga },
+            { value: dietaData.FechaDieta },
+            { value: dietaData.HoraDieta },
+            { value: dietaData.Observaciones },
+            { value: dietaData.Profesional },
+            { value: dietaData.OperadorCarga },
+            { value: dietaData.Nroindicacion },
+            { value: dietaData.TipoDieta }
+        ];
+
+        try {
+            await executeQuery(insertDieta, dietaParams);
+            console.log("Registro de dieta (imInterCtrlDieta) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
+        }
+    }
+
+    if (data.tipoIndicacion === "M"){
+        console.log("[DATA Dieta]", data);
+
+        const medicamentoData = {
+            NumeroVisita: data.numeroVisita,
+            Nroindicacion: nroIndicacion,
+            Observaciones: limitLength(data.observaciones || '', 255),
+            Profesional: data.profesionalAsiste,
+            OperadorCarga: data.profesionalAsiste,
+
+            //Fecha
+            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+            FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraControl: convertirHoraAClarion(data.horaCumplido),
+            FechaControl: convertirFechaAClarion(data.fechaCumplido),
+
+            //Data Medicamento
+            Sector: data.medicamentoCtrl.sector,
+            Cantidad: data.medicamentoCtrl.Cantidad,
+            CantidadIndicada: data.medicamentoCtrl.CantidadIndicada,
+            TipoUnidad: data.medicamentoCtrl.TipoUnidad,
+        }
+
+        const insertMedicamento = `
+        INSERT INTO dbo.imInterCtrlMedicamento (
+            NumeroVisita, Nroindicacion, Observaciones, Profesional, OperadorCarga, HoraCarga, FechaCarga, HoraControl, FechaControl,
+            Sector, Cantidad, CantidadIndicada, TipoUnidad
+        ) Values (
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12
+        )
+        `;
+
+        const medicamentoParams = [
+            { value: medicamentoData.NumeroVisita },
+            { value: medicamentoData.Nroindicacion },
+            { value: medicamentoData.Observaciones },
+            { value: medicamentoData.Profesional },
+            { value: medicamentoData.OperadorCarga },
+            { value: medicamentoData.HoraCarga },
+            { value: medicamentoData.FechaCarga },
+            { value: medicamentoData.HoraControl },
+            { value: medicamentoData.FechaControl },
+            { value: medicamentoData.Sector },
+            { value: medicamentoData.Cantidad },
+            { value: medicamentoData.CantidadIndicada },
+            { value: medicamentoData.TipoUnidad },
+        ]
+
+        try {
+            await executeQuery(insertMedicamento, medicamentoParams);
+            console.log("Registro de dieta (imInterCtrlMedicamento) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
+        }
+    }
+
+    if( data.tipoIndicacion === "A" ) {
+        console.log("[DATA Dieta]", data);
+
+        const medidaAsistencialData = {
+            Numero: 0,
+            NumeroVisita: data.numeroVisita,
+            ValorSector: data.medidaAsistencial.valorSector,
+            CodOperador: data.profesionalAsiste,
+            HoraGraba: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+            FechaGraba: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            Observaciones: limitLength(data.observaciones || '', 255),
+        }
+
+        const insertMedidaAsistencial = `
+        INSERT INTO dbo.imFacPracticas (
+            Numero, NumeroVisita, ValorSector, CodOperador, HoraGraba, FechaGraba, Observaciones
+        ) VALUES (
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6
+        )`
+
+        const medidaAsistencialParams = [
+            { value: medidaAsistencialData.Numero },
+            { value: medidaAsistencialData.NumeroVisita },
+            { value: medidaAsistencialData.ValorSector},
+            { value: medidaAsistencialData.CodOperador },
+            { value: medidaAsistencialData.HoraGraba },
+            { value: medidaAsistencialData.FechaGraba },
+            { value: medidaAsistencialData.Observaciones }
+        ]
+
+
+        try {
+            await executeQuery(insertMedidaAsistencial, medidaAsistencialParams);
+            console.log("Registro de dieta (iimFacPracticas) insertado correctamente.");
+        } catch (e) {
+            console.error("Error al insertar en imInterCtrlDieta:", e);
+            throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
 }
