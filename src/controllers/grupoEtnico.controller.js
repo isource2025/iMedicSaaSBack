@@ -2,7 +2,7 @@
  * grupoEtnico.controller.js
  * Controlador para las operaciones CRUD de la tabla imGrupoEtnico
  */
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 // Obtener todos los grupos étnicos
 const getGruposEtnicos = async (req, res) => {

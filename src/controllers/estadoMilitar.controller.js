@@ -2,7 +2,7 @@
  * estadoMilitar.controller.js
  * Controlador para las operaciones CRUD de la tabla imEstadoMilitar
  */
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 // Obtener todos los estados militares
 const getEstadosMilitares = async (req, res) => {

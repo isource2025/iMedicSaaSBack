@@ -3,7 +3,7 @@
  * @module services/requisito.service
  */
 
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Servicio para gestionar los requisitos de clientes

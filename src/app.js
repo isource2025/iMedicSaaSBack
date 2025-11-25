@@ -7,6 +7,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { configureCors } = require('./middlewares/cors.middleware'); // ✅ ACTIVADO
 // Importar middlewares
 // const { configureCors } = require('./middlewares/cors.middleware');
 
@@ -32,6 +33,8 @@ const grupoEtnicoRoutes = require('./routes/grupoEtnico.routes');
 const estadoMilitarRoutes = require('./routes/estadoMilitar.routes');
 const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 const coberturaRoutes = require('./routes/cobertura.routes');
+const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
+const estadosCivilesRoutes = require('./routes/estadoCivil.routes.js');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -54,7 +57,7 @@ connectDB()
 	});
 
 // Configurar middlewares
-// configureCors(app); // Configuración CORS
+configureCors(app); // Configuración CORS
 //Permitir solo desde tu Frontend (opcion recomendada)
 app.use(cors());
 
@@ -81,6 +84,7 @@ app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
 app.use('/api/provincias', provinciaRoutes);
 app.use('/api/sexo', sexoRoutes);
+
 app.use('/api/localidad', localidadRoutes);
 app.use('/api/raza', razaRoutes);
 app.use('/api/idiomas-iso', idiomasISORoutes);
@@ -91,6 +95,8 @@ app.use('/api/dador-organos', dadorOrganosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 app.use('/api/renaper', renaperRoutes);
 app.use('/api/cobertura', coberturaRoutes);
+app.use('/api/visita-movimientos', visitaMovimientosRoutes);
+app.use('/api/estados-civiles', estadosCivilesRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

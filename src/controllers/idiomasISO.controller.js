@@ -2,7 +2,7 @@
  * idiomasISO.controller.js
  * Controlador para las operaciones CRUD de la tabla imIdiomasISO
  */
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 // Obtener todos los idiomas ISO
 const getIdiomasISO = async (req, res) => {

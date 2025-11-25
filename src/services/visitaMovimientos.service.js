@@ -3,7 +3,7 @@
  * @module services/visitaMovimientos.service
  */
 const { executeQuery } = require('../models/db');
-const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/dateUtils');
+const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString } = require('../utils/dateUtils');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -652,10 +652,200 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   }
 }
 
+/**
+ * Obtiene los movimientos más recientes de internación (último ingreso, último egreso y último cambio de cama)
+ * @param {number} limite - Número máximo de registros a devolver (default: 10)
+ * @returns {Promise<Array>} - Array con los movimientos recientes
+ */
+async function obtenerMovimientosRecientes(limite = 10) {
+  const sql = `
+    WITH MovimientosRecientes AS (
+      -- Últimos 10 ingresos
+      SELECT TOP 10
+        vm.NumeroVisita,
+        vm.FechaAdmision,
+        vm.HoraAdmision,
+        vm.FechaEgreso,
+        vm.HoraEgreso,
+        vm.ValorHabitacionCama,
+        vm.ValorSector,
+        vm.EstadoCama,
+        v.IDPaciente,
+        p.ApellidoyNombre,
+        p.NumeroDocumento,
+        s.Descripcion as SectorDescripcion,
+        'Ingreso' as TipoMovimiento,
+        1 as Prioridad
+      FROM imVisitaMovimiento vm
+      INNER JOIN imVisita v ON vm.NumeroVisita = v.NumeroVisita
+      INNER JOIN imPacientes p ON v.IDPaciente = p.IDPaciente
+      LEFT JOIN imSectores s ON vm.ValorSector = s.Valor
+      WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
+        AND (vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0)
+      ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
+      
+      UNION ALL
+      
+      -- Últimos 10 egresos
+      SELECT TOP 10
+        vm.NumeroVisita,
+        vm.FechaAdmision,
+        vm.HoraAdmision,
+        vm.FechaEgreso,
+        vm.HoraEgreso,
+        vm.ValorHabitacionCama,
+        vm.ValorSector,
+        vm.EstadoCama,
+        v.IDPaciente,
+        p.ApellidoyNombre,
+        p.NumeroDocumento,
+        s.Descripcion as SectorDescripcion,
+        'Egreso' as TipoMovimiento,
+        2 as Prioridad
+      FROM imVisitaMovimiento vm
+      INNER JOIN imVisita v ON vm.NumeroVisita = v.NumeroVisita
+      INNER JOIN imPacientes p ON v.IDPaciente = p.IDPaciente
+      LEFT JOIN imSectores s ON vm.ValorSector = s.Valor
+      WHERE vm.FechaEgreso IS NOT NULL AND vm.FechaEgreso > 0
+      ORDER BY vm.FechaEgreso DESC, vm.HoraEgreso DESC
+      
+      UNION ALL
+      
+      -- Últimos 10 movimientos de cama
+      SELECT TOP 10
+        vm.NumeroVisita,
+        vm.FechaAdmision,
+        vm.HoraAdmision,
+        vm.FechaEgreso,
+        vm.HoraEgreso,
+        vm.ValorHabitacionCama,
+        vm.ValorSector,
+        vm.EstadoCama,
+        v.IDPaciente,
+        p.ApellidoyNombre,
+        p.NumeroDocumento,
+        s.Descripcion as SectorDescripcion,
+        'Movimiento de cama' as TipoMovimiento,
+        3 as Prioridad
+      FROM imVisitaMovimiento vm
+      INNER JOIN imVisita v ON vm.NumeroVisita = v.NumeroVisita
+      INNER JOIN imPacientes p ON v.IDPaciente = p.IDPaciente
+      LEFT JOIN imSectores s ON vm.ValorSector = s.Valor
+      WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
+      ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
+    )
+    SELECT 
+      NumeroVisita,
+      FechaAdmision,
+      HoraAdmision,
+      FechaEgreso,
+      HoraEgreso,
+      ValorHabitacionCama,
+      ValorSector,
+      EstadoCama,
+      IDPaciente,
+      ApellidoyNombre,
+      NumeroDocumento,
+      SectorDescripcion,
+      TipoMovimiento
+    FROM MovimientosRecientes
+    ORDER BY 
+      CASE 
+        WHEN TipoMovimiento = 'Ingreso' THEN FechaAdmision
+        WHEN TipoMovimiento = 'Egreso' THEN FechaEgreso
+        ELSE FechaAdmision
+      END DESC,
+      CASE 
+        WHEN TipoMovimiento = 'Ingreso' THEN HoraAdmision
+        WHEN TipoMovimiento = 'Egreso' THEN HoraEgreso
+        ELSE HoraAdmision
+      END DESC
+  `;
+  
+  try {
+    const result = await executeQuery(sql, [{ value: limite }]);
+    
+    // Convertir fechas y horas Clarion usando las funciones de dateUtils
+    const resultadoConFechas = result.map(row => {
+      const fechaAdmision = convertirFechaClarionADate(row.FechaAdmision);
+      const fechaEgreso = row.FechaEgreso && row.FechaEgreso > 0 
+        ? convertirFechaClarionADate(row.FechaEgreso) 
+        : null;
+      
+      const horaAdmision = convertirHoraClarionAString(row.HoraAdmision);
+      const horaEgreso = row.HoraEgreso && row.HoraEgreso > 0
+        ? convertirHoraClarionAString(row.HoraEgreso)
+        : null;
+      
+      return {
+        ...row,
+        FechaAdmisionFormateada: fechaAdmision ? fechaAdmision.toISOString() : null,
+        FechaEgresoFormateada: fechaEgreso ? fechaEgreso.toISOString() : null,
+        HoraAdmisionFormateada: horaAdmision,
+        HoraEgresoFormateada: horaEgreso
+      };
+    });
+
+    // Seleccionar el primer registro válido de cada tipo (no futuro)
+    const fechaActual = new Date();
+    const fechaLimiteArgentina = new Date(fechaActual.getFullYear() + 1, fechaActual.getMonth(), fechaActual.getDate());
+    
+    const tiposMovimiento = ['Ingreso', 'Egreso', 'Movimiento de cama'];
+    const resultadoFinal = [];
+    
+    tiposMovimiento.forEach(tipo => {
+      const registrosDeTipo = resultadoConFechas.filter(row => row.TipoMovimiento === tipo);
+      
+      // Buscar el primer registro válido (no futuro) de este tipo
+      for (const row of registrosDeTipo) {
+        const fechaAdmision = row.FechaAdmisionFormateada ? new Date(row.FechaAdmisionFormateada) : null;
+        const fechaEgreso = row.FechaEgresoFormateada ? new Date(row.FechaEgresoFormateada) : null;
+        
+        let esValido = true;
+        
+        // Validar que las fechas no sean futuras
+        if (fechaAdmision && fechaAdmision > fechaLimiteArgentina) {
+          console.warn(`Registro saltado por fecha de admisión futura: ${row.ApellidoyNombre} - ${fechaAdmision.toISOString()}`);
+          esValido = false;
+        }
+        
+        if (fechaEgreso && fechaEgreso > fechaLimiteArgentina) {
+          console.warn(`Registro saltado por fecha de egreso futura: ${row.ApellidoyNombre} - ${fechaEgreso.toISOString()}`);
+          esValido = false;
+        }
+        
+        if (esValido) {
+          resultadoFinal.push(row);
+          break; // Solo tomar el primer registro válido de cada tipo
+        }
+      }
+    });
+    
+    // Ordenar por fecha más reciente
+    resultadoFinal.sort((a, b) => {
+      const fechaA = a.TipoMovimiento === 'Egreso' && a.FechaEgresoFormateada 
+        ? new Date(a.FechaEgresoFormateada) 
+        : new Date(a.FechaAdmisionFormateada || 0);
+      const fechaB = b.TipoMovimiento === 'Egreso' && b.FechaEgresoFormateada 
+        ? new Date(b.FechaEgresoFormateada) 
+        : new Date(b.FechaAdmisionFormateada || 0);
+      
+      return fechaB.getTime() - fechaA.getTime(); // Más reciente primero
+    });
+    
+    return resultadoFinal || [];
+  } catch (error) {
+    console.error('Error al obtener movimientos recientes:', error);
+    throw new Error('Error al obtener los movimientos recientes de internación');
+  }
+}
+
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
-  intercambiarCamasPacientes
+  intercambiarCamasPacientes,
+  obtenerMovimientosRecientes
 };

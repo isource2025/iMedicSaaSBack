@@ -2,38 +2,34 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 
 /**
- * Lista pacientes con paginación optimizada.
+ * Lista pacientes con paginación real.
  * Query params:
  *  - page: número de página (default 1)
- *  - limit: registros por página (default 30, max 100)
+ *  - limit: número de pacientes por página (default 30, max 100)
  *  - search: término de búsqueda opcional
- *  - withCount=1 => agrega totalCount y totalPages
  */
 const obtenerPacientes = async (req, res) => {
 	try {
-		const { page = 1, limit = 30, search = '', withCount } = req.query;
+		const { page = 1, limit = 30, search = '' } = req.query;
 		
-		const parsedPage = Math.max(1, parseInt(page, 10) || 1);
-		const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 30));
-		const searchTerm = search ? String(search).trim() : '';
+		// Validar y limitar parámetros
+		const pageNum = Math.max(1, parseInt(page, 10) || 1);
+		const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 30));
+		const searchTerm = String(search || '').trim();
 
-		const pacientes = await patientsService.obtenerPacientes(parsedPage, parsedLimit, searchTerm);
-
-		if (withCount === '1' || withCount === 'true') {
-			const totalCount = await patientsService.contarPacientes(searchTerm);
-			const totalPages = Math.ceil(totalCount / parsedLimit);
-			return res.json({ 
-				success: true, 
-				data: pacientes,
-				pagination: {
-					currentPage: parsedPage,
-					totalPages,
-					totalCount,
-					limit: parsedLimit
-				}
-			});
-		}
-		res.json({ success: true, data: pacientes });
+		// Usar servicio de búsqueda paginada
+		const result = await patientsService.buscarPacientesPaginados(pageNum, limitNum, searchTerm);
+		
+		res.json({
+			success: true,
+			data: result.data,
+			pagination: {
+				currentPage: pageNum,
+				totalPages: result.totalPages,
+				totalCount: result.totalCount,
+				limit: limitNum
+			}
+		});
 	} catch (error) {
 		console.error('Error al obtener pacientes:', error);
 		res.status(500).json({
@@ -147,7 +143,7 @@ const crearPaciente = async (req, res) => {
 			Sexo,
 			NumeroHC,
 			FechaNacimiento,
-			HoraNacimiento,
+			Hora,
 			Domicilio,
 			ValorLocalidad,
 			Provincia,
@@ -193,9 +189,15 @@ const crearPaciente = async (req, res) => {
 
 		// Hora en formato HH:MM a entero HHMM
 		let horaInt = null;
-		if (HoraNacimiento && /^\d{1,2}:\d{2}$/.test(HoraNacimiento)) {
-			const [h, m] = HoraNacimiento.split(':').map(Number);
+		if (Hora && /^\d{1,2}:\d{2}$/.test(Hora)) {
+			const [h, m] = Hora.split(':').map(Number);
 			if (!isNaN(h) && !isNaN(m)) horaInt = h * 100 + m;
+		}
+
+		let horaIntDefuncion = null;
+		if (HoraDefuncion && /^\d{1,2}:\d{2}$/.test(HoraDefuncion)) {
+			const [h, m] = HoraDefuncion.split(':').map(Number);
+			if (!isNaN(h) && !isNaN(m)) horaIntDefuncion = h * 100 + m;
 		}
 
 		// Alias / derivaciones
@@ -236,7 +238,7 @@ const crearPaciente = async (req, res) => {
 			OrdenNacimiento: numOrNull(OrdenNacimiento),
 			LugarNacimiento: strOrNull(LugarNacimiento),
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
-			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			HoraDefuncion: horaIntDefuncion,
 			IdiomaPrimario: idiomaPrimarioIn,
 			Idioma: idiomaPrimarioIn,
 			GrupoEtnico:
@@ -365,7 +367,7 @@ const actualizarPaciente = async (req, res) => {
 			Sexo,
 			NumeroHC,
 			FechaNacimiento,
-			HoraNacimiento,
+			Hora,
 			Domicilio,
 			ValorLocalidad,
 			Provincia,
@@ -444,11 +446,17 @@ const actualizarPaciente = async (req, res) => {
 
 		// Convertir hora de formato HH:MM a HHMM (entero)
 		let horaInt = null;
-		if (HoraNacimiento) {
-			const [horas, minutos] = HoraNacimiento.split(':').map(Number);
+		if (Hora) {
+			const [horas, minutos] = Hora.split(':').map(Number);
 			if (!isNaN(horas) && !isNaN(minutos)) {
 				horaInt = horas * 100 + minutos;
 			}
+		}
+
+		let horaIntDefuncion = null;
+		if (HoraDefuncion) {
+			const [h, m] = HoraDefuncion.split(':').map(Number);
+			if (!isNaN(h) && !isNaN(m)) horaIntDefuncion = h * 100 + m;
 		}
 
 		// Validación de NumeroDocumento si viene con caracteres no numéricos (politica: rechazar)
@@ -497,7 +505,7 @@ const actualizarPaciente = async (req, res) => {
 			LicenciaConducir,
 			OrdenNacimiento: OrdenNacimiento ? parseInt(OrdenNacimiento) : null,
 			FechaDefuncion: FechaDefuncion ? convertirFechaAClarion(FechaDefuncion) : null,
-			HoraDefuncion: HoraDefuncion ? convertirHoraAClarion(HoraDefuncion) : null,
+			HoraDefuncion: horaIntDefuncion,
 			FotoURL: FotoURL && FotoURL !== 'undefined' ? FotoURL : null,
 		};
 

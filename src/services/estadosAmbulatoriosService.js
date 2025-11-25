@@ -1,4 +1,4 @@
-const db = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Servicio para manejar las operaciones relacionadas con los estados ambulatorios

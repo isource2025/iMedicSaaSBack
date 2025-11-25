@@ -68,5 +68,6 @@ async function executeProcedure(nombreProcedimiento, parametros = {}) {
 
 module.exports = {
   executeQuery,
-  executeProcedure
+  executeProcedure,
+  sql
 };

@@ -1,7 +1,7 @@
 /**
  * Script para obtener la estructura de la tabla impacientes
  */
-const { sql } = require('../config/database');
+const { sql } = require('../models/db');
 
 async function getTableStructure() {
   try {

@@ -1,4 +1,4 @@
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Obtiene todos los estados ambulatorios

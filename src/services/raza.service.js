@@ -3,7 +3,7 @@
  * @module services/raza.service
  */
 
-const { executeQuery } = require('../config/database');
+const { executeQuery } = require('../models/db');
 
 /**
  * Servicio para gestionar las razas
