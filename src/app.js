@@ -36,6 +36,8 @@ const coberturaRoutes = require('./routes/cobertura.routes');
 const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
 const estadosCivilesRoutes = require('./routes/estadoCivil.routes.js');
 const medicacionControlRoutes = require('./routes/medicacionControl.routes');
+const controlesFrecuentesRoutes = require('./routes/controlesFrecuentes.routes');
+const evolucionEnfermeriaRoutes = require('./routes/evolucionEnfermeria.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -99,6 +101,8 @@ app.use('/api/cobertura', coberturaRoutes);
 app.use('/api/visita-movimientos', visitaMovimientosRoutes);
 app.use('/api/estados-civiles', estadosCivilesRoutes);
 app.use('/api/medicacion-control', medicacionControlRoutes);
+app.use('/api/controles-frecuentes', controlesFrecuentesRoutes);
+app.use('/api/evolucion-enfermeria', evolucionEnfermeriaRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
