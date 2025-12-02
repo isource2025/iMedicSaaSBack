@@ -20,7 +20,7 @@ const getLocalDateString = (date) => {
 };
 
 // ✅ Helper para obtener hora local en formato HH:mm
-const getLocalTimeString = (date)=> {
+const getLocalTimeString = (date) => {
     const hh = String(date.getHours()).padStart(2, '0');
     const mm = String(date.getMinutes()).padStart(2, '0');
     return `${hh}:${mm}`;
@@ -178,7 +178,7 @@ INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
-ORDER BY iim.NroIndicacion DESC;
+ORDER BY iim.Orden ASC;
   `;
 
     const params = [
@@ -311,7 +311,7 @@ const obtenerDatosFormulario = async () => {
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
-    console.log("[DATA A GUARDAR]",data)
+    console.log("[DATA A GUARDAR]", data)
     const sd = {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
         NroAdicional: toNumberOrNull(data.NroAdicional),
@@ -677,65 +677,65 @@ WHERE NroIndicacion = @p31
 const aplicarIndicacion = async (nroIndicacion, data) => {
 
     try {
-    // Construir el UPDATE dinámicamente - solo campos que vienen en data
-    const fieldsToUpdate = [];
-    const params = [];
-    let paramIndex = 0;
+        // Construir el UPDATE dinámicamente - solo campos que vienen en data
+        const fieldsToUpdate = [];
+        const params = [];
+        let paramIndex = 0;
 
-    // Siempre actualizar estos campos si vienen
-    if (data.fechaCumplido) {
-        fieldsToUpdate.push(`FechaCumplido = @p${paramIndex}`);
-        params.push({ value: convertirFechaAClarion(data.fechaCumplido) });
-        paramIndex++;
-    }
+        // Siempre actualizar estos campos si vienen
+        if (data.fechaCumplido) {
+            fieldsToUpdate.push(`FechaCumplido = @p${paramIndex}`);
+            params.push({ value: convertirFechaAClarion(data.fechaCumplido) });
+            paramIndex++;
+        }
 
-    if (data.horaCumplido) {
-        fieldsToUpdate.push(`HoraCumplido = @p${paramIndex}`);
-        params.push({ value: convertirHoraAClarion(data.horaCumplido) });
-        paramIndex++;
-    }
+        if (data.horaCumplido) {
+            fieldsToUpdate.push(`HoraCumplido = @p${paramIndex}`);
+            params.push({ value: convertirHoraAClarion(data.horaCumplido) });
+            paramIndex++;
+        }
 
-    if (data.fechaProximo) {
-        fieldsToUpdate.push(`FechaProximo = @p${paramIndex}`);
-        params.push({ value: convertirFechaAClarion(data.fechaProximo) });
-        paramIndex++;
-    }
+        if (data.fechaProximo) {
+            fieldsToUpdate.push(`FechaProximo = @p${paramIndex}`);
+            params.push({ value: convertirFechaAClarion(data.fechaProximo) });
+            paramIndex++;
+        }
 
-    if (data.horaProximo) {
-        fieldsToUpdate.push(`HoraProximo = @p${paramIndex}`);
-        params.push({ value: convertirHoraAClarion(data.horaProximo) });
-        paramIndex++;
-    }
+        if (data.horaProximo) {
+            fieldsToUpdate.push(`HoraProximo = @p${paramIndex}`);
+            params.push({ value: convertirHoraAClarion(data.horaProximo) });
+            paramIndex++;
+        }
 
-    if (data.observaciones !== undefined) {
-        fieldsToUpdate.push(`Observaciones = @p${paramIndex}`);
-        params.push({ value: limitLength(data.observaciones, 255) });
-        paramIndex++;
-    }
+        if (data.observaciones !== undefined) {
+            fieldsToUpdate.push(`Observaciones = @p${paramIndex}`);
+            params.push({ value: limitLength(data.observaciones, 255) });
+            paramIndex++;
+        }
 
-    // Agregar campos adicionales si vienen
-    if (data.profesionalAsiste) {
-        fieldsToUpdate.push(`ProfesionalAsiste = @p${paramIndex}`);
-        params.push({ value: toNumberOrNull(data.profesionalAsiste) });
-        paramIndex++;
-    }
+        // Agregar campos adicionales si vienen
+        if (data.profesionalAsiste) {
+            fieldsToUpdate.push(`ProfesionalAsiste = @p${paramIndex}`);
+            params.push({ value: toNumberOrNull(data.profesionalAsiste) });
+            paramIndex++;
+        }
 
-    if (data.cantidadIndicada) {
-        fieldsToUpdate.push(`CantidadIndicada = @p${paramIndex}`);
-        params.push({ value: Number(data.cantidadIndicada) });
-        paramIndex++;
-    }
+        if (data.cantidadIndicada) {
+            fieldsToUpdate.push(`CantidadIndicada = @p${paramIndex}`);
+            params.push({ value: Number(data.cantidadIndicada) });
+            paramIndex++;
+        }
 
-    // Solo hacer el UPDATE si hay campos para actualizar
-    if (fieldsToUpdate.length === 0) {
-        console.log("No hay campos para actualizar en la indicación principal");
-        return;
-    }
+        // Solo hacer el UPDATE si hay campos para actualizar
+        if (fieldsToUpdate.length === 0) {
+            console.log("No hay campos para actualizar en la indicación principal");
+            return;
+        }
 
-    // Agregar el WHERE al final
-    params.push({ value: nroIndicacion });
+        // Agregar el WHERE al final
+        params.push({ value: nroIndicacion });
 
-    const updateIndicacion = `
+        const updateIndicacion = `
         UPDATE dbo.imInterIndMedicas 
         SET ${fieldsToUpdate.join(', ')}
         WHERE NroIndicacion = @p${paramIndex}
@@ -813,26 +813,26 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             { value: controlData.Peso },
             { value: controlData.Talla },
             { value: controlData.IdTurno },
-            {value: data.profesionalAsiste},
+            { value: data.profesionalAsiste },
             { value: data.profesionalAsiste }
         ];
 
         try {
             await executeQuery(insertControl, controlParams);
-        } catch (e){
+        } catch (e) {
             console.error(e);
             throw e;
         }
     }
 
-    if (data.tipoIndicacion === "D"){
+    if (data.tipoIndicacion === "D") {
         console.log("[DATA Dieta]", data);
         const dietaData = {
             NumeroVisita: data.numeroVisita,
 
             // Fecha/Hora Carga (Servidor) - según tu regla
             // Solo se graba si el front envió una fecha de cumplimiento
-            FechaCarga:  convertirFechaAClarion(getLocalDateString(dateCarga)),
+            FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
             HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
 
             // Fecha/Hora Dieta (Front) - según tu regla
@@ -878,7 +878,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         }
     }
 
-    if (data.tipoIndicacion === "M"){
+    if (data.tipoIndicacion === "M") {
         console.log("[DATA Dieta]", data);
 
         const medicamentoData = {
@@ -935,7 +935,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         }
     }
 
-    if( data.tipoIndicacion === "A" ) {
+    if (data.tipoIndicacion === "A") {
         console.log("[DATA Dieta]", data);
 
         const medidaAsistencialData = {
@@ -958,7 +958,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         const medidaAsistencialParams = [
             { value: medidaAsistencialData.Numero },
             { value: medidaAsistencialData.NumeroVisita },
-            { value: medidaAsistencialData.ValorSector},
+            { value: medidaAsistencialData.ValorSector },
             { value: medidaAsistencialData.CodOperador },
             { value: medidaAsistencialData.HoraGraba },
             { value: medidaAsistencialData.FechaGraba },
