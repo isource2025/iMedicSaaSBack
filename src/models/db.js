@@ -2,7 +2,7 @@
  * Modelo para realizar operaciones con SQL Server
  * @module models/db
  */
-const { sql } = require('../config/database');
+const { sql, connectDB } = require('../config/database');
 
 /**
  * Ejecuta una consulta SQL y devuelve los resultados
@@ -12,7 +12,9 @@ const { sql } = require('../config/database');
  */
 async function executeQuery(consulta, parametros = []) {
   try {
-    const request = new sql.Request();
+    // Asegurar que la conexión está activa
+    const pool = await connectDB();
+    const request = pool.request();
     
     console.log('Ejecutando consulta SQL:', consulta);
     
@@ -45,7 +47,9 @@ async function executeQuery(consulta, parametros = []) {
  */
 async function executeProcedure(nombreProcedimiento, parametros = {}) {
   try {
-    const request = new sql.Request();
+    // Asegurar que la conexión está activa
+    const pool = await connectDB();
+    const request = pool.request();
     
     // Añadir parámetros si existen
     if (parametros && Object.keys(parametros).length > 0) {
