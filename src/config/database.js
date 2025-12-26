@@ -35,17 +35,37 @@ let connectionPool;
  * @returns {Promise<sql.ConnectionPool>}
  */
 async function connectDB() {
+  // Si existe un pool y está conectado, retornarlo
   if (connectionPool && connectionPool.connected) {
     return connectionPool;
   }
 
+  // Si existe un pool pero no está conectado, cerrarlo primero
+  if (connectionPool && !connectionPool.connected) {
+    try {
+      await connectionPool.close();
+    } catch (err) {
+      console.warn('⚠️ Error al cerrar pool desconectado:', err.message);
+    }
+    connectionPool = null;
+  }
+
   try {
     console.log(`Conectando a SQL Server en ${sqlAuthConfig.server}:${sqlAuthConfig.port}`);
-    connectionPool = await sql.connect(sqlAuthConfig);
+    connectionPool = new sql.ConnectionPool(sqlAuthConfig);
+    await connectionPool.connect();
     console.log('✅ Conexión establecida correctamente con autenticación SQL');
+    
+    // Manejar eventos de error y cierre del pool
+    connectionPool.on('error', err => {
+      console.error('❌ Error en el pool de conexiones:', err.message);
+      connectionPool = null;
+    });
+
     return connectionPool;
   } catch (err) {
     console.error('❌ Error al conectar con SQL Server:', err.message);
+    connectionPool = null;
     throw err;
   }
 }
