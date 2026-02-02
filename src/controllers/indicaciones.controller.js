@@ -108,6 +108,43 @@ const byDate = async (req, res) => {
     }
 };
 
+// ✅ NUEVO: Obtener insumos/descartables por visita y fecha
+const insumosByDate = async (req, res) => {
+    try {
+        const { numeroVisita } = req.params;
+        const { date } = req.query;
+
+        const visitaNum = Number(numeroVisita);
+        if (!Number.isFinite(visitaNum) || visitaNum <= 0) {
+            return res
+                .status(400)
+                .json({ success: false, mensaje: "numeroVisita inválido" });
+        }
+
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+            return res
+                .status(400)
+                .json({ success: false, mensaje: "date debe ser YYYY-MM-DD" });
+        }
+
+        const rows = await indicacionesService.getInsumosByVisitaAndDate(
+            visitaNum,
+            String(date)
+        );
+
+        return res.json({
+            success: true,
+            data: rows || [],
+        });
+    } catch (err) {
+        console.error("[IndicacionesController][insumosByDate] error:", err);
+        return res.status(500).json({
+            success: false,
+            mensaje: "Error interno al obtener insumos por fecha",
+        });
+    }
+};
+
 /**
  * Obtener datos para el formulario de creación de indicaciones
  */
@@ -189,7 +226,6 @@ const nuevaIndicacion = async (req, res) => {
             });
         }
 
-        // === Llamada al servicio ===
         const result = await indicacionesService.nuevaIndicacion(data);
         res.status(201).json({
             message: "Indicación creada correctamente",
@@ -197,10 +233,11 @@ const nuevaIndicacion = async (req, res) => {
             data: result,
         });
     } catch (err) {
+        console.error("Error al crear indicación:", err.message);
         res.status(500).json({
             message: "Error interno al intentar crear una indicación",
             success: false,
-            error: err,
+            error: err.message || err,
         });
     }
 };
@@ -323,6 +360,7 @@ module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
     byDate,
+    insumosByDate,
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,

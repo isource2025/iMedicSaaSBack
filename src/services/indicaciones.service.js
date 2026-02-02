@@ -2,6 +2,8 @@ const { executeQuery } = require("../models/db");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
+    convertirFechaClarionADate,
+    convertirHoraClarionAString,
 } = require("../utils/dateUtils");
 
 const limitLength = (str, max) =>
@@ -25,6 +27,129 @@ const getLocalTimeString = (date) => {
     const mm = String(date.getMinutes()).padStart(2, '0');
     return `${hh}:${mm}`;
 };
+
+/**
+ * Convierte fecha y hora Clarion a objeto Date JavaScript usando utilidades existentes
+ * @param {number} fechaClarion - Fecha en formato Clarion (días desde 28/12/1800)
+ * @param {number} horaClarion - Hora en formato Clarion TIME (milisegundos/10 + 1)
+ * @returns {Date} Objeto Date
+ */
+const convertirClarionADateCompleto = (fechaClarion, horaClarion) => {
+    // Usar utilidad existente para convertir fecha
+    const fecha = convertirFechaClarionADate(fechaClarion);
+    if (!fecha) return null;
+    
+    // Agregar hora si existe usando utilidad existente
+    if (horaClarion && horaClarion > 0) {
+        const horaStr = convertirHoraClarionAString(horaClarion);
+        if (horaStr) {
+            const [horas, minutos, segundos] = horaStr.split(':').map(Number);
+            fecha.setHours(horas, minutos, segundos, 0);
+        }
+    }
+    
+    return fecha;
+};
+
+/**
+ * Calcula la próxima fecha/hora de aplicación basándose en la última aplicación y frecuencia
+ * @param {number} fechaCumplido - Fecha Clarion de última aplicación
+ * @param {number} horaCumplido - Hora Clarion de última aplicación
+ * @param {number} intervaloMinutos - Intervalo en minutos desde imFrecuenciasAdmin
+ * @returns {Object} { fechaProximo, horaProximo } en formato Clarion
+ */
+const calcularProximaAplicacion = (fechaCumplido, horaCumplido, intervaloMinutos) => {
+    if (!fechaCumplido || fechaCumplido <= 0 || !intervaloMinutos || intervaloMinutos <= 0) {
+        return { fechaProximo: null, horaProximo: null };
+    }
+    
+    // ✅ CORREGIDO: Usar función actualizada con utilidades correctas
+    const fechaBase = convertirClarionADateCompleto(fechaCumplido, horaCumplido);
+    if (!fechaBase) {
+        return { fechaProximo: null, horaProximo: null };
+    }
+    
+    // Sumar intervalo en minutos
+    const proximaFecha = new Date(fechaBase.getTime() + (intervaloMinutos * 60 * 1000));
+    
+    // Convertir de vuelta a formato Clarion usando utilidades existentes
+    const fechaProximo = convertirFechaAClarion(getLocalDateString(proximaFecha));
+    const horaProximo = convertirHoraAClarion(getLocalTimeString(proximaFecha) + ':00');
+    
+    return { fechaProximo, horaProximo };
+};
+
+/**
+ * Obtiene el intervalo en minutos para una frecuencia dada
+ * @param {string} frecuencia - Código de frecuencia
+ * @returns {Promise<number|null>} Intervalo en minutos o null
+ */
+const obtenerIntervaloFrecuencia = async (frecuencia) => {
+    if (!frecuencia) return null;
+    
+    try {
+        // ✅ NUEVO: Primero intentar interpretar frecuencias textuales comunes
+        const frecuenciaUpper = frecuencia.toUpperCase().trim();
+        
+        // Patrón especial: "POR UNICA VEZ" o "UNICA VEZ" (sin intervalo)
+        if (frecuenciaUpper.includes('UNICA VEZ') || frecuenciaUpper.includes('ÚNICA VEZ') || frecuenciaUpper.includes('POR UNICA')) {
+            console.log(`[FRECUENCIA] "${frecuencia}" es de única vez - NO tiene intervalo`);
+            return null;
+        }
+        
+        // Patrón especial: "CADA HORA" (sin número)
+        if (frecuenciaUpper === 'CADA HORA' || frecuenciaUpper === 'C/HORA' || frecuenciaUpper === 'C/ HORA') {
+            console.log(`[FRECUENCIA] "${frecuencia}" interpretado como cada hora = 60 minutos`);
+            return 60;
+        }
+        
+        // Patrón: "X VECES P/DIA" o "X VECES POR DIA"
+        const vecesMatch = frecuenciaUpper.match(/(\d+)\s*VECES?\s*(P\/DIA|POR\s*DIA|P\/D)/);
+        if (vecesMatch) {
+            const veces = parseInt(vecesMatch[1]);
+            // X veces por día = 24 horas / X veces = intervalo en horas
+            const intervaloHoras = 24 / veces;
+            const intervaloMinutos = Math.round(intervaloHoras * 60);
+            console.log(`[FRECUENCIA] "${frecuencia}" interpretado como ${veces} veces/día = ${intervaloMinutos} minutos`);
+            return intervaloMinutos;
+        }
+        
+        // Patrón: "CADA X HS" o "CADA X HORAS"
+        const horasMatch = frecuenciaUpper.match(/CADA\s*(\d+)\s*(HS|HORAS?)/);
+        if (horasMatch) {
+            const horas = parseInt(horasMatch[1]);
+            const intervaloMinutos = horas * 60;
+            console.log(`[FRECUENCIA] "${frecuencia}" interpretado como cada ${horas} horas = ${intervaloMinutos} minutos`);
+            return intervaloMinutos;
+        }
+        
+        // Patrón: "CADA X MIN" o "CADA X MINUTOS"
+        const minutosMatch = frecuenciaUpper.match(/CADA\s*(\d+)\s*(MIN|MINUTOS?)/);
+        if (minutosMatch) {
+            const minutos = parseInt(minutosMatch[1]);
+            console.log(`[FRECUENCIA] "${frecuencia}" interpretado como cada ${minutos} minutos`);
+            return minutos;
+        }
+        
+        // Si no coincide con patrones textuales, buscar en la tabla
+        const result = await executeQuery(
+            'SELECT Intervalo FROM imFrecuenciasAdmin WHERE Valor = @p0',
+            [{ value: frecuencia }]
+        );
+        
+        if (result && result[0] && result[0].Intervalo) {
+            // El Intervalo ya está en minutos según la tabla
+            return result[0].Intervalo;
+        }
+        
+        console.warn(`[FRECUENCIA] No se pudo interpretar la frecuencia: "${frecuencia}"`);
+        return null;
+    } catch (error) {
+        console.error('Error al obtener intervalo de frecuencia:', error);
+        return null;
+    }
+};
+
 /**
  * Obtener la última indicación por número de visita
  * @param {number} numeroVisita - Número de visita
@@ -49,6 +174,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
       pw.Nombres AS OperadorNombres,
       iim.ProfesionalAsiste,
       iim.TipoIndicacion,
+      tit.Tipo as TipoIndicacionCodigo,
       iim.Codigo,
       iim.Cantidad,
       iim.TipoUnidad,
@@ -72,9 +198,20 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
       iim.NroIndicacionAnterior,
       iim.IdSector,
       iim.AliasMedicamento,
-      iim.ExcluidoDeEntrega
+      iim.ExcluidoDeEntrega,
+      CASE 
+        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'C' THEN tc.Descripcion
+        WHEN tit.Tipo = 'D' THEN td.Descripcion
+        WHEN tit.Tipo = 'A' THEN ca.Descripcion
+        ELSE iim.AliasMedicamento
+      END AS DescripcionIndicacion
     FROM dbo.imInterIndMedicas AS iim
     LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = iim.OperadorCarga
+    LEFT JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
+    LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+    LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+    LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
     WHERE iim.NumeroVisita = @param0
     ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
@@ -113,6 +250,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       pw.Nombres AS OperadorNombres,
       iim.ProfesionalAsiste,
       iim.TipoIndicacion,
+      tit.Tipo as TipoIndicacionCodigo,
       iim.Codigo,
       iim.Cantidad,
       iim.TipoUnidad,
@@ -136,9 +274,20 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       iim.NroIndicacionAnterior,
       iim.IdSector,
       iim.AliasMedicamento,
-      iim.ExcluidoDeEntrega
+      iim.ExcluidoDeEntrega,
+      CASE 
+        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'C' THEN tc.Descripcion
+        WHEN tit.Tipo = 'D' THEN td.Descripcion
+        WHEN tit.Tipo = 'A' THEN ca.Descripcion
+        ELSE iim.AliasMedicamento
+      END AS DescripcionIndicacion
     FROM dbo.imInterIndMedicas AS iim
     LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = iim.OperadorCarga
+    LEFT JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
+    LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+    LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+    LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
     WHERE iim.NumeroVisita = @param0
     ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
@@ -163,21 +312,67 @@ SELECT
   iim.ProfesionalAsiste,
   p.Nombres + ' ' + p.Apellido AS FullName,
   iim.Frecuencia,
+  fa.Intervalo,
   iim.Observaciones,
-  CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaProximo,0) - 4, '1801-01-01'), 23) AS FechaProximoISO,
-  CONVERT(varchar(8), DATEADD(SECOND, HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
-  CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaRevision,0) - 4, '1801-01-01'), 23) AS FechaRevisionISO,
-  CONVERT(varchar(8), DATEADD(SECOND, HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
-  CONVERT(varchar(10), DATEADD(day,  NULLIF(iim.FechaCarga,0)   - 4, '1801-01-01'), 23) AS FechaCargaISO,
-  CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,
+  iim.Estado,
+  
+  -- ✅ CORREGIDO: Fechas usando epoch Clarion correcto (28/12/1800)
+  -- Formato: DATEADD(day, ClarionDate, '1800-12-28')
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaProximo,0), '1800-12-28'), 23) AS FechaProximoISO,
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
+  
+  -- ✅ CORREGIDO: Horas usando formato Clarion TIME (milisegundos/10 + 1)
+  -- Formato: DATEADD(ms, (ClarionTIME - 1) * 10, 0)
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10, 0), 108) AS HoraProximo,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraRevision,0) - 1) * 10, 0), 108) AS HoraRevision,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
+  
+  -- ✅ CORREGIDO: Última aplicación (PUNTO DE ANCLAJE) en formato ISO completo
+  CASE 
+    WHEN iim.FechaCumplido IS NOT NULL AND iim.FechaCumplido > 0 THEN
+      CONVERT(varchar(19), 
+        DATEADD(ms, (NULLIF(iim.HoraCumplido,0) - 1) * 10,
+          DATEADD(day, iim.FechaCumplido, '1800-12-28')
+        ), 120)
+    ELSE NULL
+  END AS UltimaAplicacion,
+  
+  -- ✅ CORREGIDO: Próxima aplicación en formato ISO completo
+  CASE 
+    WHEN iim.FechaProximo IS NOT NULL AND iim.FechaProximo > 0 THEN
+      CONVERT(varchar(19), 
+        DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10,
+          DATEADD(day, iim.FechaProximo, '1800-12-28')
+        ), 120)
+    ELSE NULL
+  END AS ProximaAplicacion,
+  
   iim.IdSector,
   iim.AliasMedicamento,
-  tit.Tipo as TipoIndicacion
+  iim.Codigo,
+  tit.Tipo as TipoIndicacion,
+  v.TipoMedicamento,
+  
+  -- Obtener descripción según el tipo de indicación
+  CASE 
+    WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+    WHEN tit.Tipo = 'C' THEN tc.Descripcion
+    WHEN tit.Tipo = 'D' THEN td.Descripcion
+    WHEN tit.Tipo = 'A' THEN ca.Descripcion
+    ELSE iim.AliasMedicamento
+  END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
+LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
+LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+LEFT JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
+  AND (tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)
 ORDER BY iim.Orden ASC;
   `;
 
@@ -189,13 +384,16 @@ ORDER BY iim.Orden ASC;
     const rows = await executeQuery(sql, params);
 
     console.log("getByVisitaAndDate - rows:", rows);
+    console.log("🔍 DEBUG - Primer registro completo:", rows[0]);
+    
     return rows.map((r) => ({
         id: String(r.NroIndicacion),
         cantidad: r.Cantidad,
-        descripcion: r.AliasMedicamento,
+        descripcion: r.DescripcionIndicacion,
         profesional: r.ProfesionalAsiste,
         fullName: r.FullName,
         frecuencia: r.Frecuencia,
+        intervalo: r.Intervalo,
         observaciones: r.Observaciones,
         proximo: r.FechaProximoISO,
         HoraProximo: r.HoraProximo,
@@ -207,6 +405,72 @@ ORDER BY iim.Orden ASC;
         nro: r.NroIndicacion,
         idSector: r.IdSector,
         medicamento: r.AliasMedicamento,
+        // ✅ NUEVOS: Campos para cálculo de estado
+        ultimaAplicacion: r.UltimaAplicacion,
+        proximaAplicacion: r.ProximaAplicacion,
+        estado: r.Estado,
+        suspendida: r.Estado === 'S',
+        // ✅ CORREGIDO: Detectar única vez por frecuencia, no por Estado
+        unicaVez: r.Frecuencia && (
+            r.Frecuencia.toUpperCase().includes('UNICA VEZ') || 
+            r.Frecuencia.toUpperCase().includes('ÚNICA VEZ') ||
+            r.Frecuencia.toUpperCase().includes('POR UNICA') ||
+            r.Estado === 'U'
+        ),
+    }));
+}
+
+// ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
+async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
+    const sql = `
+SELECT
+  iim.NroIndicacion,
+  iim.CantidadIndicada AS Cantidad,
+  iim.ProfesionalAsiste,
+  p.Nombres + ' ' + p.Apellido AS FullName,
+  iim.Observaciones,
+  
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
+  
+  iim.IdSector,
+  iim.AliasMedicamento,
+  iim.Codigo,
+  tit.Tipo as TipoIndicacion,
+  v.TipoMedicamento,
+  iim.AliasMedicamento AS DescripcionIndicacion
+FROM dbo.imInterIndMedicas AS iim
+INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
+INNER JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
+WHERE iim.NumeroVisita = @param0
+  AND iim.FechaCarga   = @param1
+  AND v.TipoMedicamento = 'DESC'
+  AND ISNULL(v.NROREG1, 0) = 0
+ORDER BY iim.Orden ASC;
+  `;
+
+    const params = [
+        { value: numeroVisita },
+        { value: convertirFechaAClarion(ymdDate) },
+    ];
+
+    const rows = await executeQuery(sql, params);
+    
+    return rows.map((r) => ({
+        id: String(r.NroIndicacion),
+        cantidad: r.Cantidad,
+        descripcion: r.DescripcionIndicacion,
+        profesional: r.ProfesionalAsiste,
+        fullName: r.FullName,
+        observaciones: r.Observaciones,
+        vigenteDesde: r.FechaCargaISO,
+        horaCarga: r.HoraCarga,
+        tipo: r.TipoIndicacion,
+        nro: r.NroIndicacion,
+        idSector: r.IdSector,
+        medicamento: r.AliasMedicamento,
+        tipoMedicamento: r.TipoMedicamento,
     }));
 }
 
@@ -242,7 +506,8 @@ const obtenerDatosFormulario = async () => {
 				SELECT
 					Troquel as Valor,
 					Alias as Nombre,
-					Descripcion
+					Descripcion,
+					TipoMedicamento
 				FROM imVademecum
 				WHERE Alias <> ''
 				ORDER BY Nombre
@@ -311,7 +576,6 @@ const obtenerDatosFormulario = async () => {
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
-    console.log("[DATA A GUARDAR]", data)
     const sd = {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
         NroAdicional: toNumberOrNull(data.NroAdicional),
@@ -325,24 +589,14 @@ const nuevaIndicacion = async (data) => {
         OperadorCarga: toNumberOrNull(data.OperadorCarga),
         ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
 
-        FechaCumplido: data.FechaCumplido
-            ? convertirFechaAClarion(data.FechaCumplido)
-            : null,
-        HoraCumplido: data.HoraCumplido
-            ? convertirHoraAClarion(data.HoraCumplido)
-            : null,
-        FechaProximo: data.FechaProximo
-            ? convertirFechaAClarion(data.FechaProximo)
-            : null,
-        HoraProximo: data.HoraProximo
-            ? convertirHoraAClarion(data.HoraProximo)
-            : null,
-        FechaRevision: data.FechaRevision
-            ? convertirFechaAClarion(data.FechaRevision)
-            : null,
-        HoraRevision: data.HoraRevision
-            ? convertirHoraAClarion(data.HoraRevision)
-            : null,
+        // ✅ NUEVO: Al crear una indicación, estos campos deben estar vacíos
+        // Se calcularán automáticamente cuando se aplique la indicación por primera vez
+        FechaCumplido: null,
+        HoraCumplido: null,
+        FechaProximo: null,
+        HoraProximo: null,
+        FechaRevision: null,
+        HoraRevision: null,
 
         TipoIndicacion: toNumberOrNull(data.TipoIndicacion),
         Codigo: toNumberOrNull(data.Codigo),
@@ -404,15 +658,15 @@ const nuevaIndicacion = async (data) => {
       FormaAdicional, NroIndicacionAnterior, IdSector, AliasMedicamento, ExcluidoDeEntrega,
 
       -- Helpers para ver legible las Clarion dates/times (opcionales en la respuesta)
-      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaCarga,0) - 4, '1801-01-01'), 23)  AS FechaCargaISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaCarga,0), '1800-12-28'), 23)  AS FechaCargaISO,
       CONVERT(varchar(8),  DATEADD(ms, (NULLIF(HoraCarga,0) - 1) * 10, 0), 108)       AS HoraCargaISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaCumplido,0) - 4, '1801-01-01'), 23) AS FechaCumplidoISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaCumplido,0), '1800-12-28'), 23) AS FechaCumplidoISO,
       CONVERT(varchar(8),  DATEADD(ms, (NULLIF(HoraCumplido,0) - 1) * 10, 0), 108)      AS HoraCumplidoISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaProximo,0) - 4, '1801-01-01'), 23)  AS FechaProximoISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaProximo,0), '1800-12-28'), 23)  AS FechaProximoISO,
       CONVERT(varchar(8),  DATEADD(ms, (NULLIF(HoraProximo,0) - 1) * 10, 0), 108)       AS HoraProximoISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaRevision,0) - 4, '1801-01-01'), 23) AS FechaRevisionISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
       CONVERT(varchar(8),  DATEADD(ms, (NULLIF(HoraRevision,0) - 1) * 10, 0), 108)      AS HoraRevisionISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaExpiro,0) - 4, '1801-01-01'), 23)   AS FechaExpiroISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(FechaExpiro,0), '1800-12-28'), 23)   AS FechaExpiroISO,
       CONVERT(varchar(8),  DATEADD(ms, (NULLIF(HoraExpiro,0) - 1) * 10, 0), 108)        AS HoraExpiroISO
     FROM dbo.imInterIndMedicas
     WHERE NroIndicacion = SCOPE_IDENTITY();
@@ -441,7 +695,7 @@ const nuevaIndicacion = async (data) => {
         { value: sd.HoraExpiro }, // @p19
         { value: sd.CantidadIndicada }, // @p20 (real)
         { value: sd.Orden }, // @p21 smallint
-        { value: 'N' }, // @p22 char(1)
+        { value: sd.Estado }, // @p22 char(1)
         { value: sd.CantidadPorTurno }, // @p23 (real)
         { value: sd.CantidadEntregada }, // @p24 (real)
         { value: sd.ParaFechaEntrega }, // @p25 date
@@ -449,11 +703,19 @@ const nuevaIndicacion = async (data) => {
         { value: sd.NroIndicacionAnterior }, // @p27
         { value: sd.IdSector }, // @p28 varchar(4)
         { value: sd.AliasMedicamento }, // @p29 varchar(50)
-        { value: false }, // @p30 bit
+        { value: sd.ExcluidoDeEntrega }, // @p30 bit
     ];
 
-    const [nueva] = await executeQuery(insert, params);
-    return nueva; // incluye NroIndicacion y los campos ISO auxiliares
+    try {
+        console.log("[EJECUTANDO INSERT] Parámetros:", params.map((p, i) => `@p${i}: ${p.value}`));
+        const [nueva] = await executeQuery(insert, params);
+        console.log("[INSERT EXITOSO] Nueva indicación:", nueva);
+        return nueva; // incluye NroIndicacion y los campos ISO auxiliares
+    } catch (error) {
+        console.error("[ERROR EN INSERT]", error);
+        console.error("[DATOS QUE CAUSARON ERROR]", sd);
+        throw error;
+    }
 };
 
 const deleteIndicacion = async (nroIndicacion) => {
@@ -468,44 +730,56 @@ WHERE NroIndicacion = @param0
 const getIndicacionById = async (nroIndicacion) => {
     const sql = `
 SELECT 
-    NroIndicacion,
-    NumeroVisita,
-    NroAdicional,
-    CONVERT(varchar(10), DATEADD(DAY, CAST(FechaCarga AS int), '1800-12-28'), 23) AS FechaCarga,
-    CONVERT(varchar(8), DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,    
-    OperadorCarga,
-    ProfesionalAsiste,
-    CONVERT(varchar(10), DATEADD(DAY, FechaCumplido, '1800-12-28'), 23) AS FechaCumplido,
-    CONVERT(varchar(8), DATEADD(SECOND, HoraCumplido / 100, '00:00:00'), 108) AS HoraCumplido, 
+    iim.NroIndicacion,
+    iim.NumeroVisita,
+    iim.NroAdicional,
+    CONVERT(varchar(10), DATEADD(DAY, CAST(iim.FechaCarga AS int), '1800-12-28'), 23) AS FechaCarga,
+    CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,    
+    iim.OperadorCarga,
+    iim.ProfesionalAsiste,
+    CONVERT(varchar(10), DATEADD(DAY, iim.FechaCumplido, '1800-12-28'), 23) AS FechaCumplido,
+    CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCumplido / 100, '00:00:00'), 108) AS HoraCumplido, 
    
-    CONVERT(varchar(10), DATEADD(DAY, FechaProximo, '1800-12-28'), 23) AS FechaProximo,
-    CONVERT(varchar(8), DATEADD(SECOND, HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
+    CONVERT(varchar(10), DATEADD(DAY, iim.FechaProximo, '1800-12-28'), 23) AS FechaProximo,
+    CONVERT(varchar(8), DATEADD(SECOND, iim.HoraProximo / 100, '00:00:00'), 108) AS HoraProximo,    
 
-    CONVERT(varchar(10), DATEADD(DAY, FechaRevision, '1800-12-28'), 23) AS FechaRevision,
-    CONVERT(varchar(8), DATEADD(SECOND, HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
-    TipoIndicacion,
-    Codigo,
-    CantidadIndicada,
-    TipoUnidad,
-    Frecuencia,
+    CONVERT(varchar(10), DATEADD(DAY, iim.FechaRevision, '1800-12-28'), 23) AS FechaRevision,
+    CONVERT(varchar(8), DATEADD(SECOND, iim.HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
+    iim.TipoIndicacion,
+    tit.Tipo as TipoIndicacionCodigo,
+    iim.Codigo,
+    iim.CantidadIndicada,
+    iim.TipoUnidad,
+    iim.Frecuencia,
     fa.Intervalo as Intervalo,      
-    Cantidad,
-    Observaciones,
-    FechaExpiro,     
-    HoraExpiro,       
-    Orden,
-    Estado,
-    CantidadPorTurno,
-    CantidadEntregada,
-    ParaFechaEntrega,
-    FormaAdicional,
-    NroIndicacionAnterior,
-    IdSector,
-    AliasMedicamento,
-    ExcluidoDeEntrega
-FROM imInterIndMedicas
-LEFT JOIN imFrecuenciasAdmin fa ON imInterIndMedicas.Frecuencia = Valor
-WHERE NroIndicacion = @param0
+    iim.Cantidad,
+    iim.Observaciones,
+    iim.FechaExpiro,     
+    iim.HoraExpiro,       
+    iim.Orden,
+    iim.Estado,
+    iim.CantidadPorTurno,
+    iim.CantidadEntregada,
+    iim.ParaFechaEntrega,
+    iim.FormaAdicional,
+    iim.NroIndicacionAnterior,
+    iim.IdSector,
+    iim.AliasMedicamento,
+    iim.ExcluidoDeEntrega,
+    CASE 
+        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'C' THEN tc.Descripcion
+        WHEN tit.Tipo = 'D' THEN td.Descripcion
+        WHEN tit.Tipo = 'A' THEN ca.Descripcion
+        ELSE iim.AliasMedicamento
+    END AS DescripcionIndicacion
+FROM imInterIndMedicas iim
+LEFT JOIN imFrecuenciasAdmin fa ON iim.Frecuencia = fa.Valor
+LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
+LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+WHERE iim.NroIndicacion = @param0
 `;
     const params = [{ value: nroIndicacion }];
     const rows = await executeQuery(sql, params);
@@ -677,6 +951,55 @@ WHERE NroIndicacion = @p31
 const aplicarIndicacion = async (nroIndicacion, data) => {
 
     try {
+        // ✅ NUEVO: Obtener la indicación actual para conocer su frecuencia
+        const indicacionActual = await getIndicacionById(nroIndicacion);
+        if (!indicacionActual) {
+            throw new Error('Indicación no encontrada');
+        }
+
+        // ✅ NUEVO: Detectar si es única vez por frecuencia
+        const frecuenciaUpper = indicacionActual.Frecuencia ? indicacionActual.Frecuencia.toUpperCase().trim() : '';
+        const esUnicaVez = indicacionActual.Estado === 'U' || 
+                          frecuenciaUpper.includes('UNICA VEZ') || 
+                          frecuenciaUpper.includes('ÚNICA VEZ') ||
+                          frecuenciaUpper.includes('POR UNICA');
+
+        // ✅ NUEVO: Validar que indicaciones de única vez no se apliquen más de una vez
+        if (esUnicaVez && indicacionActual.FechaCumplido && indicacionActual.FechaCumplido !== '1800-12-28') {
+            throw new Error('Esta indicación es de única vez y ya fue aplicada anteriormente');
+        }
+        
+        // ✅ NUEVO: Obtener intervalo de la frecuencia (solo si NO es única vez)
+        const intervaloMinutos = esUnicaVez ? null : await obtenerIntervaloFrecuencia(indicacionActual.Frecuencia);
+        
+        // ✅ NUEVO: Calcular próxima aplicación automáticamente si se está aplicando
+        let fechaProximoCalculada = null;
+        let horaProximoCalculada = null;
+        
+        if (!esUnicaVez && data.fechaCumplido && data.horaCumplido && intervaloMinutos) {
+            const fechaCumplidoClarion = convertirFechaAClarion(data.fechaCumplido);
+            const horaCumplidoClarion = convertirHoraAClarion(data.horaCumplido);
+            
+            const resultado = calcularProximaAplicacion(
+                fechaCumplidoClarion,
+                horaCumplidoClarion,
+                intervaloMinutos
+            );
+            
+            fechaProximoCalculada = resultado.fechaProximo;
+            horaProximoCalculada = resultado.horaProximo;
+            
+            console.log(`[APLICAR INDICACIÓN ${nroIndicacion}] Próxima aplicación calculada:`, {
+                fechaCumplido: data.fechaCumplido,
+                horaCumplido: data.horaCumplido,
+                intervaloMinutos,
+                fechaProximo: fechaProximoCalculada,
+                horaProximo: horaProximoCalculada
+            });
+        } else if (esUnicaVez) {
+            console.log(`[APLICAR INDICACIÓN ${nroIndicacion}] Es única vez - NO se calcula próxima aplicación`);
+        }
+
         // Construir el UPDATE dinámicamente - solo campos que vienen en data
         const fieldsToUpdate = [];
         const params = [];
@@ -695,15 +1018,37 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             paramIndex++;
         }
 
-        if (data.fechaProximo) {
+        // ✅ MODIFICADO: Usar valores calculados automáticamente si existen
+        if (fechaProximoCalculada !== null) {
+            fieldsToUpdate.push(`FechaProximo = @p${paramIndex}`);
+            params.push({ value: fechaProximoCalculada });
+            paramIndex++;
+        } else if (data.fechaProximo) {
             fieldsToUpdate.push(`FechaProximo = @p${paramIndex}`);
             params.push({ value: convertirFechaAClarion(data.fechaProximo) });
             paramIndex++;
         }
 
-        if (data.horaProximo) {
+        if (horaProximoCalculada !== null) {
+            fieldsToUpdate.push(`HoraProximo = @p${paramIndex}`);
+            params.push({ value: horaProximoCalculada });
+            paramIndex++;
+        } else if (data.horaProximo) {
             fieldsToUpdate.push(`HoraProximo = @p${paramIndex}`);
             params.push({ value: convertirHoraAClarion(data.horaProximo) });
+            paramIndex++;
+        }
+
+        // ✅ NUEVO: Actualizar FechaRevision/HoraRevision con la aplicación anterior
+        if (indicacionActual.FechaCumplido && indicacionActual.FechaCumplido !== '1800-12-28') {
+            fieldsToUpdate.push(`FechaRevision = @p${paramIndex}`);
+            params.push({ value: convertirFechaAClarion(indicacionActual.FechaCumplido) });
+            paramIndex++;
+        }
+
+        if (indicacionActual.HoraCumplido && indicacionActual.HoraCumplido !== '00:00:00') {
+            fieldsToUpdate.push(`HoraRevision = @p${paramIndex}`);
+            params.push({ value: convertirHoraAClarion(indicacionActual.HoraCumplido) });
             paramIndex++;
         }
 
@@ -827,7 +1172,12 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
     if (data.tipoIndicacion === "D") {
         console.log("[DATA Dieta]", data);
+        // ✅ NUEVO: Obtener el siguiente valor para el campo Valor
+        const maxValorResult = await executeQuery('SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM dbo.imInterCtrlDieta');
+        const nextValor = maxValorResult[0]?.NextValor || 1;
+
         const dietaData = {
+            Valor: nextValor,
             NumeroVisita: data.numeroVisita,
 
             // Fecha/Hora Carga (Servidor) - según tu regla
@@ -848,15 +1198,16 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
         const insertDieta = `
             INSERT INTO dbo.imInterCtrlDieta (
-                NumeroVisita, FechaCarga, HoraCarga, FechaDieta, HoraDieta,
+                Valor, NumeroVisita, FechaCarga, HoraCarga, FechaDieta, HoraDieta,
                 Observaciones, Profesional, OperadorCarga, Nroindicacion,
                 TipoDieta
             ) VALUES (
-                @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9
+                @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10
             )
         `;
 
         const dietaParams = [
+            { value: dietaData.Valor },
             { value: dietaData.NumeroVisita },
             { value: dietaData.FechaCarga },
             { value: dietaData.HoraCarga },
@@ -979,6 +1330,7 @@ module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
     getByVisitaAndDate,
+    getInsumosByVisitaAndDate,
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,

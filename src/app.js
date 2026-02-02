@@ -38,6 +38,7 @@ const estadosCivilesRoutes = require('./routes/estadoCivil.routes.js');
 const medicacionControlRoutes = require('./routes/medicacionControl.routes');
 const controlesFrecuentesRoutes = require('./routes/controlesFrecuentes.routes');
 const evolucionEnfermeriaRoutes = require('./routes/evolucionEnfermeria.routes');
+const actualizacionRoutes = require('./routes/actualizacion.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -103,6 +104,7 @@ app.use('/api/estados-civiles', estadosCivilesRoutes);
 app.use('/api/medicacion-control', medicacionControlRoutes);
 app.use('/api/controles-frecuentes', controlesFrecuentesRoutes);
 app.use('/api/evolucion-enfermeria', evolucionEnfermeriaRoutes);
+app.use('/api/actualizacion', actualizacionRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
@@ -111,7 +113,10 @@ app.get('/', (req, res) => {
 
 // Middleware para manejo de errores global
 app.use((err, req, res, next) => {
-	console.error('Error en la aplicación:', err);
+	console.error('Error en la aplicación:', err.message);
+	if (process.env.NODE_ENV === 'development') {
+		console.error('Stack:', err.stack);
+	}
 	res.status(500).json({
 		success: false,
 		mensaje: 'Error interno del servidor',

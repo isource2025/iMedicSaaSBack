@@ -11,12 +11,43 @@
  */
 // Clarion DATE: días transcurridos desde 28/12/1800 (date 0 = 28/12/1800)
 function convertirFechaAClarion(fecha) {
-	const base = Date.UTC(1801, 0, 1);
-	const d = fecha instanceof Date ? fecha : new Date(fecha);
-	if (isNaN(d)) throw new Error('Fecha inválida para conversión a Clarion');
+	// Manejar null y undefined - retornar null para fechas opcionales
+	if (fecha === null || fecha === undefined) {
+		return null;
+	}
+	
+	// Epoch Clarion: 28/12/1800 (debe coincidir con SQL: '1800-12-28')
+	const base = Date.UTC(1800, 11, 28); // 28 Dec 1800
+	
+	// Parsear fecha de entrada
+	let d;
+	if (fecha instanceof Date) {
+		d = fecha;
+	} else if (typeof fecha === 'string') {
+		// Si es string YYYY-MM-DD, parsear como fecha local
+		const parts = fecha.split('-');
+		
+		if (parts.length !== 3) {
+			throw new Error(`Formato de fecha inválido: esperado YYYY-MM-DD, recibido: ${fecha}`);
+		}
+		
+		const [year, month, day] = parts.map(Number);
+		
+		if (isNaN(year) || isNaN(month) || isNaN(day)) {
+			throw new Error(`Fecha con valores no numéricos: ${fecha}`);
+		}
+		
+		d = new Date(year, month - 1, day);
+	} else {
+		throw new Error(`Formato de fecha inválido: tipo ${typeof fecha}, valor: ${fecha}`);
+	}
+	
+	if (isNaN(d.getTime())) throw new Error('Fecha inválida para conversión a Clarion');
+	
+	// Usar UTC para el cálculo
 	const utcFecha = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
 	const diffDias = Math.floor((utcFecha - base) / 86400000);
-	return diffDias + 5;
+	return diffDias;
 }
 /**
  * Convierte una hora HH:MM o HH:MM:SS al Clarion TIME (int)
@@ -25,6 +56,11 @@ function convertirFechaAClarion(fecha) {
  * @returns {number} ClarionTime
  */
 function convertirHoraAClarion(hora) {
+	// Manejar null y undefined - retornar null para horas opcionales
+	if (hora === null || hora === undefined) {
+		return null;
+	}
+	
 	if (typeof hora !== 'string') throw new Error('Hora inválida para conversión a Clarion');
 	const [hh = '0', mm = '0', ss = '0'] = hora.split(':');
 	const ms =

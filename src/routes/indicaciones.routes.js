@@ -19,6 +19,9 @@ router.get(
 
 router.get("/:numeroVisita/byDate", indicacionesController.byDate);
 
+// ✅ NUEVO: Obtener insumos/descartables por visita y fecha
+router.get("/:numeroVisita/insumos/byDate", indicacionesController.insumosByDate);
+
 //Nueva indicación
 router.post("/", indicacionesController.nuevaIndicacion);
 
