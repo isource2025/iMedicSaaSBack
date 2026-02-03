@@ -24,7 +24,8 @@ async function executeQuery(consulta, parametros = []) {
         const nombreParametro = `param${indice}`;
         console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value);
         request.input(nombreParametro, parametro.value);
-        consulta = consulta.replaceAll(`@p${indice}`, `@${nombreParametro}`);
+        const regex = new RegExp(`@p${indice}\\b`, 'g');
+        consulta = consulta.replace(regex, `@${nombreParametro}`);
       });
     }
     
