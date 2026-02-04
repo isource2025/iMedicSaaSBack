@@ -372,6 +372,8 @@ LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = 
 LEFT JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
+  AND iim.TipoIndicacion <> 9
+  AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
   AND (tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)
 ORDER BY iim.Orden ASC;
   `;
