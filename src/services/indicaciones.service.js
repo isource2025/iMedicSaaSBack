@@ -251,6 +251,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       iim.ProfesionalAsiste,
       iim.TipoIndicacion,
       tit.Tipo as TipoIndicacionCodigo,
+      tit.PromptCodigo,
       iim.Codigo,
       iim.Cantidad,
       iim.TipoUnidad,
@@ -352,10 +353,7 @@ SELECT
   iim.AliasMedicamento,
   iim.Codigo,
   tit.Tipo as TipoIndicacion,
-  CASE 
-    WHEN v.TipoMedicamento = 'DESC' THEN 'Solucion'
-    ELSE tit.PromptCodigo
-  END AS PromptCodigo,
+  tit.PromptCodigo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
