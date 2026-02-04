@@ -468,6 +468,13 @@ ORDER BY iim.Orden ASC;
 
     const rows = await executeQuery(sql, params);
     
+    console.log('🔍 BACKEND INSUMOS - Total registros:', rows.length);
+    if (rows.length > 0) {
+        console.log('🔍 BACKEND INSUMOS - Primer registro completo:', rows[0]);
+        console.log('🔍 BACKEND INSUMOS - Cantidad del primer registro:', rows[0].Cantidad);
+        console.log('🔍 BACKEND INSUMOS - CantidadIndicada:', rows[0].CantidadIndicada);
+    }
+    
     return rows.map((r) => ({
         id: String(r.NroIndicacion),
         cantidad: r.Cantidad,
