@@ -352,7 +352,7 @@ SELECT
   iim.AliasMedicamento,
   iim.Codigo,
   tit.Tipo as TipoIndicacion,
-  tit.Descripcion as PromptCodigo,
+  tit.PromptCodigo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
