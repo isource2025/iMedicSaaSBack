@@ -352,7 +352,10 @@ SELECT
   iim.AliasMedicamento,
   iim.Codigo,
   tit.Tipo as TipoIndicacion,
-  tit.PromptCodigo,
+  CASE 
+    WHEN v.TipoMedicamento = 'DESC' THEN 'Solucion'
+    ELSE tit.PromptCodigo
+  END AS PromptCodigo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
