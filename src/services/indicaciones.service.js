@@ -387,8 +387,12 @@ ORDER BY iim.Orden ASC;
 
     const rows = await executeQuery(sql, params);
 
-    console.log("getByVisitaAndDate - rows:", rows);
-    console.log("🔍 DEBUG - Primer registro completo:", rows[0]);
+    console.log("🔍 BACKEND SQL - Total registros:", rows.length);
+    if (rows.length > 0) {
+        console.log("🔍 BACKEND SQL - Primer registro completo:", rows[0]);
+        console.log("🔍 BACKEND SQL - PromptCodigo del primer registro:", rows[0].PromptCodigo);
+        console.log("🔍 BACKEND SQL - Keys del primer registro:", Object.keys(rows[0]));
+    }
     
     return rows.map((r) => ({
         id: String(r.NroIndicacion),
