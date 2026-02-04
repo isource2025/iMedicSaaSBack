@@ -440,15 +440,15 @@ SELECT
   iim.Codigo,
   tit.Tipo as TipoIndicacion,
   v.TipoMedicamento,
-  iim.AliasMedicamento AS DescripcionIndicacion
+  COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento) AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
-INNER JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
+INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
-  AND v.TipoMedicamento = 'DESC'
-  AND ISNULL(v.NROREG1, 0) = 0
+  AND iim.TipoIndicacion = 9
+  AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 ORDER BY iim.Orden ASC;
   `;
 
