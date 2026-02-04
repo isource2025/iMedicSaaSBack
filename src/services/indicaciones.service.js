@@ -435,7 +435,10 @@ async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
 SELECT
   iim.NroIndicacion,
   iim.CantidadIndicada AS Cantidad,
+  iim.Codigo,
   iim.ProfesionalAsiste,
+  p.Apellido,
+  p.Nombres,
   p.Nombres + ' ' + p.Apellido AS FullName,
   iim.Observaciones,
   
@@ -444,7 +447,6 @@ SELECT
   
   iim.IdSector,
   iim.AliasMedicamento,
-  iim.Codigo,
   tit.Tipo as TipoIndicacion,
   v.TipoMedicamento,
   COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento) AS DescripcionIndicacion
@@ -469,8 +471,11 @@ ORDER BY iim.Orden ASC;
     return rows.map((r) => ({
         id: String(r.NroIndicacion),
         cantidad: r.Cantidad,
+        codigo: r.Codigo,
         descripcion: r.DescripcionIndicacion,
         profesional: r.ProfesionalAsiste,
+        apellido: r.Apellido,
+        nombres: r.Nombres,
         fullName: r.FullName,
         observaciones: r.Observaciones,
         vigenteDesde: r.FechaCargaISO,
