@@ -433,23 +433,24 @@ ORDER BY iim.Orden ASC;
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
     const sql = `
 SELECT
-  iim.NroIndicacion,
-  iim.Cantidad,
+  MIN(iim.NroIndicacion) AS NroIndicacion,
+  SUM(iim.Cantidad) AS Cantidad,
   iim.Codigo,
-  iim.ProfesionalAsiste,
-  p.Apellido,
-  p.Nombres,
-  p.Nombres + ' ' + p.Apellido AS FullName,
-  iim.Observaciones,
+  MIN(iim.ProfesionalAsiste) AS ProfesionalAsiste,
+  MIN(p.Apellido) AS Apellido,
+  MIN(p.Nombres) AS Nombres,
+  MIN(p.Nombres + ' ' + p.Apellido) AS FullName,
+  MIN(iim.Observaciones) AS Observaciones,
   
-  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
-  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
+  MIN(CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23)) AS FechaCargaISO,
+  MIN(CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108)) AS HoraCarga,
   
-  iim.IdSector,
-  iim.AliasMedicamento,
-  tit.Tipo as TipoIndicacion,
-  v.TipoMedicamento,
-  COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento) AS DescripcionIndicacion
+  MIN(iim.IdSector) AS IdSector,
+  MIN(iim.AliasMedicamento) AS AliasMedicamento,
+  MIN(tit.Tipo) AS TipoIndicacion,
+  MIN(v.TipoMedicamento) AS TipoMedicamento,
+  MIN(COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)) AS DescripcionIndicacion,
+  COUNT(*) AS NumeroSolicitantes
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
@@ -458,7 +459,8 @@ WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
   AND iim.TipoIndicacion = 9
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
-ORDER BY iim.Orden ASC;
+GROUP BY iim.Codigo
+ORDER BY MIN(iim.Orden) ASC;
   `;
 
     const params = [
