@@ -433,24 +433,25 @@ ORDER BY iim.Orden ASC;
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
     const sql = `
 SELECT
-  MIN(iim.NroIndicacion) AS NroIndicacion,
-  SUM(iim.Cantidad) AS Cantidad,
+  iim.NroIndicacion,
+  iim.Cantidad,
   iim.Codigo,
-  MIN(iim.ProfesionalAsiste) AS ProfesionalAsiste,
-  MIN(p.Apellido) AS Apellido,
-  MIN(p.Nombres) AS Nombres,
-  MIN(p.Nombres + ' ' + p.Apellido) AS FullName,
-  MIN(iim.Observaciones) AS Observaciones,
+  iim.ProfesionalAsiste,
+  p.Apellido,
+  p.Nombres,
+  p.Nombres + ' ' + p.Apellido AS FullName,
+  iim.Observaciones,
   
-  MIN(CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23)) AS FechaCargaISO,
-  MIN(CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108)) AS HoraCarga,
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
   
-  MIN(iim.IdSector) AS IdSector,
-  MIN(iim.AliasMedicamento) AS AliasMedicamento,
-  MIN(tit.Tipo) AS TipoIndicacion,
-  MIN(v.TipoMedicamento) AS TipoMedicamento,
-  MIN(COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)) AS DescripcionIndicacion,
-  COUNT(*) AS NumeroSolicitantes
+  iim.IdSector,
+  iim.AliasMedicamento,
+  tit.Tipo as TipoIndicacion,
+  v.TipoMedicamento,
+  COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento) AS DescripcionIndicacion,
+  iim.NroAdicional,
+  iim.Orden
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
@@ -459,8 +460,7 @@ WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
   AND iim.TipoIndicacion = 9
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
-GROUP BY iim.Codigo
-ORDER BY MIN(iim.Orden) ASC;
+ORDER BY iim.Orden ASC;
   `;
 
     const params = [
@@ -472,9 +472,24 @@ ORDER BY MIN(iim.Orden) ASC;
     
     console.log('🔍 BACKEND INSUMOS - Total registros:', rows.length);
     if (rows.length > 0) {
-        console.log('🔍 BACKEND INSUMOS - Primer registro completo:', rows[0]);
-        console.log('🔍 BACKEND INSUMOS - Cantidad del primer registro:', rows[0].Cantidad);
-        console.log('🔍 BACKEND INSUMOS - CantidadIndicada:', rows[0].CantidadIndicada);
+        console.log('🔍 BACKEND INSUMOS - Todos los registros:');
+        rows.forEach((r, idx) => {
+            console.log(`  [${idx}] NroIndicacion: ${r.NroIndicacion}, Codigo: ${r.Codigo}, Cantidad: ${r.Cantidad}, Descripcion: ${r.DescripcionIndicacion}, Profesional: ${r.ProfesionalAsiste}, NroAdicional: ${r.NroAdicional}, Orden: ${r.Orden}`);
+        });
+        
+        // Detectar duplicados por código
+        const codigosVistos = {};
+        rows.forEach(r => {
+            if (codigosVistos[r.Codigo]) {
+                console.log(`⚠️ DUPLICADO DETECTADO - Codigo: ${r.Codigo}, NroIndicacion: ${r.NroIndicacion}`);
+            }
+            codigosVistos[r.Codigo] = (codigosVistos[r.Codigo] || 0) + 1;
+        });
+        
+        console.log('🔍 BACKEND INSUMOS - Resumen de códigos:');
+        Object.keys(codigosVistos).forEach(codigo => {
+            console.log(`  Codigo ${codigo}: ${codigosVistos[codigo]} registro(s)`);
+        });
     }
     
     return rows.map((r) => ({
