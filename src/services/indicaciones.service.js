@@ -352,6 +352,7 @@ SELECT
   iim.AliasMedicamento,
   iim.Codigo,
   tit.Tipo as TipoIndicacion,
+  tit.PromptCodigo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
@@ -404,6 +405,7 @@ ORDER BY iim.Orden ASC;
         vigenteDesde: r.FechaCargaISO,
         horaCarga: r.HoraCarga,
         tipo: r.TipoIndicacion,
+        promptCodigo: r.PromptCodigo,
         nro: r.NroIndicacion,
         idSector: r.IdSector,
         medicamento: r.AliasMedicamento,
