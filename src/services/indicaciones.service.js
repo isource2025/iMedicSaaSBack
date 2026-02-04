@@ -436,7 +436,7 @@ SELECT DISTINCT
   iim.NroIndicacion,
   iim.Cantidad,
   iim.Codigo,
-  iim.ProfesionalAsiste,
+  iim.OperadorCarga,
   p.Apellido,
   p.Nombres,
   p.Nombres + ' ' + p.Apellido AS FullName,
@@ -453,7 +453,7 @@ SELECT DISTINCT
   iim.NroAdicional,
   iim.Orden
 FROM dbo.imInterIndMedicas AS iim
-LEFT JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+LEFT JOIN dbo.imPassword AS p ON p.CodOperador = iim.OperadorCarga
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
@@ -497,7 +497,7 @@ ORDER BY iim.Orden ASC;
         cantidad: r.Cantidad,
         codigo: r.Codigo,
         descripcion: r.DescripcionIndicacion,
-        profesional: r.ProfesionalAsiste,
+        profesional: r.OperadorCarga,
         apellido: r.Apellido,
         nombres: r.Nombres,
         fullName: r.FullName,
