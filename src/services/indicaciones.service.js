@@ -432,7 +432,7 @@ ORDER BY iim.Orden ASC;
 // ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
     const sql = `
-SELECT
+SELECT DISTINCT
   iim.NroIndicacion,
   iim.Cantidad,
   iim.Codigo,
