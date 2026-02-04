@@ -453,7 +453,7 @@ SELECT DISTINCT
   iim.NroAdicional,
   iim.Orden
 FROM dbo.imInterIndMedicas AS iim
-INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+LEFT JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
