@@ -434,7 +434,7 @@ async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
     const sql = `
 SELECT
   iim.NroIndicacion,
-  iim.CantidadIndicada AS Cantidad,
+  iim.Cantidad,
   iim.Codigo,
   iim.ProfesionalAsiste,
   p.Apellido,
