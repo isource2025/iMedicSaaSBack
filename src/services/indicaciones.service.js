@@ -354,13 +354,14 @@ SELECT
   iim.IdSector,
   iim.AliasMedicamento,
   iim.Codigo,
+  iim.FormaAdicional,
   tit.Tipo as TipoIndicacion,
   tit.PromptCodigo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
   CASE 
-    WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+    WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
     WHEN tit.Tipo = 'C' THEN tc.Descripcion
     WHEN tit.Tipo = 'D' THEN td.Descripcion
     WHEN tit.Tipo = 'A' THEN ca.Descripcion
@@ -451,6 +452,7 @@ ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 descripcion: r.DescripcionIndicacion,
                 observaciones: r.Observaciones,
                 frecuencia: r.Frecuencia,
+                formaAdicional: r.FormaAdicional,
             };
             
             // Agrupar por el NroIndicacion del padre (que está en NroAdicional de la hija)
@@ -991,6 +993,7 @@ SELECT
     iim.Observaciones,
     iim.Frecuencia,
     iim.Codigo,
+    iim.FormaAdicional,
     tit.Tipo as TipoIndicacion,
     v.TipoMedicamento,
     CASE 
@@ -1021,6 +1024,7 @@ ORDER BY iim.NroIndicacion ASC
         descripcion: h.DescripcionIndicacion,
         observaciones: h.Observaciones,
         frecuencia: h.Frecuencia,
+        formaAdicional: h.FormaAdicional,
     }));
     
     console.log('🔍 BACKEND - Indicación padre cargada:', indicacionPadre.NroIndicacion);
