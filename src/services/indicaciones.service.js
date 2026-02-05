@@ -877,13 +877,16 @@ WHERE iim.NroIndicacion = @param0
 SELECT 
     iim.NroIndicacion,
     iim.NroAdicional,
-    iim.Cantidad,
+    iim.CantidadIndicada AS Cantidad,
     iim.TipoUnidad,
     iim.AliasMedicamento,
     iim.Observaciones,
     iim.Frecuencia,
+    iim.Codigo,
+    tit.Tipo as TipoIndicacion,
+    v.TipoMedicamento,
     CASE 
-        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
         WHEN tit.Tipo = 'C' THEN tc.Descripcion
         WHEN tit.Tipo = 'D' THEN td.Descripcion
         WHEN tit.Tipo = 'A' THEN ca.Descripcion
@@ -894,6 +897,7 @@ LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+LEFT JOIN imVademecum v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
 WHERE iim.NroAdicional = @param0
 ORDER BY iim.NroIndicacion ASC
 `;
