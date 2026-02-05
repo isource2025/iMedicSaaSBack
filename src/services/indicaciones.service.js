@@ -870,6 +870,35 @@ WHERE iim.NroIndicacion = @param0
     
     if (!indicacionPadre) return null;
     
+    // 🔍 DIAGNÓSTICO: Ver TODAS las filas con este NroIndicacion
+    const sqlDiagnostico = `
+SELECT 
+    iim.NroIndicacion,
+    iim.NroAdicional,
+    iim.NumeroVisita,
+    iim.FechaCarga,
+    iim.Codigo,
+    iim.AliasMedicamento,
+    iim.Cantidad,
+    iim.TipoUnidad,
+    iim.Observaciones,
+    iim.Frecuencia
+FROM imInterIndMedicas iim
+WHERE iim.NroIndicacion = @param0
+ORDER BY iim.NroAdicional ASC
+`;
+    const todasLasFilas = await executeQuery(sqlDiagnostico, params);
+    console.log('🔍 DIAGNÓSTICO - Todas las filas con NroIndicacion', nroIndicacion, ':', todasLasFilas.length);
+    todasLasFilas.forEach((fila, idx) => {
+        console.log(`  Fila ${idx + 1}:`, {
+            NroIndicacion: fila.NroIndicacion,
+            NroAdicional: fila.NroAdicional,
+            Codigo: fila.Codigo,
+            Medicamento: fila.AliasMedicamento,
+            Cantidad: fila.Cantidad
+        });
+    });
+    
     // Obtener indicaciones hijas
     const sqlHijas = `
 SELECT 
