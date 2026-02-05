@@ -33,4 +33,7 @@ router.put("/:nroIndicacion", indicacionesController.updateIndicacion);
 
 router.post("/:nroIndicacion/aplicar", indicacionesController.aplicarIndicacion);
 
+// Obtener indicaciones hijas (compuestas) de una indicación padre
+router.get("/:nroIndicacion/hijas", indicacionesController.getIndicacionesHijas);
+
 module.exports = router;

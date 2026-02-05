@@ -1364,6 +1364,70 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         }
     }
 }
+/**
+ * Obtener indicaciones hijas (compuestas) de una indicación padre
+ * @param {number} nroIndicacionPadre - Número de indicación padre
+ * @returns {Promise<Array>} Lista de indicaciones hijas
+ */
+async function getIndicacionesHijas(nroIndicacionPadre) {
+    const sql = `
+SELECT
+  iim.NroIndicacion,
+  iim.NroAdicional,
+  iim.Cantidad,
+  iim.CantidadIndicada,
+  iim.TipoUnidad,
+  iim.Frecuencia,
+  iim.Observaciones,
+  iim.Codigo,
+  iim.TipoIndicacion,
+  iim.AliasMedicamento,
+  tit.Tipo as TipoIndicacionCodigo,
+  tit.Descripcion as TipoIndicacionDescripcion,
+  
+  -- Descripción según tipo de indicación
+  CASE 
+    WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+    WHEN tit.Tipo = 'C' THEN tc.Descripcion
+    WHEN tit.Tipo = 'D' THEN td.Descripcion
+    WHEN tit.Tipo = 'A' THEN ca.Descripcion
+    ELSE iim.AliasMedicamento
+  END AS DescripcionMedicamento,
+  
+  um.Descripcion as TipoUnidadDescripcion
+FROM dbo.imInterIndMedicas AS iim
+INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
+LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+LEFT JOIN dbo.imUnidadesMedida AS um ON iim.TipoUnidad = um.Valor
+WHERE iim.NroIndicacion = @param0
+  AND iim.NroAdicional IS NOT NULL
+  AND iim.NroAdicional > 0
+ORDER BY iim.NroAdicional ASC;
+  `;
+
+    const params = [{ value: nroIndicacionPadre }];
+    const rows = await executeQuery(sql, params);
+    
+    return rows.map((r) => ({
+        nroIndicacion: r.NroIndicacion,
+        nroAdicional: r.NroAdicional,
+        cantidad: r.Cantidad,
+        cantidadIndicada: r.CantidadIndicada,
+        tipoUnidad: r.TipoUnidad,
+        tipoUnidadDescripcion: r.TipoUnidadDescripcion,
+        frecuencia: r.Frecuencia,
+        observaciones: r.Observaciones,
+        codigo: r.Codigo,
+        tipoIndicacion: r.TipoIndicacion,
+        tipoIndicacionCodigo: r.TipoIndicacionCodigo,
+        tipoIndicacionDescripcion: r.TipoIndicacionDescripcion,
+        aliasMedicamento: r.AliasMedicamento,
+        descripcionMedicamento: r.DescripcionMedicamento,
+    }));
+}
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -1375,4 +1439,5 @@ module.exports = {
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,
+    getIndicacionesHijas,
 };

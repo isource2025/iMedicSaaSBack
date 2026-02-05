@@ -356,6 +356,37 @@ const aplicarIndicacion = async (req, res) => {
     }
 }
 
+/**
+ * Obtener indicaciones hijas (compuestas) de una indicación padre
+ */
+const getIndicacionesHijas = async (req, res) => {
+    try {
+        const { nroIndicacion } = req.params;
+        const nroIndicacionInt = parseInt(nroIndicacion);
+
+        if (isNaN(nroIndicacionInt)) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Número de indicación inválido",
+            });
+        }
+
+        const hijas = await indicacionesService.getIndicacionesHijas(nroIndicacionInt);
+
+        res.json({
+            success: true,
+            data: hijas,
+        });
+    } catch (error) {
+        console.error("Error al obtener indicaciones hijas:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: "Error al obtener indicaciones hijas",
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -367,4 +398,5 @@ module.exports = {
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,
+    getIndicacionesHijas,
 };
