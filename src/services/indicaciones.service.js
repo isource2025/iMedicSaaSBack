@@ -396,14 +396,15 @@ ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
     }
     
     // Agrupar indicaciones padre con sus hijas
+    // IMPORTANTE: Las hijas tienen en NroAdicional el NroIndicacion del padre
     const indicacionesPadre = [];
-    const indicacionesHijas = new Map(); // Map<NroIndicacion, Array<Hija>>
+    const indicacionesHijas = new Map(); // Map<NroIndicacion del padre, Array<Hija>>
     
     rows.forEach((r) => {
         const nroAdicional = r.NroAdicional || 0;
         
         if (nroAdicional === 0) {
-            // Es una indicación padre
+            // Es una indicación padre (NroAdicional = 0 o NULL)
             indicacionesPadre.push({
                 id: String(r.NroIndicacion),
                 nroIndicacion: r.NroIndicacion,
@@ -440,7 +441,7 @@ ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 indicacionesHijas: [] // Se llenará después
             });
         } else {
-            // Es una indicación hija
+            // Es una indicación hija (NroAdicional contiene el NroIndicacion del padre)
             const hija = {
                 nroIndicacion: r.NroIndicacion,
                 nroAdicional: r.NroAdicional,
@@ -452,10 +453,11 @@ ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 frecuencia: r.Frecuencia,
             };
             
-            if (!indicacionesHijas.has(r.NroIndicacion)) {
-                indicacionesHijas.set(r.NroIndicacion, []);
+            // Agrupar por el NroIndicacion del padre (que está en NroAdicional de la hija)
+            if (!indicacionesHijas.has(r.NroAdicional)) {
+                indicacionesHijas.set(r.NroAdicional, []);
             }
-            indicacionesHijas.get(r.NroIndicacion).push(hija);
+            indicacionesHijas.get(r.NroAdicional).push(hija);
         }
     });
     
@@ -870,36 +872,7 @@ WHERE iim.NroIndicacion = @param0
     
     if (!indicacionPadre) return null;
     
-    // 🔍 DIAGNÓSTICO: Ver TODAS las filas con este NroIndicacion
-    const sqlDiagnostico = `
-SELECT 
-    iim.NroIndicacion,
-    iim.NroAdicional,
-    iim.NumeroVisita,
-    iim.FechaCarga,
-    iim.Codigo,
-    iim.AliasMedicamento,
-    iim.Cantidad,
-    iim.TipoUnidad,
-    iim.Observaciones,
-    iim.Frecuencia
-FROM imInterIndMedicas iim
-WHERE iim.NroIndicacion = @param0
-ORDER BY iim.NroAdicional ASC
-`;
-    const todasLasFilas = await executeQuery(sqlDiagnostico, params);
-    console.log('🔍 DIAGNÓSTICO - Todas las filas con NroIndicacion', nroIndicacion, ':', todasLasFilas.length);
-    todasLasFilas.forEach((fila, idx) => {
-        console.log(`  Fila ${idx + 1}:`, {
-            NroIndicacion: fila.NroIndicacion,
-            NroAdicional: fila.NroAdicional,
-            Codigo: fila.Codigo,
-            Medicamento: fila.AliasMedicamento,
-            Cantidad: fila.Cantidad
-        });
-    });
-    
-    // Obtener indicaciones hijas
+    // Obtener indicaciones hijas (donde NroAdicional = NroIndicacion del padre)
     const sqlHijas = `
 SELECT 
     iim.NroIndicacion,
@@ -921,9 +894,8 @@ LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
-WHERE iim.NroIndicacion = @param0
-  AND iim.NroAdicional > 0
-ORDER BY iim.NroAdicional ASC
+WHERE iim.NroAdicional = @param0
+ORDER BY iim.NroIndicacion ASC
 `;
     const hijasRows = await executeQuery(sqlHijas, params);
     
