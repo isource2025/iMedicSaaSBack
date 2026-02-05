@@ -862,10 +862,58 @@ LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
 WHERE iim.NroIndicacion = @param0
+  AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;
     const params = [{ value: nroIndicacion }];
     const rows = await executeQuery(sql, params);
-    return rows[0] || null;
+    const indicacionPadre = rows[0] || null;
+    
+    if (!indicacionPadre) return null;
+    
+    // Obtener indicaciones hijas
+    const sqlHijas = `
+SELECT 
+    iim.NroIndicacion,
+    iim.NroAdicional,
+    iim.Cantidad,
+    iim.TipoUnidad,
+    iim.AliasMedicamento,
+    iim.Observaciones,
+    iim.Frecuencia,
+    CASE 
+        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'C' THEN tc.Descripcion
+        WHEN tit.Tipo = 'D' THEN td.Descripcion
+        WHEN tit.Tipo = 'A' THEN ca.Descripcion
+        ELSE iim.AliasMedicamento
+    END AS DescripcionIndicacion
+FROM imInterIndMedicas iim
+LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
+LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
+LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
+LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+WHERE iim.NroIndicacion = @param0
+  AND iim.NroAdicional > 0
+ORDER BY iim.NroAdicional ASC
+`;
+    const hijasRows = await executeQuery(sqlHijas, params);
+    
+    // Agregar indicaciones hijas al objeto padre
+    indicacionPadre.indicacionesHijas = hijasRows.map(h => ({
+        nroIndicacion: h.NroIndicacion,
+        nroAdicional: h.NroAdicional,
+        cantidad: h.Cantidad,
+        tipoUnidad: h.TipoUnidad,
+        medicamento: h.AliasMedicamento,
+        descripcion: h.DescripcionIndicacion,
+        observaciones: h.Observaciones,
+        frecuencia: h.Frecuencia,
+    }));
+    
+    console.log('🔍 BACKEND - Indicación padre cargada:', indicacionPadre.NroIndicacion);
+    console.log('🔍 BACKEND - Indicaciones hijas encontradas:', indicacionPadre.indicacionesHijas.length);
+    
+    return indicacionPadre;
 };
 
 const updateIndicacion = async (nroIndicacion, data) => {
