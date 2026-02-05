@@ -803,12 +803,120 @@ const nuevaIndicacion = async (data) => {
 };
 
 const deleteIndicacion = async (nroIndicacion) => {
+    // Verificar que no sea una indicación padre con hijas
+    const checkHijas = `
+SELECT COUNT(*) as CantidadHijas
+FROM imInterIndMedicas
+WHERE NroAdicional = @param0
+`;
+    const checkParams = [{ value: nroIndicacion }];
+    const result = await executeQuery(checkHijas, checkParams);
+    
+    if (result[0].CantidadHijas > 0) {
+        throw new Error('No se puede eliminar una indicación padre que tiene indicaciones hijas. Elimine primero las hijas.');
+    }
+    
     const sql = `
 DELETE FROM imInterIndMedicas
 WHERE NroIndicacion = @param0
 `;
     const params = [{ value: nroIndicacion }];
     await executeQuery(sql, params);
+};
+
+const crearIndicacionHija = async (data) => {
+    // Validar que la indicación padre existe y es realmente un padre
+    const sqlValidarPadre = `
+SELECT NroIndicacion, NumeroVisita, NroAdicional, IdSector
+FROM imInterIndMedicas
+WHERE NroIndicacion = @param0
+  AND (NroAdicional IS NULL OR NroAdicional = 0)
+`;
+    const validarParams = [{ value: data.nroIndicacionPadre }];
+    const padreRows = await executeQuery(sqlValidarPadre, validarParams);
+    
+    if (padreRows.length === 0) {
+        throw new Error('La indicación padre no existe o no es una indicación padre válida');
+    }
+    
+    const padre = padreRows[0];
+    
+    // Obtener próximo NroIndicacion
+    const sqlProximoNro = `
+SELECT ISNULL(MAX(NroIndicacion), 0) + 1 AS ProximoNro
+FROM imInterIndMedicas
+`;
+    const proximoRows = await executeQuery(sqlProximoNro, []);
+    const proximoNro = proximoRows[0].ProximoNro;
+    
+    // Preparar datos para inserción
+    const ahora = new Date();
+    const fechaCarga = convertirFechaAClarion(getLocalDateString(ahora));
+    const horaCarga = convertirHoraAClarion(ahora.toTimeString().slice(0, 8));
+    
+    const sd = {
+        NroIndicacion: proximoNro,
+        NumeroVisita: padre.NumeroVisita,
+        NroAdicional: data.nroIndicacionPadre, // Clave: NroAdicional = NroIndicacion del padre
+        FechaCarga: fechaCarga,
+        HoraCarga: horaCarga,
+        OperadorCarga: toNumberOrNull(data.operadorCarga),
+        ProfesionalAsiste: toNumberOrNull(data.profesionalAsiste),
+        TipoIndicacion: toNumberOrNull(data.tipoIndicacion),
+        Codigo: toNumberOrNull(data.codigo),
+        CantidadIndicada: data.cantidadIndicada == null ? null : Number(data.cantidadIndicada),
+        TipoUnidad: limitLength(data.tipoUnidad, 5),
+        Frecuencia: limitLength(data.frecuencia, 20),
+        Observaciones: limitLength(data.observaciones, 255),
+        IdSector: padre.IdSector, // Mismo sector que el padre
+        Estado: null,
+        Cantidad: data.cantidadIndicada, // Por ahora igual a CantidadIndicada
+        AliasMedicamento: limitLength(data.aliasMedicamento, 255),
+    };
+    
+    const sql = `
+INSERT INTO imInterIndMedicas (
+    NroIndicacion, NumeroVisita, NroAdicional, FechaCarga, HoraCarga,
+    OperadorCarga, ProfesionalAsiste, TipoIndicacion, Codigo,
+    CantidadIndicada, TipoUnidad, Frecuencia, Observaciones,
+    IdSector, Estado, Cantidad, AliasMedicamento
+) VALUES (
+    @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16
+)
+`;
+    
+    const params = [
+        { value: sd.NroIndicacion },
+        { value: sd.NumeroVisita },
+        { value: sd.NroAdicional },
+        { value: sd.FechaCarga },
+        { value: sd.HoraCarga },
+        { value: sd.OperadorCarga },
+        { value: sd.ProfesionalAsiste },
+        { value: sd.TipoIndicacion },
+        { value: sd.Codigo },
+        { value: sd.CantidadIndicada },
+        { value: sd.TipoUnidad },
+        { value: sd.Frecuencia },
+        { value: sd.Observaciones },
+        { value: sd.IdSector },
+        { value: sd.Estado },
+        { value: sd.Cantidad },
+        { value: sd.AliasMedicamento },
+    ];
+    
+    try {
+        await executeQuery(sql, params);
+        console.log('✅ Indicación hija creada:', proximoNro, 'para padre:', data.nroIndicacionPadre);
+        return {
+            nroIndicacion: proximoNro,
+            nroAdicional: data.nroIndicacionPadre,
+        };
+    } catch (error) {
+        console.error('❌ Error al crear indicación hija:', error);
+        console.error('[DATOS QUE CAUSARON ERROR]', sd);
+        throw error;
+    }
 };
 
 const getIndicacionById = async (nroIndicacion) => {
@@ -1472,4 +1580,5 @@ module.exports = {
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,
+    crearIndicacionHija,
 };

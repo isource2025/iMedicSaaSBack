@@ -25,6 +25,9 @@ router.get("/:numeroVisita/insumos/byDate", indicacionesController.insumosByDate
 //Nueva indicación
 router.post("/", indicacionesController.nuevaIndicacion);
 
+// Crear indicación hija
+router.post("/hija", indicacionesController.crearIndicacionHija);
+
 router.delete("/:nroIndicacion", indicacionesController.deleteIndicacion);
 
 router.get("/:nroIndicacion", indicacionesController.getIndicacionById);

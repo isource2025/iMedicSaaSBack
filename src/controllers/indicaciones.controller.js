@@ -356,6 +356,41 @@ const aplicarIndicacion = async (req, res) => {
     }
 }
 
+const crearIndicacionHija = async (req, res) => {
+    try {
+        const data = req.body;
+        
+        // Validaciones básicas
+        if (!data.nroIndicacionPadre) {
+            return res.status(400).json({
+                success: false,
+                mensaje: 'El NroIndicacion del padre es requerido'
+            });
+        }
+        
+        if (!data.tipoIndicacion || !data.codigo) {
+            return res.status(400).json({
+                success: false,
+                mensaje: 'Tipo de indicación y código son requeridos'
+            });
+        }
+        
+        const resultado = await indicacionesService.crearIndicacionHija(data);
+        
+        res.status(201).json({
+            success: true,
+            data: resultado,
+            mensaje: 'Indicación hija creada exitosamente'
+        });
+    } catch (error) {
+        console.error('Error al crear indicación hija:', error);
+        res.status(500).json({
+            success: false,
+            mensaje: error.message || 'Error al crear indicación hija'
+        });
+    }
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -367,4 +402,5 @@ module.exports = {
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,
+    crearIndicacionHija,
 };
