@@ -8,6 +8,12 @@ router.get(
     evolucionEnfermeriaController.obtenerEvolucionesPorVisitaYFecha
 );
 
+// Crear nueva evolución de enfermería
+router.post(
+    "/",
+    evolucionEnfermeriaController.crearEvolucion
+);
+
 // Eliminar una evolución de enfermería (?numeroVisita=X&fechaControl=Y&horaControl=Z)
 router.delete(
     "/",

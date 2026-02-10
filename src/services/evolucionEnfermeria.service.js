@@ -1,5 +1,8 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion } = require("../utils/dateUtils");
+const {
+    convertirFechaAClarion,
+    convertirHoraAClarion,
+} = require("../utils/dateUtils");
 
 /**
  * Obtener evoluciones de enfermería por número de visita y fecha
@@ -26,21 +29,19 @@ const obtenerEvolucionesPorVisitaYFecha = async (numeroVisita, fecha) => {
     SELECT 
       ev.NumeroVisita,
       ev.Profesional,
-      pw1.Apellido AS ProfesionalApellido,
-      pw1.Nombres AS ProfesionalNombres,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(ev.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
-      CONVERT(varchar(8), DATEADD(ms, (NULLIF(ev.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
+      CAST(ev.Profesional AS VARCHAR(50)) AS ProfesionalApellido,
+      NULL AS ProfesionalNombres,
+      CONVERT(varchar(10), DATEADD(day, ev.FechaControl, '1800-12-28'), 23) AS FechaControl,
+      CONVERT(varchar(5), DATEADD(ms, (ev.HoraControl - 1) * 10, 0), 108) AS HoraControl,
       ev.Observaciones,
       ev.FechaHoraCarga,
       ev.OperadorCarga,
-      pw2.Apellido AS OperadorApellido,
-      pw2.Nombres AS OperadorNombres
+      NULL AS OperadorApellido,
+      NULL AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = ev.Profesional
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = ev.OperadorCarga
     WHERE ev.NumeroVisita = @param0 
       AND ev.FechaControl = @param1
-    ORDER BY ev.HoraControl ASC
+    ORDER BY ev.HoraControl DESC
   `;
     const parametros = [{ value: numeroVisita }, { value: fechaClarion }];
     
@@ -77,18 +78,16 @@ const obtenerEvolucionPorClave = async (numeroVisita, fechaControl, horaControl)
     SELECT 
       ev.NumeroVisita,
       ev.Profesional,
-      pw1.Apellido AS ProfesionalApellido,
-      pw1.Nombres AS ProfesionalNombres,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(ev.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
-      CONVERT(varchar(8), DATEADD(ms, (NULLIF(ev.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
+      CAST(ev.Profesional AS VARCHAR(50)) AS ProfesionalApellido,
+      NULL AS ProfesionalNombres,
+      CONVERT(varchar(10), DATEADD(day, ev.FechaControl, '1800-12-28'), 23) AS FechaControl,
+      CONVERT(varchar(5), DATEADD(ms, (ev.HoraControl - 1) * 10, 0), 108) AS HoraControl,
       ev.Observaciones,
       ev.FechaHoraCarga,
       ev.OperadorCarga,
-      pw2.Apellido AS OperadorApellido,
-      pw2.Nombres AS OperadorNombres
+      NULL AS OperadorApellido,
+      NULL AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = ev.Profesional
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = ev.OperadorCarga
     WHERE ev.NumeroVisita = @param0
       AND ev.FechaControl = @param1
       AND ev.HoraControl = @param2
@@ -137,8 +136,57 @@ const eliminarEvolucion = async (numeroVisita, fechaControl, horaControl) => {
     }
 };
 
+/**
+ * Crear nueva evolución de enfermería
+ * @param {Object} data - Datos de la evolución
+ * @returns {Promise<Object>} Resultado de la inserción
+ */
+const crearEvolucion = async (data) => {
+    // Convertir fecha y hora a formato Clarion INT
+    const fechaClarion = convertirFechaAClarion(data.FechaControl);
+    const horaClarion = convertirHoraAClarion(data.HoraControl);
+
+    const sql = `
+        INSERT INTO dbo.imInterCtrlEvolucion (
+            NumeroVisita,
+            Profesional,
+            FechaControl,
+            HoraControl,
+            Observaciones,
+            FechaHoraCarga,
+            OperadorCarga
+        ) VALUES (
+            @param0,
+            @param1,
+            @param2,
+            @param3,
+            @param4,
+            GETDATE(),
+            @param5
+        )
+    `;
+
+    const params = [
+        { value: data.NumeroVisita },
+        { value: data.Profesional || null },
+        { value: fechaClarion },
+        { value: horaClarion },
+        { value: data.Observaciones },
+        { value: data.OperadorCarga || data.Profesional || null }
+    ];
+
+    try {
+        await executeQuery(sql, params);
+        return { success: true };
+    } catch (error) {
+        console.error("Error al crear evolución de enfermería:", error);
+        throw error;
+    }
+};
+
 module.exports = {
     obtenerEvolucionesPorVisitaYFecha,
     obtenerEvolucionPorClave,
     eliminarEvolucion,
+    crearEvolucion,
 };

@@ -662,16 +662,40 @@ const obtenerDatosFormulario = async () => {
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
+    console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
+    
+    // Si es una indicación adicional, contar cuántas ya existen para incrementar HoraCarga de forma única
+    let horaCarga = data.HoraCarga ? convertirHoraAClarion(data.HoraCarga) : null;
+    
+    if (data.NroAdicional && horaCarga) {
+        // Contar cuántas indicaciones adicionales ya existen para este padre
+        const sqlContarHijas = `
+            SELECT COUNT(*) as Total
+            FROM imInterIndMedicas
+            WHERE NroAdicional = @param0
+        `;
+        const contarParams = [{ value: data.NroAdicional }];
+        const contarResult = await executeQuery(sqlContarHijas, contarParams);
+        const cantidadExistentes = contarResult[0]?.Total || 0;
+        
+        // Incrementar HoraCarga según la cantidad de hijas existentes + 1
+        // Cada indicación adicional tendrá un incremento de 100 (1 segundo en formato Clarion)
+        horaCarga = horaCarga + ((cantidadExistentes + 1) * 100);
+        
+        console.log(`📝 Indicación adicional #${cantidadExistentes + 1} para padre ${data.NroAdicional}, HoraCarga incrementada a: ${horaCarga}`);
+    }
+    
+    const nroAdicionalConvertido = toNumberOrNull(data.NroAdicional);
+    console.log('🔍 BACKEND - NroAdicional recibido:', data.NroAdicional, '→ convertido:', nroAdicionalConvertido);
+    
     const sd = {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
-        NroAdicional: toNumberOrNull(data.NroAdicional),
+        NroAdicional: nroAdicionalConvertido,
 
         FechaCarga: data.FechaCarga
             ? convertirFechaAClarion(data.FechaCarga)
             : null,
-        HoraCarga: data.HoraCarga
-            ? convertirHoraAClarion(data.HoraCarga)
-            : null,
+        HoraCarga: horaCarga,
         OperadorCarga: toNumberOrNull(data.OperadorCarga),
         ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
 
@@ -760,7 +784,7 @@ const nuevaIndicacion = async (data) => {
 
     const params = [
         { value: sd.NumeroVisita }, // @p0
-        { value: 0 }, // @p1
+        { value: sd.NroAdicional }, // @p1
         { value: sd.FechaCarga }, // @p2 (Clarion DATE)
         { value: sd.HoraCarga }, // @p3 (Clarion TIME)
         { value: sd.OperadorCarga }, // @p4

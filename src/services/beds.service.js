@@ -113,11 +113,14 @@ const obtenerCamaPorId = async (id) => {
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
+      p.NumeroDocumento as documentoPaciente,
       p.Sexo as SexoPaciente,
 	  p.Domicilio as ubicacionPaciente,
       sx.Descripcion as DescripcionSexo,
       c.RazonSocial as RazonSocialCliente,
-      sm.Descripcion as ServicioMedicoDescripcion
+      sm.Descripcion as ServicioMedicoDescripcion,
+      CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
+      CONVERT(VARCHAR(8), v.FECHAADMISIONS, 108) as horaIngresoSQL
     FROM 
       imHabitacionCamas hc
     LEFT JOIN 

@@ -104,7 +104,68 @@ const eliminarEvolucion = async (req, res) => {
     }
 };
 
+/**
+ * Crear nueva evolución de enfermería
+ */
+const crearEvolucion = async (req, res) => {
+    try {
+        const { NumeroVisita, FechaControl, HoraControl, Observaciones, Profesional } = req.body;
+
+        // Validaciones
+        if (!NumeroVisita) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "NumeroVisita es requerido",
+            });
+        }
+
+        if (!FechaControl) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "FechaControl es requerida",
+            });
+        }
+
+        if (!HoraControl) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "HoraControl es requerida",
+            });
+        }
+
+        if (!Observaciones || Observaciones.trim() === "") {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Observaciones es requerida",
+            });
+        }
+
+        const resultado = await evolucionEnfermeriaService.crearEvolucion({
+            NumeroVisita,
+            FechaControl,
+            HoraControl,
+            Observaciones,
+            Profesional,
+            OperadorCarga: Profesional
+        });
+
+        res.json({
+            success: true,
+            mensaje: "Evolución de enfermería creada correctamente",
+            data: resultado,
+        });
+    } catch (error) {
+        console.error("Error al crear evolución de enfermería:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: "Error al crear la evolución de enfermería",
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     obtenerEvolucionesPorVisitaYFecha,
     eliminarEvolucion,
+    crearEvolucion,
 };
