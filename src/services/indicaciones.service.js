@@ -664,10 +664,15 @@ const obtenerDatosFormulario = async () => {
 const nuevaIndicacion = async (data) => {
     console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
     
-    // Si es una indicación adicional, contar cuántas ya existen para incrementar HoraCarga de forma única
-    let horaCarga = data.HoraCarga ? convertirHoraAClarion(data.HoraCarga) : null;
+    // ✅ SIMPLIFICADO: Calcular automáticamente fecha y hora actual
+    const ahora = new Date();
+    const fechaActual = getLocalDateString(ahora);
+    const horaActual = getLocalTimeString(ahora) + ':00';
     
-    if (data.NroAdicional && horaCarga) {
+    let horaCarga = convertirHoraAClarion(horaActual);
+    
+    // Si es una indicación adicional, incrementar HoraCarga para que sea única
+    if (data.NroAdicional) {
         // Contar cuántas indicaciones adicionales ya existen para este padre
         const sqlContarHijas = `
             SELECT COUNT(*) as Total
@@ -692,9 +697,8 @@ const nuevaIndicacion = async (data) => {
         NumeroVisita: toNumberOrNull(data.NumeroVisita),
         NroAdicional: nroAdicionalConvertido,
 
-        FechaCarga: data.FechaCarga
-            ? convertirFechaAClarion(data.FechaCarga)
-            : null,
+        // ✅ SIMPLIFICADO: Usar siempre fecha/hora actual calculada en el backend
+        FechaCarga: convertirFechaAClarion(fechaActual),
         HoraCarga: horaCarga,
         OperadorCarga: toNumberOrNull(data.OperadorCarga),
         ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
