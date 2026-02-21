@@ -824,6 +824,47 @@ const nuevaIndicacion = async (data) => {
         console.log("[EJECUTANDO INSERT] Parámetros:", params.map((p, i) => `@p${i}: ${p.value}`));
         const [nueva] = await executeQuery(insert, params);
         console.log("[INSERT EXITOSO] Nueva indicación:", nueva);
+        
+        // ✅ CORREGIDO: Obtener el tipo de indicación (letra) desde la BD para saber si es Dieta, Control, etc.
+        let tipoLetra = null;
+        if (data.TipoIndicacion) {
+            const sqlTipo = `SELECT Tipo FROM imInterTipoIndicacion WHERE Valor = @param0`;
+            const tipoResult = await executeQuery(sqlTipo, [{ value: data.TipoIndicacion }]);
+            tipoLetra = tipoResult[0]?.Tipo;
+            
+            console.log(`[TIPO INDICACION] Valor: ${data.TipoIndicacion}, Tipo: ${tipoLetra}`);
+        }
+        
+        // ✅ NUEVO: Insertar en tablas secundarias según el tipo de indicación
+        const nroIndicacion = nueva.NroIndicacion;
+        const dateCarga = new Date();
+        
+        if (tipoLetra === "D" && data.Codigo) {
+            console.log("[INSERTANDO DIETA] en imInterCtrlDieta");
+            const maxValorResult = await executeQuery('SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM dbo.imInterCtrlDieta');
+            const nextValor = maxValorResult[0]?.NextValor || 1;
+            
+            const insertDieta = `
+                INSERT INTO dbo.imInterCtrlDieta (
+                    Valor, NumeroVisita, FechaCarga, HoraCarga,
+                    Observaciones, Profesional, OperadorCarga, Nroindicacion, TipoDieta
+                ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)
+            `;
+            
+            await executeQuery(insertDieta, [
+                { value: nextValor },
+                { value: data.NumeroVisita },
+                { value: convertirFechaAClarion(getLocalDateString(dateCarga)) },
+                { value: convertirHoraAClarion(getLocalTimeString(dateCarga) + ':00') },
+                { value: limitLength(data.Observaciones || '', 255) },
+                { value: data.ProfesionalAsiste },
+                { value: data.OperadorCarga },
+                { value: nroIndicacion },
+                { value: data.Codigo }
+            ]);
+            console.log("[DIETA INSERTADA] correctamente");
+        }
+        
         return nueva; // incluye NroIndicacion y los campos ISO auxiliares
     } catch (error) {
         console.error("[ERROR EN INSERT]", error);
