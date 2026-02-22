@@ -39,11 +39,14 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
       mc.CantidadIndicada,
       mc.IdTurno,
       v.Alias AS NombreMedicamento,
-      v.Descripcion AS DescripcionMedicamento
+      v.Descripcion AS DescripcionMedicamento,
+      ind.NroAdicional,
+      ind.FormaAdicional
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
+    LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
     WHERE mc.NumeroVisita = @param0
     ORDER BY mc.FechaCarga DESC, mc.HoraCarga DESC, mc.IDCtrlMedica DESC
   `;
@@ -139,11 +142,14 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
       mc.CantidadIndicada,
       mc.IdTurno,
       v.Alias AS NombreMedicamento,
-      v.Descripcion AS DescripcionMedicamento
+      v.Descripcion AS DescripcionMedicamento,
+      ind.NroAdicional,
+      ind.FormaAdicional
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
+    LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
     WHERE mc.NumeroVisita = @param0 
       AND mc.FechaCarga = @param1
     ORDER BY mc.HoraControl ASC, mc.IDCtrlMedica ASC
@@ -211,11 +217,14 @@ const obtenerMedicacionPorId = async (idCtrlMedica) => {
       mc.CantidadIndicada,
       mc.IdTurno,
       v.Alias AS NombreMedicamento,
-      v.Descripcion AS DescripcionMedicamento
+      v.Descripcion AS DescripcionMedicamento,
+      ind.NroAdicional,
+      ind.FormaAdicional
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
+    LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
     WHERE mc.IDCtrlMedica = @param0
   `;
     const parametros = [{ value: idCtrlMedica }];
