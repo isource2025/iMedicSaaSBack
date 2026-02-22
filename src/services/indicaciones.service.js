@@ -1559,12 +1559,26 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             operadorCarga_indicacion: indicacionActual.OperadorCarga
         });
 
+        // ✅ CORRECCIÓN: Convertir código 999999 a 1 (código válido de ADMINISTRADOR en imPassword)
+        const profesionalCodigo = data.profesionalAsiste || indicacionActual.ProfesionalAsiste;
+        const operadorCodigo = data.operadorCarga || indicacionActual.OperadorCarga;
+        
+        const profesionalCorregido = profesionalCodigo === 999999 ? 1 : profesionalCodigo;
+        const operadorCorregido = operadorCodigo === 999999 ? 1 : operadorCodigo;
+        
+        console.log("[DEBUG] Códigos corregidos:", {
+            profesionalOriginal: profesionalCodigo,
+            profesionalCorregido: profesionalCorregido,
+            operadorOriginal: operadorCodigo,
+            operadorCorregido: operadorCorregido
+        });
+
         const medicamentoData = {
             NumeroVisita: indicacionActual.NumeroVisita,
             Nroindicacion: nroIndicacion,
             Observaciones: limitLength(data.observaciones || indicacionActual.Observaciones || '', 255),
-            Profesional: data.profesionalAsiste || indicacionActual.ProfesionalAsiste,
-            OperadorCarga: data.operadorCarga || indicacionActual.OperadorCarga,
+            Profesional: profesionalCorregido,
+            OperadorCarga: operadorCorregido,
 
             //Fecha
             HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
