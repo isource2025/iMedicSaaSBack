@@ -1404,15 +1404,11 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
 
         await executeQuery(updateIndicacion, params);
-    } catch (error) {
-        console.error(error);
-        throw error;
-    }
 
+        // ✅ Insertar en tablas secundarias según el tipo de indicación
+        const dateCarga = new Date();
 
-    const dateCarga = new Date();
-
-    if (data.tipoIndicacion === "C") {
+        if (data.tipoIndicacion === "C") {
         const controlData = {
             NroIndicacion: nroIndicacion,
             NumeroVisita: data.numeroVisita,
@@ -1645,13 +1641,19 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
         try {
             await executeQuery(insertMedidaAsistencial, medidaAsistencialParams);
-            console.log("Registro de dieta (iimFacPracticas) insertado correctamente.");
+            console.log("Registro de medida asistencial (imFacPracticas) insertado correctamente.");
         } catch (e) {
-            console.error("Error al insertar en imInterCtrlDieta:", e);
+            console.error("Error al insertar en imFacPracticas:", e);
             throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
-}
+    
+    } catch (error) {
+        console.error("[ERROR APLICAR INDICACION]", error);
+        throw error;
+    }
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
