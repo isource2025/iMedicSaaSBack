@@ -55,7 +55,54 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
     const parametros = [{ value: numeroVisita }];
     try {
         const resultado = await executeQuery(consulta, parametros);
-        return Array.isArray(resultado) ? resultado : [];
+        const medicaciones = Array.isArray(resultado) ? resultado : [];
+        
+        // Agrupar medicaciones padre con sus hijas (adicionales)
+        const medicacionesPadre = [];
+        const medicacionesHijas = new Map(); // Map<NroIndicacion del padre, Array<Hija>>
+        
+        medicaciones.forEach((m) => {
+            const nroAdicional = m.NroAdicional || 0;
+            
+            if (nroAdicional === 0 || nroAdicional === null) {
+                // Es una medicación padre (principal)
+                medicacionesPadre.push({
+                    ...m,
+                    adicionales: [] // Se llenará después
+                });
+            } else {
+                // Es una medicación hija (NroAdicional contiene el NroIndicacion del padre)
+                const hija = {
+                    NroIndicacion: m.NroIndicacion,
+                    NroAdicional: m.NroAdicional,
+                    FormaAdicional: m.FormaAdicional,
+                    NombreMedicamento: m.NombreMedicamento,
+                    DescripcionMedicamento: m.DescripcionMedicamento,
+                    Cantidad: m.Cantidad,
+                    CantidadIndicada: m.CantidadIndicada,
+                    TipoUnidad: m.TipoUnidad
+                };
+                
+                // Agrupar por el NroIndicacion del padre (que está en NroAdicional de la hija)
+                if (!medicacionesHijas.has(m.NroAdicional)) {
+                    medicacionesHijas.set(m.NroAdicional, []);
+                }
+                medicacionesHijas.get(m.NroAdicional).push(hija);
+            }
+        });
+        
+        // Asignar hijas a sus padres
+        medicacionesPadre.forEach((padre) => {
+            if (medicacionesHijas.has(padre.NroIndicacion)) {
+                padre.adicionales = medicacionesHijas.get(padre.NroIndicacion);
+            }
+        });
+        
+        console.log("🔍 [medicacionControl] Medicaciones padre:", medicacionesPadre.length);
+        console.log("🔍 [medicacionControl] Medicaciones con adicionales:", 
+            medicacionesPadre.filter(p => p.adicionales && p.adicionales.length > 0).length);
+        
+        return medicacionesPadre;
     } catch (error) {
         console.error("Error al obtener medicación por visita:", error);
         console.error("Parámetros:", JSON.stringify(parametros));
@@ -167,15 +214,57 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
 
     try {
         const resultado = await executeQuery(consulta, parametros);
+        const medicaciones = Array.isArray(resultado) ? resultado : [];
         
         console.log('🔵 [medicacionControl.service] Query result:', {
             resultadoType: typeof resultado,
             isArray: Array.isArray(resultado),
-            length: Array.isArray(resultado) ? resultado.length : 'N/A',
-            firstRecord: Array.isArray(resultado) && resultado.length > 0 ? resultado[0] : null
+            length: medicaciones.length,
+            firstRecord: medicaciones.length > 0 ? medicaciones[0] : null
         });
 
-        return Array.isArray(resultado) ? resultado : [];
+        // Agrupar medicaciones padre con sus hijas (adicionales)
+        const medicacionesPadre = [];
+        const medicacionesHijas = new Map();
+        
+        medicaciones.forEach((m) => {
+            const nroAdicional = m.NroAdicional || 0;
+            
+            if (nroAdicional === 0 || nroAdicional === null) {
+                medicacionesPadre.push({
+                    ...m,
+                    adicionales: []
+                });
+            } else {
+                const hija = {
+                    NroIndicacion: m.NroIndicacion,
+                    NroAdicional: m.NroAdicional,
+                    FormaAdicional: m.FormaAdicional,
+                    NombreMedicamento: m.NombreMedicamento,
+                    DescripcionMedicamento: m.DescripcionMedicamento,
+                    Cantidad: m.Cantidad,
+                    CantidadIndicada: m.CantidadIndicada,
+                    TipoUnidad: m.TipoUnidad
+                };
+                
+                if (!medicacionesHijas.has(m.NroAdicional)) {
+                    medicacionesHijas.set(m.NroAdicional, []);
+                }
+                medicacionesHijas.get(m.NroAdicional).push(hija);
+            }
+        });
+        
+        medicacionesPadre.forEach((padre) => {
+            if (medicacionesHijas.has(padre.NroIndicacion)) {
+                padre.adicionales = medicacionesHijas.get(padre.NroIndicacion);
+            }
+        });
+        
+        console.log("🔍 [medicacionControl] Medicaciones padre (por fecha):", medicacionesPadre.length);
+        console.log("🔍 [medicacionControl] Medicaciones con adicionales:", 
+            medicacionesPadre.filter(p => p.adicionales && p.adicionales.length > 0).length);
+
+        return medicacionesPadre;
     } catch (error) {
         console.error("❌ [medicacionControl.service] Error al obtener medicación por visita y fecha:", error);
         console.error("Parámetros:", JSON.stringify(parametros));
