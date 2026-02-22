@@ -1545,27 +1545,36 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         }
     }
 
-    if (data.tipoIndicacion === "M") {
-        console.log("[DATA Dieta]", data);
+    // ✅ CORREGIDO: Obtener el tipo de indicación desde la BD
+    let tipoIndicacion = data.tipoIndicacion;
+    if (!tipoIndicacion && indicacionActual) {
+        const sqlTipo = `SELECT Tipo FROM imInterTipoIndicacion WHERE Valor = @param0`;
+        const tipoResult = await executeQuery(sqlTipo, [{ value: indicacionActual.TipoIndicacion }]);
+        tipoIndicacion = tipoResult[0]?.Tipo;
+        console.log(`[APLICAR INDICACION] Tipo obtenido de BD: ${tipoIndicacion}`);
+    }
+
+    if (tipoIndicacion === "M") {
+        console.log("[APLICAR MEDICAMENTO] Insertando en imInterCtrlMedicamento");
 
         const medicamentoData = {
-            NumeroVisita: data.numeroVisita,
+            NumeroVisita: indicacionActual.NumeroVisita,
             Nroindicacion: nroIndicacion,
-            Observaciones: limitLength(data.observaciones || '', 255),
-            Profesional: data.profesionalAsiste,
-            OperadorCarga: data.profesionalAsiste,
+            Observaciones: limitLength(data.observaciones || indicacionActual.Observaciones || '', 255),
+            Profesional: data.profesionalAsiste || indicacionActual.ProfesionalAsiste,
+            OperadorCarga: data.operadorCarga || indicacionActual.OperadorCarga,
 
             //Fecha
             HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
             FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
-            HoraControl: convertirHoraAClarion(data.horaCumplido),
-            FechaControl: convertirFechaAClarion(data.fechaCumplido),
+            HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
+            FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
 
-            //Data Medicamento
-            Sector: data.medicamentoCtrl.sector,
-            Cantidad: data.medicamentoCtrl.Cantidad,
-            CantidadIndicada: data.medicamentoCtrl.CantidadIndicada,
-            TipoUnidad: data.medicamentoCtrl.TipoUnidad,
+            //Data Medicamento - usar datos de la indicación actual
+            Sector: indicacionActual.IdSector,
+            Cantidad: indicacionActual.Cantidad,
+            CantidadIndicada: indicacionActual.CantidadIndicada,
+            TipoUnidad: indicacionActual.TipoUnidad,
         }
 
         const insertMedicamento = `
@@ -1595,19 +1604,19 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
         try {
             await executeQuery(insertMedicamento, medicamentoParams);
-            console.log("Registro de dieta (imInterCtrlMedicamento) insertado correctamente.");
+            console.log("Registro de medicamento (imInterCtrlMedicamento) insertado correctamente.");
         } catch (e) {
-            console.error("Error al insertar en imInterCtrlDieta:", e);
+            console.error("Error al insertar en imInterCtrlMedicamento:", e);
             throw e; // Relanzar el error para que el try/catch exterior lo maneje
         }
     }
 
-    if (data.tipoIndicacion === "A") {
-        console.log("[DATA Dieta]", data);
+    if (tipoIndicacion === "A") {
+        console.log("[APLICAR MEDIDA ASISTENCIAL] Insertando en imFacPracticas");
 
         const medidaAsistencialData = {
             Numero: 0,
-            NumeroVisita: data.numeroVisita,
+            NumeroVisita: indicacionActual.NumeroVisita,
             ValorSector: data.medidaAsistencial.valorSector,
             CodOperador: data.profesionalAsiste,
             HoraGraba: convertirHoraAClarion(getLocalTimeString(dateCarga)),
