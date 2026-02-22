@@ -1580,9 +1580,9 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         const insertMedicamento = `
         INSERT INTO dbo.imInterCtrlMedicamento (
             NumeroVisita, Nroindicacion, Observaciones, Profesional, OperadorCarga, HoraCarga, FechaCarga, HoraControl, FechaControl,
-            Sector, Cantidad, CantidadIndicada, TipoUnidad
+            Sector, Cantidad, CantidadIndicada, TipoUnidad, Troquel
         ) Values (
-            @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12
+            @p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13
         )
         `;
 
@@ -1600,6 +1600,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             { value: medicamentoData.Cantidad },
             { value: medicamentoData.CantidadIndicada },
             { value: medicamentoData.TipoUnidad },
+            { value: indicacionActual.Codigo }, // ✅ Troquel del medicamento
         ]
 
         try {
