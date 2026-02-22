@@ -116,7 +116,7 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
         WHERE ev.IdHCEvolucion = @param0
     `;
 
-    const params = [{ value: id }];
+    const params = [{ value: idHCEvolucion }];
 
     try {
         const resultado = await executeQuery(sql, params);
