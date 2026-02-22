@@ -41,6 +41,7 @@ const controlesFrecuentesRoutes = require('./routes/controlesFrecuentes.routes')
 const evolucionEnfermeriaRoutes = require('./routes/evolucionEnfermeria.routes');
 const actualizacionRoutes = require('./routes/actualizacion.routes');
 const hcIngresoRoutes = require('./routes/hcIngreso.routes');
+const hciRoutes = require('./routes/hci.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -109,6 +110,7 @@ app.use('/api/controles-frecuentes', controlesFrecuentesRoutes);
 app.use('/api/evolucion-enfermeria', evolucionEnfermeriaRoutes);
 app.use('/api/actualizacion', actualizacionRoutes);
 app.use('/api/hc-ingreso', hcIngresoRoutes);
+app.use('/api/hci', hciRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
