@@ -1610,6 +1610,57 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
         try {
             await executeQuery(insertMedicamento, medicamentoParams);
             console.log("Registro de medicamento (imInterCtrlMedicamento) insertado correctamente.");
+            
+            // ✅ NUEVO: Buscar y aplicar también las indicaciones adicionales
+            const sqlAdicionales = `
+                SELECT NroIndicacion, Codigo, CantidadIndicada, Cantidad, TipoUnidad, FormaAdicional, AliasMedicamento
+                FROM imInterIndMedicas
+                WHERE NroAdicional = @param0
+            `;
+            const adicionales = await executeQuery(sqlAdicionales, [{ value: nroIndicacion }]);
+            
+            if (adicionales && adicionales.length > 0) {
+                console.log(`[APLICAR MEDICAMENTO] Encontradas ${adicionales.length} indicaciones adicionales`);
+                
+                for (const adicional of adicionales) {
+                    const adicionalData = {
+                        NumeroVisita: indicacionActual.NumeroVisita,
+                        Nroindicacion: adicional.NroIndicacion,
+                        Observaciones: limitLength(data.observaciones || '', 255),
+                        Profesional: medicamentoData.Profesional,
+                        OperadorCarga: medicamentoData.OperadorCarga,
+                        HoraCarga: medicamentoData.HoraCarga,
+                        FechaCarga: medicamentoData.FechaCarga,
+                        HoraControl: medicamentoData.HoraControl,
+                        FechaControl: medicamentoData.FechaControl,
+                        Sector: medicamentoData.Sector,
+                        Cantidad: adicional.Cantidad,
+                        CantidadIndicada: adicional.CantidadIndicada,
+                        TipoUnidad: adicional.TipoUnidad,
+                        Troquel: adicional.Codigo
+                    };
+                    
+                    const adicionalParams = [
+                        { value: adicionalData.NumeroVisita },
+                        { value: adicionalData.Nroindicacion },
+                        { value: adicionalData.Observaciones },
+                        { value: adicionalData.Profesional },
+                        { value: adicionalData.OperadorCarga },
+                        { value: adicionalData.HoraCarga },
+                        { value: adicionalData.FechaCarga },
+                        { value: adicionalData.HoraControl },
+                        { value: adicionalData.FechaControl },
+                        { value: adicionalData.Sector },
+                        { value: adicionalData.Cantidad },
+                        { value: adicionalData.CantidadIndicada },
+                        { value: adicionalData.TipoUnidad },
+                        { value: adicionalData.Troquel }
+                    ];
+                    
+                    await executeQuery(insertMedicamento, adicionalParams);
+                    console.log(`[APLICAR MEDICAMENTO] Indicación adicional ${adicional.NroIndicacion} insertada (${adicional.AliasMedicamento})`);
+                }
+            }
         } catch (e) {
             console.error("Error al insertar en imInterCtrlMedicamento:", e);
             throw e; // Relanzar el error para que el try/catch exterior lo maneje
