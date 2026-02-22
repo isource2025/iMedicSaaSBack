@@ -37,10 +37,13 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
       mc.IDCliente,
       mc.Status,
       mc.CantidadIndicada,
-      mc.IdTurno
+      mc.IdTurno,
+      v.Alias AS NombreMedicamento,
+      v.Descripcion AS DescripcionMedicamento
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
+    LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     WHERE mc.NumeroVisita = @param0
     ORDER BY mc.FechaCarga DESC, mc.HoraCarga DESC, mc.IDCtrlMedica DESC
   `;
@@ -134,10 +137,13 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
       mc.IDCliente,
       mc.Status,
       mc.CantidadIndicada,
-      mc.IdTurno
+      mc.IdTurno,
+      v.Alias AS NombreMedicamento,
+      v.Descripcion AS DescripcionMedicamento
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
+    LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     WHERE mc.NumeroVisita = @param0 
       AND mc.FechaCarga = @param1
     ORDER BY mc.HoraControl ASC, mc.IDCtrlMedica ASC
@@ -203,10 +209,13 @@ const obtenerMedicacionPorId = async (idCtrlMedica) => {
       mc.IDCliente,
       mc.Status,
       mc.CantidadIndicada,
-      mc.IdTurno
+      mc.IdTurno,
+      v.Alias AS NombreMedicamento,
+      v.Descripcion AS DescripcionMedicamento
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
+    LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     WHERE mc.IDCtrlMedica = @param0
   `;
     const parametros = [{ value: idCtrlMedica }];
