@@ -1552,6 +1552,12 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
     if (tipoIndicacion === "M") {
         console.log("[APLICAR MEDICAMENTO] Insertando en imInterCtrlMedicamento");
+        console.log("[DEBUG] Valores recibidos:", {
+            profesionalAsiste_data: data.profesionalAsiste,
+            operadorCarga_data: data.operadorCarga,
+            profesionalAsiste_indicacion: indicacionActual.ProfesionalAsiste,
+            operadorCarga_indicacion: indicacionActual.OperadorCarga
+        });
 
         const medicamentoData = {
             NumeroVisita: indicacionActual.NumeroVisita,
@@ -1572,6 +1578,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             CantidadIndicada: indicacionActual.CantidadIndicada,
             TipoUnidad: indicacionActual.TipoUnidad,
         }
+
+        console.log("[DEBUG] Datos finales a insertar:", medicamentoData);
 
         const insertMedicamento = `
         INSERT INTO dbo.imInterCtrlMedicamento (
