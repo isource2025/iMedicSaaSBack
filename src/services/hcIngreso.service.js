@@ -131,13 +131,7 @@ const guardarSignosVitalesEnControles = async (data) => {
 const obtenerHCIngresoPorVisita = async (numeroVisita) => {
     const sql = `
         SELECT 
-            hc.IdHCIngreso,
-            hc.NumeroVisita,
-            hc.IdSector,
-            hc.MotivoConsulta,
-            hc.EnfermedadActual,
-            hc.IdProfecional,
-            hc.Fecha,
+            hc.*,
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
             LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
@@ -166,13 +160,7 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
 const obtenerHCIngresoPorId = async (idHCIngreso) => {
     const sql = `
         SELECT 
-            hc.IdHCIngreso,
-            hc.NumeroVisita,
-            hc.IdSector,
-            hc.MotivoConsulta,
-            hc.EnfermedadActual,
-            hc.IdProfecional,
-            hc.Fecha,
+            hc.*,
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
             LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
