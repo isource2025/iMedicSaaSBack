@@ -1,5 +1,5 @@
 const sql = require('mssql');
-const { getConnection } = require('../config/database');
+const { connectDB } = require('../config/database');
 const path = require('path');
 const fs = require('fs').promises;
 
@@ -9,7 +9,7 @@ class AdjuntosService {
    */
   async subirAdjunto(data, file, cargadoPor) {
     try {
-      const pool = await getConnection();
+      const pool = await connectDB();
 
       const result = await pool.request()
         .input('numeroVisita', sql.Int, data.numeroVisita)
@@ -76,7 +76,7 @@ class AdjuntosService {
    */
   async getAdjuntosPorVisita(numeroVisita) {
     try {
-      const pool = await getConnection();
+      const pool = await connectDB();
 
       const result = await pool.request()
         .input('numeroVisita', sql.Int, numeroVisita)
@@ -117,7 +117,7 @@ class AdjuntosService {
    */
   async getAdjuntoPorId(idAdjunto) {
     try {
-      const pool = await getConnection();
+      const pool = await connectDB();
 
       const result = await pool.request()
         .input('idAdjunto', sql.Int, idAdjunto)
@@ -162,7 +162,7 @@ class AdjuntosService {
    */
   async eliminarAdjunto(idAdjunto, usuarioId) {
     try {
-      const pool = await getConnection();
+      const pool = await connectDB();
 
       // Obtener información del adjunto antes de eliminar
       const adjunto = await this.getAdjuntoPorId(idAdjunto);
