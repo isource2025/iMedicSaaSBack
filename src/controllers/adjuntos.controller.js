@@ -262,14 +262,32 @@ router.get('/:idAdjunto/download', async (req, res) => {
       });
     }
     
-    // Enviar archivo
-    res.download(adjunto.RutaArchivo, adjunto.NombreArchivo, (err) => {
+    // Determinar el tipo MIME del archivo
+    const ext = path.extname(adjunto.NombreArchivo).toLowerCase();
+    const mimeTypes = {
+      '.pdf': 'application/pdf',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    };
+    
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    
+    // Configurar headers para visualización inline (no descarga)
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
+    
+    // Enviar archivo para visualización
+    res.sendFile(adjunto.RutaArchivo, (err) => {
       if (err) {
-        console.error('❌ Error al descargar archivo:', err);
+        console.error('❌ Error al enviar archivo:', err);
         if (!res.headersSent) {
           res.status(500).json({
             success: false,
-            error: 'Error al descargar archivo'
+            error: 'Error al enviar archivo'
           });
         }
       }
