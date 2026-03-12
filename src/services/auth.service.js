@@ -81,6 +81,9 @@ const obtenerSectoresPorUsuario = async (username) => {
     }];
     console.log(`Ejecutando consulta SQL:\n${consulta}\nCon parámetro: ${username}`);
     const resultado = await executeQuery(consulta, parametros);
+    console.log(`✅ Resultado CRUDO de la consulta:`, resultado);
+    console.log(`✅ Tipo de resultado:`, typeof resultado, Array.isArray(resultado));
+    console.log(`✅ Cantidad de registros:`, resultado ? resultado.length : 0);
     console.log(`Sectores filtrados para usuario ${username}:`, JSON.stringify(resultado, null, 2));
     return resultado;
   } catch (error) {
