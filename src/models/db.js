@@ -22,8 +22,15 @@ async function executeQuery(consulta, parametros = []) {
     if (parametros && parametros.length > 0) {
       parametros.forEach((parametro, indice) => {
         const nombreParametro = `param${indice}`;
-        console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value);
-        request.input(nombreParametro, parametro.value);
+        console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value, `Tipo: ${parametro.type || 'auto'}`);
+        
+        // Si se especifica un tipo, usarlo; si no, dejar que SQL Server lo infiera
+        if (parametro.type) {
+          request.input(nombreParametro, sql[parametro.type], parametro.value);
+        } else {
+          request.input(nombreParametro, parametro.value);
+        }
+        
         const regex = new RegExp(`@p${indice}\\b`, 'g');
         consulta = consulta.replace(regex, `@${nombreParametro}`);
       });

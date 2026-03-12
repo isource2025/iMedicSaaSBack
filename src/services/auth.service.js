@@ -10,8 +10,8 @@ const autenticarUsuario = async (username, contraseña) => {
       AND password = @p1
     `;
     const parametros = [
-      { value: username },
-      { value: contraseña }
+      { value: username, type: 'VarChar' },
+      { value: contraseña, type: 'VarChar' }
     ];
     
     const resultado = await executeQuery(consulta, parametros);
@@ -75,7 +75,10 @@ const obtenerSectoresPorUsuario = async (username) => {
         UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
     `;
     
-    const parametros = [{ value: username }];
+    const parametros = [{ 
+      value: username,
+      type: 'VarChar' // Especificar tipo VARCHAR para manejar números como strings
+    }];
     console.log(`Ejecutando consulta SQL:\n${consulta}\nCon parámetro: ${username}`);
     const resultado = await executeQuery(consulta, parametros);
     console.log(`Sectores filtrados para usuario ${username}:`, JSON.stringify(resultado, null, 2));
