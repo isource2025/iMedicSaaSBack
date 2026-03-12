@@ -3,7 +3,12 @@ const { executeQuery } = require('../models/db');
 const autenticarUsuario = async (username, contraseña) => {
   try {
     // Verificar credenciales contra la tabla impassword
-    const consulta = `SELECT * FROM impassword WHERE nombrered = @p0 AND password = @p1`;
+    // Usar UPPER y RTRIM/LTRIM para comparación case-insensitive y sin espacios
+    const consulta = `
+      SELECT * FROM impassword 
+      WHERE UPPER(RTRIM(LTRIM(nombrered))) = UPPER(RTRIM(LTRIM(@p0))) 
+      AND password = @p1
+    `;
     const parametros = [
       { value: username },
       { value: contraseña }
@@ -54,6 +59,7 @@ const obtenerSectores = async () => {
 const obtenerSectoresPorUsuario = async (username) => {
   try {
     // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
+    // Usar UPPER y RTRIM para hacer la comparación case-insensitive y sin espacios
     const consulta = `
       SELECT 
         ps.idPersonal as idPersonal,
@@ -66,7 +72,7 @@ const obtenerSectoresPorUsuario = async (username) => {
       INNER JOIN 
         impassword pw ON ps.idPersonal = pw.ValorPersonal
       WHERE 
-        pw.NombreRed = @p0
+        UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
     `;
     
     const parametros = [{ value: username }];
