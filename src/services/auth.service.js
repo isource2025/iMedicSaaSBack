@@ -68,7 +68,7 @@ const obtenerSectoresPorUsuario = async (username) => {
       FROM 
         impassword pw
       INNER JOIN 
-        imPersonalSectores ps ON pw.CodOperador = ps.idPersonal
+        imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
       INNER JOIN 
         imSectores s ON ps.idSector = s.Valor
       WHERE 
