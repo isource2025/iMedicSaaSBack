@@ -66,11 +66,11 @@ const obtenerSectoresPorUsuario = async (username) => {
         ps.idSector as idSector, 
         s.Descripcion as descripcionSector 
       FROM 
-        imPersonalSectores ps
+        impassword pw
+      INNER JOIN 
+        imPersonalSectores ps ON pw.CodOperador = ps.idPersonal
       INNER JOIN 
         imSectores s ON ps.idSector = s.Valor
-      INNER JOIN 
-        impassword pw ON ps.idPersonal = pw.ValorPersonal
       WHERE 
         UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
     `;
