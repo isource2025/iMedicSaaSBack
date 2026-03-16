@@ -43,6 +43,7 @@ const actualizacionRoutes = require('./routes/actualizacion.routes');
 const hcIngresoRoutes = require('./routes/hcIngreso.routes');
 const hciRoutes = require('./routes/hci.routes');
 const adjuntosRoutes = require('./routes/adjuntos.routes');
+const signosVitalesRoutes = require('./routes/signosVitales.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -113,6 +114,7 @@ app.use('/api/actualizacion', actualizacionRoutes);
 app.use('/api/hc-ingreso', hcIngresoRoutes);
 app.use('/api/hci', hciRoutes);
 app.use('/api/adjuntos', adjuntosRoutes);
+app.use('/api/signos-vitales', signosVitalesRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
