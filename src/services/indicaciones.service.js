@@ -13,6 +13,51 @@ const toNumberOrNull = (v) =>
     v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
 
 const toBitOrNull = (v) => (v == null ? null : v ? 1 : 0);
+
+/**
+ * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
+ * Sistema viejo: "Más", "Alterno", "Paralero" (con espacios y variantes de capitalización)
+ * Sistema nuevo: "MAS", "ALTERNO", "PARALELO"
+ * @param {string} valor - Valor a normalizar
+ * @param {boolean} paraGuardar - Si es true, convierte a formato sistema viejo; si es false, a formato sistema nuevo
+ * @returns {string} Valor normalizado
+ */
+const normalizarFormaAdicional = (valor, paraGuardar = false) => {
+    if (!valor || typeof valor !== 'string') return '';
+    
+    // Limpiar espacios y convertir a mayúsculas para comparación
+    const limpio = valor.trim().toUpperCase();
+    
+    // Mapeo de variantes a formato estándar
+    const mapeoNuevo = {
+        'MAS': 'MAS',
+        'MÁS': 'MAS',
+        'M?S': 'MAS', // encoding corrupto
+        'ALTERNO': 'ALTERNO',
+        'PARALELO': 'PARALELO',
+        'PARALERO': 'PARALELO', // typo del sistema viejo
+    };
+    
+    const mapeoViejo = {
+        'MAS': 'Más',
+        'MÁS': 'Más',
+        'M?S': 'Más',
+        'ALTERNO': 'Alterno',
+        'PARALELO': 'Paralero', // sistema viejo usa "Paralero" con 'r'
+        'PARALERO': 'Paralero',
+    };
+    
+    const valorNormalizado = mapeoNuevo[limpio] || limpio;
+    
+    if (paraGuardar) {
+        // Para guardar en BD: usar formato sistema viejo (con tilde y capitalizado)
+        return mapeoViejo[valorNormalizado] || valor.trim();
+    } else {
+        // Para enviar al frontend: usar formato sistema nuevo (mayúsculas sin tilde)
+        return valorNormalizado;
+    }
+};
+
 // ✅ Helper: obtener Date ajustado a Argentina (UTC-3)
 const getArgentinaDate = (date) => {
     // Convertir a UTC y aplicar offset -3 horas
@@ -461,7 +506,7 @@ ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 descripcion: r.DescripcionIndicacion,
                 observaciones: r.Observaciones,
                 frecuencia: r.Frecuencia,
-                formaAdicional: r.FormaAdicional,
+                formaAdicional: normalizarFormaAdicional(r.FormaAdicional, false),
             };
             
             // Agrupar por el NroIndicacion del padre (que está en NroAdicional de la hija)
@@ -751,7 +796,7 @@ const nuevaIndicacion = async (data) => {
 
         ParaFechaEntrega: data.ParaFechaEntrega || null, // ÚNICA date real en SQL - se mantiene null si no hay
 
-        FormaAdicional: limitLength(data.FormaAdicional, 15) || "",
+        FormaAdicional: limitLength(normalizarFormaAdicional(data.FormaAdicional, true), 15) || "",
         NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior) || 0,
         IdSector: limitLength(data.IdSector, 4) || "",
         AliasMedicamento: limitLength(data.AliasMedicamento, 50) || "",
@@ -1100,7 +1145,7 @@ ORDER BY iim.NroIndicacion ASC
     const hijasRows = await executeQuery(sqlHijas, params);
     
     // Agregar indicaciones hijas al objeto padre
-    indicacionPadre.indicacionesHijas = hijasRows.map(h => ({
+    const indicacionesHijas = hijasRows.map(h => ({
         nroIndicacion: h.NroIndicacion,
         nroAdicional: h.NroAdicional,
         cantidad: h.Cantidad,
@@ -1109,11 +1154,13 @@ ORDER BY iim.NroIndicacion ASC
         descripcion: h.DescripcionIndicacion,
         observaciones: h.Observaciones,
         frecuencia: h.Frecuencia,
-        formaAdicional: h.FormaAdicional,
+        formaAdicional: normalizarFormaAdicional(h.FormaAdicional, false),
     }));
     
     console.log('🔍 BACKEND - Indicación padre cargada:', indicacionPadre.NroIndicacion);
-    console.log('🔍 BACKEND - Indicaciones hijas encontradas:', indicacionPadre.indicacionesHijas.length);
+    console.log('🔍 BACKEND - Indicaciones hijas encontradas:', indicacionesHijas.length);
+    
+    indicacionPadre.indicacionesHijas = indicacionesHijas;
     
     return indicacionPadre;
 };
@@ -1185,7 +1232,7 @@ const updateIndicacion = async (nroIndicacion, data) => {
 
         ParaFechaEntrega: data.ParaFechaEntrega || null, // ÚNICA date real en SQL
 
-        FormaAdicional: limitLength(data.FormaAdicional, 15) || "",
+        FormaAdicional: limitLength(normalizarFormaAdicional(data.FormaAdicional, true), 15) || "",
         NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior) || 0,
         IdSector: limitLength(data.IdSector, 4) || "",
         AliasMedicamento: limitLength(data.AliasMedicamento, 50) || "",
