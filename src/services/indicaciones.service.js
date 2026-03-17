@@ -693,60 +693,60 @@ const nuevaIndicacion = async (data) => {
     const nroAdicionalConvertido = toNumberOrNull(data.NroAdicional);
     console.log('🔍 BACKEND - NroAdicional recibido:', data.NroAdicional, '→ convertido:', nroAdicionalConvertido);
     
+    // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para campos numéricos
+    // y strings vacíos en lugar de NULL para campos de texto.
+    // Clarion NO maneja NULLs - los registros con NULLs no se ven en el sistema viejo.
     const sd = {
-        NumeroVisita: toNumberOrNull(data.NumeroVisita),
-        NroAdicional: nroAdicionalConvertido,
+        NumeroVisita: toNumberOrNull(data.NumeroVisita) || 0,
+        NroAdicional: nroAdicionalConvertido || 0,
 
-        // ✅ SIMPLIFICADO: Usar siempre fecha/hora actual calculada en el backend
         FechaCarga: convertirFechaAClarion(fechaActual),
         HoraCarga: horaCarga,
-        OperadorCarga: toNumberOrNull(data.OperadorCarga),
-        ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
+        OperadorCarga: toNumberOrNull(data.OperadorCarga) || 0,
+        ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste) || 0,
 
-        // ✅ NUEVO: Al crear una indicación, estos campos deben estar vacíos
-        // Se calcularán automáticamente cuando se aplique la indicación por primera vez
-        FechaCumplido: null,
-        HoraCumplido: null,
-        FechaProximo: null,
-        HoraProximo: null,
-        FechaRevision: null,
-        HoraRevision: null,
+        // Al crear, estos campos deben ser 0 (no NULL) para Clarion
+        FechaCumplido: 0,
+        HoraCumplido: 0,
+        FechaProximo: 0,
+        HoraProximo: 0,
+        FechaRevision: 0,
+        HoraRevision: 0,
 
-        TipoIndicacion: toNumberOrNull(data.TipoIndicacion),
-        Codigo: toNumberOrNull(data.Codigo),
+        TipoIndicacion: toNumberOrNull(data.TipoIndicacion) || 0,
+        Codigo: toNumberOrNull(data.Codigo) || 0,
 
-        Cantidad: data.Cantidad == null ? null : Number(data.Cantidad),
-        TipoUnidad: limitLength(data.TipoUnidad, 5), // char(5)
-        Frecuencia: limitLength(data.Frecuencia, 20), // varchar(20)
-        Observaciones: limitLength(data.Observaciones, 255), // varchar(255)
-        FechaExpiro: data?.FechaExpiro === 0 ? 0 : convertirFechaAClarion(data.FechaExpiro),
+        Cantidad: data.Cantidad == null ? 0 : Number(data.Cantidad),
+        TipoUnidad: limitLength(data.TipoUnidad, 5) || "",
+        Frecuencia: limitLength(data.Frecuencia, 20) || "",
+        Observaciones: limitLength(data.Observaciones, 255) || "",
+        FechaExpiro: data?.FechaExpiro === 0 ? 0 : (convertirFechaAClarion(data.FechaExpiro) || 0),
         HoraExpiro: data.HoraExpiro
             ? convertirHoraAClarion(data.HoraExpiro)
-            : null,
+            : 0,
 
         CantidadIndicada:
             data.CantidadIndicada == null
-                ? null
+                ? 0
                 : Number(data.CantidadIndicada),
-        Orden: toNumberOrNull(data.Orden),
-        Estado: limitLength(data.Estado, 1), // char(1)
+        Orden: toNumberOrNull(data.Orden) || 0,
+        Estado: limitLength(data.Estado, 1) || "N", // Clarion usa "N" como estado por defecto (Nueva)
         CantidadPorTurno:
             data.CantidadPorTurno == null
-                ? null
+                ? 0
                 : Number(data.CantidadPorTurno),
         CantidadEntregada:
             data.CantidadEntregada == null
-                ? null
+                ? 0
                 : Number(data.CantidadEntregada),
 
-        // ÚNICA date real en SQL:
-        ParaFechaEntrega: data.ParaFechaEntrega || null, // 'YYYY-MM-DD' recomendado
+        ParaFechaEntrega: data.ParaFechaEntrega || null, // ÚNICA date real en SQL - se mantiene null si no hay
 
-        FormaAdicional: limitLength(data.FormaAdicional, 15),
-        NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior),
-        IdSector: limitLength(data.IdSector, 4),
-        AliasMedicamento: limitLength(data.AliasMedicamento, 50),
-        ExcluidoDeEntrega: toBitOrNull(data.ExcluidoDeEntrega), // bit
+        FormaAdicional: limitLength(data.FormaAdicional, 15) || "",
+        NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior) || 0,
+        IdSector: limitLength(data.IdSector, 4) || "",
+        AliasMedicamento: limitLength(data.AliasMedicamento, 50) || "",
+        ExcluidoDeEntrega: toBitOrNull(data.ExcluidoDeEntrega) || 0,
     };
 
     // 2) SQL paramétrico (mismo patrón que crearPaciente)
@@ -925,24 +925,26 @@ FROM imInterIndMedicas
     const fechaCarga = convertirFechaAClarion(getLocalDateString(ahora));
     const horaCarga = convertirHoraAClarion(ahora.toTimeString().slice(0, 8));
     
+    // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para campos numéricos
+    // y strings vacíos en lugar de NULL para campos de texto.
     const sd = {
         NroIndicacion: proximoNro,
         NumeroVisita: padre.NumeroVisita,
-        NroAdicional: data.nroIndicacionPadre, // Clave: NroAdicional = NroIndicacion del padre
+        NroAdicional: data.nroIndicacionPadre || 0,
         FechaCarga: fechaCarga,
         HoraCarga: horaCarga,
-        OperadorCarga: toNumberOrNull(data.operadorCarga),
-        ProfesionalAsiste: toNumberOrNull(data.profesionalAsiste),
-        TipoIndicacion: toNumberOrNull(data.tipoIndicacion),
-        Codigo: toNumberOrNull(data.codigo),
-        CantidadIndicada: data.cantidadIndicada == null ? null : Number(data.cantidadIndicada),
-        TipoUnidad: limitLength(data.tipoUnidad, 5),
-        Frecuencia: limitLength(data.frecuencia, 20),
-        Observaciones: limitLength(data.observaciones, 255),
-        IdSector: padre.IdSector, // Mismo sector que el padre
-        Estado: null,
-        Cantidad: data.cantidadIndicada, // Por ahora igual a CantidadIndicada
-        AliasMedicamento: limitLength(data.aliasMedicamento, 255),
+        OperadorCarga: toNumberOrNull(data.operadorCarga) || 0,
+        ProfesionalAsiste: toNumberOrNull(data.profesionalAsiste) || 0,
+        TipoIndicacion: toNumberOrNull(data.tipoIndicacion) || 0,
+        Codigo: toNumberOrNull(data.codigo) || 0,
+        CantidadIndicada: data.cantidadIndicada == null ? 0 : Number(data.cantidadIndicada),
+        TipoUnidad: limitLength(data.tipoUnidad, 5) || "",
+        Frecuencia: limitLength(data.frecuencia, 20) || "",
+        Observaciones: limitLength(data.observaciones, 255) || "",
+        IdSector: padre.IdSector || "",
+        Estado: "N", // Clarion usa "N" como estado por defecto (Nueva)
+        Cantidad: data.cantidadIndicada == null ? 0 : Number(data.cantidadIndicada),
+        AliasMedicamento: limitLength(data.aliasMedicamento, 50) || "",
     };
     
     const sql = `
@@ -1103,77 +1105,77 @@ ORDER BY iim.NroIndicacion ASC
 };
 
 const updateIndicacion = async (nroIndicacion, data) => {
+    // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para campos numéricos
+    // y strings vacíos en lugar de NULL para campos de texto.
     const sd = {
-        // ===== mismos campos que en nuevaIndicacion =====
-        NumeroVisita: toNumberOrNull(data.NumeroVisita),
-        NroAdicional: toNumberOrNull(data.NroAdicional),
+        NumeroVisita: toNumberOrNull(data.NumeroVisita) || 0,
+        NroAdicional: toNumberOrNull(data.NroAdicional) || 0,
 
         FechaCarga: data.FechaCarga
             ? convertirFechaAClarion(data.FechaCarga)
-            : null,
+            : 0,
         HoraCarga: data.HoraCarga
             ? convertirHoraAClarion(data.HoraCarga)
-            : null,
-        OperadorCarga: toNumberOrNull(data.OperadorCarga),
-        ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste),
+            : 0,
+        OperadorCarga: toNumberOrNull(data.OperadorCarga) || 0,
+        ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste) || 0,
 
         FechaCumplido: data.FechaCumplido
             ? convertirFechaAClarion(data.FechaCumplido)
-            : null,
+            : 0,
         HoraCumplido: data.HoraCumplido
             ? convertirHoraAClarion(data.HoraCumplido)
-            : null,
+            : 0,
         FechaProximo: data.FechaProximo
             ? convertirFechaAClarion(data.FechaProximo)
-            : null,
+            : 0,
         HoraProximo: data.HoraProximo
             ? convertirHoraAClarion(data.HoraProximo)
-            : null,
+            : 0,
         FechaRevision: data.FechaRevision
             ? convertirFechaAClarion(data.FechaRevision)
-            : null,
+            : 0,
         HoraRevision: data.HoraRevision
             ? convertirHoraAClarion(data.HoraRevision)
-            : null,
+            : 0,
 
-        TipoIndicacion: toNumberOrNull(data.TipoIndicacion),
-        Codigo: toNumberOrNull(data.Codigo),
+        TipoIndicacion: toNumberOrNull(data.TipoIndicacion) || 0,
+        Codigo: toNumberOrNull(data.Codigo) || 0,
 
-        Cantidad: data.Cantidad == null ? null : Number(data.Cantidad),
-        TipoUnidad: limitLength(data.TipoUnidad, 5), // char(5)
-        Frecuencia: limitLength(data.Frecuencia, 20), // varchar(20)
-        Observaciones: limitLength(data.Observaciones, 255), // varchar(255)
+        Cantidad: data.Cantidad == null ? 0 : Number(data.Cantidad),
+        TipoUnidad: limitLength(data.TipoUnidad, 5) || "",
+        Frecuencia: limitLength(data.Frecuencia, 20) || "",
+        Observaciones: limitLength(data.Observaciones, 255) || "",
 
         FechaExpiro: data.FechaExpiro
             ? convertirFechaAClarion(data.FechaExpiro)
-            : null,
+            : 0,
         HoraExpiro: data.HoraExpiro
             ? convertirHoraAClarion(data.HoraExpiro)
-            : null,
+            : 0,
 
         CantidadIndicada:
             data.CantidadIndicada == null
-                ? null
+                ? 0
                 : Number(data.CantidadIndicada),
-        Orden: toNumberOrNull(data.Orden), // smallint
-        Estado: limitLength(data.Estado, 1), // char(1)
+        Orden: toNumberOrNull(data.Orden) || 0,
+        Estado: limitLength(data.Estado, 1) || "N",
         CantidadPorTurno:
             data.CantidadPorTurno == null
-                ? null
+                ? 0
                 : Number(data.CantidadPorTurno),
         CantidadEntregada:
             data.CantidadEntregada == null
-                ? null
+                ? 0
                 : Number(data.CantidadEntregada),
 
-        // En tu INSERT, ParaFechaEntrega se guarda como DATE (YYYY-MM-DD)
-        ParaFechaEntrega: data.ParaFechaEntrega || null,
+        ParaFechaEntrega: data.ParaFechaEntrega || null, // ÚNICA date real en SQL
 
-        FormaAdicional: limitLength(data.FormaAdicional, 15),
-        NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior),
-        IdSector: limitLength(data.IdSector, 4),
-        AliasMedicamento: limitLength(data.AliasMedicamento, 50),
-        ExcluidoDeEntrega: toBitOrNull(data.ExcluidoDeEntrega), // bit
+        FormaAdicional: limitLength(data.FormaAdicional, 15) || "",
+        NroIndicacionAnterior: toNumberOrNull(data.NroIndicacionAnterior) || 0,
+        IdSector: limitLength(data.IdSector, 4) || "",
+        AliasMedicamento: limitLength(data.AliasMedicamento, 50) || "",
+        ExcluidoDeEntrega: toBitOrNull(data.ExcluidoDeEntrega) || 0,
     };
 
     const sql = `
@@ -1370,7 +1372,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
         if (data.observaciones !== undefined) {
             fieldsToUpdate.push(`Observaciones = @p${paramIndex}`);
-            params.push({ value: limitLength(data.observaciones, 255) });
+            params.push({ value: limitLength(data.observaciones, 255) || "" });
             paramIndex++;
         }
 
