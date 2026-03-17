@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion, convertirHoraAClarion, getLocalDateString, getLocalTimeString } = require("../utils/dateUtils");
+const { convertirFechaAClarion, convertirHoraAClarion } = require("../utils/dateUtils");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -185,8 +185,15 @@ const eliminarControl = async (valor) => {
  */
 const crearControl = async (data) => {
     const ahora = new Date();
-    const fechaCargaClarion = convertirFechaAClarion(getLocalDateString(ahora));
-    const horaCargaClarion = convertirHoraAClarion(getLocalTimeString(ahora) + ':00');
+    const yyyy = ahora.getFullYear();
+    const mm = String(ahora.getMonth() + 1).padStart(2, '0');
+    const dd = String(ahora.getDate()).padStart(2, '0');
+    const hh = String(ahora.getHours()).padStart(2, '0');
+    const mi = String(ahora.getMinutes()).padStart(2, '0');
+    const ss = String(ahora.getSeconds()).padStart(2, '0');
+
+    const fechaCargaClarion = convertirFechaAClarion(`${yyyy}-${mm}-${dd}`);
+    const horaCargaClarion = convertirHoraAClarion(`${hh}:${mi}:${ss}`);
     const fechaControlClarion = convertirFechaAClarion(data.fechaControl);
     const horaControlClarion = convertirHoraAClarion(data.horaControl + ':00');
 
