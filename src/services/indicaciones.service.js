@@ -1057,7 +1057,7 @@ LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
 LEFT JOIN imVademecum v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
-LEFT JOIN imPassword pw ON iim.ProfesionalAsiste = pw.CodOperador
+LEFT JOIN imPassword pw ON iim.ProfesionalAsiste = pw.ValorPersonal
 WHERE iim.NroIndicacion = @param0
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;
