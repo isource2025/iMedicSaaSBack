@@ -30,6 +30,9 @@ router.post("/hija", indicacionesController.crearIndicacionHija);
 
 router.delete("/:nroIndicacion", indicacionesController.deleteIndicacion);
 
+// Eliminar indicación hija (adicional)
+router.delete("/hija/:nroIndicacion", indicacionesController.deleteIndicacionHija);
+
 router.get("/:nroIndicacion", indicacionesController.getIndicacionById);
 
 router.put("/:nroIndicacion", indicacionesController.updateIndicacion);

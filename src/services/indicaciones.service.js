@@ -938,7 +938,8 @@ WHERE NroAdicional = @param0
     const result = await executeQuery(checkHijas, checkParams);
     
     if (result[0].CantidadHijas > 0) {
-        throw new Error('No se puede eliminar una indicación padre que tiene indicaciones hijas. Elimine primero las hijas.');
+        const cantidadHijas = result[0].CantidadHijas;
+        throw new Error(`Esta indicación tiene ${cantidadHijas} adicional${cantidadHijas > 1 ? 'es' : ''}. Borre los adicionales para poder borrar esta indicación.`);
     }
     
     const sql = `
@@ -947,6 +948,38 @@ WHERE NroIndicacion = @param0
 `;
     const params = [{ value: nroIndicacion }];
     await executeQuery(sql, params);
+};
+
+/**
+ * Elimina una indicación hija (adicional) sin validaciones de padre
+ * @param {number} nroIndicacion - Número de indicación hija a eliminar
+ */
+const deleteIndicacionHija = async (nroIndicacion) => {
+    // Verificar que sea realmente una indicación hija (tiene NroAdicional > 0)
+    const checkHija = `
+SELECT NroAdicional
+FROM imInterIndMedicas
+WHERE NroIndicacion = @param0
+`;
+    const checkParams = [{ value: nroIndicacion }];
+    const result = await executeQuery(checkHija, checkParams);
+    
+    if (result.length === 0) {
+        throw new Error('La indicación no existe');
+    }
+    
+    if (!result[0].NroAdicional || result[0].NroAdicional === 0) {
+        throw new Error('Esta no es una indicación adicional. Use el endpoint de eliminación normal.');
+    }
+    
+    const sql = `
+DELETE FROM imInterIndMedicas
+WHERE NroIndicacion = @param0
+`;
+    const params = [{ value: nroIndicacion }];
+    await executeQuery(sql, params);
+    
+    console.log(`✅ Indicación hija ${nroIndicacion} eliminada correctamente`);
 };
 
 const crearIndicacionHija = async (data) => {
@@ -1784,6 +1817,7 @@ module.exports = {
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,
+    deleteIndicacionHija,
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,

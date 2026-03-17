@@ -262,7 +262,33 @@ const deleteIndicacion = async (req, res) => {
         console.error("Error al eliminar indicación:", error);
         res.status(500).json({
             success: false,
-            mensaje: "Error al eliminar la indicación",
+            mensaje: error.message || "Error al eliminar la indicación",
+            error: error.message,
+        });
+    }
+};
+
+const deleteIndicacionHija = async (req, res) => {
+    try {
+        const { nroIndicacion } = req.params;
+        const nroIndicacionInt = parseInt(nroIndicacion);
+        if (isNaN(nroIndicacionInt)) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Número de indicación inválido",
+            });
+        }
+
+        await indicacionesService.deleteIndicacionHija(nroIndicacionInt);
+        res.json({
+            success: true,
+            mensaje: "Indicación adicional eliminada correctamente",
+        });
+    } catch (error) {
+        console.error("Error al eliminar indicación hija:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: error.message || "Error al eliminar la indicación adicional",
             error: error.message,
         });
     }
@@ -399,6 +425,7 @@ module.exports = {
     obtenerDatosFormulario,
     nuevaIndicacion,
     deleteIndicacion,
+    deleteIndicacionHija,
     getIndicacionById,
     updateIndicacion,
     aplicarIndicacion,
