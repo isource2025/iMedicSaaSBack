@@ -133,8 +133,81 @@ const eliminarControl = async (req, res) => {
     }
 };
 
+/**
+ * Crear un nuevo control frecuente
+ */
+const crearControl = async (req, res) => {
+    try {
+        const {
+            numeroVisita,
+            fechaControl,
+            horaControl,
+            operadorCarga,
+            idHci,
+            pulso,
+            presionMax,
+            presionMin,
+            presionMedia,
+            frecuenciaRespiratoria,
+            temperaturaAxilar,
+            temperaturaRectal,
+            glucemia,
+            saturacion,
+            observaciones,
+            idSector
+        } = req.body;
+
+        if (!numeroVisita) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Número de visita es requerido",
+            });
+        }
+
+        if (!fechaControl || !horaControl) {
+            return res.status(400).json({
+                success: false,
+                mensaje: "Fecha y hora del control son requeridos",
+            });
+        }
+
+        const resultado = await controlesFrecuentesService.crearControl({
+            numeroVisita: parseInt(numeroVisita),
+            fechaControl,
+            horaControl,
+            operadorCarga: operadorCarga ? parseInt(operadorCarga) : 0,
+            idHci: idHci ? parseInt(idHci) : 0,
+            pulso: pulso ? parseInt(pulso) : 0,
+            presionMax: presionMax ? parseInt(presionMax) : 0,
+            presionMin: presionMin ? parseInt(presionMin) : 0,
+            presionMedia: presionMedia ? parseInt(presionMedia) : 0,
+            frecuenciaRespiratoria: frecuenciaRespiratoria ? parseInt(frecuenciaRespiratoria) : 0,
+            temperaturaAxilar: temperaturaAxilar ? parseFloat(temperaturaAxilar) : 0,
+            temperaturaRectal: temperaturaRectal ? parseFloat(temperaturaRectal) : 0,
+            glucemia: glucemia ? parseInt(glucemia) : 0,
+            saturacion: saturacion ? parseInt(saturacion) : 0,
+            observaciones: observaciones || '',
+            idSector: idSector || '',
+        });
+
+        res.status(201).json({
+            success: true,
+            mensaje: "Control frecuente creado correctamente",
+            data: resultado,
+        });
+    } catch (error) {
+        console.error("Error al crear control frecuente:", error);
+        res.status(500).json({
+            success: false,
+            mensaje: "Error al crear el control frecuente",
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     obtenerControlesPorVisitaYFecha,
     obtenerControlPorId,
     eliminarControl,
+    crearControl,
 };

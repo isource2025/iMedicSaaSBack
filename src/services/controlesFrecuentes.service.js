@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion } = require("../utils/dateUtils");
+const { convertirFechaAClarion, convertirHoraAClarion, getLocalDateString, getLocalTimeString } = require("../utils/dateUtils");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -54,7 +54,8 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
       cf.Saturometria,
       cf.Peso,
       cf.Talla,
-      cf.IdTurno
+      cf.IdTurno,
+      cf.IdHci
     FROM dbo.imInterCtrlFrecuente AS cf
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = cf.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = cf.Profesional
@@ -122,7 +123,8 @@ const obtenerControlPorId = async (valor) => {
       cf.Saturometria,
       cf.Peso,
       cf.Talla,
-      cf.IdTurno
+      cf.IdTurno,
+      cf.IdHci
     FROM dbo.imInterCtrlFrecuente AS cf
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = cf.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = cf.Profesional
@@ -160,8 +162,94 @@ const eliminarControl = async (valor) => {
     }
 };
 
+/**
+ * Crear un nuevo control frecuente (desde HC o Gestión de Enfermería)
+ * @param {Object} data - Datos del control
+ * @param {number} data.numeroVisita - Número de visita del paciente
+ * @param {string} data.fechaControl - Fecha del control YYYY-MM-DD
+ * @param {string} data.horaControl - Hora del control HH:mm
+ * @param {number} data.operadorCarga - Código del operador
+ * @param {number|null} data.idHci - ID de HC de Ingreso (si fue cargado desde HC)
+ * @param {number|null} data.pulso
+ * @param {number|null} data.presionMax
+ * @param {number|null} data.presionMin
+ * @param {number|null} data.presionMedia
+ * @param {number|null} data.frecuenciaRespiratoria
+ * @param {number|null} data.temperaturaAxilar
+ * @param {number|null} data.temperaturaRectal
+ * @param {number|null} data.glucemia
+ * @param {number|null} data.saturacion
+ * @param {string|null} data.observaciones
+ * @param {string|null} data.idSector
+ * @returns {Promise<Object>} Registro creado con su Valor (ID)
+ */
+const crearControl = async (data) => {
+    const ahora = new Date();
+    const fechaCargaClarion = convertirFechaAClarion(getLocalDateString(ahora));
+    const horaCargaClarion = convertirHoraAClarion(getLocalTimeString(ahora) + ':00');
+    const fechaControlClarion = convertirFechaAClarion(data.fechaControl);
+    const horaControlClarion = convertirHoraAClarion(data.horaControl + ':00');
+
+    // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para numéricos, "" para strings
+    const sql = `
+        INSERT INTO dbo.imInterCtrlFrecuente (
+            NumeroVisita, FechaCarga, HoraCarga, OperadorCarga, Profesional,
+            FechaControl, HoraControl,
+            Pulso, Maximo, Minimo, FrecuenciaRespiratoria,
+            Axilar, Rectal, Hgt, PAMedia, Saturometria,
+            Peso, Talla, IdSector, IdTurno, Nroindicacion,
+            Observaciones, IdHci
+        )
+        OUTPUT INSERTED.Valor
+        VALUES (
+            @param0, @param1, @param2, @param3, @param4,
+            @param5, @param6,
+            @param7, @param8, @param9, @param10,
+            @param11, @param12, @param13, @param14, @param15,
+            @param16, @param17, @param18, @param19, @param20,
+            @param21, @param22
+        )
+    `;
+
+    const params = [
+        { value: data.numeroVisita },                                       // @param0
+        { value: fechaCargaClarion },                                       // @param1
+        { value: horaCargaClarion },                                        // @param2
+        { value: data.operadorCarga || 0 },                                 // @param3
+        { value: data.operadorCarga || 0 },                                 // @param4 (Profesional = OperadorCarga)
+        { value: fechaControlClarion },                                     // @param5
+        { value: horaControlClarion },                                      // @param6
+        { value: data.pulso || 0 },                                         // @param7
+        { value: data.presionMax || 0 },                                    // @param8
+        { value: data.presionMin || 0 },                                    // @param9
+        { value: data.frecuenciaRespiratoria || 0 },                        // @param10
+        { value: data.temperaturaAxilar || 0 },                             // @param11
+        { value: data.temperaturaRectal || 0 },                             // @param12
+        { value: data.glucemia ? String(data.glucemia) : '0' },             // @param13 (Hgt es varchar)
+        { value: data.presionMedia || 0 },                                  // @param14
+        { value: data.saturacion || 0 },                                    // @param15
+        { value: 0 },                                                       // @param16 Peso
+        { value: 0 },                                                       // @param17 Talla
+        { value: data.idSector || '' },                                     // @param18
+        { value: 0 },                                                       // @param19 IdTurno
+        { value: 0 },                                                       // @param20 Nroindicacion
+        { value: data.observaciones || '' },                                // @param21
+        { value: data.idHci || 0 },                                         // @param22 IdHci (0 = no viene de HC)
+    ];
+
+    try {
+        const resultado = await executeQuery(sql, params);
+        console.log('✅ Control frecuente creado:', resultado[0]?.Valor, data.idHci ? `(desde HC ${data.idHci})` : '');
+        return resultado[0];
+    } catch (error) {
+        console.error("Error al crear control frecuente:", error);
+        throw error;
+    }
+};
+
 module.exports = {
     obtenerControlesPorVisitaYFecha,
     obtenerControlPorId,
     eliminarControl,
+    crearControl,
 };

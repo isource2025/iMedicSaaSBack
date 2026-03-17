@@ -14,6 +14,12 @@ router.get(
     controlesFrecuentesController.obtenerControlPorId
 );
 
+// Crear un nuevo control frecuente
+router.post(
+    "/",
+    controlesFrecuentesController.crearControl
+);
+
 // Eliminar un control frecuente por ID
 router.delete(
     "/:valor",
