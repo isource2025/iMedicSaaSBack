@@ -13,18 +13,27 @@ const toNumberOrNull = (v) =>
     v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
 
 const toBitOrNull = (v) => (v == null ? null : v ? 1 : 0);
-// ✅ Helper para obtener fecha local sin problemas de zona horaria
+// ✅ Helper: obtener Date ajustado a Argentina (UTC-3)
+const getArgentinaDate = (date) => {
+    // Convertir a UTC y aplicar offset -3 horas
+    const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+    return new Date(utc + (-3 * 3600000));
+};
+
+// ✅ Helper para obtener fecha local Argentina sin problemas de zona horaria
 const getLocalDateString = (date) => {
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const dd = String(date.getDate()).padStart(2, '0');
+    const ar = getArgentinaDate(date);
+    const yyyy = ar.getFullYear();
+    const mm = String(ar.getMonth() + 1).padStart(2, '0');
+    const dd = String(ar.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
 };
 
-// ✅ Helper para obtener hora local en formato HH:mm
+// ✅ Helper para obtener hora local Argentina en formato HH:mm
 const getLocalTimeString = (date) => {
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
+    const ar = getArgentinaDate(date);
+    const hh = String(ar.getHours()).padStart(2, '0');
+    const mm = String(ar.getMinutes()).padStart(2, '0');
     return `${hh}:${mm}`;
 };
 
@@ -1002,6 +1011,7 @@ SELECT
     CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,    
     iim.OperadorCarga,
     iim.ProfesionalAsiste,
+    LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
     CONVERT(varchar(10), DATEADD(DAY, iim.FechaCumplido, '1800-12-28'), 23) AS FechaCumplido,
     CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCumplido / 100, '00:00:00'), 108) AS HoraCumplido, 
    
@@ -1012,6 +1022,7 @@ SELECT
     CONVERT(varchar(8), DATEADD(SECOND, iim.HoraRevision / 100, '00:00:00'), 108) AS HoraRevision,  
     iim.TipoIndicacion,
     tit.Tipo as TipoIndicacionCodigo,
+    tit.Descripcion as TipoIndicacionDescripcion,
     iim.Codigo,
     iim.CantidadIndicada,
     iim.TipoUnidad,
@@ -1032,18 +1043,21 @@ SELECT
     iim.AliasMedicamento,
     iim.ExcluidoDeEntrega,
     CASE 
-        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
+        WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
         WHEN tit.Tipo = 'C' THEN tc.Descripcion
         WHEN tit.Tipo = 'D' THEN td.Descripcion
         WHEN tit.Tipo = 'A' THEN ca.Descripcion
         ELSE iim.AliasMedicamento
-    END AS DescripcionIndicacion
+    END AS DescripcionIndicacion,
+    v.TipoMedicamento AS VademecumTipoMedicamento
 FROM imInterIndMedicas iim
 LEFT JOIN imFrecuenciasAdmin fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
+LEFT JOIN imVademecum v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
+LEFT JOIN imPassword pw ON iim.ProfesionalAsiste = pw.CodOperador
 WHERE iim.NroIndicacion = @param0
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;
