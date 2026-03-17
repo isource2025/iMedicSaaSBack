@@ -144,7 +144,8 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             uc.Talla AS CTRL_Talla,
             uc.Observaciones AS CTRL_Observaciones,
             CONVERT(VARCHAR(10), DATEADD(day, NULLIF(uc.FechaControl,0) - 4, '1801-01-01'), 23) AS CTRL_FechaControl,
-            CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl
+            CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl,
+            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
@@ -193,7 +194,8 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             uc.Talla AS CTRL_Talla,
             uc.Observaciones AS CTRL_Observaciones,
             CONVERT(VARCHAR(10), DATEADD(day, NULLIF(uc.FechaControl,0) - 4, '1801-01-01'), 23) AS CTRL_FechaControl,
-            CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl
+            CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl,
+            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
@@ -223,6 +225,12 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
 // Lista de campos válidos de imHCI que se pueden insertar/actualizar dinámicamente
 // (excluimos IdHCIngreso que es identity, NumeroVisita, Fecha, y los campos base)
 const CAMPOS_BASICOS_HCI = ['NumeroVisita', 'IdSector', 'MotivoConsulta', 'EnfermedadActual', 'IdProfecional'];
+
+// Mapeo de nombres de columnas con typos en la BD (frontend -> BD real)
+const COLUMN_NAME_MAP = {
+    'SN_PARESCRANEANOS': 'SN _PARESCRANEANOS',  // Typo en la BD: espacio antes del _
+};
+const mapColumnName = (key) => COLUMN_NAME_MAP[key] || key;
 
 const buildDynamicFields = (data) => {
     const columns = [];
@@ -269,7 +277,7 @@ const buildDynamicFields = (data) => {
         const valor = data[key];
         if (valor === undefined || valor === null) return;
         
-        columns.push(key);
+        columns.push(`[${mapColumnName(key)}]`);
         values.push(`@param${paramIndex}`);
         params.push({ value: String(valor) });
         paramIndex++;
@@ -278,7 +286,7 @@ const buildDynamicFields = (data) => {
     // Campos especiales sin prefijo que también son parte de la HC
     ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO'].forEach(campo => {
         if (data[campo] !== undefined && data[campo] !== null) {
-            columns.push(campo);
+            columns.push(`[${campo}]`);
             values.push(`@param${paramIndex}`);
             params.push({ value: String(data[campo]) });
             paramIndex++;
@@ -360,7 +368,7 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
             const valor = data[key];
             if (valor === undefined) return;
             
-            setClauses.push(`[${key}] = @param${paramIndex}`);
+            setClauses.push(`[${mapColumnName(key)}] = @param${paramIndex}`);
             params.push({ value: valor !== null ? String(valor) : '' });
             paramIndex++;
         });
