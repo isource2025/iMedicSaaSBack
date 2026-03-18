@@ -5,6 +5,54 @@ const path = require('path');
 const fs = require('fs').promises;
 const adjuntosService = require('../services/adjuntos.service');
 
+/**
+ * Resuelve la ruta de un archivo, intentando múltiples ubicaciones posibles
+ * Maneja archivos viejos (E:\, D:\) y nuevos (uploads, red local)
+ */
+async function resolverRutaArchivo(rutaOriginal) {
+  if (!rutaOriginal) return null;
+
+  // Configuración de mapeo de rutas
+  const BASE_PATHS = [
+    process.env.ARCHIVOS_BASE_PATH || 'E:\\imagenes',  // Path base para archivos viejos
+    'D:\\imagenes',
+    '\\\\192.168.25.213\\Images',  // Red local
+  ];
+
+  // Lista de rutas a intentar
+  const rutasAIntentar = [rutaOriginal];
+
+  // Si la ruta original empieza con E:\ o D:\, intentar mapearla
+  if (rutaOriginal.startsWith('E:\\') || rutaOriginal.startsWith('D:\\')) {
+    // Extraer la parte después de la unidad
+    const pathSinUnidad = rutaOriginal.substring(3); // Quita "E:\" o "D:\"
+    
+    // Intentar en diferentes ubicaciones base
+    for (const basePath of BASE_PATHS) {
+      rutasAIntentar.push(path.join(basePath, pathSinUnidad));
+    }
+  }
+
+  // Si es una ruta de red, intentarla tal cual
+  if (rutaOriginal.startsWith('\\\\')) {
+    rutasAIntentar.push(rutaOriginal);
+  }
+
+  // Intentar cada ruta hasta encontrar una que exista
+  for (const rutaIntento of rutasAIntentar) {
+    try {
+      await fs.access(rutaIntento);
+      console.log(`✅ Archivo encontrado en: ${rutaIntento}`);
+      return rutaIntento;
+    } catch {
+      // Continuar con la siguiente ruta
+    }
+  }
+
+  console.warn(`⚠️ Archivo no encontrado en ninguna ubicación. Original: ${rutaOriginal}`);
+  return null;
+}
+
 // Configurar multer para upload de archivos
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
@@ -252,18 +300,22 @@ router.get('/:idAdjunto/download', async (req, res) => {
       });
     }
     
-    // Verificar que el archivo existe
-    try {
-      await fs.access(adjunto.RutaArchivo);
-    } catch {
+    console.log(`📂 Buscando archivo: ${adjunto.RutaArchivo}`);
+    
+    // Resolver la ruta del archivo (maneja archivos viejos y nuevos)
+    const rutaResuelta = await resolverRutaArchivo(adjunto.RutaArchivo);
+    
+    if (!rutaResuelta) {
+      console.error(`❌ Archivo no encontrado en ninguna ubicación: ${adjunto.RutaArchivo}`);
       return res.status(404).json({
         success: false,
-        error: 'Archivo no encontrado en el servidor'
+        error: 'Archivo no encontrado en el servidor',
+        rutaOriginal: adjunto.RutaArchivo
       });
     }
     
     // Determinar el tipo MIME del archivo
-    const ext = path.extname(adjunto.NombreArchivo).toLowerCase();
+    const ext = path.extname(adjunto.NombreArchivo || rutaResuelta).toLowerCase();
     const mimeTypes = {
       '.pdf': 'application/pdf',
       '.jpg': 'image/jpeg',
@@ -280,8 +332,10 @@ router.get('/:idAdjunto/download', async (req, res) => {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
     
+    console.log(`✅ Enviando archivo desde: ${rutaResuelta}`);
+    
     // Enviar archivo para visualización
-    res.sendFile(adjunto.RutaArchivo, (err) => {
+    res.sendFile(rutaResuelta, (err) => {
       if (err) {
         console.error('❌ Error al enviar archivo:', err);
         if (!res.headersSent) {
