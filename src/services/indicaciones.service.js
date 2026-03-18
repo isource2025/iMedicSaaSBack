@@ -229,6 +229,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
       iim.ProfesionalAsiste,
       iim.TipoIndicacion,
       tit.Tipo as TipoIndicacionCodigo,
+      tit.Orden as OrdenTipo,
       iim.Codigo,
       iim.Cantidad,
       iim.TipoUnidad,
@@ -267,7 +268,7 @@ const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
     LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
     LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
     WHERE iim.NumeroVisita = @param0
-    ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
+    ORDER BY tit.Orden ASC, iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
     const parametros = [{ value: numeroVisita }];
     try {
@@ -306,6 +307,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
       iim.TipoIndicacion,
       tit.Tipo as TipoIndicacionCodigo,
       tit.PromptCodigo,
+      tit.Orden as OrdenTipo,
       iim.Codigo,
       iim.Cantidad,
       iim.TipoUnidad,
@@ -344,7 +346,7 @@ const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
     LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
     LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
     WHERE iim.NumeroVisita = @param0
-    ORDER BY iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
+    ORDER BY tit.Orden ASC, iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
   `;
     const parametros = [{ value: numeroVisita }, { value: limit }];
     try {
