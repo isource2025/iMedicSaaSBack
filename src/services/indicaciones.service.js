@@ -205,165 +205,38 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
 };
 
 /**
- * Obtener la última indicación por número de visita
- * @param {number} numeroVisita - Número de visita
- * @returns {Promise<Object>} Última indicación para la visita
+ * FUNCIÓN UNIFICADA: Obtener indicaciones médicas por visita.
+ * Soporta filtro por fecha (opcional) y límite (opcional).
+ * SIEMPRE ordena por tit.Orden ASC (campo Orden de imInterTipoIndicacion).
+ * 
+ * @param {number} numeroVisita - Número de visita (requerido)
+ * @param {Object} opciones - Opciones de filtrado
+ * @param {string} [opciones.fecha] - Fecha en formato 'YYYY-MM-DD' para filtrar por FechaCarga
+ * @param {number} [opciones.limit] - Límite de registros (TOP N)
+ * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
-const obtenerUltimaIndicacionPorVisita = async (numeroVisita) => {
-    const consulta = `
-    SELECT TOP 1
-      iim.NumeroVisita,
-      iim.NroIndicacion,
-      iim.NroAdicional,
-      CASE
-        WHEN FechaCarga IS NULL OR FechaCarga <= 0 OR FechaCarga > 2958465 THEN NULL
-        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
-      END AS FechaCarga,
-      CASE
-        WHEN HoraCarga IS NULL OR HoraCarga < 0 OR HoraCarga > 8639999 THEN NULL
-        ELSE FORMAT(DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 'HH:mm:ss')
-      END AS HoraCarga,
-      iim.OperadorCarga,
-      pw.Apellido AS OperadorApellido,
-      pw.Nombres AS OperadorNombres,
-      iim.ProfesionalAsiste,
-      iim.TipoIndicacion,
-      tit.Tipo as TipoIndicacionCodigo,
-      tit.Orden as OrdenTipo,
-      iim.Codigo,
-      iim.Cantidad,
-      iim.TipoUnidad,
-      iim.Frecuencia,
-      iim.Observaciones,
-      CASE
-        WHEN FechaExpiro IS NULL OR FechaExpiro <= 0 OR FechaExpiro > 2958465 THEN NULL
-        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
-      END AS FechaExpiro,
-      CASE
-        WHEN HoraExpiro IS NULL OR HoraExpiro < 0 OR HoraExpiro > 8639999 THEN NULL
-        ELSE FORMAT(DATEADD(SECOND, HoraExpiro / 100, '00:00:00'), 'HH:mm:ss')
-      END AS HoraExpiro,
-      iim.CantidadIndicada,
-      iim.Orden,
-      iim.Estado,
-      iim.CantidadPorTurno,
-      iim.CantidadEntregada,
-      iim.ParaFechaEntrega,
-      iim.FormaAdicional,
-      iim.NroIndicacionAnterior,
-      iim.IdSector,
-      iim.AliasMedicamento,
-      iim.ExcluidoDeEntrega,
-      CASE 
-        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
-        WHEN tit.Tipo = 'C' THEN tc.Descripcion
-        WHEN tit.Tipo = 'D' THEN td.Descripcion
-        WHEN tit.Tipo = 'A' THEN ca.Descripcion
-        ELSE iim.AliasMedicamento
-      END AS DescripcionIndicacion
-    FROM dbo.imInterIndMedicas AS iim
-    LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = iim.OperadorCarga
-    LEFT JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
-    LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
-    LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
-    LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
-    WHERE iim.NumeroVisita = @param0
-    ORDER BY tit.Orden ASC, iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
-  `;
-    const parametros = [{ value: numeroVisita }];
-    try {
-        return await executeQuery(consulta, parametros);
-    } catch (error) {
-        console.error("Error al obtener última indicación por visita:", error);
-        console.error("Parámetros:", JSON.stringify(parametros));
-        throw error;
-    }
-};
+async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
+    const { fecha, limit } = opciones;
 
-/**
- * Obtener las últimas N indicaciones por número de visita
- * @param {number} numeroVisita
- * @param {number} limit
- * @returns {Promise<Array>} Lista de indicaciones ordenadas por más recientes
- */
-const obtenerUltimasIndicacionesPorVisita = async (numeroVisita, limit = 3) => {
-    const consulta = `
-    SELECT TOP (@param1)
-      iim.NumeroVisita,
-      iim.NroIndicacion,
-      iim.NroAdicional,
-      CASE
-        WHEN FechaCarga IS NULL OR FechaCarga <= 0 OR FechaCarga > 2958465 THEN NULL
-        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaCarga - 2, '19000101'))
-      END AS FechaCarga,
-      CASE
-        WHEN HoraCarga IS NULL OR HoraCarga < 0 OR HoraCarga > 8639999 THEN NULL
-        ELSE FORMAT(DATEADD(SECOND, HoraCarga / 100, '00:00:00'), 'HH:mm:ss')
-      END AS HoraCarga,
-      iim.OperadorCarga,
-      pw.Apellido AS OperadorApellido,
-      pw.Nombres AS OperadorNombres,
-      iim.ProfesionalAsiste,
-      iim.TipoIndicacion,
-      tit.Tipo as TipoIndicacionCodigo,
-      tit.PromptCodigo,
-      tit.Orden as OrdenTipo,
-      iim.Codigo,
-      iim.Cantidad,
-      iim.TipoUnidad,
-      iim.Frecuencia,
-      iim.Observaciones,
-      CASE
-        WHEN FechaExpiro IS NULL OR FechaExpiro <= 0 OR FechaExpiro > 2958465 THEN NULL
-        ELSE CONVERT(DATETIME, DATEADD(DAY, FechaExpiro - 2, '19000101'))
-      END AS FechaExpiro,
-      CASE
-        WHEN HoraExpiro IS NULL OR HoraExpiro < 0 OR HoraExpiro > 8639999 THEN NULL
-        ELSE FORMAT(DATEADD(SECOND, HoraExpiro / 100, '00:00:00'), 'HH:mm:ss')
-      END AS HoraExpiro,
-      iim.CantidadIndicada,
-      iim.Orden,
-      iim.Estado,
-      iim.CantidadPorTurno,
-      iim.CantidadEntregada,
-      iim.ParaFechaEntrega,
-      iim.FormaAdicional,
-      iim.NroIndicacionAnterior,
-      iim.IdSector,
-      iim.AliasMedicamento,
-      iim.ExcluidoDeEntrega,
-      CASE 
-        WHEN tit.Tipo = 'M' THEN iim.AliasMedicamento
-        WHEN tit.Tipo = 'C' THEN tc.Descripcion
-        WHEN tit.Tipo = 'D' THEN td.Descripcion
-        WHEN tit.Tipo = 'A' THEN ca.Descripcion
-        ELSE iim.AliasMedicamento
-      END AS DescripcionIndicacion
-    FROM dbo.imInterIndMedicas AS iim
-    LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = iim.OperadorCarga
-    LEFT JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
-    LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
-    LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
-    LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
-    WHERE iim.NumeroVisita = @param0
-    ORDER BY tit.Orden ASC, iim.FechaCarga DESC, iim.HoraCarga DESC, iim.NroIndicacion DESC
-  `;
-    const parametros = [{ value: numeroVisita }, { value: limit }];
-    try {
-        return await executeQuery(consulta, parametros);
-    } catch (error) {
-        console.error(
-            "Error al obtener últimas indicaciones por visita:",
-            error
-        );
-        console.error("Parámetros:", JSON.stringify(parametros));
-        throw error;
-    }
-};
+    // Construir cláusula TOP dinámica
+    const topClause = limit ? `TOP (${parseInt(limit)})` : '';
 
-async function getByVisitaAndDate(numeroVisita, ymdDate) {
+    // Construir filtros WHERE dinámicos
+    const whereParts = ['iim.NumeroVisita = @param0'];
+    const params = [{ value: numeroVisita }];
+
+    if (fecha) {
+        whereParts.push('iim.FechaCarga = @param1');
+        params.push({ value: convertirFechaAClarion(fecha) });
+    }
+
+    // Excluir insumos/descartables (TipoIndicacion = 9)
+    whereParts.push('iim.TipoIndicacion <> 9');
+    // Excluir descartables sin registro
+    whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
+
     const sql = `
-SELECT
+SELECT ${topClause}
   iim.NroIndicacion,
   iim.NroAdicional,
   iim.CantidadIndicada AS Cantidad,
@@ -375,19 +248,14 @@ SELECT
   iim.Observaciones,
   iim.Estado,
   
-  -- ✅ CORREGIDO: Fechas usando epoch Clarion correcto (28/12/1800)
-  -- Formato: DATEADD(day, ClarionDate, '1800-12-28')
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaProximo,0), '1800-12-28'), 23) AS FechaProximoISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
   
-  -- ✅ CORREGIDO: Horas usando formato Clarion TIME (milisegundos/10 + 1)
-  -- Formato: DATEADD(ms, (ClarionTIME - 1) * 10, 0)
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10, 0), 108) AS HoraProximo,
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraRevision,0) - 1) * 10, 0), 108) AS HoraRevision,
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
   
-  -- ✅ CORREGIDO: Última aplicación (PUNTO DE ANCLAJE) en formato ISO completo
   CASE 
     WHEN iim.FechaCumplido IS NOT NULL AND iim.FechaCumplido > 0 THEN
       CONVERT(varchar(19), 
@@ -397,7 +265,6 @@ SELECT
     ELSE NULL
   END AS UltimaAplicacion,
   
-  -- ✅ CORREGIDO: Próxima aplicación en formato ISO completo
   CASE 
     WHEN iim.FechaProximo IS NOT NULL AND iim.FechaProximo > 0 THEN
       CONVERT(varchar(19), 
@@ -416,7 +283,6 @@ SELECT
   tit.Orden as OrdenTipo,
   v.TipoMedicamento,
   
-  -- Obtener descripción según el tipo de indicación
   CASE 
     WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
     WHEN tit.Tipo = 'C' THEN tc.Descripcion
@@ -432,37 +298,20 @@ LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.V
 LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
 LEFT JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
-WHERE iim.NumeroVisita = @param0
-  AND iim.FechaCarga   = @param1
-  AND iim.TipoIndicacion <> 9
-  AND (tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)
+WHERE ${whereParts.join('\n  AND ')}
 ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
   `;
 
-    const params = [
-        { value: numeroVisita },
-        { value: convertirFechaAClarion(ymdDate) }, // 'YYYY-MM-DD'
-    ];
-
     const rows = await executeQuery(sql, params);
 
-    console.log("🔍 BACKEND SQL - Total registros:", rows.length);
-    if (rows.length > 0) {
-        console.log("🔍 BACKEND SQL - Primer registro completo:", rows[0]);
-        console.log("🔍 BACKEND SQL - PromptCodigo del primer registro:", rows[0].PromptCodigo);
-        console.log("🔍 BACKEND SQL - Keys del primer registro:", Object.keys(rows[0]));
-    }
-    
     // Agrupar indicaciones padre con sus hijas
-    // IMPORTANTE: Las hijas tienen en NroAdicional el NroIndicacion del padre
     const indicacionesPadre = [];
-    const indicacionesHijas = new Map(); // Map<NroIndicacion del padre, Array<Hija>>
+    const indicacionesHijas = new Map();
     
     rows.forEach((r) => {
         const nroAdicional = r.NroAdicional || 0;
         
         if (nroAdicional === 0) {
-            // Es una indicación padre (NroAdicional = 0 o NULL)
             indicacionesPadre.push({
                 id: String(r.NroIndicacion),
                 nroIndicacion: r.NroIndicacion,
@@ -483,6 +332,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 horaCarga: r.HoraCarga,
                 tipo: r.TipoIndicacion,
                 promptCodigo: r.PromptCodigo,
+                ordenTipo: r.OrdenTipo,
                 nro: r.NroIndicacion,
                 idSector: r.IdSector,
                 medicamento: r.AliasMedicamento,
@@ -496,10 +346,9 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                     r.Frecuencia.toUpperCase().includes('POR UNICA') ||
                     r.Estado === 'U'
                 ),
-                indicacionesHijas: [] // Se llenará después
+                indicacionesHijas: []
             });
         } else {
-            // Es una indicación hija (NroAdicional contiene el NroIndicacion del padre)
             const hija = {
                 nroIndicacion: r.NroIndicacion,
                 nroAdicional: r.NroAdicional,
@@ -512,7 +361,6 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 formaAdicional: normalizarFormaAdicional(r.FormaAdicional, false),
             };
             
-            // Agrupar por el NroIndicacion del padre (que está en NroAdicional de la hija)
             if (!indicacionesHijas.has(r.NroAdicional)) {
                 indicacionesHijas.set(r.NroAdicional, []);
             }
@@ -527,12 +375,18 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
         }
     });
     
-    console.log("🔍 BACKEND - Indicaciones padre:", indicacionesPadre.length);
-    console.log("🔍 BACKEND - Indicaciones con hijas:", 
-        indicacionesPadre.filter(p => p.indicacionesHijas.length > 0).length);
-    
     return indicacionesPadre;
 }
+
+// Aliases de compatibilidad que llaman a la función unificada
+const obtenerUltimaIndicacionPorVisita = (numeroVisita) =>
+    getIndicacionesByVisita(numeroVisita, { limit: 1 });
+
+const obtenerUltimasIndicacionesPorVisita = (numeroVisita, limit = 3) =>
+    getIndicacionesByVisita(numeroVisita, { limit });
+
+const getByVisitaAndDate = (numeroVisita, ymdDate) =>
+    getIndicacionesByVisita(numeroVisita, { fecha: ymdDate });
 
 // ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
