@@ -411,6 +411,7 @@ SELECT
   iim.FormaAdicional,
   tit.Tipo as TipoIndicacion,
   tit.PromptCodigo,
+  tit.Orden as OrdenTipo,
   v.TipoMedicamento,
   
   -- Obtener descripción según el tipo de indicación
@@ -433,7 +434,7 @@ WHERE iim.NumeroVisita = @param0
   AND iim.FechaCarga   = @param1
   AND iim.TipoIndicacion <> 9
   AND (tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)
-ORDER BY iim.NroIndicacion ASC, iim.NroAdicional ASC;
+ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
   `;
 
     const params = [
