@@ -40,7 +40,7 @@ const obtenerInfoEmpresa = async () => {
       if (empresa.IdTipoIVA) {
         try {
           const tipoIvaResult = await executeQuery(
-            'SELECT Descripcion FROM imTipoIVA WHERE Valor = @param0',
+            'SELECT Descripcion FROM imIVA WHERE Valor = @param0',
             [{ value: empresa.IdTipoIVA }]
           );
           if (tipoIvaResult && tipoIvaResult.length > 0) {
