@@ -3,91 +3,31 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
+const FormData = require('form-data');
+const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
 
+const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
+
 /**
- * Resuelve la ruta de un archivo, intentando múltiples ubicaciones posibles
- * Maneja archivos viejos (E:\, D:\) y nuevos (uploads, red local)
- * IMPORTANTE: Todos los archivos están en disco E:\, se mapea D:\ -> E:\
- * 
- * Si FILE_SERVER_URL está configurado, retorna la URL del servidor de archivos (NAS)
- * en lugar de una ruta local
+ * Normaliza la ruta del archivo (mapea D:\ y F:\ a E:\)
  */
-async function resolverRutaArchivo(rutaOriginal) {
-  if (!rutaOriginal) return null;
-
-  const fileServerUrl = process.env.FILE_SERVER_URL;
-
-  // Si hay un servidor de archivos configurado (NAS), construir URL
-  if (fileServerUrl) {
-    // Mapear D:\ y F:\ a E:\
-    let rutaNormalizada = rutaOriginal;
-    if (rutaOriginal.startsWith('D:\\')) {
-      rutaNormalizada = rutaOriginal.replace(/^D:\\/, 'E:\\');
-    } else if (rutaOriginal.startsWith('F:\\')) {
-      rutaNormalizada = rutaOriginal.replace(/^F:\\/, 'E:\\');
-    }
-
-    // Convertir path de Windows a URL
-    // E:\Escritorio\file.pdf -> /E/Escritorio/file.pdf
-    const urlPath = rutaNormalizada.replace(/\\/g, '/');
-    const fileUrl = `${fileServerUrl}${urlPath}`;
-    
-    console.log(`🌐 Usando servidor de archivos: ${fileUrl}`);
-    return { tipo: 'url', ruta: fileUrl };
+function normalizarRuta(rutaOriginal) {
+  if (!rutaOriginal) return rutaOriginal;
+  
+  let ruta = rutaOriginal;
+  
+  // Mapear D:\ a E:\
+  if (ruta.startsWith('D:\\')) {
+    ruta = ruta.replace(/^D:\\/, 'E:\\');
   }
-
-  // Modo local: intentar múltiples ubicaciones
-  const rutasAIntentar = [];
-
-  // 1. Intentar la ruta original primero
-  rutasAIntentar.push(rutaOriginal);
-
-  // 2. Si la ruta empieza con D:\, mapearla a E:\ (todos los archivos están en E:\)
-  if (rutaOriginal.startsWith('D:\\')) {
-    const rutaEnE = rutaOriginal.replace(/^D:\\/, 'E:\\');
-    rutasAIntentar.push(rutaEnE);
-    console.log(`🔄 Mapeando D:\\ a E:\\: ${rutaOriginal} -> ${rutaEnE}`);
+  
+  // Mapear F:\ a E:\
+  if (ruta.startsWith('F:\\')) {
+    ruta = ruta.replace(/^F:\\/, 'E:\\');
   }
-
-  // 3. Si la ruta empieza con F:\, mapearla a E:\
-  if (rutaOriginal.startsWith('F:\\')) {
-    const rutaEnE = rutaOriginal.replace(/^F:\\/, 'E:\\');
-    rutasAIntentar.push(rutaEnE);
-    console.log(`🔄 Mapeando F:\\ a E:\\: ${rutaOriginal} -> ${rutaEnE}`);
-  }
-
-  // 4. Si la ruta empieza con E:\, también intentarla tal cual
-  if (rutaOriginal.startsWith('E:\\')) {
-    rutasAIntentar.push(rutaOriginal);
-  }
-
-  // 5. Si es una ruta de red, intentarla tal cual
-  if (rutaOriginal.startsWith('\\\\')) {
-    rutasAIntentar.push(rutaOriginal);
-  }
-
-  // 6. Intentar con path base configurable (para producción)
-  const basePath = process.env.ARCHIVOS_BASE_PATH;
-  if (basePath && (rutaOriginal.startsWith('E:\\') || rutaOriginal.startsWith('D:\\') || rutaOriginal.startsWith('F:\\'))) {
-    const pathSinUnidad = rutaOriginal.substring(3); // Quita "E:\" o "D:\" o "F:\"
-    rutasAIntentar.push(path.join(basePath, pathSinUnidad));
-  }
-
-  // Intentar cada ruta hasta encontrar una que exista
-  for (const rutaIntento of rutasAIntentar) {
-    try {
-      await fs.access(rutaIntento);
-      console.log(`✅ Archivo encontrado en: ${rutaIntento}`);
-      return { tipo: 'local', ruta: rutaIntento };
-    } catch {
-      // Continuar con la siguiente ruta
-    }
-  }
-
-  console.warn(`⚠️ Archivo no encontrado en ninguna ubicación. Original: ${rutaOriginal}`);
-  console.warn(`   Rutas intentadas: ${rutasAIntentar.join(', ')}`);
-  return null;
+  
+  return ruta;
 }
 
 // Configurar multer para upload de archivos
@@ -322,7 +262,7 @@ router.get('/:idAdjunto', async (req, res) => {
 
 /**
  * GET /api/adjuntos/:idAdjunto/download
- * Descargar archivo adjunto
+ * Descargar archivo adjunto desde el servidor HTTP de archivos
  */
 router.get('/:idAdjunto/download', async (req, res) => {
   try {
@@ -337,59 +277,64 @@ router.get('/:idAdjunto/download', async (req, res) => {
       });
     }
     
-    console.log(`📂 Buscando archivo: ${adjunto.RutaArchivo}`);
+    console.log(`📂 Solicitando archivo al servidor: ${adjunto.RutaArchivo}`);
     
-    // Resolver la ruta del archivo (maneja archivos viejos y nuevos, o URL del NAS)
-    const resultado = await resolverRutaArchivo(adjunto.RutaArchivo);
+    // Normalizar la ruta (mapear D:\ y F:\ a E:\)
+    const rutaNormalizada = normalizarRuta(adjunto.RutaArchivo);
     
-    if (!resultado) {
-      console.error(`❌ Archivo no encontrado en ninguna ubicación: ${adjunto.RutaArchivo}`);
-      return res.status(404).json({
+    if (rutaNormalizada !== adjunto.RutaArchivo) {
+      console.log(`🔄 Ruta normalizada: ${adjunto.RutaArchivo} -> ${rutaNormalizada}`);
+    }
+    
+    // Solicitar el archivo al servidor HTTP de archivos
+    try {
+      const response = await axios.get(`${FILE_SERVER_URL}/file`, {
+        params: { path: rutaNormalizada },
+        responseType: 'stream',
+        timeout: 30000 // 30 segundos
+      });
+      
+      // Determinar el tipo MIME del archivo
+      const ext = path.extname(adjunto.NombreArchivo || rutaNormalizada).toLowerCase();
+      const mimeTypes = {
+        '.pdf': 'application/pdf',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      };
+      
+      const contentType = mimeTypes[ext] || 'application/octet-stream';
+      
+      // Configurar headers para visualización inline
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
+      
+      console.log(`✅ Enviando archivo desde servidor HTTP: ${rutaNormalizada}`);
+      
+      // Pipe del stream del servidor de archivos al cliente
+      response.data.pipe(res);
+      
+    } catch (fileError) {
+      console.error(`❌ Error al obtener archivo del servidor HTTP:`, fileError.message);
+      
+      if (fileError.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: 'Archivo no encontrado en el servidor',
+          rutaOriginal: adjunto.RutaArchivo,
+          rutaNormalizada
+        });
+      }
+      
+      return res.status(500).json({
         success: false,
-        error: 'Archivo no encontrado en el servidor',
-        rutaOriginal: adjunto.RutaArchivo
+        error: 'Error al obtener archivo del servidor de archivos',
+        details: fileError.message
       });
     }
-    
-    // Determinar el tipo MIME del archivo
-    const ext = path.extname(adjunto.NombreArchivo || resultado.ruta).toLowerCase();
-    const mimeTypes = {
-      '.pdf': 'application/pdf',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    };
-    
-    const contentType = mimeTypes[ext] || 'application/octet-stream';
-    
-    // Si es una URL (NAS), redirigir al servidor de archivos
-    if (resultado.tipo === 'url') {
-      console.log(`🌐 Redirigiendo a servidor de archivos: ${resultado.ruta}`);
-      return res.redirect(resultado.ruta);
-    }
-    
-    // Si es local, servir el archivo directamente
-    console.log(`✅ Enviando archivo local desde: ${resultado.ruta}`);
-    
-    // Configurar headers para visualización inline (no descarga)
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
-    
-    // Enviar archivo para visualización
-    res.sendFile(resultado.ruta, (err) => {
-      if (err) {
-        console.error('❌ Error al enviar archivo:', err);
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            error: 'Error al enviar archivo'
-          });
-        }
-      }
-    });
   } catch (error) {
     console.error('❌ Error al descargar adjunto:', error);
     res.status(500).json({
