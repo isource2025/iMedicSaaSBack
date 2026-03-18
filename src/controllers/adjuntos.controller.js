@@ -9,11 +9,35 @@ const adjuntosService = require('../services/adjuntos.service');
  * Resuelve la ruta de un archivo, intentando múltiples ubicaciones posibles
  * Maneja archivos viejos (E:\, D:\) y nuevos (uploads, red local)
  * IMPORTANTE: Todos los archivos están en disco E:\, se mapea D:\ -> E:\
+ * 
+ * Si FILE_SERVER_URL está configurado, retorna la URL del servidor de archivos (NAS)
+ * en lugar de una ruta local
  */
 async function resolverRutaArchivo(rutaOriginal) {
   if (!rutaOriginal) return null;
 
-  // Lista de rutas a intentar
+  const fileServerUrl = process.env.FILE_SERVER_URL;
+
+  // Si hay un servidor de archivos configurado (NAS), construir URL
+  if (fileServerUrl) {
+    // Mapear D:\ y F:\ a E:\
+    let rutaNormalizada = rutaOriginal;
+    if (rutaOriginal.startsWith('D:\\')) {
+      rutaNormalizada = rutaOriginal.replace(/^D:\\/, 'E:\\');
+    } else if (rutaOriginal.startsWith('F:\\')) {
+      rutaNormalizada = rutaOriginal.replace(/^F:\\/, 'E:\\');
+    }
+
+    // Convertir path de Windows a URL
+    // E:\Escritorio\file.pdf -> /E/Escritorio/file.pdf
+    const urlPath = rutaNormalizada.replace(/\\/g, '/');
+    const fileUrl = `${fileServerUrl}${urlPath}`;
+    
+    console.log(`🌐 Usando servidor de archivos: ${fileUrl}`);
+    return { tipo: 'url', ruta: fileUrl };
+  }
+
+  // Modo local: intentar múltiples ubicaciones
   const rutasAIntentar = [];
 
   // 1. Intentar la ruta original primero
@@ -26,20 +50,27 @@ async function resolverRutaArchivo(rutaOriginal) {
     console.log(`🔄 Mapeando D:\\ a E:\\: ${rutaOriginal} -> ${rutaEnE}`);
   }
 
-  // 3. Si la ruta empieza con E:\, también intentarla tal cual
+  // 3. Si la ruta empieza con F:\, mapearla a E:\
+  if (rutaOriginal.startsWith('F:\\')) {
+    const rutaEnE = rutaOriginal.replace(/^F:\\/, 'E:\\');
+    rutasAIntentar.push(rutaEnE);
+    console.log(`🔄 Mapeando F:\\ a E:\\: ${rutaOriginal} -> ${rutaEnE}`);
+  }
+
+  // 4. Si la ruta empieza con E:\, también intentarla tal cual
   if (rutaOriginal.startsWith('E:\\')) {
     rutasAIntentar.push(rutaOriginal);
   }
 
-  // 4. Si es una ruta de red, intentarla tal cual
+  // 5. Si es una ruta de red, intentarla tal cual
   if (rutaOriginal.startsWith('\\\\')) {
     rutasAIntentar.push(rutaOriginal);
   }
 
-  // 5. Intentar con path base configurable (para producción)
+  // 6. Intentar con path base configurable (para producción)
   const basePath = process.env.ARCHIVOS_BASE_PATH;
-  if (basePath && (rutaOriginal.startsWith('E:\\') || rutaOriginal.startsWith('D:\\'))) {
-    const pathSinUnidad = rutaOriginal.substring(3); // Quita "E:\" o "D:\"
+  if (basePath && (rutaOriginal.startsWith('E:\\') || rutaOriginal.startsWith('D:\\') || rutaOriginal.startsWith('F:\\'))) {
+    const pathSinUnidad = rutaOriginal.substring(3); // Quita "E:\" o "D:\" o "F:\"
     rutasAIntentar.push(path.join(basePath, pathSinUnidad));
   }
 
@@ -48,7 +79,7 @@ async function resolverRutaArchivo(rutaOriginal) {
     try {
       await fs.access(rutaIntento);
       console.log(`✅ Archivo encontrado en: ${rutaIntento}`);
-      return rutaIntento;
+      return { tipo: 'local', ruta: rutaIntento };
     } catch {
       // Continuar con la siguiente ruta
     }
@@ -308,10 +339,10 @@ router.get('/:idAdjunto/download', async (req, res) => {
     
     console.log(`📂 Buscando archivo: ${adjunto.RutaArchivo}`);
     
-    // Resolver la ruta del archivo (maneja archivos viejos y nuevos)
-    const rutaResuelta = await resolverRutaArchivo(adjunto.RutaArchivo);
+    // Resolver la ruta del archivo (maneja archivos viejos y nuevos, o URL del NAS)
+    const resultado = await resolverRutaArchivo(adjunto.RutaArchivo);
     
-    if (!rutaResuelta) {
+    if (!resultado) {
       console.error(`❌ Archivo no encontrado en ninguna ubicación: ${adjunto.RutaArchivo}`);
       return res.status(404).json({
         success: false,
@@ -321,7 +352,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
     }
     
     // Determinar el tipo MIME del archivo
-    const ext = path.extname(adjunto.NombreArchivo || rutaResuelta).toLowerCase();
+    const ext = path.extname(adjunto.NombreArchivo || resultado.ruta).toLowerCase();
     const mimeTypes = {
       '.pdf': 'application/pdf',
       '.jpg': 'image/jpeg',
@@ -334,14 +365,21 @@ router.get('/:idAdjunto/download', async (req, res) => {
     
     const contentType = mimeTypes[ext] || 'application/octet-stream';
     
+    // Si es una URL (NAS), redirigir al servidor de archivos
+    if (resultado.tipo === 'url') {
+      console.log(`🌐 Redirigiendo a servidor de archivos: ${resultado.ruta}`);
+      return res.redirect(resultado.ruta);
+    }
+    
+    // Si es local, servir el archivo directamente
+    console.log(`✅ Enviando archivo local desde: ${resultado.ruta}`);
+    
     // Configurar headers para visualización inline (no descarga)
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
     
-    console.log(`✅ Enviando archivo desde: ${rutaResuelta}`);
-    
     // Enviar archivo para visualización
-    res.sendFile(rutaResuelta, (err) => {
+    res.sendFile(resultado.ruta, (err) => {
       if (err) {
         console.error('❌ Error al enviar archivo:', err);
         if (!res.headersSent) {
