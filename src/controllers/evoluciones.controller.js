@@ -6,7 +6,7 @@ const evolucionesService = require("../services/evoluciones.service");
 const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
     try {
         const { idVisita } = req.params;
-        const { date } = req.query;
+        const { date, days } = req.query;
 
         const visitaNum = Number(idVisita);
         if (!Number.isFinite(visitaNum) || visitaNum <= 0) {
@@ -23,14 +23,27 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
             });
         }
 
+        // Parsear parámetro days: null = todas, número = días hacia atrás
+        let diasFiltro = 0; // Por defecto solo la fecha específica
+        if (days === 'all' || days === 'todas') {
+            diasFiltro = null;
+        } else if (days !== undefined && days !== '') {
+            const diasNum = parseInt(days);
+            if (!isNaN(diasNum) && diasNum > 0) {
+                diasFiltro = diasNum;
+            }
+        }
+
         const rows = await evolucionesService.obtenerEvolucionesPorVisitaYFecha(
             visitaNum,
-            String(date)
+            String(date),
+            diasFiltro
         );
 
         console.log('🔍 [Evoluciones] Datos a enviar al frontend:', {
             cantidadRegistros: rows?.length || 0,
-            primerRegistro: rows?.[0] || null
+            primerRegistro: rows?.[0] || null,
+            filtro: diasFiltro === null ? 'todas' : `${diasFiltro} días`
         });
 
         return res.json({

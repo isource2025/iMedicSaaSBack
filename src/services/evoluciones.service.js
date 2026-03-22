@@ -5,10 +5,34 @@ const {
 } = require("../utils/dateUtils");
 
 /**
- * Obtener evoluciones por visita y fecha
+ * Obtener evoluciones por visita y fecha/período
+ * @param {number} idVisita - Número de visita
+ * @param {string} fecha - Fecha en formato YYYY-MM-DD (fecha de referencia)
+ * @param {number|null} dias - Número de días hacia atrás desde la fecha (null = todas)
  */
-const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha) => {
+const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) => {
     const fechaClarion = convertirFechaAClarion(fecha);
+    
+    let whereClause = 'ev.IdVisita = @param0';
+    const params = [{ value: idVisita }];
+    
+    if (dias === null) {
+        // Todas las evoluciones de la visita
+        // No agregamos filtro de fecha
+    } else if (dias === 0) {
+        // Solo la fecha específica
+        whereClause += ' AND ev.FechaEv = @param1';
+        params.push({ value: fechaClarion });
+    } else {
+        // Rango de días hacia atrás
+        const fechaDesde = convertirFechaAClarion(
+            new Date(new Date(fecha).getTime() - dias * 24 * 60 * 60 * 1000)
+                .toISOString().split('T')[0]
+        );
+        whereClause += ' AND ev.FechaEv >= @param1 AND ev.FechaEv <= @param2';
+        params.push({ value: fechaDesde });
+        params.push({ value: fechaClarion });
+    }
     
     const sql = `
         SELECT 
@@ -24,15 +48,9 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha) => {
             per.ApellidoNombre AS ProfesionalNombreCompleto
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
-        WHERE ev.IdVisita = @param0
-          AND ev.FechaEv = @param1
+        WHERE ${whereClause}
         ORDER BY ev.FechaEv DESC, ev.HoraEv DESC
     `;
-
-    const params = [
-        { value: idVisita },
-        { value: fechaClarion }
-    ];
 
     try {
         const resultado = await executeQuery(sql, params);
