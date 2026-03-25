@@ -45,9 +45,12 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
-            per.ApellidoNombre AS ProfesionalNombreCompleto
+            per.ApellidoNombre AS ProfesionalNombreCompleto,
+            per.ValorEspecialidad,
+            esp.Descripcion AS EspecialidadDescripcion
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
+        LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         WHERE ${whereClause}
         ORDER BY ev.FechaEv DESC, ev.HoraEv DESC
     `;
@@ -128,9 +131,12 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
-            per.ApellidoNombre AS ProfesionalNombreCompleto
+            per.ApellidoNombre AS ProfesionalNombreCompleto,
+            per.ValorEspecialidad,
+            esp.Descripcion AS EspecialidadDescripcion
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
+        LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         WHERE ev.IdHCEvolucion = @param0
     `;
 
