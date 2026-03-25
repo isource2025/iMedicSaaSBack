@@ -18,6 +18,8 @@ const obtenerCamas = async () => {
       ec.Descripcion as EstadoDescripcion,
       c.RazonSocial as RazonSocialCliente,
       sm.Descripcion as ServicioMedicoDescripcion,
+      CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
+      CONVERT(VARCHAR(8), v.FECHAADMISIONS, 108) as horaIngresoSQL,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
     FROM 
       imHabitacionCamas hc
@@ -69,6 +71,8 @@ const filtrarCamasPorEstado = async (estadoValor) => {
       d.Descripcion as DiagnosticoDescripcion,
       c.RazonSocial as RazonSocialCliente,
       sm.Descripcion as ServicioMedicoDescripcion,
+      CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
+      CONVERT(VARCHAR(8), v.FECHAADMISIONS, 108) as horaIngresoSQL,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
     FROM 
       imHabitacionCamas hc
