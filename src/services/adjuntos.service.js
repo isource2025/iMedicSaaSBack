@@ -85,7 +85,7 @@ class AdjuntosService {
             a.IdAdjunto,
             a.NumeroVisita,
             a.Descripcion,
-            a.Patch,
+            a.PatchServidor,
             a.Fecha,
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
@@ -99,9 +99,9 @@ class AdjuntosService {
         IdAdjunto: adj.IdAdjunto,
         NumeroVisita: adj.NumeroVisita,
         NombreArchivo: adj.Descripcion || 'Sin nombre',
-        RutaArchivo: adj.Patch,
+        RutaArchivo: adj.PatchServidor,
         TipoArchivo: this.getTipoFromNombre(adj.Descripcion || ''),
-        TamanioBytes: this.getFileSize(adj.Patch),
+        TamanioBytes: this.getFileSize(adj.PatchServidor),
         CargadoPor: adj.IdOperador,
         NombreUsuario: adj.NombreOperador || 'Desconocido',
         FechaCarga: adj.Fecha
@@ -126,7 +126,7 @@ class AdjuntosService {
             a.IdAdjunto,
             a.NumeroVisita,
             a.Descripcion,
-            a.Patch,
+            a.PatchServidor,
             a.Fecha,
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
@@ -144,13 +144,14 @@ class AdjuntosService {
         IdAdjunto: adj.IdAdjunto,
         NumeroVisita: adj.NumeroVisita,
         NombreArchivo: adj.Descripcion || 'Sin nombre',
-        RutaArchivo: adj.Patch,
+        RutaArchivo: adj.PatchServidor,
         TipoArchivo: this.getTipoFromNombre(adj.Descripcion || ''),
-        TamanioBytes: this.getFileSize(adj.Patch),
+        TamanioBytes: this.getFileSize(adj.PatchServidor),
         CargadoPor: adj.IdOperador,
         NombreUsuario: adj.NombreOperador || 'Desconocido',
         FechaCarga: adj.Fecha
       };
+
     } catch (error) {
       console.error('❌ Error al obtener adjunto por ID:', error);
       throw error;
