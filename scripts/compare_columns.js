@@ -1,0 +1,97 @@
+const db = require('../src/models/db');
+
+(async () => {
+    try {
+        const cols = await db.executeQuery(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='imHCI' ORDER BY COLUMN_NAME"
+        );
+        const realCols = new Set(cols.map(c => c.COLUMN_NAME));
+        
+        // Frontend column names extracted from examenFisicoHelpers.ts mapearExamenFisicoAHCI
+        const frontendCols = [
+            'SV_FC','SV_FR','SV_TAX','SV_PA','SV_GLUCEMIA','SV_TALLA','SV_PESOACTUAL','SV_PESOHABITUAL',
+            'SV_ESTADONUTRICIONAL','SV_IMPRESIONGENERAL','SV_FACIE','SV_DECUBITO','SV_MARCHA',
+            'SV_VARICES','SV_FLEBITIS','SV_TROMBOSIS','SV_CIRCULACIONCOLATERAL',
+            'PF_COLORACION','PF_HUMEDAD','PF_TEMPERATURA','PF_DISTRIBUCIONPILOSA','PF_ELASTICIDAD',
+            'PF_UNAS','PF_CICATRICES','PF_TEXTO',
+            'TCS_DISTRIBUCION','TCS_CANTIDAD','TCS_NODULOS','TCS_ENFISEMA','TCS_EDEMAS','TCS_TEXTO',
+            'SL_LINFANGITIS','SL_ADENOMEGALIAS','SL_TEXTO',
+            'SOAM_MUSCULO','SOAM_HUESOS','SOAM_COLUMNAVERTEBRAL',
+            'SOAM_INDICETOBILLOBRAZODERECHA','SOAM_INDICETOBILLOBRAZOIZQUIERDA',
+            'SOAM_PERIMETRODISTALPROXIMALMD','SOAM_PERIMETRODISTALPROXIMALMI',
+            'SOAM_ARTICULACIONES','SOAM_TEXTO',
+            'MI_TAMANO','MI_SUPERFICIE','MI_AREOLAS','MI_PEZONES','MI_MANIOBRAPECTORALES',
+            'MI_PIELRETRACCION','MI_ELEVACION','MI_DENARANJA','MI_ULCERAS','MI_TEXTO',
+            'MP_LIMITES','MP_DOLOROSA','MP_SUPERFICIE','MP_CONSISTENCIA','MP_TUMOR',
+            'MP_FIJACIONPIEL','MP_DERRAMEPORPEZON',
+            'A_INSPECCION','A_PALPACION','A_SUPERFICIAL','A_PROFUNDA','A_PERCUSION',
+            'A_HIGADO','A_LIMITESUP','A_LIMITEINF','A_ALTURA','A_CARACTERISTICAS',
+            'A_AUSCULTACION','A_RHA','A_SOPLOS','A_CELDAESPLENICA','A_BAZO','A_PERIMETRO',
+            'AUG_GENITALESEXTERNOS','AUG_TACTOVAGINAL','AUG_PUNIOPERCUSION','AUG_PUNTOSURETRALES',
+            'AIG_TACTORECTAL',
+            'SN_CONCIENCIA','SN_MARCHA','SN_TONOMUSCULAR','SN_FUERZAMUSCULAR',
+            'SN_SIGNOSPIRAMIDALES','SN_SENSIBILIDADSUPERFICIAL','SN_SIGNOSMENINGEOS',
+            'SN_PARESCRANEANOS','SN_TAXIA','SN_PRAXIA','SN_TEXTO',
+            'C_FORMA','C_TAMANIO','C_OJOS','C_PUPILAS','C_CONJUNTIVAS','C_CORNEAS',
+            'C_ESCLEROTICAS','C_PARPADOS','C_FOSASNASALES','C_BOCA','C_LABIOS','C_ENCIAS',
+            'C_FAUCES','C_LENGUA','C_DIENTES','C_GLANDULASSALIVALES',
+            'C_PABELLONESAURICULARESYCAE','C_TEXTO',
+            'CU_CONFORMACION','CU_LARINGE','CU_HUECOSUPRACLAVICULAR','CU_HUECOINFRACLAVICULAR',
+            'CU_YUGULARES','CU_TIROIDES','CU_TEXTO',
+            'M_SIMETRIA','M_NODULOS',
+            'AR_TORAX','AR_FORMA','AR_ELASTICIDAD','AR_TIPORESPIRATORIO',
+            'AR_EXPANSIONDEVERTICES','AR_BASES','AR_VIBRACIONESVOCALES',
+            'AR_INSPECCION','AR_PALPACION','AR_PERCUSION','AR_AUSCULTACION','AR_TEXTO',
+            'AC_FRECUENCIACARDIACA','AC_CENTRAL','AC_PERIFERICA','AC_PULSORADIAL',
+            'AC_RELLENOAPILAR','AC_LATIDOAPEXIANO','AC_LATIDOPALPABLES',
+            'AC_AUSCULTACION','AC_R1','AC_R2','AC_RUIDOSAGREGADOS','AC_FROTES',
+            'AC_SOPLOS','AC_PALPACION','AC_PULSOS','AC_TEXTO',
+            'EO_FONDODEOJO','EO_MEDIOSBIREFRIGENTES','EO_CRUCES','EO_RELACION',
+            'EO_HEMORRAGIAEXUDADOS','EO_TONO',
+            'EO_AU','EO_LCF','EO_MFA','EO_DU','EO_LEOPOLD','EO_TACTOVAGINAL',
+            'EO_BISHOP_P','EO_BISHOP_R','EO_BISHOP_E','EO_BISHOP_L','EO_BISHOP_D',
+            'EO_MEMBRANASOVULARES','EO_MANIOBRADETAMIER','EO_PLANO','EO_PELVIMETRIA',
+            'EO_HIDRORREA','EO_GINECORRAGIA','EO_LOQUIOS','EO_RETRACCION','EO_MAMAS',
+            'EO_LACTANCIA','EO_PERINE','EO_ESPECULOSCOPIA','EO_TBM','EO_DIAGNOSTICO',
+            'EO_REFRACCION','EO_BIOMOSCROPIA','EO_TONOMETRIA','EO_PRACTICAQUIRURGICA',
+            'EC_RITMO','EC_FRECUENCIA','EC_PR','EC_QT','EC_ONDAP',
+            'EC_DURACION','EC_AMPLITUD','EC_CONFORMACION','EC_QRS',
+            'EC_DURACION1','EC_ONDAT','EC_ST','EC_EJE','EC_CONCLUSIONES',
+            'RDT_DATETIME','RDT_TECNICA','RDT_PARTESBLANDAS','RDT_PARTESOSEAS',
+            'RDT_HEMIDIAFRAGMAS','RDT_ICT','RDT_SENOSCOSTOFRENICOS','RDT_MEDIASTINO',
+            'RDT_SILUETACARDIOVASCULAR','RDT_HILIOS','RDT_CAMPOSPULMONARES',
+            'RDT_CONCLUSIONES','RDT_POSICION','RDT_PARENQUIMA','RDT_LABORATORIO',
+            'EG_MONTEDEVENUS','EG_LABIOSMAYORESMENORES','EG_CLITORIS','EG_INTROITO',
+            'EG_VAGINA','EG_FONDOSACOVAGINAL','EG_CERVIX','EG_UTERO','EG_ANEXOS',
+            'EG_EXAMENAB_VA_RE','EG_ESPECULOSCOPIA','EG_TEXTO',
+            'DIA_DETERMINACION','DIA_DIETA','DIA_MONITOREO','DIA_EDUCACION',
+            'DIA_PIE','DIA_DOPLER','DIA_CURVA',
+            'PD_A','PD_B','PD_C','PD_D','PD_E','PD_F','PD_G','PD_H','PD_I','PD_J','PD_K',
+            'PT_1','PT_2','PT_3','PT_4','PT_5','PT_6','PT_7','PT_8','PT_9','PT_10','PT_11','PT_12','PT_13','PT_14','PT_15',
+            'AD_INSPECCION','AD_PALPACION','AD_PERCUSION','AD_AUSCULTACION',
+            'EN_GLASGOW','EN_SENCIVILIDAD','EN_MOTRICIDAD',
+            'IMPRESIONDIAGNOSTICA','COMENTARIODEINGRESO','EXAMENCOMPLEMENTARIO',
+            'ModMedica','Semiologia',
+        ];
+        
+        console.log('=== COLUMNAS del FRONTEND que NO EXISTEN en la tabla ===');
+        const noExisten = frontendCols.filter(c => !realCols.has(c));
+        noExisten.forEach(c => console.log(`  ❌ ${c}`));
+        console.log(`Total desajustes: ${noExisten.length}`);
+        
+        // Sugerir posibles matches
+        console.log('\n=== POSIBLES MATCHES ===');
+        noExisten.forEach(c => {
+            const prefix = c.split('_')[0];
+            const candidates = [...realCols].filter(r => r.startsWith(prefix + '_'));
+            if (candidates.length > 0) {
+                console.log(`  ${c} -> posibles: ${candidates.join(', ')}`);
+            }
+        });
+        
+        process.exit(0);
+    } catch (e) {
+        console.error('Error:', e.message);
+        process.exit(1);
+    }
+})();

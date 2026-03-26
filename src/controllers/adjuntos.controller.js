@@ -291,7 +291,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
       const response = await axios.get(`${FILE_SERVER_URL}/file`, {
         params: { path: rutaNormalizada },
         responseType: 'stream',
-        timeout: 30000 // 30 segundos
+        timeout: 60000 // 60 segundos (túnel puede ser lento)
       });
       
       // Determinar el tipo MIME del archivo
