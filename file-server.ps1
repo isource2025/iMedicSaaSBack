@@ -1,10 +1,12 @@
 # iMedic File Server - PowerShell HTTP Server
 # No requiere Node.js ni dependencias adicionales
 
+# Cargar ensamblado para decodificación de URLs
+Add-Type -AssemblyName System.Web
+
 $port = 3002
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://localhost:$port/")
-$listener.Prefixes.Add("http://127.0.0.1:$port/")
+$listener.Prefixes.Add("http://+:$port/")
 $listener.Start()
 
 Write-Host "========================================" -ForegroundColor Cyan
@@ -21,6 +23,14 @@ Write-Host ""
 
 function Normalize-Path {
     param([string]$path)
+    
+    # Normalizar dobles barras invertidas a simples
+    $path = $path -replace "\\\\", "\"
+    
+    # Mapear rutas de red \server\ a E:\
+    if ($path -like "\server\*") {
+        $path = $path -replace "^\\server\\", "E:\"
+    }
     
     # Mapear D:\ a E:\
     if ($path -like "D:\*") {
@@ -149,7 +159,15 @@ while ($listener.IsListening) {
         
         # Endpoint: /file?path=...
         if ($url -eq "/file") {
-            $filePath = $query["path"]
+            # Obtener la query string raw y decodificarla correctamente con UTF-8
+            $rawUrl = $request.RawUrl
+            if ($rawUrl -match "path=(.+)") {
+                $encodedPath = $matches[1]
+                # Decodificar con UTF-8 explícito
+                $filePath = [System.Web.HttpUtility]::UrlDecode($encodedPath, [System.Text.Encoding]::UTF8)
+            } else {
+                $filePath = $null
+            }
             
             if ([string]::IsNullOrEmpty($filePath)) {
                 Send-JsonResponse -response $response -data @{

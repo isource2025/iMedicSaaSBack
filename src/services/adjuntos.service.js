@@ -99,7 +99,9 @@ class AdjuntosService {
         // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
         let nombreArchivo = adj.Descripcion;
         if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
-          nombreArchivo = path.basename(adj.PatchServidor || '');
+          // Extraer solo el nombre del archivo (última parte después de \ o /)
+          const rutaCompleta = adj.PatchServidor || '';
+          nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
         }
         
         return {
@@ -152,7 +154,9 @@ class AdjuntosService {
       // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
       let nombreArchivo = adj.Descripcion;
       if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
-        nombreArchivo = path.basename(adj.PatchServidor || '');
+        // Extraer solo el nombre del archivo (última parte después de \ o /)
+        const rutaCompleta = adj.PatchServidor || '';
+        nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
       }
       
       return {
