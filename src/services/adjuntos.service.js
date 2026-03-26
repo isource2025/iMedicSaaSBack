@@ -95,17 +95,25 @@ class AdjuntosService {
           ORDER BY a.Fecha DESC
         `);
 
-      return result.recordset.map(adj => ({
-        IdAdjunto: adj.IdAdjunto,
-        NumeroVisita: adj.NumeroVisita,
-        NombreArchivo: adj.Descripcion || 'Sin nombre',
-        RutaArchivo: adj.PatchServidor,
-        TipoArchivo: this.getTipoFromNombre(adj.Descripcion || ''),
-        TamanioBytes: this.getFileSize(adj.PatchServidor),
-        CargadoPor: adj.IdOperador,
-        NombreUsuario: adj.NombreOperador || 'Desconocido',
-        FechaCarga: adj.Fecha
-      }));
+      return result.recordset.map(adj => {
+        // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
+        let nombreArchivo = adj.Descripcion;
+        if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
+          nombreArchivo = path.basename(adj.PatchServidor || '');
+        }
+        
+        return {
+          IdAdjunto: adj.IdAdjunto,
+          NumeroVisita: adj.NumeroVisita,
+          NombreArchivo: nombreArchivo || 'Sin nombre',
+          RutaArchivo: adj.PatchServidor,
+          TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
+          TamanioBytes: this.getFileSize(adj.PatchServidor),
+          CargadoPor: adj.IdOperador,
+          NombreUsuario: adj.NombreOperador || 'Desconocido',
+          FechaCarga: adj.Fecha
+        };
+      });
     } catch (error) {
       console.error('❌ Error al obtener adjuntos por visita:', error);
       throw error;
@@ -140,12 +148,19 @@ class AdjuntosService {
       }
 
       const adj = result.recordset[0];
+      
+      // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
+      let nombreArchivo = adj.Descripcion;
+      if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
+        nombreArchivo = path.basename(adj.PatchServidor || '');
+      }
+      
       return {
         IdAdjunto: adj.IdAdjunto,
         NumeroVisita: adj.NumeroVisita,
-        NombreArchivo: adj.Descripcion || 'Sin nombre',
+        NombreArchivo: nombreArchivo || 'Sin nombre',
         RutaArchivo: adj.PatchServidor,
-        TipoArchivo: this.getTipoFromNombre(adj.Descripcion || ''),
+        TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
         TamanioBytes: this.getFileSize(adj.PatchServidor),
         CargadoPor: adj.IdOperador,
         NombreUsuario: adj.NombreOperador || 'Desconocido',
