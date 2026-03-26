@@ -7,31 +7,36 @@ class AdjuntosService {
   /**
    * Subir archivo adjunto para una visita
    */
-  async subirAdjunto(data, file, cargadoPor) {
+  async subirAdjunto(data, file, cargadoPor, patchServidor) {
     try {
       const pool = await connectDB();
+
+      // Usar patchServidor (ruta en servidor SQL) en lugar de file.path (ruta local temporal)
+      const rutaArchivo = patchServidor || file.path;
 
       const result = await pool.request()
         .input('numeroVisita', sql.Int, data.numeroVisita)
         .input('descripcion', sql.NVarChar(255), file.originalname)
-        .input('patch', sql.NVarChar(500), file.path)
+        .input('patch', sql.NVarChar(500), rutaArchivo)
+        .input('patchServidor', sql.NVarChar(500), rutaArchivo)
         .input('fecha', sql.DateTime, new Date())
         .input('idOperador', sql.Int, cargadoPor)
         .query(`
-          INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, Fecha, IdOperador)
+          INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, PatchServidor, Fecha, IdOperador)
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@numeroVisita, @descripcion, @patch, @fecha, @idOperador)
+          VALUES (@numeroVisita, @descripcion, @patch, @patchServidor, @fecha, @idOperador)
         `);
 
       const idAdjunto = result.recordset[0].IdAdjunto;
       
       console.log(`✅ Adjunto subido para visita ${data.numeroVisita}: ${idAdjunto} - ${file.originalname}`);
+      console.log(`📁 Ruta en servidor: ${rutaArchivo}`);
 
       return {
         success: true,
         idAdjunto,
         nombreArchivo: file.originalname,
-        rutaArchivo: file.path,
+        rutaArchivo: rutaArchivo,
         tipoArchivo: file.mimetype,
         tamanioBytes: file.size
       };

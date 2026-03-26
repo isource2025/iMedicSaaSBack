@@ -85,7 +85,7 @@ const upload = multer({
 router.post('/upload', upload.single('archivo'), async (req, res) => {
   try {
     const { numeroVisita } = req.body;
-    const userId = req.user?.id || req.body.userId || 1; // Obtener del token o default
+    const userId = req.user?.id || req.body.userId || 1;
 
     // Validaciones
     if (!numeroVisita) {
@@ -105,16 +105,41 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
       });
     }
 
-    // Subir adjunto
+    console.log(`📤 Enviando archivo al servidor SQL: ${req.file.originalname}`);
+
+    // Enviar archivo al servidor PowerShell vía túnel
+    const formData = new FormData();
+    const fileStream = require('fs').createReadStream(req.file.path);
+    formData.append('file', fileStream, req.file.originalname);
+
+    const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+      headers: {
+        ...formData.getHeaders()
+      },
+      timeout: 60000
+    });
+
+    // Limpiar archivo temporal local
+    await fs.unlink(req.file.path).catch(() => {});
+
+    if (!uploadResponse.data.success) {
+      throw new Error(uploadResponse.data.error || 'Error al subir archivo al servidor');
+    }
+
+    const { filePath } = uploadResponse.data;
+    console.log(`✅ Archivo guardado en servidor SQL: ${filePath}`);
+
+    // Guardar referencia en base de datos con PatchServidor
     const result = await adjuntosService.subirAdjunto(
       {
         numeroVisita: parseInt(numeroVisita)
       },
       req.file,
-      userId
+      userId,
+      filePath // Ruta en el servidor SQL
     );
 
-    console.log(`✅ Adjunto subido por usuario ${userId} para visita ${numeroVisita}: ${req.file.originalname}`);
+    console.log(`✅ Adjunto registrado en BD por usuario ${userId} para visita ${numeroVisita}`);
 
     res.status(201).json({
       success: true,
@@ -123,14 +148,14 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
   } catch (error) {
     console.error('❌ Error al subir adjunto:', error);
     
-    // Limpiar archivo si hubo error
+    // Limpiar archivo temporal si hubo error
     if (req.file) {
       await fs.unlink(req.file.path).catch(() => {});
     }
 
     res.status(500).json({
       success: false,
-      error: 'Error al subir archivo adjunto'
+      error: error.message || 'Error al subir archivo adjunto'
     });
   }
 });
@@ -164,25 +189,54 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
       });
     }
 
-    // Subir todos los adjuntos
+    console.log(`📤 Enviando ${req.files.length} archivos al servidor SQL`);
+
+    // Subir todos los adjuntos al servidor PowerShell
     const resultados = [];
     for (const file of req.files) {
       try {
+        // Enviar archivo al servidor PowerShell vía túnel
+        const formData = new FormData();
+        const fileStream = require('fs').createReadStream(file.path);
+        formData.append('file', fileStream, file.originalname);
+
+        const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+          headers: {
+            ...formData.getHeaders()
+          },
+          timeout: 60000
+        });
+
+        // Limpiar archivo temporal local
+        await fs.unlink(file.path).catch(() => {});
+
+        if (!uploadResponse.data.success) {
+          console.error(`❌ Error al subir ${file.originalname} al servidor`);
+          continue;
+        }
+
+        const { filePath } = uploadResponse.data;
+        console.log(`✅ ${file.originalname} guardado en: ${filePath}`);
+
+        // Guardar referencia en base de datos
         const result = await adjuntosService.subirAdjunto(
           {
             numeroVisita: parseInt(numeroVisita)
           },
           file,
-          userId
+          userId,
+          filePath
         );
         resultados.push(result);
       } catch (error) {
         console.error(`❌ Error al subir archivo ${file.originalname}:`, error);
+        // Limpiar archivo temporal
+        await fs.unlink(file.path).catch(() => {});
         // Continuar con los demás archivos
       }
     }
 
-    console.log(`✅ ${resultados.length} adjuntos subidos por usuario ${userId} para visita ${numeroVisita}`);
+    console.log(`✅ ${resultados.length} adjuntos registrados en BD para visita ${numeroVisita}`);
 
     res.status(201).json({
       success: true,

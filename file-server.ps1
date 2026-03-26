@@ -17,6 +17,7 @@ Write-Host "Puerto: $port" -ForegroundColor Yellow
 Write-Host "Endpoints:" -ForegroundColor Yellow
 Write-Host "  - GET /health" -ForegroundColor White
 Write-Host "  - GET /file?path=E:\adjuntos\archivo.pdf" -ForegroundColor White
+Write-Host "  - POST /upload (multipart/form-data)" -ForegroundColor White
 Write-Host ""
 Write-Host "Presiona Ctrl+C para detener" -ForegroundColor Gray
 Write-Host ""
@@ -134,6 +135,102 @@ function Send-FileResponse {
     }
 }
 
+function Handle-FileUpload {
+    param(
+        [System.Net.HttpListenerRequest]$request,
+        [System.Net.HttpListenerResponse]$response
+    )
+    
+    try {
+        # Leer el cuerpo de la solicitud
+        $boundary = $null
+        $contentType = $request.ContentType
+        if ($contentType -match 'boundary=(.+)$') {
+            $boundary = "--" + $matches[1]
+        } else {
+            Send-JsonResponse -response $response -data @{
+                success = $false
+                error = "Content-Type debe ser multipart/form-data"
+            } -statusCode 400
+            return
+        }
+        
+        # Leer el stream completo
+        $reader = New-Object System.IO.StreamReader($request.InputStream)
+        $content = $reader.ReadToEnd()
+        $reader.Close()
+        
+        # Parsear multipart/form-data
+        $parts = $content -split $boundary
+        $fileName = $null
+        $fileContent = $null
+        
+        foreach ($part in $parts) {
+            if ($part -match 'Content-Disposition: form-data; name="file"; filename="([^"]+)"') {
+                $fileName = $matches[1]
+                # Extraer el contenido del archivo (después de los headers)
+                $headerEnd = $part.IndexOf("`r`n`r`n")
+                if ($headerEnd -gt 0) {
+                    $fileContent = $part.Substring($headerEnd + 4)
+                    # Remover el trailing boundary
+                    $fileContent = $fileContent -replace "`r`n--$", ""
+                }
+            }
+        }
+        
+        if ([string]::IsNullOrEmpty($fileName) -or $null -eq $fileContent) {
+            Send-JsonResponse -response $response -data @{
+                success = $false
+                error = "No se encontró archivo en la solicitud"
+            } -statusCode 400
+            return
+        }
+        
+        # Crear estructura de carpetas: E:\adjuntos\año\mes\
+        $year = (Get-Date).Year
+        $month = (Get-Date).ToString("MM")
+        $uploadDir = "E:\adjuntos\$year\$month"
+        
+        if (-not (Test-Path $uploadDir)) {
+            New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
+            Write-Host "📁 Creado directorio: $uploadDir" -ForegroundColor Yellow
+        }
+        
+        # Generar nombre único para el archivo
+        $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
+        $random = Get-Random -Minimum 1000 -Maximum 9999
+        $extension = [System.IO.Path]::GetExtension($fileName)
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+        $uniqueFileName = "${baseName}_${timestamp}_${random}${extension}"
+        $filePath = Join-Path $uploadDir $uniqueFileName
+        
+        # Guardar archivo
+        [System.IO.File]::WriteAllBytes($filePath, [System.Text.Encoding]::Default.GetBytes($fileContent))
+        
+        $fileInfo = Get-Item $filePath
+        
+        Write-Host "✅ Archivo guardado: $filePath ($($fileInfo.Length) bytes)" -ForegroundColor Green
+        
+        # Responder con la información del archivo
+        Send-JsonResponse -response $response -data @{
+            success = $true
+            fileName = $uniqueFileName
+            originalName = $fileName
+            filePath = $filePath
+            size = $fileInfo.Length
+            uploadDir = $uploadDir
+        }
+        
+    } catch {
+        Write-Host "❌ Error al subir archivo: $_" -ForegroundColor Red
+        Send-JsonResponse -response $response -data @{
+            success = $false
+            error = "Error al procesar archivo"
+            details = $_.Exception.Message
+        } -statusCode 500
+    }
+}
+
 # Loop principal
 while ($listener.IsListening) {
     try {
@@ -158,7 +255,7 @@ while ($listener.IsListening) {
         }
         
         # Endpoint: /file?path=...
-        if ($url -eq "/file") {
+        if ($url -eq "/file" -and $request.HttpMethod -eq "GET") {
             # Obtener la query string raw y decodificarla correctamente con UTF-8
             $rawUrl = $request.RawUrl
             if ($rawUrl -match "path=(.+)") {
@@ -181,11 +278,18 @@ while ($listener.IsListening) {
             continue
         }
         
+        # Endpoint: POST /upload
+        if ($url -eq "/upload" -and $request.HttpMethod -eq "POST") {
+            Handle-FileUpload -request $request -response $response
+            continue
+        }
+        
         # Endpoint no encontrado
         Send-JsonResponse -response $response -data @{
             success = $false
             error = "Endpoint no encontrado"
             path = $url
+            method = $request.HttpMethod
         } -statusCode 404
         
     } catch {
