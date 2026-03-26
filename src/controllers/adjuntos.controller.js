@@ -299,8 +299,11 @@ router.get('/:idAdjunto/download', async (req, res) => {
         timeout: 60000 // 60 segundos (túnel puede ser lento)
       });
       
+      // Obtener nombre del archivo desde la ruta si no hay descripción
+      const fileName = adjunto.NombreArchivo || path.basename(rutaNormalizada);
+      
       // Determinar el tipo MIME del archivo
-      const ext = path.extname(adjunto.NombreArchivo || rutaNormalizada).toLowerCase();
+      const ext = path.extname(fileName).toLowerCase();
       const mimeTypes = {
         '.pdf': 'application/pdf',
         '.jpg': 'image/jpeg',
@@ -315,9 +318,11 @@ router.get('/:idAdjunto/download', async (req, res) => {
       
       // Configurar headers para visualización inline
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adjunto.NombreArchivo)}"`);
+      // Usar filename* para soportar caracteres UTF-8
+      res.setHeader('Content-Disposition', `inline; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
       
-      console.log(`✅ Enviando archivo desde servidor HTTP: ${rutaNormalizada}`);
+      console.log(`✅ Enviando archivo: ${fileName} (${contentType})`);
       
       // Pipe del stream del servidor de archivos al cliente
       response.data.pipe(res);
