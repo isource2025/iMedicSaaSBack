@@ -288,8 +288,13 @@ router.get('/:idAdjunto/download', async (req, res) => {
     
     // Solicitar el archivo al servidor HTTP de archivos
     try {
-      const response = await axios.get(`${FILE_SERVER_URL}/file`, {
-        params: { path: rutaNormalizada },
+      // Construir URL manualmente para controlar la codificación
+      const encodedPath = encodeURIComponent(rutaNormalizada);
+      const fileUrl = `${FILE_SERVER_URL}/file?path=${encodedPath}`;
+      
+      console.log(`🌐 URL solicitada: ${fileUrl}`);
+      
+      const response = await axios.get(fileUrl, {
         responseType: 'stream',
         timeout: 60000 // 60 segundos (túnel puede ser lento)
       });
