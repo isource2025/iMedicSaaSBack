@@ -172,7 +172,8 @@ const obtenerTotalCamas = async (req, res) => {
 const obtenerControlesFrecuentesPorVisita = async (req, res) => {
 	try {
 		const { numeroVisita } = req.params;
-		const registros = await bedsService.obtenerControlesFrecuentesPorVisita(numeroVisita);
+		const { days } = req.query; // Parámetro opcional: 0 (hoy), 7, 30, 'all'
+		const registros = await bedsService.obtenerControlesFrecuentesPorVisita(numeroVisita, days);
 		res.json({
 			success: true,
 			data: registros,

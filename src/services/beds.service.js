@@ -269,9 +269,30 @@ const obtenerTotalCamas = async () => {
 /**
  * Obtener los registros de control frecuente por número de visita
  * @param {number} numeroVisita Número de visita para filtrar
+ * @param {string|number} dias Número de días hacia atrás (0=hoy, 7, 30, 'all'=todos)
  * @returns {Promise<Array>} Lista de registros de control frecuente
  */
-const obtenerControlesFrecuentesPorVisita = async (numeroVisita) => {
+const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') => {
+	// Construir la cláusula WHERE según el filtro de días
+	let whereClause = 'icf.NumeroVisita = @param0';
+	
+	if (dias !== 'all' && dias !== undefined) {
+		const numDias = Number(dias);
+		if (!isNaN(numDias)) {
+			// Calcular la fecha límite en formato Clarion
+			const hoy = new Date();
+			const fechaLimite = new Date(hoy);
+			fechaLimite.setDate(hoy.getDate() - numDias);
+			
+			// Convertir a formato Clarion (días desde 28/12/1800)
+			const clarionEpoch = new Date(1800, 11, 28);
+			const diffTime = fechaLimite.getTime() - clarionEpoch.getTime();
+			const fechaClarion = Math.floor(diffTime / (24 * 60 * 60 * 1000));
+			
+			whereClause += ` AND icf.FechaControl >= ${fechaClarion}`;
+		}
+	}
+
 	const consulta = `
     SELECT 
       dbo.fn_ClarionDATE2SQL(icf.FechaControl) as FechaControl,
@@ -291,7 +312,7 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita) => {
     FROM 
       imInterCtrlFrecuente icf
     WHERE 
-      icf.NumeroVisita = @param0
+      ${whereClause}
     ORDER BY 
       icf.FechaControl DESC, icf.HoraControl DESC
   `;
