@@ -5,6 +5,68 @@ const fs = require('fs').promises;
 
 class AdjuntosService {
   /**
+   * Normalizar tipo de imagen
+   */
+  normalizarTipoImagen(idtipoimagen) {
+    if (!idtipoimagen) return 'OTROS';
+    
+    // Limpiar espacios y convertir a mayúsculas
+    const tipo = idtipoimagen.trim().toUpperCase();
+    
+    // Mapear variaciones a categorías principales
+    if (tipo.startsWith('LAB')) {
+      if (tipo.includes('URG') || tipo.includes('EMERG')) return 'LABORATORIO_URGENCIAS';
+      if (tipo.includes('CEN')) return 'LABORATORIO_CENTRAL';
+      if (tipo.includes('HEMA') || tipo.includes('HEMO')) return 'HEMATOLOGIA';
+      if (tipo.includes('BACT')) return 'BACTERIOLOGIA';
+      return 'LABORATORIO';
+    }
+    
+    if (tipo.startsWith('RAD') || tipo === 'RFL') return 'RADIOLOGIA';
+    
+    if (tipo.startsWith('TOM') || tipo.includes('TOMOG')) return 'TOMOGRAFIA';
+    
+    if (tipo.startsWith('ECO')) return 'ECOGRAFIA';
+    
+    if (tipo.startsWith('HEMO') || tipo.startsWith('HEMA')) return 'HEMATOLOGIA';
+    
+    if (tipo.startsWith('ANE') || tipo.startsWith('ANP') || tipo.includes('ANATOMIA')) return 'ANATOMIA_PATOLOGICA';
+    
+    if (tipo.startsWith('GAS')) return 'GASOMETRIA';
+    
+    if (tipo.startsWith('CAR')) return 'CARDIOLOGIA';
+    
+    if (tipo.startsWith('NEUM') || tipo.startsWith('NEU')) return 'NEUMOLOGIA';
+    
+    if (tipo.includes('URG') || tipo.includes('EMERG') || tipo.includes('GUAR')) return 'URGENCIAS';
+    
+    return 'OTROS';
+  }
+  
+  /**
+   * Obtener nombre legible del tipo de imagen
+   */
+  getNombreTipoImagen(tipoNormalizado) {
+    const nombres = {
+      'LABORATORIO': 'Laboratorio',
+      'LABORATORIO_URGENCIAS': 'Laboratorio Urgencias',
+      'LABORATORIO_CENTRAL': 'Laboratorio Central',
+      'RADIOLOGIA': 'Radiología',
+      'TOMOGRAFIA': 'Tomografía',
+      'ECOGRAFIA': 'Ecografía',
+      'HEMATOLOGIA': 'Hematología',
+      'ANATOMIA_PATOLOGICA': 'Anatomía Patológica',
+      'BACTERIOLOGIA': 'Bacteriología',
+      'GASOMETRIA': 'Gasometría',
+      'CARDIOLOGIA': 'Cardiología',
+      'NEUMOLOGIA': 'Neumología',
+      'URGENCIAS': 'Urgencias',
+      'OTROS': 'Otros'
+    };
+    return nombres[tipoNormalizado] || tipoNormalizado;
+  }
+
+  /**
    * Subir archivo adjunto para una visita
    */
   async subirAdjunto(data, file, cargadoPor, patchServidor) {
@@ -91,6 +153,7 @@ class AdjuntosService {
             a.NumeroVisita,
             a.Descripcion,
             a.PatchServidor,
+            a.idtipoimagen,
             a.Fecha,
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
@@ -109,6 +172,8 @@ class AdjuntosService {
           nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
         }
         
+        const tipoImagenNormalizado = this.normalizarTipoImagen(adj.idtipoimagen);
+        
         return {
           IdAdjunto: adj.IdAdjunto,
           NumeroVisita: adj.NumeroVisita,
@@ -118,11 +183,47 @@ class AdjuntosService {
           TamanioBytes: this.getFileSize(adj.PatchServidor),
           CargadoPor: adj.IdOperador,
           NombreUsuario: adj.NombreOperador || 'Desconocido',
-          FechaCarga: adj.Fecha
+          FechaCarga: adj.Fecha,
+          TipoImagen: tipoImagenNormalizado,
+          TipoImagenNombre: this.getNombreTipoImagen(tipoImagenNormalizado)
         };
       });
     } catch (error) {
       console.error('❌ Error al obtener adjuntos por visita:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener adjuntos de una visita agrupados por tipo de imagen
+   */
+  async getAdjuntosAgrupadosPorTipo(numeroVisita) {
+    try {
+      const adjuntos = await this.getAdjuntosPorVisita(numeroVisita);
+      
+      // Agrupar por tipo de imagen
+      const grupos = {};
+      
+      adjuntos.forEach(adj => {
+        const tipo = adj.TipoImagen;
+        if (!grupos[tipo]) {
+          grupos[tipo] = {
+            tipo: tipo,
+            nombre: adj.TipoImagenNombre,
+            adjuntos: [],
+            cantidad: 0
+          };
+        }
+        grupos[tipo].adjuntos.push(adj);
+        grupos[tipo].cantidad++;
+      });
+      
+      // Convertir a array y ordenar por cantidad descendente
+      const resultado = Object.values(grupos).sort((a, b) => b.cantidad - a.cantidad);
+      
+      return resultado;
+    } catch (error) {
+      console.error('❌ Error al obtener adjuntos agrupados:', error);
       throw error;
     }
   }

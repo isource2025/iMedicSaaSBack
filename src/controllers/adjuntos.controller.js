@@ -285,6 +285,31 @@ router.get('/visita/:numeroVisita', async (req, res) => {
 });
 
 /**
+ * GET /api/adjuntos/visita/:numeroVisita/agrupados
+ * Obtener adjuntos de una visita agrupados por tipo de imagen
+ */
+router.get('/visita/:numeroVisita/agrupados', async (req, res) => {
+  try {
+    const { numeroVisita } = req.params;
+    
+    const grupos = await adjuntosService.getAdjuntosAgrupadosPorTipo(parseInt(numeroVisita));
+    
+    res.json({
+      success: true,
+      data: grupos,
+      totalGrupos: grupos.length,
+      totalAdjuntos: grupos.reduce((sum, g) => sum + g.cantidad, 0)
+    });
+  } catch (error) {
+    console.error('❌ Error al obtener adjuntos agrupados:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al obtener adjuntos agrupados'
+    });
+  }
+});
+
+/**
  * GET /api/adjuntos/:idAdjunto
  * Obtener información de un adjunto
  */
