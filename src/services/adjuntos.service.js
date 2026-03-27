@@ -235,20 +235,39 @@ class AdjuntosService {
         throw new Error('Adjunto no encontrado');
       }
 
+      // Eliminar archivo físico del servidor
+      const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
+      
+      if (adjunto.RutaArchivo) {
+        try {
+          const axios = require('axios');
+          const encodedPath = encodeURIComponent(adjunto.RutaArchivo);
+          const deleteUrl = `${FILE_SERVER_URL}/file?path=${encodedPath}`;
+          
+          console.log(`🗑️ Eliminando archivo del servidor: ${adjunto.RutaArchivo}`);
+          
+          const response = await axios.delete(deleteUrl, {
+            timeout: 30000
+          });
+          
+          if (response.data.success) {
+            console.log(`✅ Archivo físico eliminado: ${adjunto.RutaArchivo}`);
+          } else {
+            console.warn(`⚠️ Respuesta del servidor: ${response.data.message || 'Error desconocido'}`);
+          }
+        } catch (fileError) {
+          console.warn(`⚠️ No se pudo eliminar archivo físico: ${adjunto.RutaArchivo}`);
+          console.warn(`   Error: ${fileError.message}`);
+          // Continuar con la eliminación del registro aunque falle la eliminación del archivo
+        }
+      }
+
       // Eliminar de la base de datos
       await pool.request()
         .input('idAdjunto', sql.Int, idAdjunto)
         .query('DELETE FROM imPedidosEstudiosAdjuntos WHERE IdAdjunto = @idAdjunto');
 
-      // Eliminar archivo físico
-      try {
-        await fs.unlink(adjunto.RutaArchivo);
-        console.log(`✅ Archivo físico eliminado: ${adjunto.RutaArchivo}`);
-      } catch (fileError) {
-        console.warn(`⚠️ No se pudo eliminar archivo físico: ${adjunto.RutaArchivo}`);
-      }
-
-      console.log(`✅ Adjunto eliminado: ${idAdjunto}`);
+      console.log(`✅ Adjunto eliminado de BD: ${idAdjunto}`);
       return { success: true };
     } catch (error) {
       console.error('❌ Error al eliminar adjunto:', error);

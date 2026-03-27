@@ -382,6 +382,66 @@ while ($listener.IsListening) {
             continue
         }
         
+        # Endpoint: DELETE /file?path=...
+        if ($url -eq "/file" -and $request.HttpMethod -eq "DELETE") {
+            # Obtener la query string raw y decodificarla correctamente con UTF-8
+            $rawUrl = $request.RawUrl
+            if ($rawUrl -match "path=(.+)") {
+                $encodedPath = $matches[1]
+                # Decodificar con UTF-8 explícito
+                $filePath = [System.Web.HttpUtility]::UrlDecode($encodedPath, [System.Text.Encoding]::UTF8)
+            } else {
+                $filePath = $null
+            }
+            
+            if ([string]::IsNullOrEmpty($filePath)) {
+                Send-JsonResponse -response $response -data @{
+                    success = $false
+                    error = "Parámetro 'path' es requerido"
+                } -statusCode 400
+                continue
+            }
+            
+            # Normalizar la ruta
+            $normalizedPath = Normalize-Path -path $filePath
+            
+            Write-Host "🗑️ Solicitando eliminar: $filePath" -ForegroundColor Yellow
+            if ($normalizedPath -ne $filePath) {
+                Write-Host "🔄 Normalizado: $normalizedPath" -ForegroundColor Yellow
+            }
+            
+            # Verificar si el archivo existe
+            if (-not (Test-Path $normalizedPath)) {
+                Write-Host "⚠️ Archivo no encontrado: $normalizedPath" -ForegroundColor Yellow
+                Send-JsonResponse -response $response -data @{
+                    success = $true
+                    message = "Archivo no encontrado (ya eliminado o no existe)"
+                    path = $normalizedPath
+                }
+                continue
+            }
+            
+            # Eliminar el archivo
+            try {
+                Remove-Item -Path $normalizedPath -Force
+                Write-Host "✅ Archivo eliminado: $normalizedPath" -ForegroundColor Green
+                
+                Send-JsonResponse -response $response -data @{
+                    success = $true
+                    message = "Archivo eliminado correctamente"
+                    path = $normalizedPath
+                }
+            } catch {
+                Write-Host "❌ Error al eliminar archivo: $_" -ForegroundColor Red
+                Send-JsonResponse -response $response -data @{
+                    success = $false
+                    error = "Error al eliminar archivo"
+                    details = $_.Exception.Message
+                } -statusCode 500
+            }
+            continue
+        }
+        
         # Endpoint no encontrado
         Send-JsonResponse -response $response -data @{
             success = $false
