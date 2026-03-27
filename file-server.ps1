@@ -146,7 +146,7 @@ function Handle-FileUpload {
         $boundary = $null
         $contentType = $request.ContentType
         if ($contentType -match 'boundary=(.+)$') {
-            $boundary = "--" + $matches[1]
+            $boundary = $matches[1]
         } else {
             Send-JsonResponse -response $response -data @{
                 success = $false
@@ -155,52 +155,110 @@ function Handle-FileUpload {
             return
         }
         
-        # Leer el stream completo
-        $reader = New-Object System.IO.StreamReader($request.InputStream)
-        $content = $reader.ReadToEnd()
-        $reader.Close()
+        # Leer el stream completo como BYTES (no como texto)
+        $memoryStream = New-Object System.IO.MemoryStream
+        $request.InputStream.CopyTo($memoryStream)
+        $bodyBytes = $memoryStream.ToArray()
+        $memoryStream.Close()
         
-        # Parsear multipart/form-data
-        $parts = $content -split $boundary
+        # Convertir boundary a bytes
+        $boundaryBytes = [System.Text.Encoding]::UTF8.GetBytes("--$boundary")
+        $crlfBytes = [System.Text.Encoding]::UTF8.GetBytes("`r`n")
+        
+        # Variables para almacenar los datos parseados
         $fileName = $null
-        $fileContent = $null
+        $fileBytes = $null
         $numeroVisita = $null
         $nombrePaciente = $null
         
-        foreach ($part in $parts) {
-            if ($part -match 'Content-Disposition: form-data; name="file"; filename="([^"]+)"') {
+        # Parsear multipart/form-data manualmente
+        $position = 0
+        while ($position -lt $bodyBytes.Length) {
+            # Buscar el siguiente boundary
+            $boundaryIndex = -1
+            for ($i = $position; $i -lt ($bodyBytes.Length - $boundaryBytes.Length); $i++) {
+                $match = $true
+                for ($j = 0; $j -lt $boundaryBytes.Length; $j++) {
+                    if ($bodyBytes[$i + $j] -ne $boundaryBytes[$j]) {
+                        $match = $false
+                        break
+                    }
+                }
+                if ($match) {
+                    $boundaryIndex = $i
+                    break
+                }
+            }
+            
+            if ($boundaryIndex -eq -1) { break }
+            
+            # Saltar el boundary y CRLF
+            $position = $boundaryIndex + $boundaryBytes.Length + 2
+            
+            # Leer headers hasta encontrar CRLF CRLF
+            $headerEnd = -1
+            for ($i = $position; $i -lt ($bodyBytes.Length - 3); $i++) {
+                if ($bodyBytes[$i] -eq 13 -and $bodyBytes[$i+1] -eq 10 -and 
+                    $bodyBytes[$i+2] -eq 13 -and $bodyBytes[$i+3] -eq 10) {
+                    $headerEnd = $i
+                    break
+                }
+            }
+            
+            if ($headerEnd -eq -1) { break }
+            
+            # Extraer headers
+            $headerLength = $headerEnd - $position
+            $headerBytes = $bodyBytes[$position..($headerEnd - 1)]
+            $headers = [System.Text.Encoding]::UTF8.GetString($headerBytes)
+            
+            # Posición del contenido (después de CRLF CRLF)
+            $contentStart = $headerEnd + 4
+            
+            # Buscar el siguiente boundary para saber dónde termina el contenido
+            $nextBoundaryIndex = -1
+            for ($i = $contentStart; $i -lt ($bodyBytes.Length - $boundaryBytes.Length); $i++) {
+                $match = $true
+                for ($j = 0; $j -lt $boundaryBytes.Length; $j++) {
+                    if ($bodyBytes[$i + $j] -ne $boundaryBytes[$j]) {
+                        $match = $false
+                        break
+                    }
+                }
+                if ($match) {
+                    $nextBoundaryIndex = $i
+                    break
+                }
+            }
+            
+            if ($nextBoundaryIndex -eq -1) { break }
+            
+            # Extraer contenido (sin el CRLF antes del boundary)
+            $contentEnd = $nextBoundaryIndex - 2
+            $contentLength = $contentEnd - $contentStart
+            
+            # Parsear según el tipo de campo
+            if ($headers -match 'name="file".*filename="([^"]+)"') {
                 $fileName = $matches[1]
-                # Extraer el contenido del archivo (después de los headers)
-                $headerEnd = $part.IndexOf("`r`n`r`n")
-                if ($headerEnd -gt 0) {
-                    $fileContent = $part.Substring($headerEnd + 4)
-                    # Remover el trailing boundary
-                    $fileContent = $fileContent -replace "`r`n--$", ""
-                }
+                $fileBytes = $bodyBytes[$contentStart..($contentEnd - 1)]
+                Write-Host "📄 Archivo encontrado: $fileName ($($fileBytes.Length) bytes)" -ForegroundColor Cyan
             }
-            elseif ($part -match 'Content-Disposition: form-data; name="numeroVisita"') {
-                $headerEnd = $part.IndexOf("`r`n`r`n")
-                if ($headerEnd -gt 0) {
-                    $numeroVisita = $part.Substring($headerEnd + 4)
-                    # Limpiar caracteres de control y espacios
-                    $numeroVisita = $numeroVisita -replace "`r", "" -replace "`n", "" -replace "--", ""
-                    $numeroVisita = $numeroVisita.Trim()
-                    Write-Host "📋 NumeroVisita recibido: '$numeroVisita'" -ForegroundColor Magenta
-                }
+            elseif ($headers -match 'name="numeroVisita"') {
+                $fieldBytes = $bodyBytes[$contentStart..($contentEnd - 1)]
+                $numeroVisita = [System.Text.Encoding]::UTF8.GetString($fieldBytes).Trim()
+                Write-Host "📋 NumeroVisita recibido: '$numeroVisita'" -ForegroundColor Magenta
             }
-            elseif ($part -match 'Content-Disposition: form-data; name="nombrePaciente"') {
-                $headerEnd = $part.IndexOf("`r`n`r`n")
-                if ($headerEnd -gt 0) {
-                    $nombrePaciente = $part.Substring($headerEnd + 4)
-                    # Limpiar caracteres de control y espacios
-                    $nombrePaciente = $nombrePaciente -replace "`r", "" -replace "`n", "" -replace "--", ""
-                    $nombrePaciente = $nombrePaciente.Trim()
-                    Write-Host "👤 NombrePaciente recibido: '$nombrePaciente'" -ForegroundColor Magenta
-                }
+            elseif ($headers -match 'name="nombrePaciente"') {
+                $fieldBytes = $bodyBytes[$contentStart..($contentEnd - 1)]
+                $nombrePaciente = [System.Text.Encoding]::UTF8.GetString($fieldBytes).Trim()
+                Write-Host "👤 NombrePaciente recibido: '$nombrePaciente'" -ForegroundColor Magenta
             }
+            
+            # Mover posición al siguiente boundary
+            $position = $nextBoundaryIndex
         }
         
-        if ([string]::IsNullOrEmpty($fileName) -or $null -eq $fileContent) {
+        if ([string]::IsNullOrEmpty($fileName) -or $null -eq $fileBytes) {
             Send-JsonResponse -response $response -data @{
                 success = $false
                 error = "No se encontró archivo en la solicitud"
@@ -210,7 +268,7 @@ function Handle-FileUpload {
         
         # Log de debug de valores parseados
         Write-Host "`n=== VALORES PARSEADOS ===" -ForegroundColor Yellow
-        Write-Host "Archivo: $fileName" -ForegroundColor White
+        Write-Host "Archivo: $fileName ($($fileBytes.Length) bytes)" -ForegroundColor White
         Write-Host "NumeroVisita: '$numeroVisita' (IsNullOrEmpty: $([string]::IsNullOrEmpty($numeroVisita)))" -ForegroundColor White
         Write-Host "NombrePaciente: '$nombrePaciente' (IsNullOrEmpty: $([string]::IsNullOrEmpty($nombrePaciente)))" -ForegroundColor White
         Write-Host "========================`n" -ForegroundColor Yellow
@@ -239,8 +297,8 @@ function Handle-FileUpload {
         # Usar el nombre original del archivo (sin timestamp ni random)
         $filePath = Join-Path $uploadDir $fileName
         
-        # Guardar archivo
-        [System.IO.File]::WriteAllBytes($filePath, [System.Text.Encoding]::Default.GetBytes($fileContent))
+        # Guardar archivo directamente como bytes (sin conversión de encoding)
+        [System.IO.File]::WriteAllBytes($filePath, $fileBytes)
         
         $fileInfo = Get-Item $filePath
         
