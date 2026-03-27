@@ -164,6 +164,8 @@ function Handle-FileUpload {
         $parts = $content -split $boundary
         $fileName = $null
         $fileContent = $null
+        $numeroVisita = $null
+        $nombrePaciente = $null
         
         foreach ($part in $parts) {
             if ($part -match 'Content-Disposition: form-data; name="file"; filename="([^"]+)"') {
@@ -176,6 +178,18 @@ function Handle-FileUpload {
                     $fileContent = $fileContent -replace "`r`n--$", ""
                 }
             }
+            elseif ($part -match 'Content-Disposition: form-data; name="numeroVisita"') {
+                $headerEnd = $part.IndexOf("`r`n`r`n")
+                if ($headerEnd -gt 0) {
+                    $numeroVisita = $part.Substring($headerEnd + 4).Trim()
+                }
+            }
+            elseif ($part -match 'Content-Disposition: form-data; name="nombrePaciente"') {
+                $headerEnd = $part.IndexOf("`r`n`r`n")
+                if ($headerEnd -gt 0) {
+                    $nombrePaciente = $part.Substring($headerEnd + 4).Trim()
+                }
+            }
         }
         
         if ([string]::IsNullOrEmpty($fileName) -or $null -eq $fileContent) {
@@ -186,23 +200,29 @@ function Handle-FileUpload {
             return
         }
         
-        # Crear estructura de carpetas: E:\adjuntos\año\mes\
-        $year = (Get-Date).Year
-        $month = (Get-Date).ToString("MM")
-        $uploadDir = "E:\adjuntos\$year\$month"
+        # Crear estructura de carpetas: E:\Imagenes\Vidal\{NumeroVisita} {NombrePaciente}\
+        $baseDir = "E:\Imagenes\Vidal"
+        
+        # Construir nombre de carpeta del paciente
+        if ([string]::IsNullOrEmpty($numeroVisita) -or [string]::IsNullOrEmpty($nombrePaciente)) {
+            # Si no hay datos del paciente, usar estructura por fecha
+            $year = (Get-Date).Year
+            $month = (Get-Date).ToString("MM")
+            $uploadDir = "E:\adjuntos\$year\$month"
+        } else {
+            # Limpiar nombre del paciente (quitar caracteres no válidos para carpetas)
+            $nombrePacienteLimpio = $nombrePaciente -replace '[<>:"/\\|?*]', '_'
+            $carpetaPaciente = "$numeroVisita $nombrePacienteLimpio"
+            $uploadDir = Join-Path $baseDir $carpetaPaciente
+        }
         
         if (-not (Test-Path $uploadDir)) {
             New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
             Write-Host "📁 Creado directorio: $uploadDir" -ForegroundColor Yellow
         }
         
-        # Generar nombre único para el archivo
-        $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
-        $random = Get-Random -Minimum 1000 -Maximum 9999
-        $extension = [System.IO.Path]::GetExtension($fileName)
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-        $uniqueFileName = "${baseName}_${timestamp}_${random}${extension}"
-        $filePath = Join-Path $uploadDir $uniqueFileName
+        # Usar el nombre original del archivo (sin timestamp ni random)
+        $filePath = Join-Path $uploadDir $fileName
         
         # Guardar archivo
         [System.IO.File]::WriteAllBytes($filePath, [System.Text.Encoding]::Default.GetBytes($fileContent))
@@ -211,12 +231,17 @@ function Handle-FileUpload {
         
         Write-Host "✅ Archivo guardado: $filePath ($($fileInfo.Length) bytes)" -ForegroundColor Green
         
+        # Convertir E:\ a \\server\ para el path que se guarda en la BD
+        $filePathServidor = $filePath -replace "^E:\\", "\\server\"
+        
+        Write-Host "📋 Path para BD: $filePathServidor" -ForegroundColor Cyan
+        
         # Responder con la información del archivo
         Send-JsonResponse -response $response -data @{
             success = $true
-            fileName = $uniqueFileName
+            fileName = $fileName
             originalName = $fileName
-            filePath = $filePath
+            filePath = $filePathServidor
             size = $fileInfo.Length
             uploadDir = $uploadDir
         }

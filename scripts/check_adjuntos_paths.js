@@ -47,34 +47,31 @@ const db = require('../src/models/db');
             });
         }
         
-        // Buscar específicamente el paciente mencionado
-        console.log('\n🔍 Buscando archivos de BEJARANO LORENA PAOLA...\n');
+        // Buscar archivos con estructura de carpetas por paciente
+        console.log('\n🔍 Buscando archivos con estructura de carpetas...\n');
         
         const sql2 = `
-            SELECT 
-                a.IdAdjunto,
-                a.NumeroVisita,
-                a.Descripcion,
-                a.Patch,
-                a.Fecha,
-                p.Apellido,
-                p.Nombres
-            FROM imPedidosEstudiosAdjuntos a
-            LEFT JOIN imVisitaMovimiento vm ON a.NumeroVisita = vm.NumeroVisita
-            LEFT JOIN imPacientes p ON vm.NroHistoriaClinica = p.NroHistoriaClinica
-            WHERE a.Patch LIKE '%BEJARANO%' OR a.Patch LIKE '%416367%'
-            ORDER BY a.Fecha DESC
+            SELECT TOP 10
+                IdAdjunto,
+                NumeroVisita,
+                Descripcion,
+                Patch,
+                PatchServidor,
+                Fecha
+            FROM imPedidosEstudiosAdjuntos
+            WHERE (Patch LIKE '%\\\\server\\%' OR Patch LIKE '%Imagenes%' OR Patch LIKE '%Vida%')
+            ORDER BY Fecha DESC
         `;
         
         const result2 = await db.executeQuery(sql2);
         
         if (result2.length > 0) {
-            console.log(`✅ Encontrados ${result2.length} archivos:`);
+            console.log(`✅ Encontrados ${result2.length} archivos con estructura:`);
             result2.forEach(adj => {
                 console.log(`\n   ID: ${adj.IdAdjunto}`);
-                console.log(`   Paciente: ${adj.Apellido} ${adj.Nombres}`);
-                console.log(`   Path: ${adj.Patch}`);
-                console.log(`   Fecha: ${adj.Fecha}`);
+                console.log(`   Visita: ${adj.NumeroVisita}`);
+                console.log(`   Patch: ${adj.Patch}`);
+                console.log(`   PatchServidor: ${adj.PatchServidor || 'NULL'}`);
             });
         } else {
             console.log('❌ No se encontraron archivos con ese criterio');

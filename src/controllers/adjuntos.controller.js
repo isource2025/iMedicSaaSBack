@@ -107,10 +107,28 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
 
     console.log(`📤 Enviando archivo al servidor SQL: ${req.file.originalname}`);
 
+    // Obtener nombre del paciente desde la base de datos
+    const { executeQuery } = require('../models/db');
+    const pacienteResult = await executeQuery(`
+      SELECT TOP 1 
+        p.ApellidoYNombre
+      FROM imVisita v
+      INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+      WHERE v.NumeroVisita = @param0
+    `, [{ value: parseInt(numeroVisita) }]);
+
+    const nombrePaciente = pacienteResult.length > 0 
+      ? pacienteResult[0].ApellidoYNombre 
+      : `PACIENTE_${numeroVisita}`;
+
+    console.log(`👤 Paciente: ${nombrePaciente}`);
+
     // Enviar archivo al servidor PowerShell vía túnel
     const formData = new FormData();
     const fileStream = require('fs').createReadStream(req.file.path);
     formData.append('file', fileStream, req.file.originalname);
+    formData.append('numeroVisita', numeroVisita);
+    formData.append('nombrePaciente', nombrePaciente);
 
     const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
       headers: {
