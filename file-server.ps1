@@ -181,13 +181,21 @@ function Handle-FileUpload {
             elseif ($part -match 'Content-Disposition: form-data; name="numeroVisita"') {
                 $headerEnd = $part.IndexOf("`r`n`r`n")
                 if ($headerEnd -gt 0) {
-                    $numeroVisita = $part.Substring($headerEnd + 4).Trim()
+                    $numeroVisita = $part.Substring($headerEnd + 4)
+                    # Limpiar caracteres de control y espacios
+                    $numeroVisita = $numeroVisita -replace "`r", "" -replace "`n", "" -replace "--", ""
+                    $numeroVisita = $numeroVisita.Trim()
+                    Write-Host "📋 NumeroVisita recibido: '$numeroVisita'" -ForegroundColor Magenta
                 }
             }
             elseif ($part -match 'Content-Disposition: form-data; name="nombrePaciente"') {
                 $headerEnd = $part.IndexOf("`r`n`r`n")
                 if ($headerEnd -gt 0) {
-                    $nombrePaciente = $part.Substring($headerEnd + 4).Trim()
+                    $nombrePaciente = $part.Substring($headerEnd + 4)
+                    # Limpiar caracteres de control y espacios
+                    $nombrePaciente = $nombrePaciente -replace "`r", "" -replace "`n", "" -replace "--", ""
+                    $nombrePaciente = $nombrePaciente.Trim()
+                    Write-Host "👤 NombrePaciente recibido: '$nombrePaciente'" -ForegroundColor Magenta
                 }
             }
         }
@@ -199,6 +207,13 @@ function Handle-FileUpload {
             } -statusCode 400
             return
         }
+        
+        # Log de debug de valores parseados
+        Write-Host "`n=== VALORES PARSEADOS ===" -ForegroundColor Yellow
+        Write-Host "Archivo: $fileName" -ForegroundColor White
+        Write-Host "NumeroVisita: '$numeroVisita' (IsNullOrEmpty: $([string]::IsNullOrEmpty($numeroVisita)))" -ForegroundColor White
+        Write-Host "NombrePaciente: '$nombrePaciente' (IsNullOrEmpty: $([string]::IsNullOrEmpty($nombrePaciente)))" -ForegroundColor White
+        Write-Host "========================`n" -ForegroundColor Yellow
         
         # Crear estructura de carpetas: E:\Imagenes\Vidal\{NumeroVisita} {NombrePaciente}\
         $baseDir = "E:\Imagenes\Vidal"
