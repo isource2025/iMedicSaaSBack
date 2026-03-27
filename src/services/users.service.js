@@ -6,6 +6,7 @@ const { executeQuery } = require('../models/db');
  */
 const obtenerTodosLosUsuarios = async () => {
   try {
+    // Consulta optimizada con LEFT JOIN para obtener usuarios y sectores en una sola query
     const consulta = `
       SELECT 
         p.ValorPersonal,
@@ -16,29 +17,48 @@ const obtenerTodosLosUsuarios = async () => {
         p.NumeroDocumento,
         p.Legajo,
         p.MarcadeBaja,
-        p.FechaActual
+        p.FechaActual,
+        ps.idSector,
+        s.Descripcion as descripcionSector
       FROM imPassword p
+      LEFT JOIN imPersonalSectores ps ON p.ValorPersonal = ps.idPersonal
+      LEFT JOIN imSectores s ON ps.idSector = s.Valor
       ORDER BY p.Apellido, p.Nombres
     `;
     
-    const usuarios = await executeQuery(consulta);
+    const resultado = await executeQuery(consulta);
     
-    // Para cada usuario, obtener sus sectores
-    for (let usuario of usuarios) {
-      const sectoresConsulta = `
-        SELECT 
-          ps.idSector,
-          s.Descripcion as descripcionSector
-        FROM imPersonalSectores ps
-        INNER JOIN imSectores s ON ps.idSector = s.Valor
-        WHERE ps.idPersonal = @p0
-      `;
+    // Agrupar sectores por usuario
+    const usuariosMap = new Map();
+    
+    resultado.forEach(row => {
+      const userId = row.ValorPersonal;
       
-      const sectores = await executeQuery(sectoresConsulta, [{ value: usuario.ValorPersonal }]);
-      usuario.sectores = sectores || [];
-    }
+      if (!usuariosMap.has(userId)) {
+        usuariosMap.set(userId, {
+          ValorPersonal: row.ValorPersonal,
+          CodOperador: row.CodOperador,
+          Apellido: row.Apellido,
+          Nombres: row.Nombres,
+          NombreRed: row.NombreRed,
+          NumeroDocumento: row.NumeroDocumento,
+          Legajo: row.Legajo,
+          MarcadeBaja: row.MarcadeBaja,
+          FechaActual: row.FechaActual,
+          sectores: []
+        });
+      }
+      
+      // Agregar sector si existe
+      if (row.idSector) {
+        usuariosMap.get(userId).sectores.push({
+          idSector: row.idSector,
+          descripcionSector: row.descripcionSector
+        });
+      }
+    });
     
-    return usuarios;
+    return Array.from(usuariosMap.values());
   } catch (error) {
     console.error('Error al obtener usuarios:', error.message);
     throw error;
