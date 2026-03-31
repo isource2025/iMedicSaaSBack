@@ -194,8 +194,8 @@ const extraerParametros = (texto, tipoEstudio) => {
     if (esNombreParametro && i + 1 < lineas.length) {
       const siguienteLinea = lineas[i + 1].trim();
       
-      // Buscar valor en la siguiente línea: "118 mg/dl 70 - 100 mg/dl"
-      const patronValor = /^([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
+      // Buscar valor en la siguiente línea: "118 mg/dl" o "35.0 mmHg" o "-6.6 mmol/l"
+      const patronValor = /^(-?[\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
       const matchValor = siguienteLinea.match(patronValor);
       
       if (matchValor) {
@@ -206,10 +206,11 @@ const extraerParametros = (texto, tipoEstudio) => {
         // Buscar valores de referencia en el resto de la línea
         let valorReferencia = '';
         const restoLinea = siguienteLinea.substring(matchValor[0].length).trim();
-        const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);
+        // Patrón mejorado para rangos: "70 - 100", "7.35 - 7.45", "±2.5"
+        const rangoMatch = restoLinea.match(/([±\-]?[\d]+[\.,]?[\d]*\s*[-±]\s*[\d]+[\.,]?[\d]*)/);
         if (rangoMatch) {
           valorReferencia = rangoMatch[1].trim();
-        } else if (restoLinea.length > 0 && restoLinea.length < 50) {
+        } else if (restoLinea.length > 0 && restoLinea.length < 100) {
           // Si no hay rango numérico, tomar el texto como referencia
           valorReferencia = restoLinea;
         }
@@ -233,8 +234,8 @@ const extraerParametros = (texto, tipoEstudio) => {
     }
 
     // FORMATO 2: Nombre y valor en la misma línea
-    // Ejemplo: "GLUCEMIA 118 mg/dl"
-    const patronLinea = /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{2,40}?)\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
+    // Ejemplo: "GLUCEMIA 118 mg/dl" o "pH 7.34"
+    const patronLinea = /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{2,40}?)\s+(-?[\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
     const matchLinea = linea.match(patronLinea);
     
     if (matchLinea) {
@@ -247,12 +248,14 @@ const extraerParametros = (texto, tipoEstudio) => {
         continue;
       }
 
-      // Buscar valores de referencia
+      // Buscar valores de referencia con patrón mejorado
       let valorReferencia = '';
       const restoLinea = linea.substring(matchLinea.index + matchLinea[0].length).trim();
-      const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);
+      const rangoMatch = restoLinea.match(/([±\-]?[\d]+[\.,]?[\d]*\s*[-±]\s*[\d]+[\.,]?[\d]*)/);
       if (rangoMatch) {
         valorReferencia = rangoMatch[1].trim();
+      } else if (restoLinea.length > 0 && restoLinea.length < 100) {
+        valorReferencia = restoLinea;
       }
 
       const parametro = {
