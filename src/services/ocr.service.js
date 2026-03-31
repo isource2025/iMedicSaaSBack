@@ -218,8 +218,8 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     return titulosSecciones.some(t => low.includes(t));
   };
 
-  // Unidades de laboratorio conocidas
-  const UNIDADES_REGEX = /^(mg\/dl|g\/dl|g%|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos|fl|pg|p'g|g\/dl)\b/i;
+  // Unidades de laboratorio conocidas (con trim del espacio inicial)
+  const UNIDADES_REGEX = /^\s*(mg\/dl|g\/dl|g%|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos|fl|pg|p'g)/i;
 
   const agregarParametro = (nombre, valor, unidad, valorRef) => {
     const key = nombre.toUpperCase().replace(/[:\s]+$/g, '').trim();
@@ -253,12 +253,13 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
   const extraerUnidadYRef = (resto) => {
     let unidad = '';
     let valorRef = '';
-    const matchU = resto.match(UNIDADES_REGEX);
+    const trimmed = resto.trim();
+    const matchU = trimmed.match(UNIDADES_REGEX);
     if (matchU) {
-      unidad = matchU[1];
-      valorRef = resto.substring(matchU[0].length).trim();
+      unidad = matchU[1].trim();
+      valorRef = trimmed.substring(matchU[0].length).trim();
     } else {
-      valorRef = resto;
+      valorRef = trimmed;
     }
     return { unidad, valorRef };
   };
@@ -283,11 +284,12 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     // FORMATO A: "Nombre: VALOR UNIDAD" o "Nombre: VALOR UNIDAD  REFERENCIA"
     // Ej: "Glóbulos Blancos: 18.560 /mm3", "Hematocrito: 23.8 %", "Neutrófilos en Cayado: 2%"
     // ═══════════════════════════════════════════════
-    const matchConDosPuntos = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.'']*?)\s*:\s*(-?[\d]+[\.\,]?[\d]*)\s*(.*)/);
-    if (matchConDosPuntos) {
-      const nombre = matchConDosPuntos[1].trim();
-      const valor = matchConDosPuntos[2];
-      const resto = matchConDosPuntos[3].trim();
+    // Regex: captura número con puntos de miles Y/O coma decimal: 18.560, 2.660.000, 23.8, 7,5
+    const fmtA = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.'']*?)\s*:\s*(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/);
+    if (fmtA) {
+      const nombre = fmtA[1].trim();
+      const valor = fmtA[2];
+      const resto = fmtA[3].trim();
       const { unidad, valorRef } = extraerUnidadYRef(resto);
       
       if (agregarParametro(nombre, valor, unidad, valorRef)) {
@@ -299,7 +301,8 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     // FORMATO B: "Nombre VALOR UNIDAD" (sin dos puntos)
     // Ej: "Glóbulos Rojos 2.660.000 /mm3", "GLUCEMIA 118 mg/dl"
     // ═══════════════════════════════════════════════
-    const matchSinDosPuntos = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.'']*?)\s+(-?[\d]+[\.\,]?[\d]*)\s*(.*)/);
+    const matchSinDosPuntos = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.'']*?)\s+(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/);
+
     if (matchSinDosPuntos) {
       const nombre = matchSinDosPuntos[1].trim();
       const valor = matchSinDosPuntos[2];
@@ -335,11 +338,12 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     }
 
     // ═══════════════════════════════════════════════
-    // FORMATO D: "Resultado: VALOR .000 /mm3" (plaquetas y similares)
+    // FORMATO D: "Resultado:  210 .000 /mm3" (plaquetas y similares)
+    // Limpiar espacios dentro del número primero
     // ═══════════════════════════════════════════════
-    const matchResultado = linea.match(/^Resultado:\s*(-?[\d]+[\.\,]?\d*)\s*(.*)/i);
+    const lineaLimpia = linea.replace(/(\d+)\s+\.(\d+)/g, '$1.$2');
+    const matchResultado = lineaLimpia.match(/^Resultado:\s*(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/i);
     if (matchResultado) {
-      // Buscar nombre en línea anterior (ej: "Recuento de Plaquetas")
       let nombreParam = 'Resultado';
       for (let j = i - 1; j >= 0; j--) {
         const prevLinea = lineas[j];
