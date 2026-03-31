@@ -157,22 +157,38 @@ const extraerParametros = (texto, tipoEstudio) => {
   const parametros = [];
   const lineas = texto.split('\n');
 
-  // Patrones para detectar líneas con resultados
-  // Formato típico: "Parámetro    Resultado    Valores de referencia"
-  const patronResultado = /^([A-Za-zÁÉÍÓÚáéíóúñÑ\s\(\)\-\/]+?)\s+([\d\.,]+)\s*([a-zA-Z\/\%]+)?\s+([\d\.,\s\-]+)?/;
+  // Patrones mejorados para detectar líneas con resultados
+  // Buscar líneas que tengan: NOMBRE_PARAMETRO seguido de NUMERO mg/dl o similar
+  const patronResultado = /^([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\s\(\)\-\/]+?)\s+([\d\.,]+)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3)?\s*([\d\.,\s\-]+)?/i;
 
   for (let i = 0; i < lineas.length; i++) {
     const linea = lineas[i].trim();
     
-    // Saltar líneas vacías o de encabezado
-    if (!linea || linea.includes('Dosaje') || linea.includes('Resultado') || linea.includes('Valores de referencia')) {
+    // Saltar líneas vacías, encabezados, o líneas que no sean parámetros
+    if (!linea || 
+        linea.length < 5 ||
+        linea.includes('Dosaje') || 
+        linea.includes('Resultado') || 
+        linea.includes('Valores de referencia') ||
+        linea.includes('Protocolo') ||
+        linea.includes('CLINICA') ||
+        linea.includes('Metodo') ||
+        linea.includes('Marca de Reactivo') ||
+        linea.includes('Observaciones')) {
       continue;
     }
 
     const match = linea.match(patronResultado);
     if (match) {
+      const nombreParam = match[1].trim();
+      
+      // Validar que el nombre del parámetro sea válido (no sea un número o muy corto)
+      if (nombreParam.length < 3 || /^\d+$/.test(nombreParam)) {
+        continue;
+      }
+
       const parametro = {
-        nombreParametro: match[1].trim(),
+        nombreParametro: nombreParam,
         resultado: match[2].replace(',', '.'),
         unidadMedida: match[3] ? match[3].trim() : '',
         valorReferencia: match[4] ? match[4].trim() : '',

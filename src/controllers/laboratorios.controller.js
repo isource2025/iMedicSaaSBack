@@ -1,4 +1,4 @@
-const laboratoriosService = require('../services/laboratorios.service');
+const laboratoriosService = require('../services/laboratorios-simple.service');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;

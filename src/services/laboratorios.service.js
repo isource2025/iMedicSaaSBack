@@ -30,24 +30,15 @@ const obtenerConfiguracionParametro = async (nombreParametro) => {
   try {
     const consulta = `
       SELECT 
-        IdParametro,
-        CodigoParametro,
-        NombreParametro,
-        Categoria,
-        UnidadMedida,
-        ValorMinimoAdulto,
-        ValorMaximoAdulto,
-        ValorMinimoNino,
-        ValorMaximoNino,
-        ValorMinimoHombre,
-        ValorMaximoHombre,
-        ValorMinimoMujer,
-        ValorMaximoMujer,
-        Sinonimos,
+        IdTipoLaboratorio,
+        Orden,
+        Estudio,
+        ValorMaximo,
+        ValorMinimo,
+        ValorNormal,
         AlertaCritica
       FROM imHCExamenesLabDetalleConf
-      WHERE Activo = 1
-        AND (
+      WHERE (
           UPPER(RTRIM(LTRIM(NombreParametro))) = UPPER(RTRIM(LTRIM(@p0)))
           OR UPPER(RTRIM(LTRIM(CodigoParametro))) = UPPER(RTRIM(LTRIM(@p0)))
           OR Sinonimos LIKE '%' + @p0 + '%'
@@ -442,9 +433,7 @@ const actualizarParametroConfiguracion = async (idParametro, datos) => {
     const consulta = `
       UPDATE imHCExamenesLabDetalleConf
       SET 
-        NombreParametro = @p0,
-        Categoria = @p1,
-        UnidadMedida = @p2,
+        Estudio LIKE @param0
         ValorMinimoAdulto = @p3,
         ValorMaximoAdulto = @p4,
         ValorMinimoNino = @p5,
