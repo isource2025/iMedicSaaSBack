@@ -182,6 +182,7 @@ const extraerParametros = (texto, tipoEstudio) => {
     
     // Saltar líneas que contengan palabras a excluir
     if (excluirCompleto.some(palabra => lineaLower.includes(palabra))) {
+      console.log(`  ⊗ Línea ${i} excluida: "${linea}"`);
       continue;
     }
 
@@ -191,11 +192,15 @@ const extraerParametros = (texto, tipoEstudio) => {
     
     if (esNombreCorto && i + 1 < lineas.length) {
       const siguienteLinea = lineas[i + 1].trim();
+      console.log(`  → Línea ${i}: "${linea}" (posible parámetro)`);
+      console.log(`     Siguiente línea ${i+1}: "${siguienteLinea}"`);
       
       // Buscar CUALQUIER número al inicio de la siguiente línea (muy flexible)
       const matchNumero = siguienteLinea.match(/^(-?[\d]+[\.,]?[\d]*)/);
       
       if (matchNumero) {
+        console.log(`     ✓ Match número: "${matchNumero[1]}"`);
+
         const nombreParam = linea;
         const valor = matchNumero[1];
         
