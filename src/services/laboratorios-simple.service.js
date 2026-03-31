@@ -23,6 +23,22 @@ const procesarArchivoConOCR = async (buffer, mimeType) => {
  */
 const guardarExamen = async (cabecera, detalles) => {
   try {
+    console.log('\n=== GUARDANDO EXAMEN DE LABORATORIO ===');
+    console.log('Cabecera recibida:', JSON.stringify(cabecera, null, 2));
+    console.log('Cantidad de detalles:', detalles.length);
+
+    // Convertir fecha de YYYY-MM-DD a DATETIME para SQL Server
+    let fechaExamen = cabecera.FechaExamen;
+    if (typeof fechaExamen === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fechaExamen)) {
+      // Agregar hora si no la tiene
+      if (cabecera.HoraExamen) {
+        fechaExamen = `${fechaExamen} ${cabecera.HoraExamen}:00`;
+      } else {
+        fechaExamen = `${fechaExamen} 00:00:00`;
+      }
+    }
+    console.log('Fecha convertida para SQL:', fechaExamen);
+
     // 1. Insertar cabecera
     const consultaCabecera = `
       INSERT INTO imHCExamenesLabCabecera 
@@ -33,17 +49,22 @@ const guardarExamen = async (cabecera, detalles) => {
 
     const params = [
       { value: cabecera.Protocolo || '' },
-      { value: cabecera.FechaExamen },
+      { value: fechaExamen },
       { value: cabecera.NumeroVisita }, // Usar NumeroVisita como IdPaciente
       { value: cabecera.TipoEstudio }
     ];
 
+    console.log('Parámetros SQL:', params);
     const resultCabecera = await executeQuery(consultaCabecera, params);
     const idExamen = resultCabecera[0].IdExamenLaboratorio;
+    console.log('✓ Cabecera guardada con ID:', idExamen);
 
     // 2. Insertar detalles
+    console.log(`Insertando ${detalles.length} detalles...`);
     for (let i = 0; i < detalles.length; i++) {
       const detalle = detalles[i];
+      console.log(`  Detalle ${i + 1}:`, detalle.NombreParametro, '=', detalle.Resultado);
+      
       const consultaDetalle = `
         INSERT INTO imHCExamenesLabDetalle
         (IdTipoLaboratorio, Estudio, Valor, Indice, IdExamenLaboratorio, Orden)
@@ -62,9 +83,12 @@ const guardarExamen = async (cabecera, detalles) => {
       await executeQuery(consultaDetalle, paramsDetalle);
     }
 
+    console.log('✓ Examen guardado exitosamente con ID:', idExamen);
+    console.log('=======================================\n');
     return { IdExamen: idExamen, success: true };
   } catch (error) {
-    console.error('Error al guardar examen:', error);
+    console.error('✗ Error al guardar examen:', error);
+    console.error('Stack:', error.stack);
     throw error;
   }
 };
