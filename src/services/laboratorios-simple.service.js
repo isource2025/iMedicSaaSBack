@@ -39,15 +39,21 @@ const guardarExamen = async (cabecera, detalles) => {
     }
     console.log('Fecha convertida para SQL:', fechaExamen);
 
-    // 1. Insertar cabecera
+    // 1. Obtener el próximo ID disponible (ya que IdExamenLaboratorio NO es IDENTITY)
+    const consultaMaxId = `SELECT ISNULL(MAX(IdExamenLaboratorio), 0) + 1 as NuevoId FROM imHCExamenesLabCabecera`;
+    const resultMaxId = await executeQuery(consultaMaxId);
+    const idExamen = resultMaxId[0].NuevoId;
+    console.log('Nuevo ID generado:', idExamen);
+
+    // 2. Insertar cabecera con el ID generado
     const consultaCabecera = `
       INSERT INTO imHCExamenesLabCabecera 
-      (NroProtocolo, FechaEstudio, IdPaciente, IdTipoLaboratorio)
-      OUTPUT INSERTED.IdExamenLaboratorio
-      VALUES (@p0, @p1, @p2, @p3)
+      (IdExamenLaboratorio, NroProtocolo, FechaEstudio, IdPaciente, IdTipoLaboratorio)
+      VALUES (@p0, @p1, @p2, @p3, @p4)
     `;
 
     const params = [
+      { value: idExamen },
       { value: cabecera.Protocolo || '' },
       { value: fechaExamen },
       { value: cabecera.NumeroVisita }, // Usar NumeroVisita como IdPaciente
@@ -55,8 +61,7 @@ const guardarExamen = async (cabecera, detalles) => {
     ];
 
     console.log('Parámetros SQL:', params);
-    const resultCabecera = await executeQuery(consultaCabecera, params);
-    const idExamen = resultCabecera[0].IdExamenLaboratorio;
+    await executeQuery(consultaCabecera, params);
     console.log('✓ Cabecera guardada con ID:', idExamen);
 
     // 2. Insertar detalles
