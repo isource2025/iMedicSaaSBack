@@ -281,7 +281,39 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     if (/^Se observan/i.test(linea)) continue;
 
     // ═══════════════════════════════════════════════
-    // FORMATO A: "Nombre: VALOR UNIDAD" o "Nombre: VALOR UNIDAD  REFERENCIA"
+    // FORMATO D (PRIMERO): "Resultado:  210 .000 /mm3" (plaquetas y similares)
+    // Debe ir ANTES del formato A porque necesita limpiar espacios en números
+    // ═══════════════════════════════════════════════
+    if (/^Resultado:/i.test(linea)) {
+      // Limpiar espacios entre números y puntos: "210 .000" -> "210.000"
+      let lineaLimpia = linea;
+      while (/(\d)\s+\.(\d)/.test(lineaLimpia)) {
+        lineaLimpia = lineaLimpia.replace(/(\d)\s+\.(\d)/g, '$1.$2');
+      }
+      const matchResultado = lineaLimpia.match(/^Resultado:\s*(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/i);
+      if (matchResultado) {
+        let nombreParam = 'Resultado';
+        for (let j = i - 1; j >= 0; j--) {
+          const prevLinea = lineas[j];
+          if (/recuento de plaquetas/i.test(prevLinea)) {
+            nombreParam = 'Recuento de Plaquetas';
+            break;
+          }
+          if (/^[A-Za-z]/.test(prevLinea) && prevLinea.length > 3) {
+            nombreParam = prevLinea.replace(/\s*Cód\..*$/i, '').trim();
+            break;
+          }
+        }
+        const valor = matchResultado[1];
+        const resto = matchResultado[2].trim();
+        const { unidad, valorRef } = extraerUnidadYRef(resto);
+        agregarParametro(nombreParam, valor, unidad, valorRef);
+        continue;
+      }
+    }
+
+    // ═══════════════════════════════════════════════
+    // FORMATO A: "Nombre: VALOR UNIDAD" o "Nombre: VALORUNIDAD"
     // Ej: "Glóbulos Blancos: 18.560 /mm3", "Hematocrito: 23.8 %", "Neutrófilos en Cayado: 2%"
     // ═══════════════════════════════════════════════
     // Regex: captura número con puntos de miles Y/O coma decimal: 18.560, 2.660.000, 23.8, 7,5
@@ -335,36 +367,6 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
           continue;
         }
       }
-    }
-
-    // ═══════════════════════════════════════════════
-    // FORMATO D: "Resultado:  210 .000 /mm3" (plaquetas y similares)
-    // Limpiar espacios dentro del número primero
-    // ═══════════════════════════════════════════════
-    // Limpiar espacios entre números y puntos: "210 .000" -> "210.000", también múltiples
-    let lineaLimpia = linea;
-    while (/(\d)\s+\.(\d)/.test(lineaLimpia)) {
-      lineaLimpia = lineaLimpia.replace(/(\d)\s+\.(\d)/g, '$1.$2');
-    }
-    const matchResultado = lineaLimpia.match(/^Resultado:\s*(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/i);
-    if (matchResultado) {
-      let nombreParam = 'Resultado';
-      for (let j = i - 1; j >= 0; j--) {
-        const prevLinea = lineas[j];
-        if (/recuento de plaquetas/i.test(prevLinea)) {
-          nombreParam = 'Recuento de Plaquetas';
-          break;
-        }
-        if (/^[A-Za-z]/.test(prevLinea) && prevLinea.length > 3) {
-          nombreParam = prevLinea.replace(/\s*Cód\..*$/i, '').trim();
-          break;
-        }
-      }
-      const valor = matchResultado[1];
-      const resto = matchResultado[2].trim();
-      const { unidad, valorRef } = extraerUnidadYRef(resto);
-      agregarParametro(nombreParam, valor, unidad, valorRef);
-      continue;
     }
 
     // ═══════════════════════════════════════════════
