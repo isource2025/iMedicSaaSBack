@@ -161,114 +161,126 @@ const extraerInfoCabecera = (texto) => {
 const extraerParametros = (texto, tipoEstudio) => {
   const parametros = [];
   const lineas = texto.split('\n');
+  const parametrosEncontrados = new Set(); // Evitar duplicados
 
-  console.log('\n=== EXTRAYENDO PARÁMETROS ===');
+  console.log('\n=== EXTRAYENDO PARÁMETROS (MODO FLEXIBLE) ===');
   console.log('Total de líneas:', lineas.length);
 
-  // Palabras clave a excluir
-  const excluir = [
-    'protocolo', 'fecha', 'paciente', 'apellido', 'nombre', 'dni', 'edad',
-    'sexo', 'medico', 'servicio', 'clinica', 'laboratorio', 'dosaje',
-    'resultado', 'valores', 'referencia', 'observaciones', 'firma', 
-    'profesional', 'matricula', 'bioquimico', 'pagina', 'page', 'hoja', 
-    'codigo', 'practica', 'tel:', 'necochea'
-  ];
+  // Palabras clave a excluir (más restrictivo)
+  const excluirCompleto = ['protocolo', 'fecha', 'paciente', 'apellido', 'nombre', 'dni', 'edad', 'sexo', 'medico', 'servicio', 'clinica', 'laboratorio', 'observaciones', 'firma', 'profesional', 'matricula', 'bioquimico', 'pagina', 'page', 'hoja', 'tel:', 'necochea', 'corrientes', 'capital'];
+  
+  // Unidades comunes de laboratorio
+  const unidadesComunes = ['mg/dl', 'g/dl', 'meq/l', 'mmol/l', 'u/l', 'mmhg', '%', '/mm3', 'ml/min'];
 
   for (let i = 0; i < lineas.length; i++) {
     const linea = lineas[i].trim();
     
-    // Saltar líneas vacías o muy cortas
+    // Saltar líneas vacías
     if (!linea || linea.length < 2) continue;
 
     const lineaLower = linea.toLowerCase();
     
     // Saltar líneas que contengan palabras a excluir
-    if (excluir.some(palabra => lineaLower.includes(palabra))) {
+    if (excluirCompleto.some(palabra => lineaLower.includes(palabra))) {
       continue;
     }
 
-    // FORMATO 1: Nombre del parámetro en una línea (solo letras mayúsculas/minúsculas)
-    // Ejemplo: "GLUCEMIA" o "pH" o "pCO2" o "HCO3-"
-    const esNombreParametro = /^[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+]{1,30}$/.test(linea);
+    // ESTRATEGIA 1: Detectar nombre de parámetro corto (2-15 caracteres, solo letras/números/-/+)
+    // Ejemplos: "pH", "pCO2", "HCO3-", "EB", "SatO2", "GLUCEMIA"
+    const esNombreCorto = /^[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+]{0,14}$/.test(linea);
     
-    if (esNombreParametro && i + 1 < lineas.length) {
+    if (esNombreCorto && i + 1 < lineas.length) {
       const siguienteLinea = lineas[i + 1].trim();
       
-      // Buscar valor en la siguiente línea: "118 mg/dl" o "35.0 mmHg" o "-6.6 mmol/l"
-      const patronValor = /^(-?[\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
-      const matchValor = siguienteLinea.match(patronValor);
+      // Buscar CUALQUIER número al inicio de la siguiente línea (muy flexible)
+      const matchNumero = siguienteLinea.match(/^(-?[\d]+[\.,]?[\d]*)/);
       
-      if (matchValor) {
+      if (matchNumero) {
         const nombreParam = linea;
-        const valor = matchValor[1];
-        const unidad = matchValor[2] || '';
+        const valor = matchNumero[1];
         
-        // Buscar valores de referencia en el resto de la línea
+        // Buscar unidad después del número
+        let unidad = '';
+        const restoLinea = siguienteLinea.substring(matchNumero[0].length).trim();
+        const matchUnidad = restoLinea.match(/^([a-z\/\%]+)/i);
+        if (matchUnidad) {
+          unidad = matchUnidad[1];
+        }
+        
+        // Buscar valores de referencia (muy flexible)
         let valorReferencia = '';
-        const restoLinea = siguienteLinea.substring(matchValor[0].length).trim();
-        // Patrón mejorado para rangos: "70 - 100", "7.35 - 7.45", "±2.5"
-        const rangoMatch = restoLinea.match(/([±\-]?[\d]+[\.,]?[\d]*\s*[-±]\s*[\d]+[\.,]?[\d]*)/);
-        if (rangoMatch) {
-          valorReferencia = rangoMatch[1].trim();
-        } else if (restoLinea.length > 0 && restoLinea.length < 100) {
-          // Si no hay rango numérico, tomar el texto como referencia
-          valorReferencia = restoLinea;
+        const textoRestante = restoLinea.replace(/^[a-z\/\%]+/i, '').trim();
+        // Capturar cualquier cosa que parezca un rango o valor de referencia
+        if (textoRestante.length > 0 && textoRestante.length < 150) {
+          valorReferencia = textoRestante;
         }
 
+        // Evitar duplicados
+        const key = `${nombreParam}_${valor}`;
+        if (!parametrosEncontrados.has(key)) {
+          parametrosEncontrados.add(key);
+          
+          const parametro = {
+            nombreParametro: nombreParam,
+            resultado: valor.replace(',', '.'),
+            unidadMedida: unidad.trim(),
+            valorReferencia: valorReferencia,
+            metodo: null,
+            marcaReactivo: null
+          };
+
+          console.log(`✓ [Estrategia 1] ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
+          parametros.push(parametro);
+          
+          i++; // Saltar la siguiente línea
+          continue;
+        }
+      }
+    }
+
+    // ESTRATEGIA 2: Nombre y valor en la misma línea (muy flexible)
+    // Buscar: PALABRA(S) seguida de NÚMERO
+    const matchMismaLinea = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{1,40}?)\s+(-?[\d]+[\.,]?[\d]*)/);
+    
+    if (matchMismaLinea) {
+      const nombreParam = matchMismaLinea[1].trim();
+      const valor = matchMismaLinea[2];
+      
+      // Validar que el nombre no sea solo números y no sea muy largo
+      if (/^\d+$/.test(nombreParam) || nombreParam.length > 40) {
+        continue;
+      }
+
+      // Buscar unidad y referencia
+      const restoLinea = linea.substring(matchMismaLinea[0].length).trim();
+      let unidad = '';
+      let valorReferencia = '';
+      
+      const matchUnidad = restoLinea.match(/^([a-z\/\%]+)/i);
+      if (matchUnidad) {
+        unidad = matchUnidad[1];
+        valorReferencia = restoLinea.substring(matchUnidad[0].length).trim();
+      } else {
+        valorReferencia = restoLinea;
+      }
+
+      // Evitar duplicados
+      const key = `${nombreParam}_${valor}`;
+      if (!parametrosEncontrados.has(key)) {
+        parametrosEncontrados.add(key);
+        
         const parametro = {
           nombreParametro: nombreParam,
           resultado: valor.replace(',', '.'),
           unidadMedida: unidad.trim(),
-          valorReferencia: valorReferencia,
+          valorReferencia: valorReferencia.substring(0, 150),
           metodo: null,
           marcaReactivo: null
         };
 
-        console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
+        console.log(`✓ [Estrategia 2] ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
         parametros.push(parametro);
-        
-        // Saltar la siguiente línea ya que la procesamos
-        i++;
-        continue;
       }
-    }
-
-    // FORMATO 2: Nombre y valor en la misma línea
-    // Ejemplo: "GLUCEMIA 118 mg/dl" o "pH 7.34"
-    const patronLinea = /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{2,40}?)\s+(-?[\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
-    const matchLinea = linea.match(patronLinea);
-    
-    if (matchLinea) {
-      const nombreParam = matchLinea[1].trim();
-      const valor = matchLinea[2];
-      const unidad = matchLinea[3] || '';
-      
-      // Validar que no sea solo números
-      if (/^\d+$/.test(nombreParam)) {
-        continue;
-      }
-
-      // Buscar valores de referencia con patrón mejorado
-      let valorReferencia = '';
-      const restoLinea = linea.substring(matchLinea.index + matchLinea[0].length).trim();
-      const rangoMatch = restoLinea.match(/([±\-]?[\d]+[\.,]?[\d]*\s*[-±]\s*[\d]+[\.,]?[\d]*)/);
-      if (rangoMatch) {
-        valorReferencia = rangoMatch[1].trim();
-      } else if (restoLinea.length > 0 && restoLinea.length < 100) {
-        valorReferencia = restoLinea;
-      }
-
-      const parametro = {
-        nombreParametro: nombreParam,
-        resultado: valor.replace(',', '.'),
-        unidadMedida: unidad.trim(),
-        valorReferencia: valorReferencia,
-        metodo: null,
-        marcaReactivo: null
-      };
-
-      console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
-      parametros.push(parametro);
     }
   }
 
