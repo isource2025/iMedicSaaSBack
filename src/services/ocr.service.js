@@ -29,32 +29,29 @@ const extraerTextoDePDF = async (buffer) => {
     console.log('Intentando fallback con Tesseract OCR...');
   }
 
-  // Intento 2: Convertir PDF a imagen y usar Tesseract OCR
+  // Intento 2: Intentar Tesseract directamente con el buffer
+  // (funciona si el PDF es en realidad una imagen con extensión .pdf)
   try {
-    // sharp no soporta PDF directamente en todas las plataformas,
-    // pero podemos intentar renderizar la primera página
-    const image = await sharp(buffer, { density: 300 })
-      .greyscale()
-      .normalize()
-      .sharpen()
-      .png()
-      .toBuffer();
-
-    console.log('PDF convertido a imagen, ejecutando Tesseract OCR...');
+    console.log('Intentando Tesseract OCR directamente con el buffer...');
     const { data: { text } } = await Tesseract.recognize(
-      image,
+      buffer,
       'spa',
       { logger: m => { if (m.status === 'recognizing text') console.log(`  OCR: ${Math.round(m.progress * 100)}%`); } }
     );
-    console.log('\n=== PDF EXTRAÍDO (Tesseract fallback) ===');
-    console.log('Longitud del texto:', text.length);
-    console.log('Primeros 500 caracteres:', text.substring(0, 500));
-    console.log('==================\n');
-    return text;
+    
+    if (text && text.trim().length > 10) {
+      console.log('\n=== PDF EXTRAÍDO (Tesseract fallback) ===');
+      console.log('Longitud del texto:', text.length);
+      console.log('Primeros 500 caracteres:', text.substring(0, 500));
+      console.log('==================\n');
+      return text;
+    }
   } catch (ocrError) {
-    console.error('Error en fallback OCR:', ocrError.message);
-    throw new Error('Error al procesar el PDF: ni pdf-parse ni OCR pudieron extraer texto');
+    console.warn('Tesseract OCR también falló:', ocrError.message);
   }
+
+  // Si llegamos aquí, el PDF está corrupto y no se puede procesar
+  throw new Error('PDF corrupto o con formato no soportado. Por favor, convierta el documento a imagen (JPG/PNG) o use un PDF válido.');
 };
 
 /**
