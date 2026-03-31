@@ -119,32 +119,32 @@ const extraerInfoCabecera = (texto) => {
     laboratorio: null
   };
 
-  // Extraer nombre del paciente
-  const nombreMatch = texto.match(/(?:Apellido y Nombre|Paciente|Nombre):\s*([A-ZÁÉÍÓÚÑ\s,]+)/i);
+  // Extraer nombre del paciente - formato: "TOLEDO, KEVIN MATIAS - D.N.I.:"
+  const nombreMatch = texto.match(/^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s,]+)\s*-\s*D\.N\.I\./im);
   if (nombreMatch) {
     info.paciente = nombreMatch[1].trim();
   }
 
-  // Extraer DNI
-  const dniMatch = texto.match(/(?:DNI|D\.N\.I\.|Documento):\s*(\d+[\.\d]*)/i);
+  // Extraer DNI - formato: "D.N.I.: 40508927"
+  const dniMatch = texto.match(/D\.N\.I\.:\s*(\d+)/i);
   if (dniMatch) {
-    info.dni = dniMatch[1].replace(/\./g, '');
+    info.dni = dniMatch[1];
   }
 
-  // Extraer fecha
-  const fechaMatch = texto.match(/(?:Fecha|Date):\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+  // Extraer fecha - formato: "/ 27-03-2026" o "/ 31-03-2026"
+  const fechaMatch = texto.match(/\/\s*(\d{2}-\d{2}-\d{4})/);
   if (fechaMatch) {
     info.fecha = fechaMatch[1];
   }
 
-  // Extraer protocolo
-  const protocoloMatch = texto.match(/(?:Protocolo|Protocol|Código|Cod\.):\s*(\d+)/i);
+  // Extraer protocolo - formato: "Protocolo 331832" o "Protocolo 061330"
+  const protocoloMatch = texto.match(/Protocolo\s+(\d+)/i);
   if (protocoloMatch) {
     info.protocolo = protocoloMatch[1];
   }
 
-  // Extraer laboratorio
-  const laboratorioMatch = texto.match(/(?:LABORATORIO|LAB\.)(?:\s+del\s+)?(?:\s+SERVICIO\s+DE\s+)?([A-ZÁÉÍÓÚÑ\s]+)/i);
+  // Extraer laboratorio - formato: "CLINICA - Quimica Clinica"
+  const laboratorioMatch = texto.match(/Protocolo\s+\d+\s+([A-ZÁÉÍÓÚÑ\s]+)\s*-/i);
   if (laboratorioMatch) {
     info.laboratorio = laboratorioMatch[1].trim();
   }
@@ -165,55 +165,53 @@ const extraerParametros = (texto, tipoEstudio) => {
   console.log('\n=== EXTRAYENDO PARÁMETROS ===');
   console.log('Total de líneas:', lineas.length);
 
-  // Patrones más flexibles para diferentes formatos de laboratorio
-  // Formato 1: NOMBRE  VALOR  UNIDAD  RANGO
-  // Formato 2: NOMBRE VALOR UNIDAD
-  const patrones = [
-    // Patrón principal: nombre en mayúsculas seguido de número
-    /^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i,
-    // Patrón alternativo: nombre con minúsculas
-    /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,40})\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i
-  ];
-
   // Palabras clave a excluir
   const excluir = [
     'protocolo', 'fecha', 'paciente', 'apellido', 'nombre', 'dni', 'edad',
     'sexo', 'medico', 'servicio', 'clinica', 'laboratorio', 'dosaje',
-    'resultado', 'valores', 'referencia', 'metodo', 'marca', 'reactivo',
-    'observaciones', 'firma', 'profesional', 'matricula', 'bioquimico',
-    'pagina', 'page', 'hoja', 'codigo'
+    'resultado', 'valores', 'referencia', 'observaciones', 'firma', 
+    'profesional', 'matricula', 'bioquimico', 'pagina', 'page', 'hoja', 
+    'codigo', 'practica', 'tel:', 'necochea'
   ];
 
   for (let i = 0; i < lineas.length; i++) {
     const linea = lineas[i].trim();
     
     // Saltar líneas vacías o muy cortas
-    if (!linea || linea.length < 5) continue;
+    if (!linea || linea.length < 2) continue;
 
-    // Saltar líneas que contengan palabras a excluir
     const lineaLower = linea.toLowerCase();
+    
+    // Saltar líneas que contengan palabras a excluir
     if (excluir.some(palabra => lineaLower.includes(palabra))) {
       continue;
     }
 
-    // Intentar con cada patrón
-    for (const patron of patrones) {
-      const match = linea.match(patron);
-      if (match) {
-        const nombreParam = match[1].trim();
-        const valor = match[2];
-        const unidad = match[3] || '';
+    // FORMATO 1: Nombre del parámetro en una línea (solo letras mayúsculas/minúsculas)
+    // Ejemplo: "GLUCEMIA" o "pH" o "pCO2" o "HCO3-"
+    const esNombreParametro = /^[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+]{1,30}$/.test(linea);
+    
+    if (esNombreParametro && i + 1 < lineas.length) {
+      const siguienteLinea = lineas[i + 1].trim();
+      
+      // Buscar valor en la siguiente línea: "118 mg/dl 70 - 100 mg/dl"
+      const patronValor = /^([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
+      const matchValor = siguienteLinea.match(patronValor);
+      
+      if (matchValor) {
+        const nombreParam = linea;
+        const valor = matchValor[1];
+        const unidad = matchValor[2] || '';
         
-        // Validaciones adicionales
-        if (nombreParam.length < 3 || /^\d+$/.test(nombreParam)) {
-          continue;
-        }
-
-        // Buscar valores de referencia en la misma línea
+        // Buscar valores de referencia en el resto de la línea
         let valorReferencia = '';
-        const restoLinea = linea.substring(match.index + match[0].length);
-        const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);        if (rangoMatch) {
+        const restoLinea = siguienteLinea.substring(matchValor[0].length).trim();
+        const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);
+        if (rangoMatch) {
           valorReferencia = rangoMatch[1].trim();
+        } else if (restoLinea.length > 0 && restoLinea.length < 50) {
+          // Si no hay rango numérico, tomar el texto como referencia
+          valorReferencia = restoLinea;
         }
 
         const parametro = {
@@ -225,10 +223,49 @@ const extraerParametros = (texto, tipoEstudio) => {
           marcaReactivo: null
         };
 
-        console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad}`);
+        console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
         parametros.push(parametro);
-        break; // Salir del loop de patrones si encontramos match
+        
+        // Saltar la siguiente línea ya que la procesamos
+        i++;
+        continue;
       }
+    }
+
+    // FORMATO 2: Nombre y valor en la misma línea
+    // Ejemplo: "GLUCEMIA 118 mg/dl"
+    const patronLinea = /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{2,40}?)\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i;
+    const matchLinea = linea.match(patronLinea);
+    
+    if (matchLinea) {
+      const nombreParam = matchLinea[1].trim();
+      const valor = matchLinea[2];
+      const unidad = matchLinea[3] || '';
+      
+      // Validar que no sea solo números
+      if (/^\d+$/.test(nombreParam)) {
+        continue;
+      }
+
+      // Buscar valores de referencia
+      let valorReferencia = '';
+      const restoLinea = linea.substring(matchLinea.index + matchLinea[0].length).trim();
+      const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);
+      if (rangoMatch) {
+        valorReferencia = rangoMatch[1].trim();
+      }
+
+      const parametro = {
+        nombreParametro: nombreParam,
+        resultado: valor.replace(',', '.'),
+        unidadMedida: unidad.trim(),
+        valorReferencia: valorReferencia,
+        metodo: null,
+        marcaReactivo: null
+      };
+
+      console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
+      parametros.push(parametro);
     }
   }
 
