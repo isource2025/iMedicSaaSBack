@@ -341,7 +341,11 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     // FORMATO D: "Resultado:  210 .000 /mm3" (plaquetas y similares)
     // Limpiar espacios dentro del número primero
     // ═══════════════════════════════════════════════
-    const lineaLimpia = linea.replace(/(\d+)\s+\.(\d+)/g, '$1.$2');
+    // Limpiar espacios entre números y puntos: "210 .000" -> "210.000", también múltiples
+    let lineaLimpia = linea;
+    while (/(\d)\s+\.(\d)/.test(lineaLimpia)) {
+      lineaLimpia = lineaLimpia.replace(/(\d)\s+\.(\d)/g, '$1.$2');
+    }
     const matchResultado = lineaLimpia.match(/^Resultado:\s*(-?[\d]+(?:[\.\,]\d+)*)\s*(.*)/i);
     if (matchResultado) {
       let nombreParam = 'Resultado';
@@ -380,6 +384,33 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
           i++;
           continue;
         }
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // POST-PROCESAMIENTO: Mapear valores de referencia huérfanos
+  // PDFs con columnas separadas extraen referencias como líneas sueltas
+  // Ej: "3.800-10.000/mm3", "42-50%", "55-65" -> asignar en orden
+  // ═══════════════════════════════════════════════
+  const lineasReferencia = [];
+  for (const linea of lineas) {
+    // Detectar líneas que son rangos de referencia: "3.800-10.000/mm3", "42-50%", "55-65", "0.5-4", "0"
+    const esRango = /^[\d\.\,]+\s*[-–]\s*[\d\.\,]+/.test(linea); // "3.800-10.000", "42-50"
+    const esCero = /^0$/.test(linea); // "0" solo
+    if (esRango || esCero) {
+      lineasReferencia.push(linea);
+    }
+  }
+
+  if (lineasReferencia.length > 0) {
+    console.log(`\n--- Asignando ${lineasReferencia.length} valores de referencia huérfanos ---`);
+    let refIdx = 0;
+    for (let p = 0; p < parametros.length && refIdx < lineasReferencia.length; p++) {
+      if (!parametros[p].valorReferencia || parametros[p].valorReferencia.trim() === '') {
+        parametros[p].valorReferencia = lineasReferencia[refIdx];
+        console.log(`  → ${parametros[p].nombreParametro}: ref = "${lineasReferencia[refIdx]}"`);
+        refIdx++;
       }
     }
   }
