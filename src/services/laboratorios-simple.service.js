@@ -27,14 +27,14 @@ const guardarExamen = async (cabecera, detalles) => {
     console.log('Cabecera recibida:', JSON.stringify(cabecera, null, 2));
     console.log('Cantidad de detalles:', detalles.length);
 
-    // Convertir fecha de YYYY-MM-DD a DATETIME para SQL Server
+    // Mantener fecha en formato YYYY-MM-DD sin hora para evitar problemas de timezone
     let fechaExamen = cabecera.FechaExamen;
     if (typeof fechaExamen === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fechaExamen)) {
-      // Agregar hora si no la tiene
-      if (cabecera.HoraExamen) {
+      // Si hay hora, agregarla; si no, usar mediodía (12:00) para evitar cambios de día por timezone
+      if (cabecera.HoraExamen && cabecera.HoraExamen !== '00:00') {
         fechaExamen = `${fechaExamen} ${cabecera.HoraExamen}:00`;
       } else {
-        fechaExamen = `${fechaExamen} 00:00:00`;
+        fechaExamen = `${fechaExamen} 12:00:00`;
       }
     }
     console.log('Fecha convertida para SQL:', fechaExamen);
@@ -64,8 +64,58 @@ const guardarExamen = async (cabecera, detalles) => {
     await executeQuery(consultaCabecera, params);
     console.log('✓ Cabecera guardada con ID:', idExamen);
 
-    // 2. Insertar detalles
-    console.log(`Insertando ${detalles.length} detalles...`);
+    // 2. Gestionar valores de referencia en el catálogo (imHCExamenesLabDetalleConf)
+    console.log(`\n--- Gestionando valores de referencia en catálogo ---`);
+    for (let i = 0; i < detalles.length; i++) {
+      const detalle = detalles[i];
+      
+      // Verificar si ya existe configuración para este parámetro
+      const consultaExiste = `
+        SELECT * FROM imHCExamenesLabDetalleConf
+        WHERE IdTipoLaboratorio = @p0 AND Estudio = @p1
+      `;
+      const existe = await executeQuery(consultaExiste, [
+        { value: cabecera.TipoEstudio },
+        { value: detalle.NombreParametro }
+      ]);
+
+      if (existe.length === 0 && (detalle.ValorReferencia || detalle.UnidadMedida)) {
+        // No existe, crear configuración nueva
+        console.log(`  → Creando configuración para: ${detalle.NombreParametro}`);
+        
+        // Parsear valor de referencia para extraer min/max
+        let valorMin = null, valorMax = null, valorNormal = null;
+        if (detalle.ValorReferencia) {
+          const rangoMatch = detalle.ValorReferencia.match(/^([\d\.\,]+)\s*[-–]\s*([\d\.\,]+)/);
+          if (rangoMatch) {
+            valorMin = rangoMatch[1];
+            valorMax = rangoMatch[2];
+          } else {
+            valorNormal = detalle.ValorReferencia;
+          }
+        }
+
+        const consultaInsertConf = `
+          INSERT INTO imHCExamenesLabDetalleConf
+          (IdTipoLaboratorio, Orden, Estudio, ValorMinimo, ValorMaximo, ValorNormal, AlertaCritica)
+          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6)
+        `;
+        await executeQuery(consultaInsertConf, [
+          { value: cabecera.TipoEstudio },
+          { value: i + 1 },
+          { value: detalle.NombreParametro },
+          { value: valorMin || '' },
+          { value: valorMax || '' },
+          { value: valorNormal || '' },
+          { value: 0 } // AlertaCritica = false
+        ]);
+      } else if (existe.length > 0) {
+        console.log(`  ✓ Configuración existente para: ${detalle.NombreParametro}`);
+      }
+    }
+
+    // 3. Insertar detalles
+    console.log(`\nInsertando ${detalles.length} detalles...`);
     for (let i = 0; i < detalles.length; i++) {
       const detalle = detalles[i];
       console.log(`  Detalle ${i + 1}:`, detalle.NombreParametro, '=', detalle.Resultado);
@@ -123,13 +173,24 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
     for (const cab of cabeceras) {
       const consultaDetalle = `
         SELECT 
-          Estudio as NombreParametro,
-          Valor as Resultado,
-          Orden,
+          d.Estudio as NombreParametro,
+          d.Valor as Resultado,
+          d.Orden,
+          CASE 
+            WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
+            THEN conf.ValorMinimo + '-' + conf.ValorMaximo
+            WHEN conf.ValorNormal IS NOT NULL 
+            THEN conf.ValorNormal
+            ELSE NULL
+          END as ValorReferencia,
+          '' as UnidadMedida,
           0 as FueraDeRango
-        FROM imHCExamenesLabDetalle
-        WHERE IdExamenLaboratorio = @p0
-        ORDER BY Orden
+        FROM imHCExamenesLabDetalle d
+        LEFT JOIN imHCExamenesLabDetalleConf conf 
+          ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
+          AND d.Estudio = conf.Estudio
+        WHERE d.IdExamenLaboratorio = @p0
+        ORDER BY d.Orden
       `;
 
       const detalles = await executeQuery(consultaDetalle, [{ value: cab.IdExamen }]);
@@ -172,13 +233,24 @@ const obtenerExamenPorId = async (idExamen) => {
 
     const consultaDetalle = `
       SELECT 
-        Estudio as NombreParametro,
-        Valor as Resultado,
-        Orden,
+        d.Estudio as NombreParametro,
+        d.Valor as Resultado,
+        d.Orden,
+        CASE 
+          WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
+          THEN conf.ValorMinimo + '-' + conf.ValorMaximo
+          WHEN conf.ValorNormal IS NOT NULL 
+          THEN conf.ValorNormal
+          ELSE NULL
+        END as ValorReferencia,
+        '' as UnidadMedida,
         0 as FueraDeRango
-      FROM imHCExamenesLabDetalle
-      WHERE IdExamenLaboratorio = @p0
-      ORDER BY Orden
+      FROM imHCExamenesLabDetalle d
+      LEFT JOIN imHCExamenesLabDetalleConf conf 
+        ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
+        AND d.Estudio = conf.Estudio
+      WHERE d.IdExamenLaboratorio = @p0
+      ORDER BY d.Orden
     `;
 
     const detalles = await executeQuery(consultaDetalle, [{ value: idExamen }]);
