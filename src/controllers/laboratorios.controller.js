@@ -35,10 +35,25 @@ const uploadYProcesarOCR = async (req, res) => {
 
     const { numeroVisita } = req.body;
     
+    console.log('📄 Archivo recibido:');
+    console.log('  - Nombre original:', req.file.originalname);
+    console.log('  - MIME type:', req.file.mimetype);
+    console.log('  - Tamaño:', req.file.size, 'bytes');
+    console.log('  - Buffer length:', req.file.buffer.length);
+    console.log('  - Primeros 20 bytes:', req.file.buffer.slice(0, 20).toString('hex'));
+    
     if (!numeroVisita) {
       return res.status(400).json({
         success: false,
         error: 'El número de visita es requerido'
+      });
+    }
+
+    // Validar que el archivo no esté vacío o corrupto
+    if (req.file.size < 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'El archivo está vacío o corrupto (tamaño menor a 100 bytes)'
       });
     }
 
