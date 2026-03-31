@@ -14,6 +14,11 @@ const sharp = require('sharp');
 const extraerTextoDePDF = async (buffer) => {
   try {
     const data = await pdf(buffer);
+    console.log('\n=== PDF EXTRAÍDO ===');
+    console.log('Número de páginas:', data.numpages);
+    console.log('Longitud del texto:', data.text.length);
+    console.log('Primeros 500 caracteres:', data.text.substring(0, 500));
+    console.log('==================\n');
     return data.text;
   } catch (error) {
     console.error('Error al extraer texto del PDF:', error);
@@ -157,65 +162,78 @@ const extraerParametros = (texto, tipoEstudio) => {
   const parametros = [];
   const lineas = texto.split('\n');
 
-  // Patrones mejorados para detectar líneas con resultados
-  // Buscar líneas que tengan: NOMBRE_PARAMETRO seguido de NUMERO mg/dl o similar
-  const patronResultado = /^([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\s\(\)\-\/]+?)\s+([\d\.,]+)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3)?\s*([\d\.,\s\-]+)?/i;
+  console.log('\n=== EXTRAYENDO PARÁMETROS ===');
+  console.log('Total de líneas:', lineas.length);
+
+  // Patrones más flexibles para diferentes formatos de laboratorio
+  // Formato 1: NOMBRE  VALOR  UNIDAD  RANGO
+  // Formato 2: NOMBRE VALOR UNIDAD
+  const patrones = [
+    // Patrón principal: nombre en mayúsculas seguido de número
+    /^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{2,40})\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i,
+    // Patrón alternativo: nombre con minúsculas
+    /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,40})\s+([\d]+[\.,]?[\d]*)\s*(mg\/dl|g\/dl|meq\/l|U\/l|mmHg|%|\/mm3|mEq\/L)?/i
+  ];
+
+  // Palabras clave a excluir
+  const excluir = [
+    'protocolo', 'fecha', 'paciente', 'apellido', 'nombre', 'dni', 'edad',
+    'sexo', 'medico', 'servicio', 'clinica', 'laboratorio', 'dosaje',
+    'resultado', 'valores', 'referencia', 'metodo', 'marca', 'reactivo',
+    'observaciones', 'firma', 'profesional', 'matricula', 'bioquimico',
+    'pagina', 'page', 'hoja', 'codigo'
+  ];
 
   for (let i = 0; i < lineas.length; i++) {
     const linea = lineas[i].trim();
     
-    // Saltar líneas vacías, encabezados, o líneas que no sean parámetros
-    if (!linea || 
-        linea.length < 5 ||
-        linea.includes('Dosaje') || 
-        linea.includes('Resultado') || 
-        linea.includes('Valores de referencia') ||
-        linea.includes('Protocolo') ||
-        linea.includes('CLINICA') ||
-        linea.includes('Metodo') ||
-        linea.includes('Marca de Reactivo') ||
-        linea.includes('Observaciones')) {
+    // Saltar líneas vacías o muy cortas
+    if (!linea || linea.length < 5) continue;
+
+    // Saltar líneas que contengan palabras a excluir
+    const lineaLower = linea.toLowerCase();
+    if (excluir.some(palabra => lineaLower.includes(palabra))) {
       continue;
     }
 
-    const match = linea.match(patronResultado);
-    if (match) {
-      const nombreParam = match[1].trim();
-      
-      // Validar que el nombre del parámetro sea válido (no sea un número o muy corto)
-      if (nombreParam.length < 3 || /^\d+$/.test(nombreParam)) {
-        continue;
-      }
-
-      const parametro = {
-        nombreParametro: nombreParam,
-        resultado: match[2].replace(',', '.'),
-        unidadMedida: match[3] ? match[3].trim() : '',
-        valorReferencia: match[4] ? match[4].trim() : '',
-        metodo: null,
-        marcaReactivo: null
-      };
-
-      // Buscar método en las siguientes líneas
-      if (i + 1 < lineas.length) {
-        const siguienteLinea = lineas[i + 1].trim();
-        if (siguienteLinea.includes('Metodo:') || siguienteLinea.includes('Método:')) {
-          const metodoMatch = siguienteLinea.match(/(?:Metodo|Método):\s*(.+)/i);
-          if (metodoMatch) {
-            parametro.metodo = metodoMatch[1].trim();
-          }
+    // Intentar con cada patrón
+    for (const patron of patrones) {
+      const match = linea.match(patron);
+      if (match) {
+        const nombreParam = match[1].trim();
+        const valor = match[2];
+        const unidad = match[3] || '';
+        
+        // Validaciones adicionales
+        if (nombreParam.length < 3 || /^\d+$/.test(nombreParam)) {
+          continue;
         }
-        if (siguienteLinea.includes('Marca de Reactivo:')) {
-          const marcaMatch = siguienteLinea.match(/Marca de Reactivo:\s*(.+)/i);
-          if (marcaMatch) {
-            parametro.marcaReactivo = marcaMatch[1].trim();
-          }
-        }
-      }
 
-      parametros.push(parametro);
+        // Buscar valores de referencia en la misma línea
+        let valorReferencia = '';
+        const restoLinea = linea.substring(match.index + match[0].length);
+        const rangoMatch = restoLinea.match(/([\d]+[\.,]?[\d]*\s*-\s*[\d]+[\.,]?[\d]*)/);        if (rangoMatch) {
+          valorReferencia = rangoMatch[1].trim();
+        }
+
+        const parametro = {
+          nombreParametro: nombreParam,
+          resultado: valor.replace(',', '.'),
+          unidadMedida: unidad.trim(),
+          valorReferencia: valorReferencia,
+          metodo: null,
+          marcaReactivo: null
+        };
+
+        console.log(`✓ Parámetro encontrado: ${nombreParam} = ${valor} ${unidad}`);
+        parametros.push(parametro);
+        break; // Salir del loop de patrones si encontramos match
+      }
     }
   }
+
+  console.log(`Total parámetros extraídos: ${parametros.length}`);
+  console.log('===========================\n');
 
   return parametros;
 };
@@ -228,6 +246,12 @@ const extraerParametros = (texto, tipoEstudio) => {
  */
 const procesarDocumento = async (buffer, mimeType) => {
   try {
+    console.log('\n╔════════════════════════════════════════╗');
+    console.log('║   PROCESANDO DOCUMENTO DE LABORATORIO  ║');
+    console.log('╚════════════════════════════════════════╝');
+    console.log('Tipo MIME:', mimeType);
+    console.log('Tamaño buffer:', buffer.length, 'bytes');
+
     let textoExtraido = '';
 
     // Determinar tipo de archivo y extraer texto
@@ -241,15 +265,22 @@ const procesarDocumento = async (buffer, mimeType) => {
 
     // Limpiar texto
     const textoLimpio = limpiarTextoOCR(textoExtraido);
+    console.log('Texto limpio - longitud:', textoLimpio.length);
 
     // Detectar tipo de estudio
     const tipoEstudio = detectarTipoEstudio(textoLimpio);
+    console.log('Tipo de estudio detectado:', tipoEstudio);
 
     // Extraer información de cabecera
     const infoCabecera = extraerInfoCabecera(textoLimpio);
+    console.log('Cabecera extraída:', JSON.stringify(infoCabecera, null, 2));
 
     // Extraer parámetros
     const parametros = extraerParametros(textoLimpio, tipoEstudio);
+
+    console.log('\n╔════════════════════════════════════════╗');
+    console.log('║   PROCESAMIENTO COMPLETADO             ║');
+    console.log('╚════════════════════════════════════════╝\n');
 
     return {
       success: true,
@@ -259,7 +290,8 @@ const procesarDocumento = async (buffer, mimeType) => {
       textoCompleto: textoLimpio
     };
   } catch (error) {
-    console.error('Error al procesar documento:', error);
+    console.error('\n✗ Error al procesar documento:', error);
+    console.error(error.stack);
     throw error;
   }
 };
