@@ -66,8 +66,6 @@ const limpiarTextoOCR = (texto) => {
   return texto
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/\s{2,}/g, ' ')
     .trim();
 };
 
@@ -158,133 +156,151 @@ const extraerInfoCabecera = (texto) => {
  * @param {string} tipoEstudio - Tipo de estudio detectado
  * @returns {Array} Array de parámetros extraídos
  */
-const extraerParametros = (texto, tipoEstudio) => {
+const extraerParametros = (textoOriginal, tipoEstudio) => {
   const parametros = [];
-  const lineas = texto.split('\n');
-  const parametrosEncontrados = new Set(); // Evitar duplicados
+  const parametrosEncontrados = new Set();
 
-  console.log('\n=== EXTRAYENDO PARÁMETROS (MODO FLEXIBLE) ===');
-  console.log('Total de líneas:', lineas.length);
+  console.log('\n=== EXTRAYENDO PARÁMETROS (BÚSQUEDA GLOBAL) ===');
 
-  // Palabras clave a excluir (más restrictivo)
-  const excluirCompleto = ['protocolo', 'fecha', 'paciente', 'apellido', 'nombre', 'dni', 'edad', 'sexo', 'medico', 'servicio', 'clinica', 'laboratorio', 'observaciones', 'firma', 'profesional', 'matricula', 'bioquimico', 'pagina', 'page', 'hoja', 'tel:', 'necochea', 'corrientes', 'capital'];
-  
-  // Unidades comunes de laboratorio
-  const unidadesComunes = ['mg/dl', 'g/dl', 'meq/l', 'mmol/l', 'u/l', 'mmhg', '%', '/mm3', 'ml/min'];
+  // Usar el texto CRUDO del PDF (con saltos de línea originales)
+  // Primero normalizar saltos de línea pero NO colapsar espacios
+  const texto = textoOriginal
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
 
+  // Mostrar TODAS las líneas para debug
+  const lineas = texto.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  console.log('Líneas no vacías:');
+  lineas.forEach((l, idx) => console.log(`  [${idx}] "${l}"`));
+
+  // ESTRATEGIA PRINCIPAL: Recorrer línea por línea
+  // Si una línea es SOLO un nombre (letras, números, guiones), 
+  // buscar el valor en la SIGUIENTE línea no vacía
   for (let i = 0; i < lineas.length; i++) {
-    const linea = lineas[i].trim();
-    
-    // Saltar líneas vacías
-    if (!linea || linea.length < 2) continue;
-
+    const linea = lineas[i];
     const lineaLower = linea.toLowerCase();
-    
-    // Saltar líneas que contengan palabras a excluir
-    if (excluirCompleto.some(palabra => lineaLower.includes(palabra))) {
-      console.log(`  ⊗ Línea ${i} excluida: "${linea}"`);
+
+    // Saltar líneas de metadata/encabezado
+    if (lineaLower.includes('protocolo') ||
+        lineaLower.includes('d.n.i') ||
+        lineaLower.includes('resultado') ||
+        lineaLower.includes('practica') ||
+        lineaLower.includes('dosaje') ||
+        lineaLower.includes('metodo:') ||
+        lineaLower.includes('marca de reactivo') ||
+        lineaLower.includes('hombre:') ||
+        lineaLower.includes('mujer:') ||
+        lineaLower.includes('pagina ') ||
+        lineaLower.includes('necochea') ||
+        lineaLower.includes('tel:') ||
+        lineaLower.includes('h.c:')) {
       continue;
     }
 
-    // ESTRATEGIA 1: Detectar nombre de parámetro corto (2-15 caracteres, solo letras/números/-/+)
-    // Ejemplos: "pH", "pCO2", "HCO3-", "EB", "SatO2", "GLUCEMIA"
-    const esNombreCorto = /^[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+]{0,14}$/.test(linea);
-    
-    if (esNombreCorto && i + 1 < lineas.length) {
-      const siguienteLinea = lineas[i + 1].trim();
-      console.log(`  → Línea ${i}: "${linea}" (posible parámetro)`);
-      console.log(`     Siguiente línea ${i+1}: "${siguienteLinea}"`);
-      
-      // Buscar CUALQUIER número al inicio de la siguiente línea (muy flexible)
-      const matchNumero = siguienteLinea.match(/^(-?[\d]+[\.,]?[\d]*)/);
-      
-      if (matchNumero) {
-        console.log(`     ✓ Match número: "${matchNumero[1]}"`);
+    // ¿Es un nombre de parámetro? (solo texto, sin números sueltos al inicio)
+    // Acepta: "pH", "pCO2", "HCO3-", "EB", "SatO2", "GLUCEMIA", "ESTADO ACIDO BASE"
+    const esNombre = /^[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.]*$/.test(linea) && linea.length <= 40;
 
-        const nombreParam = linea;
-        const valor = matchNumero[1];
+    if (esNombre) {
+      // Buscar la siguiente línea que empiece con un número
+      if (i + 1 < lineas.length) {
+        const sigLinea = lineas[i + 1];
+        const matchVal = sigLinea.match(/^(-?[\d]+[\.,]?[\d]*)\s*(.*)/);
         
-        // Buscar unidad después del número
-        let unidad = '';
-        const restoLinea = siguienteLinea.substring(matchNumero[0].length).trim();
-        const matchUnidad = restoLinea.match(/^([a-z\/\%]+)/i);
-        if (matchUnidad) {
-          unidad = matchUnidad[1];
-        }
-        
-        // Buscar valores de referencia (muy flexible)
-        let valorReferencia = '';
-        const textoRestante = restoLinea.replace(/^[a-z\/\%]+/i, '').trim();
-        // Capturar cualquier cosa que parezca un rango o valor de referencia
-        if (textoRestante.length > 0 && textoRestante.length < 150) {
-          valorReferencia = textoRestante;
-        }
+        if (matchVal) {
+          const nombre = linea;
+          const valor = matchVal[1];
+          const resto = matchVal[2].trim();
 
-        // Evitar duplicados
-        const key = `${nombreParam}_${valor}`;
-        if (!parametrosEncontrados.has(key)) {
-          parametrosEncontrados.add(key);
-          
-          const parametro = {
-            nombreParametro: nombreParam,
-            resultado: valor.replace(',', '.'),
-            unidadMedida: unidad.trim(),
-            valorReferencia: valorReferencia,
-            metodo: null,
-            marcaReactivo: null
-          };
+          // Extraer unidad del resto
+          let unidad = '';
+          let valorRef = '';
+          const matchUnidad = resto.match(/^(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos)/i);
+          if (matchUnidad) {
+            unidad = matchUnidad[1];
+            valorRef = resto.substring(matchUnidad[0].length).trim();
+          } else {
+            // Sin unidad conocida, todo el resto es referencia
+            valorRef = resto;
+          }
 
-          console.log(`✓ [Estrategia 1] ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
-          parametros.push(parametro);
-          
-          i++; // Saltar la siguiente línea
+          // Limpiar valor de referencia: quitar nombres de parámetros que se pegaron al final
+          // Ej: "7.35 - 7.45 pCO2" -> ref="7.35 - 7.45", y pCO2 se procesará después
+          // No hacer nada aquí, lo dejamos como está
+
+          const key = nombre.toUpperCase();
+          if (!parametrosEncontrados.has(key) && 
+              !lineaLower.includes('estado acido') &&
+              !lineaLower.includes('quimica') &&
+              !lineaLower.includes('hematologia') &&
+              !lineaLower.includes('ionograma') &&
+              !lineaLower.includes('hepatograma') &&
+              !lineaLower.includes('hemograma') &&
+              !lineaLower.includes('coagulograma')) {
+            parametrosEncontrados.add(key);
+
+            // Limpiar valorRef de nombres de params pegados
+            valorRef = valorRef.replace(/\s+[A-Za-z][A-Za-z0-9\-\+]*\s*$/g, '').trim();
+
+            parametros.push({
+              nombreParametro: nombre,
+              resultado: valor.replace(',', '.'),
+              unidadMedida: unidad,
+              valorReferencia: valorRef,
+              metodo: null,
+              marcaReactivo: null
+            });
+
+            console.log(`✓ ${nombre} = ${valor} ${unidad} (ref: ${valorRef})`);
+            i++; // Saltar línea del valor
+          }
           continue;
         }
       }
+      // Si es un título de sección (ESTADO ACIDO BASE, QUIMICA CLINICA), simplemente seguir
+      continue;
     }
 
-    // ESTRATEGIA 2: Nombre y valor en la misma línea (muy flexible)
-    // Buscar: PALABRA(S) seguida de NÚMERO
-    const matchMismaLinea = linea.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+\s]{1,40}?)\s+(-?[\d]+[\.,]?[\d]*)/);
-    
-    if (matchMismaLinea) {
-      const nombreParam = matchMismaLinea[1].trim();
-      const valor = matchMismaLinea[2];
+    // ESTRATEGIA 2: Línea con "Observaciones: CLORO" u otros datos pegados
+    // Buscar si hay un nombre de parámetro después de "Observaciones:"
+    const matchObs = linea.match(/Observaciones:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\-\+]{1,20})\s*$/i);
+    if (matchObs && i + 1 < lineas.length) {
+      // El nombre del parámetro está pegado después de "Observaciones:"
+      const nombrePegado = matchObs[1].trim();
+      const sigLinea = lineas[i + 1];
+      const matchVal = sigLinea.match(/^(-?[\d]+[\.,]?[\d]*)\s*(.*)/);
       
-      // Validar que el nombre no sea solo números y no sea muy largo
-      if (/^\d+$/.test(nombreParam) || nombreParam.length > 40) {
+      if (matchVal) {
+        const valor = matchVal[1];
+        const resto = matchVal[2].trim();
+        let unidad = '';
+        let valorRef = '';
+        const matchUnidad = resto.match(/^(mg\/dl|g\/dl|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos)/i);
+        if (matchUnidad) {
+          unidad = matchUnidad[1];
+          valorRef = resto.substring(matchUnidad[0].length).trim();
+        } else {
+          valorRef = resto;
+        }
+
+        const key = nombrePegado.toUpperCase();
+        if (!parametrosEncontrados.has(key)) {
+          parametrosEncontrados.add(key);
+          valorRef = valorRef.replace(/\s+[A-Za-z][A-Za-z0-9\-\+]*\s*$/g, '').trim();
+          
+          parametros.push({
+            nombreParametro: nombrePegado,
+            resultado: valor.replace(',', '.'),
+            unidadMedida: unidad,
+            valorReferencia: valorRef,
+            metodo: null,
+            marcaReactivo: null
+          });
+
+          console.log(`✓ ${nombrePegado} = ${valor} ${unidad} (ref: ${valorRef}) [rescatado de Observaciones]`);
+          i++;
+        }
         continue;
-      }
-
-      // Buscar unidad y referencia
-      const restoLinea = linea.substring(matchMismaLinea[0].length).trim();
-      let unidad = '';
-      let valorReferencia = '';
-      
-      const matchUnidad = restoLinea.match(/^([a-z\/\%]+)/i);
-      if (matchUnidad) {
-        unidad = matchUnidad[1];
-        valorReferencia = restoLinea.substring(matchUnidad[0].length).trim();
-      } else {
-        valorReferencia = restoLinea;
-      }
-
-      // Evitar duplicados
-      const key = `${nombreParam}_${valor}`;
-      if (!parametrosEncontrados.has(key)) {
-        parametrosEncontrados.add(key);
-        
-        const parametro = {
-          nombreParametro: nombreParam,
-          resultado: valor.replace(',', '.'),
-          unidadMedida: unidad.trim(),
-          valorReferencia: valorReferencia.substring(0, 150),
-          metodo: null,
-          marcaReactivo: null
-        };
-
-        console.log(`✓ [Estrategia 2] ${nombreParam} = ${valor} ${unidad} (ref: ${valorReferencia})`);
-        parametros.push(parametro);
       }
     }
   }
@@ -332,8 +348,8 @@ const procesarDocumento = async (buffer, mimeType) => {
     const infoCabecera = extraerInfoCabecera(textoLimpio);
     console.log('Cabecera extraída:', JSON.stringify(infoCabecera, null, 2));
 
-    // Extraer parámetros
-    const parametros = extraerParametros(textoLimpio, tipoEstudio);
+    // Extraer parámetros - usar texto ORIGINAL (no limpio) para preservar saltos de línea
+    const parametros = extraerParametros(textoExtraido, tipoEstudio);
 
     console.log('\n╔════════════════════════════════════════╗');
     console.log('║   PROCESAMIENTO COMPLETADO             ║');
