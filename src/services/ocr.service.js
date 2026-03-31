@@ -12,17 +12,48 @@ const sharp = require('sharp');
  * @returns {Promise<string>} Texto extraído
  */
 const extraerTextoDePDF = async (buffer) => {
+  // Intento 1: pdf-parse normal
   try {
-    const data = await pdf(buffer);
-    console.log('\n=== PDF EXTRAÍDO ===');
+    const data = await pdf(buffer, { max: 0 });
+    console.log('\n=== PDF EXTRAÍDO (pdf-parse) ===');
     console.log('Número de páginas:', data.numpages);
     console.log('Longitud del texto:', data.text.length);
     console.log('Primeros 500 caracteres:', data.text.substring(0, 500));
     console.log('==================\n');
-    return data.text;
+    if (data.text && data.text.trim().length > 10) {
+      return data.text;
+    }
+    console.log('⚠ pdf-parse devolvió texto vacío o muy corto, intentando OCR...');
   } catch (error) {
-    console.error('Error al extraer texto del PDF:', error);
-    throw new Error('Error al procesar el PDF');
+    console.warn('⚠ pdf-parse falló:', error.message);
+    console.log('Intentando fallback con Tesseract OCR...');
+  }
+
+  // Intento 2: Convertir PDF a imagen y usar Tesseract OCR
+  try {
+    // sharp no soporta PDF directamente en todas las plataformas,
+    // pero podemos intentar renderizar la primera página
+    const image = await sharp(buffer, { density: 300 })
+      .greyscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer();
+
+    console.log('PDF convertido a imagen, ejecutando Tesseract OCR...');
+    const { data: { text } } = await Tesseract.recognize(
+      image,
+      'spa',
+      { logger: m => { if (m.status === 'recognizing text') console.log(`  OCR: ${Math.round(m.progress * 100)}%`); } }
+    );
+    console.log('\n=== PDF EXTRAÍDO (Tesseract fallback) ===');
+    console.log('Longitud del texto:', text.length);
+    console.log('Primeros 500 caracteres:', text.substring(0, 500));
+    console.log('==================\n');
+    return text;
+  } catch (ocrError) {
+    console.error('Error en fallback OCR:', ocrError.message);
+    throw new Error('Error al procesar el PDF: ni pdf-parse ni OCR pudieron extraer texto');
   }
 };
 
