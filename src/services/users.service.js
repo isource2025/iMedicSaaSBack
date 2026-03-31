@@ -10,12 +10,12 @@ const obtenerTodosLosUsuarios = async () => {
     const consulta = `
       SELECT 
         p.ValorPersonal,
-        p.CodOperador,
-        p.Apellido,
-        p.Nombres,
-        p.NombreRed,
-        p.NumeroDocumento,
-        p.Legajo,
+        ISNULL(RTRIM(LTRIM(p.CodOperador)), '') as CodOperador,
+        ISNULL(RTRIM(LTRIM(p.Apellido)), '') as Apellido,
+        ISNULL(RTRIM(LTRIM(p.Nombres)), '') as Nombres,
+        ISNULL(RTRIM(LTRIM(p.NombreRed)), '') as NombreRed,
+        ISNULL(RTRIM(LTRIM(p.NumeroDocumento)), '') as NumeroDocumento,
+        ISNULL(RTRIM(LTRIM(p.Legajo)), '') as Legajo,
         p.MarcadeBaja,
         p.FechaActual,
         ps.idSector,

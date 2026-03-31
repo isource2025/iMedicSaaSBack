@@ -45,6 +45,7 @@ const hciRoutes = require('./routes/hci.routes');
 const adjuntosRoutes = require('./routes/adjuntos.routes');
 const signosVitalesRoutes = require('./routes/signosVitales.routes');
 const usersRoutes = require('./routes/users.routes');
+const laboratoriosRoutes = require('./routes/laboratorios.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -117,6 +118,7 @@ app.use('/api/hci', hciRoutes);
 app.use('/api/adjuntos', adjuntosRoutes);
 app.use('/api/signos-vitales', signosVitalesRoutes);
 app.use('/api/admin/users', usersRoutes);
+app.use('/api/laboratorios', laboratoriosRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
