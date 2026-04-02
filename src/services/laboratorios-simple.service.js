@@ -227,9 +227,7 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
         c.IdTipoLaboratorio as TipoEstudio,
         c.IdPaciente as NumeroVisita,
         c.IdSector,
-        s.Descripcion as SectorDescripcion,
-        c.Laboratorio,
-        c.Observaciones
+        s.Descripcion as SectorDescripcion
       FROM imHCExamenesLabCabecera c
       LEFT JOIN imSectores s ON c.IdSector = s.Valor
       WHERE c.IdPaciente = @p0
