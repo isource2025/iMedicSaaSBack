@@ -180,9 +180,9 @@ const obtenerExamenPorId = async (req, res) => {
 const actualizarExamen = async (req, res) => {
   try {
     const { idExamen } = req.params;
-    const datos = req.body;
+    const { cabecera, detalles } = req.body;
 
-    const examen = await laboratoriosService.actualizarExamen(idExamen, datos);
+    const examen = await laboratoriosService.actualizarExamen(idExamen, cabecera, detalles);
 
     res.json({
       success: true,
