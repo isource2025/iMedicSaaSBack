@@ -55,15 +55,16 @@ const guardarExamen = async (cabecera, detalles) => {
     // 2. Insertar cabecera con el ID generado
     const consultaCabecera = `
       INSERT INTO imHCExamenesLabCabecera 
-      (IdExamenLaboratorio, NroProtocolo, FechaEstudio, IdPaciente, IdTipoLaboratorio)
-      VALUES (@p0, @p1, @p2, @p3, @p4)
+      (IdExamenLaboratorio, NumeroVisita, NroProtocolo, FechaEstudio, IdPaciente, IdTipoLaboratorio)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5)
     `;
 
     const params = [
       { value: idExamen },
+      { value: cabecera.NumeroVisita },
       { value: cabecera.Protocolo || '' },
       { value: fechaExamen },
-      { value: cabecera.NumeroVisita }, // Usar NumeroVisita como IdPaciente
+      { value: cabecera.NumeroVisita }, // Guardar también en IdPaciente por compatibilidad
       { value: cabecera.TipoEstudio }
     ];
 
@@ -332,6 +333,76 @@ const obtenerExamenPorId = async (idExamen) => {
 };
 
 /**
+ * Actualiza un examen existente
+ */
+const actualizarExamen = async (idExamen, cabecera, detalles) => {
+  try {
+    console.log('\n=== ACTUALIZANDO EXAMEN ===');
+    console.log('ID Examen:', idExamen);
+    console.log('Cabecera:', cabecera);
+    console.log('Cantidad de detalles:', detalles.length);
+
+    // Convertir fecha para SQL
+    let fechaExamen = cabecera.FechaExamen;
+    if (fechaExamen && !fechaExamen.includes(':')) {
+      if (cabecera.HoraExamen && cabecera.HoraExamen !== '00:00') {
+        fechaExamen = `${fechaExamen} ${cabecera.HoraExamen}:00`;
+      } else {
+        fechaExamen = `${fechaExamen} 12:00:00`;
+      }
+    }
+
+    // 1. Actualizar cabecera
+    const consultaCabecera = `
+      UPDATE imHCExamenesLabCabecera
+      SET NroProtocolo = @p0,
+          FechaEstudio = @p1,
+          IdTipoLaboratorio = @p2
+      WHERE IdExamenLaboratorio = @p3
+    `;
+
+    await executeQuery(consultaCabecera, [
+      { value: cabecera.Protocolo || '' },
+      { value: fechaExamen },
+      { value: cabecera.TipoEstudio },
+      { value: idExamen }
+    ]);
+    console.log('✓ Cabecera actualizada');
+
+    // 2. Eliminar detalles existentes
+    await executeQuery(
+      'DELETE FROM imHCExamenesLabDetalle WHERE IdExamenLaboratorio = @p0',
+      [{ value: idExamen }]
+    );
+    console.log('✓ Detalles anteriores eliminados');
+
+    // 3. Insertar detalles actualizados
+    for (let i = 0; i < detalles.length; i++) {
+      const det = detalles[i];
+      const consultaDetalle = `
+        INSERT INTO imHCExamenesLabDetalle
+        (IdExamenLaboratorio, Orden, IdTipoLaboratorio, Estudio, Valor)
+        VALUES (@p0, @p1, @p2, @p3, @p4)
+      `;
+
+      await executeQuery(consultaDetalle, [
+        { value: idExamen },
+        { value: det.Orden || i + 1 },
+        { value: cabecera.TipoEstudio },
+        { value: det.NombreParametro },
+        { value: det.Resultado }
+      ]);
+    }
+    console.log(`✓ ${detalles.length} detalles actualizados`);
+
+    return { success: true, idExamen };
+  } catch (error) {
+    console.error('Error al actualizar examen:', error);
+    throw error;
+  }
+};
+
+/**
  * Elimina un examen
  */
 const eliminarExamen = async (idExamen) => {
@@ -360,5 +431,6 @@ module.exports = {
   guardarExamen,
   obtenerExamenesPorVisita,
   obtenerExamenPorId,
+  actualizarExamen,
   eliminarExamen
 };
