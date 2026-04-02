@@ -1,5 +1,12 @@
 const { executeQuery } = require('../models/db');
 const ocrService = require('./ocr.service');
+const {
+  buscarParametroOCR,
+  validarRango,
+  registrarLogOCR,
+  crearParametroEnCatalogo,
+  parseNumeroOCR
+} = require('../utils/ocr-matcher');
 
 /**
  * Servicio simplificado para laboratorios usando tablas existentes
@@ -64,61 +71,102 @@ const guardarExamen = async (cabecera, detalles) => {
     await executeQuery(consultaCabecera, params);
     console.log('✓ Cabecera guardada con ID:', idExamen);
 
-    // 2. Gestionar valores de referencia en el catálogo (imHCExamenesLabDetalleConf)
-    console.log(`\n--- Gestionando valores de referencia en catálogo ---`);
+    // ═══════════════════════════════════════════════════════════════
+    // PIPELINE PROFESIONAL OCR
+    // OCR → NORMALIZACIÓN → MATCHING → VALIDACIÓN → PERSISTENCIA
+    // ═══════════════════════════════════════════════════════════════
+    
+    console.log(`\n╔═══════════════════════════════════════════════════════╗`);
+    console.log(`║  PIPELINE PROFESIONAL OCR - ${detalles.length} PARÁMETROS  ║`);
+    console.log(`╚═══════════════════════════════════════════════════════╝`);
+    
+    const detallesProcesados = [];
+    let parametrosNuevos = 0;
+    let parametrosMatcheados = 0;
+    let parametrosFueraRango = 0;
+    
     for (let i = 0; i < detalles.length; i++) {
       const detalle = detalles[i];
       
-      // Verificar si ya existe configuración para este parámetro
-      const consultaExiste = `
-        SELECT * FROM imHCExamenesLabDetalleConf
-        WHERE IdTipoLaboratorio = @p0 AND Estudio = @p1
-      `;
-      const existe = await executeQuery(consultaExiste, [
-        { value: cabecera.TipoEstudio },
-        { value: detalle.NombreParametro }
-      ]);
-
-      if (existe.length === 0 && (detalle.ValorReferencia || detalle.UnidadMedida)) {
-        // No existe, crear configuración nueva
-        console.log(`  → Creando configuración para: ${detalle.NombreParametro}`);
+      console.log(`\n[${i + 1}/${detalles.length}] Procesando: "${detalle.NombreParametro}"`);
+      
+      // ─────────────────────────────────────────────────
+      // ETAPA 1: MATCHING INTELIGENTE
+      // ─────────────────────────────────────────────────
+      const match = await buscarParametroOCR(
+        detalle.NombreParametro,
+        cabecera.TipoEstudio
+      );
+      
+      let nombreFinal = detalle.NombreParametro;
+      let parametroCatalogo = match.parametro;
+      
+      // Si es parámetro nuevo, crearlo en catálogo
+      if (match.esNuevo) {
+        console.log(`  → Creando parámetro nuevo en catálogo...`);
+        await crearParametroEnCatalogo(
+          cabecera.TipoEstudio,
+          detalle.NombreParametro,
+          detalle.ValorReferencia,
+          i + 1
+        );
+        parametrosNuevos++;
         
-        // Parsear valor de referencia para extraer min/max
-        let valorMin = null, valorMax = null, valorNormal = null;
-        if (detalle.ValorReferencia) {
-          const rangoMatch = detalle.ValorReferencia.match(/^([\d\.\,]+)\s*[-–]\s*([\d\.\,]+)/);
-          if (rangoMatch) {
-            valorMin = rangoMatch[1];
-            valorMax = rangoMatch[2];
-          } else {
-            valorNormal = detalle.ValorReferencia;
-          }
-        }
-
-        const consultaInsertConf = `
-          INSERT INTO imHCExamenesLabDetalleConf
-          (IdTipoLaboratorio, Orden, Estudio, ValorMinimo, ValorMaximo, ValorNormal, AlertaCritica)
-          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6)
-        `;
-        await executeQuery(consultaInsertConf, [
-          { value: cabecera.TipoEstudio },
-          { value: i + 1 },
-          { value: detalle.NombreParametro },
-          { value: valorMin || '' },
-          { value: valorMax || '' },
-          { value: valorNormal || '' },
-          { value: 0 } // AlertaCritica = false
-        ]);
-      } else if (existe.length > 0) {
-        console.log(`  ✓ Configuración existente para: ${detalle.NombreParametro}`);
+        // Recargar parámetro recién creado
+        const recargado = await buscarParametroOCR(
+          detalle.NombreParametro,
+          cabecera.TipoEstudio
+        );
+        parametroCatalogo = recargado.parametro;
+      } else {
+        // Usar nombre canónico del catálogo
+        nombreFinal = match.parametro.Estudio;
+        parametrosMatcheados++;
       }
+      
+      // ─────────────────────────────────────────────────
+      // ETAPA 2: VALIDACIÓN DE RANGO
+      // ─────────────────────────────────────────────────
+      const valorNumerico = parseNumeroOCR(detalle.Resultado);
+      const validacion = validarRango(valorNumerico, parametroCatalogo);
+      
+      if (validacion.fueraDeRango) {
+        console.log(`  ⚠ FUERA DE RANGO (${validacion.tipo}): ${detalle.Resultado}`);
+        parametrosFueraRango++;
+      }
+      
+      // ─────────────────────────────────────────────────
+      // ETAPA 3: LOG DE AUDITORÍA
+      // ─────────────────────────────────────────────────
+      await registrarLogOCR({
+        idExamen: idExamen,
+        textoOriginal: detalle.NombreParametro,
+        textoNormalizado: match.textoNormalizado || '',
+        parametroMatch: nombreFinal,
+        score: match.score,
+        tipoMatch: match.tipoMatch,
+        numeroVisita: cabecera.NumeroVisita,
+        tipoEstudio: cabecera.TipoEstudio
+      });
+      
+      // ─────────────────────────────────────────────────
+      // ETAPA 4: PERSISTENCIA
+      // ─────────────────────────────────────────────────
+      detallesProcesados.push({
+        nombreFinal,
+        resultado: detalle.Resultado,
+        fueraDeRango: validacion.fueraDeRango ? 1 : 0,
+        orden: i + 1
+      });
     }
-
-    // 3. Insertar detalles
-    console.log(`\nInsertando ${detalles.length} detalles...`);
-    for (let i = 0; i < detalles.length; i++) {
-      const detalle = detalles[i];
-      console.log(`  Detalle ${i + 1}:`, detalle.NombreParametro, '=', detalle.Resultado);
+    
+    // ═══════════════════════════════════════════════════════════════
+    // INSERCIÓN MASIVA DE DETALLES
+    // ═══════════════════════════════════════════════════════════════
+    console.log(`\n--- Insertando ${detallesProcesados.length} detalles en BD ---`);
+    
+    for (let i = 0; i < detallesProcesados.length; i++) {
+      const det = detallesProcesados[i];
       
       const consultaDetalle = `
         INSERT INTO imHCExamenesLabDetalle
@@ -126,17 +174,27 @@ const guardarExamen = async (cabecera, detalles) => {
         VALUES (@p0, @p1, @p2, @p3, @p4, @p5)
       `;
 
-      const paramsDetalle = [
+      await executeQuery(consultaDetalle, [
         { value: cabecera.TipoEstudio },
-        { value: detalle.NombreParametro },
-        { value: detalle.Resultado },
-        { value: i + 1 },
+        { value: det.nombreFinal },
+        { value: det.resultado },
+        { value: det.fueraDeRango },
         { value: idExamen },
-        { value: i + 1 }
-      ];
-
-      await executeQuery(consultaDetalle, paramsDetalle);
+        { value: det.orden }
+      ]);
     }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // RESUMEN DEL PIPELINE
+    // ═══════════════════════════════════════════════════════════════
+    console.log(`\n╔═══════════════════════════════════════════════════════╗`);
+    console.log(`║  RESUMEN DEL PIPELINE                                 ║`);
+    console.log(`╠═══════════════════════════════════════════════════════╣`);
+    console.log(`║  Total parámetros:        ${detalles.length.toString().padStart(3)}                        ║`);
+    console.log(`║  Matcheados (catálogo):   ${parametrosMatcheados.toString().padStart(3)}                        ║`);
+    console.log(`║  Nuevos (creados):        ${parametrosNuevos.toString().padStart(3)}                        ║`);
+    console.log(`║  Fuera de rango:          ${parametrosFueraRango.toString().padStart(3)}                        ║`);
+    console.log(`╚═══════════════════════════════════════════════════════╝`);
 
     console.log('✓ Examen guardado exitosamente con ID:', idExamen);
     console.log('=======================================\n');
