@@ -119,8 +119,15 @@ const guardarExamen = async (cabecera, detalles) => {
         );
         parametroCatalogo = recargado.parametro;
       } else {
-        // Usar nombre canónico del catálogo
-        nombreFinal = match.parametro.Estudio;
+        // Si es fuzzy match que requiere revisión, usar nombre original del OCR
+        // para evitar duplicados si el parámetro real aparece después
+        if (match.requiereRevision) {
+          console.log(`  → Usando nombre original del OCR para evitar duplicados`);
+          nombreFinal = detalle.NombreParametro;
+        } else {
+          // Match exacto o automático: usar nombre canónico del catálogo
+          nombreFinal = match.parametro.Estudio;
+        }
         parametrosMatcheados++;
       }
       
