@@ -153,8 +153,8 @@ async function buscarParametroOCR(textoOCR, tipoEstudio) {
         score: mejor.score,
         esNuevo: false
       };
-    } else if (mejor.score >= 0.75) {
-      console.log(`  ⚠ MATCH PROBABLE (0.75 ≤ score ≤ 0.90) - requiere revisión`);
+    } else if (mejor.score >= 0.85) {
+      console.log(`  ⚠ MATCH PROBABLE (0.85 ≤ score ≤ 0.90) - requiere revisión`);
       return {
         parametro: mejor,
         tipoMatch: 'FUZZY_PROBABLE',
