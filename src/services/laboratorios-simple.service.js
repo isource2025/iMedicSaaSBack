@@ -170,17 +170,16 @@ const guardarExamen = async (cabecera, detalles) => {
       
       const consultaDetalle = `
         INSERT INTO imHCExamenesLabDetalle
-        (IdTipoLaboratorio, Estudio, Valor, Indice, IdExamenLaboratorio, Orden)
-        VALUES (@p0, @p1, @p2, @p3, @p4, @p5)
+        (IdExamenLaboratorio, Orden, IdTipoLaboratorio, Estudio, Valor)
+        VALUES (@p0, @p1, @p2, @p3, @p4)
       `;
 
       await executeQuery(consultaDetalle, [
+        { value: idExamen },
+        { value: det.orden },
         { value: cabecera.TipoEstudio },
         { value: det.nombreFinal },
-        { value: det.resultado },
-        { value: det.fueraDeRango },
-        { value: idExamen },
-        { value: det.orden }
+        { value: det.resultado }
       ]);
     }
     
