@@ -7,11 +7,9 @@ const obtenerSectores = async () => {
   try {
     const consulta = `
       SELECT 
-        IdSector,
-        Descripcion,
-        Activo
+        Valor as IdSector,
+        Descripcion
       FROM imSectores
-      WHERE Activo = 1
       ORDER BY Descripcion
     `;
     
