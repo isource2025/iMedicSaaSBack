@@ -286,7 +286,8 @@ const obtenerExamenPorId = async (idExamen) => {
         NroProtocolo as Protocolo,
         FechaEstudio as FechaExamen,
         IdTipoLaboratorio as TipoEstudio,
-        IdPaciente as NumeroVisita
+        IdPaciente as NumeroVisita,
+        IdSector
       FROM imHCExamenesLabCabecera
       WHERE IdExamenLaboratorio = @p0
     `;
