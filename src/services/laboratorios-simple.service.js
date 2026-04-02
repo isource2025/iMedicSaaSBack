@@ -221,14 +221,19 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
     // Obtener cabeceras
     const consultaCabecera = `
       SELECT 
-        IdExamenLaboratorio as IdExamen,
-        NroProtocolo as Protocolo,
-        FechaEstudio as FechaExamen,
-        IdTipoLaboratorio as TipoEstudio,
-        IdPaciente as NumeroVisita
-      FROM imHCExamenesLabCabecera
-      WHERE IdPaciente = @p0
-      ORDER BY FechaEstudio DESC
+        c.IdExamenLaboratorio as IdExamen,
+        c.NroProtocolo as Protocolo,
+        c.FechaEstudio as FechaExamen,
+        c.IdTipoLaboratorio as TipoEstudio,
+        c.IdPaciente as NumeroVisita,
+        c.IdSector,
+        s.Descripcion as SectorDescripcion,
+        c.Laboratorio,
+        c.Observaciones
+      FROM imHCExamenesLabCabecera c
+      LEFT JOIN imSectores s ON c.IdSector = s.Valor
+      WHERE c.IdPaciente = @p0
+      ORDER BY c.FechaEstudio DESC
     `;
 
     const cabeceras = await executeQuery(consultaCabecera, [{ value: numeroVisita }]);
