@@ -77,28 +77,37 @@ ELSE
 GO
 
 /* -------------------------------------------------------------------------- */
-/* 2. Nuevo lote: ya existe NombreNormalizado para el compilador              */
+/* 2. Poblar NombreNormalizado (SQL dinámico: compila al ejecutar, no al abrir */
+/*    el script; evita error 207 si alguien ejecuta solo este bloque).        */
 /* -------------------------------------------------------------------------- */
 
 SET NOCOUNT ON;
 
--- Normalización simple y válida en T-SQL (REPLACE anidados correctos)
+IF COL_LENGTH(N'dbo.imHCExamenesLabDetalleConf', N'NombreNormalizado') IS NULL
+BEGIN
+    PRINT N'ERROR: no existe columna NombreNormalizado. Ejecutá el lote 1 completo (hasta su GO) antes de este.';
+END
+ELSE
+BEGIN
+    DECLARE @upd NVARCHAR(MAX) = N'
 UPDATE dbo.imHCExamenesLabDetalleConf
 SET NombreNormalizado = UPPER(
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
     REPLACE(REPLACE(REPLACE(REPLACE(
-        LTRIM(RTRIM(ISNULL(Estudio, N''))),
-        N'á', N'A'), N'é', N'E'), N'í', N'I'), N'ó', N'O'), N'ú', N'U'),
-        N'Á', N'A'), N'É', N'E'), N'Í', N'I'), N'Ó', N'O'), N'Ú', N'U'),
-        N'à', N'A'), N'è', N'E'), N'ì', N'I'), N'ò', N'O'), N'ù', N'U'),
-        N'ñ', N'N'), N'Ñ', N'N'), N'ü', N'U'), N'Ü', N'U')
+        LTRIM(RTRIM(ISNULL(Estudio, N''''))),
+        NCHAR(225), N''A''), NCHAR(233), N''E''), NCHAR(237), N''I''), NCHAR(243), N''O''), NCHAR(250), N''U''),
+        NCHAR(193), N''A''), NCHAR(201), N''E''), NCHAR(205), N''I''), NCHAR(211), N''O''), NCHAR(218), N''U''),
+        NCHAR(224), N''A''), NCHAR(232), N''E''), NCHAR(236), N''I''), NCHAR(242), N''O''), NCHAR(249), N''U''),
+        NCHAR(241), N''N''), NCHAR(209), N''N''), NCHAR(252), N''U''), NCHAR(220), N''U'')
     )
 WHERE NombreNormalizado IS NULL
-   OR LTRIM(RTRIM(NombreNormalizado)) = N'';
-
-PRINT N'✓ NombreNormalizado actualizado donde faltaba.';
+   OR LEN(LTRIM(RTRIM(ISNULL(NombreNormalizado, N'''')))) = 0;
+';
+    EXEC sp_executesql @upd;
+    PRINT N'✓ NombreNormalizado actualizado donde faltaba.';
+END
 GO
 
 /* -------------------------------------------------------------------------- */
@@ -201,13 +210,11 @@ SET NOCOUNT ON;
 PRINT N'';
 PRINT N'=== Verificación ===';
 
+/* Sin SQL dinámico, el motor valida NombreNormalizado al compilar el IF aunque la rama no corra → error 207 */
 IF COL_LENGTH(N'dbo.imHCExamenesLabDetalleConf', N'NombreNormalizado') IS NOT NULL
-BEGIN
-    SELECT N'imHCExamenesLabDetalleConf' AS Tabla,
-           COUNT(*) AS Registros,
-           SUM(CASE WHEN NombreNormalizado IS NOT NULL AND LTRIM(RTRIM(NombreNormalizado)) <> N'' THEN 1 ELSE 0 END) AS ConNombreNormalizado
-    FROM dbo.imHCExamenesLabDetalleConf;
-END
+    EXEC(N'SELECT N''imHCExamenesLabDetalleConf'' AS Tabla, COUNT(*) AS Registros,
+        SUM(CASE WHEN NombreNormalizado IS NOT NULL AND LTRIM(RTRIM(NombreNormalizado)) <> N'''' THEN 1 ELSE 0 END) AS ConNombreNormalizado
+    FROM dbo.imHCExamenesLabDetalleConf;');
 ELSE
     PRINT N'⚠ No existe columna NombreNormalizado en imHCExamenesLabDetalleConf (revisar esquema dbo).';
 

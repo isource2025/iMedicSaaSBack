@@ -16,6 +16,7 @@ GO
 SET NOCOUNT ON;
 
 DECLARE @schema sysname = N'dbo';
+DECLARE @tblConf NVARCHAR(260) = @schema + N'.imHCExamenesLabDetalleConf';
 
 /* ---------- Helpers: columnas por tabla (esquema dbo, nombre exacto) ---------- */
 IF OBJECT_ID(QUOTENAME(@schema) + N'.imHCExamenesLabCabecera', N'U') IS NULL
@@ -84,29 +85,34 @@ WHERE s.name = @schema AND t.name = N'imHCExamenesLabDetalle';
 PRINT N'';
 PRINT N'=== Catálogo + pipeline OCR — imHCExamenesLabDetalleConf ===';
 
+/* COL_LENGTH: usar dbo.Tabla sin corchetes ([dbo].Tabla puede dar NULL en algunos motores) */
 SELECT
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'NombreNormalizado') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'NombreNormalizado') IS NULL
         THEN N'FALTA NombreNormalizado (ejecutar migracion_produccion_pipeline_ocr.sql)'
         ELSE N'OK NombreNormalizado' END AS CheckNombreNormalizado,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'Orden') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'Orden') IS NULL
         THEN N'FALTA Orden' ELSE N'OK Orden' END AS CheckOrden,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'AlertaCritica') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'AlertaCritica') IS NULL
         THEN N'FALTA AlertaCritica' ELSE N'OK AlertaCritica' END AS CheckAlertaCritica,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'IdTipoLaboratorio') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'IdTipoLaboratorio') IS NULL
         THEN N'FALTA IdTipoLaboratorio' ELSE N'OK IdTipoLaboratorio' END AS CheckIdTipo,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'Estudio') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'Estudio') IS NULL
         THEN N'FALTA Estudio' ELSE N'OK Estudio' END AS CheckEstudio,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'ValorMinimo') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'ValorMinimo') IS NULL
         THEN N'FALTA ValorMinimo' ELSE N'OK ValorMinimo' END AS CheckMin,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'ValorMaximo') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'ValorMaximo') IS NULL
         THEN N'FALTA ValorMaximo' ELSE N'OK ValorMaximo' END AS CheckMax,
-    CASE WHEN COL_LENGTH(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'ValorNormal') IS NULL
+    CASE WHEN COL_LENGTH(@tblConf, N'ValorNormal') IS NULL
         THEN N'FALTA ValorNormal' ELSE N'OK ValorNormal' END AS CheckNormal;
 
+/* Referencia a NombreNormalizado: solo en SQL dinámico; si no existe la columna, el lote entero fallaba antes */
 IF OBJECT_ID(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'U') IS NOT NULL
-    SELECT
-        COUNT(*) AS FilasCatálogo,
-        SUM(CASE WHEN NombreNormalizado IS NULL OR LTRIM(RTRIM(NombreNormalizado)) = N'' THEN 1 ELSE 0 END) AS SinNombreNormalizado
+   AND COL_LENGTH(@tblConf, N'NombreNormalizado') IS NOT NULL
+    EXEC(N'SELECT COUNT(*) AS FilasCatálogo,
+        SUM(CASE WHEN NombreNormalizado IS NULL OR LEN(LTRIM(RTRIM(ISNULL(NombreNormalizado, N'''')))) = 0 THEN 1 ELSE 0 END) AS SinNombreNormalizado
+    FROM dbo.imHCExamenesLabDetalleConf;');
+ELSE IF OBJECT_ID(QUOTENAME(@schema) + N'.imHCExamenesLabDetalleConf', N'U') IS NOT NULL
+    SELECT COUNT(*) AS FilasCatálogo, CAST(NULL AS INT) AS SinNombreNormalizado_N_A_columna
     FROM dbo.imHCExamenesLabDetalleConf;
 
 PRINT N'';
