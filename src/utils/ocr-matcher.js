@@ -55,117 +55,118 @@ function parseNumeroOCR(valorOCR) {
  * @param {string} tipoEstudio - Tipo de laboratorio (HEMOGRAMA, etc)
  * @returns {Object} { parametro, tipoMatch, score, esNuevo }
  */
-async function buscarParametroOCR(textoOCR, tipoEstudio) {
-  const normalizado = normalizarTexto(textoOCR);
-  
-  console.log(`\n🔍 Buscando match para: "${textoOCR}" → "${normalizado}"`);
-  
-  // ===== 1. MATCH EXACTO =====
-  const consultaExacto = `
-    SELECT Estudio, NombreNormalizado, ValorMinimo, ValorMaximo, ValorNormal
-    FROM imHCExamenesLabDetalleConf
-    WHERE IdTipoLaboratorio = @p0 
-      AND NombreNormalizado = @p1
-  `;
-  
-  const matchExacto = await executeQuery(consultaExacto, [
-    { value: tipoEstudio },
-    { value: normalizado }
-  ]);
-  
-  if (matchExacto.length > 0) {
-    console.log(`  ✓ MATCH EXACTO: ${matchExacto[0].Estudio}`);
-    return {
-      parametro: matchExacto[0],
-      tipoMatch: 'EXACTO',
-      score: 1.0,
-      esNuevo: false
-    };
-  }
-  
-  // ===== 2. MATCH POR ALIAS =====
-  const consultaAlias = `
-    SELECT 
-      a.Estudio,
-      a.Alias,
-      conf.NombreNormalizado,
-      conf.ValorMinimo,
-      conf.ValorMaximo,
-      conf.ValorNormal
-    FROM imParametroAlias a
-    INNER JOIN imHCExamenesLabDetalleConf conf
-      ON a.IdTipoLaboratorio = conf.IdTipoLaboratorio
-      AND a.Estudio = conf.Estudio
-    WHERE a.IdTipoLaboratorio = @p0 
-      AND a.AliasNormalizado = @p1
-      AND a.Activo = 1
-  `;
-  
-  const matchAlias = await executeQuery(consultaAlias, [
-    { value: tipoEstudio },
-    { value: normalizado }
-  ]);
-  
-  if (matchAlias.length > 0) {
-    console.log(`  ✓ MATCH POR ALIAS: "${matchAlias[0].Alias}" → ${matchAlias[0].Estudio}`);
-    return {
-      parametro: matchAlias[0],
-      tipoMatch: 'ALIAS',
-      score: 0.95,
-      esNuevo: false
-    };
-  }
-  
-  // ===== 3. FUZZY MATCHING =====
-  const consultaTodos = `
+/**
+ * Dos SELECT al inicio del guardado; el matching corre en Node (evita 3×N round-trips al SQL remoto).
+ */
+async function cargarContextoMatcher(tipoEstudio) {
+  const confRows = await executeQuery(
+    `
     SELECT Estudio, NombreNormalizado, ValorMinimo, ValorMaximo, ValorNormal
     FROM imHCExamenesLabDetalleConf
     WHERE IdTipoLaboratorio = @p0
-  `;
-  
-  const todosParametros = await executeQuery(consultaTodos, [
-    { value: tipoEstudio }
-  ]);
-  
-  if (todosParametros.length > 0) {
-    // Calcular similitud con cada parámetro
-    const matches = todosParametros.map(p => ({
+    `,
+    [{ value: tipoEstudio }]
+  );
+
+  let aliasRows = [];
+  try {
+    aliasRows = await executeQuery(
+      `
+      SELECT
+        a.Estudio,
+        a.Alias,
+        a.AliasNormalizado,
+        conf.NombreNormalizado,
+        conf.ValorMinimo,
+        conf.ValorMaximo,
+        conf.ValorNormal
+      FROM imParametroAlias a
+      INNER JOIN imHCExamenesLabDetalleConf conf
+        ON a.IdTipoLaboratorio = conf.IdTipoLaboratorio
+        AND a.Estudio = conf.Estudio
+      WHERE a.IdTipoLaboratorio = @p0 AND a.Activo = 1
+      `,
+      [{ value: tipoEstudio }]
+    );
+  } catch (e) {
+    console.warn('⚠ imParametroAlias: catálogo de alias omitido:', e.message);
+  }
+
+  return { tipoEstudio, confRows, aliasRows };
+}
+
+/**
+ * Misma lógica que buscarParametroOCR pero sin idas a BD (usa contexto precargado).
+ * Tras crearParametroEnCatalogo, llamar agregarParametroAlContextoMatcher o volver a empujar la fila.
+ */
+function buscarParametroConContexto(textoOCR, contexto) {
+  const normalizado = normalizarTexto(textoOCR);
+
+  console.log(`\n🔍 Buscando match para: "${textoOCR}" → "${normalizado}"`);
+
+  const matchExacto = contexto.confRows.filter(
+    (r) => (r.NombreNormalizado || '') === normalizado
+  );
+  if (matchExacto.length > 0) {
+    const p = matchExacto[0];
+    console.log(`  ✓ MATCH EXACTO: ${p.Estudio}`);
+    return {
+      parametro: p,
+      tipoMatch: 'EXACTO',
+      score: 1.0,
+      esNuevo: false,
+      textoNormalizado: normalizado
+    };
+  }
+
+  const matchAlias = contexto.aliasRows.filter((r) => r.AliasNormalizado === normalizado);
+  if (matchAlias.length > 0) {
+    const p = matchAlias[0];
+    console.log(`  ✓ MATCH POR ALIAS: "${p.Alias}" → ${p.Estudio}`);
+    return {
+      parametro: p,
+      tipoMatch: 'ALIAS',
+      score: 0.95,
+      esNuevo: false,
+      textoNormalizado: normalizado
+    };
+  }
+
+  if (contexto.confRows.length > 0) {
+    const matches = contexto.confRows.map((p) => ({
       ...p,
       score: stringSimilarity.compareTwoStrings(
         normalizado,
         p.NombreNormalizado || normalizarTexto(p.Estudio)
       )
     }));
-    
-    // Ordenar por score descendente
     matches.sort((a, b) => b.score - a.score);
-    
     const mejor = matches[0];
-    
     console.log(`  → Mejor fuzzy match: ${mejor.Estudio} (score: ${mejor.score.toFixed(3)})`);
-    
-    // Reglas de negocio
-    if (mejor.score > 0.90) {
+
+    if (mejor.score > 0.9) {
       console.log(`  ✓ MATCH AUTOMÁTICO (score > 0.90)`);
       return {
         parametro: mejor,
         tipoMatch: 'FUZZY_AUTO',
         score: mejor.score,
-        esNuevo: false
+        esNuevo: false,
+        textoNormalizado: normalizado
       };
-    } else if (mejor.score >= 0.85) {
+    }
+    if (mejor.score >= 0.85) {
       console.log(`  ⚠ MATCH PROBABLE (0.85 ≤ score ≤ 0.90) - requiere revisión`);
       return {
         parametro: mejor,
         tipoMatch: 'FUZZY_PROBABLE',
         score: mejor.score,
         esNuevo: false,
-        requiereRevision: true
+        requiereRevision: true,
+        textoNormalizado: normalizado
       };
     }
   }
-  
-  // ===== 4. NO MATCH - PARÁMETRO NUEVO =====
+
   console.log(`  ✗ NO MATCH (score < 0.75) - parámetro nuevo`);
   return {
     parametro: null,
@@ -175,6 +176,15 @@ async function buscarParametroOCR(textoOCR, tipoEstudio) {
     textoOriginal: textoOCR,
     textoNormalizado: normalizado
   };
+}
+
+function agregarParametroAlContextoMatcher(contexto, filaCatalogo) {
+  contexto.confRows.push(filaCatalogo);
+}
+
+async function buscarParametroOCR(textoOCR, tipoEstudio) {
+  const ctx = await cargarContextoMatcher(tipoEstudio);
+  return buscarParametroConContexto(textoOCR, ctx);
 }
 
 /**
@@ -225,34 +235,41 @@ function validarRango(valor, parametro) {
  * Registra en log de auditoría OCR
  */
 async function registrarLogOCR(datos) {
-  const {
-    idExamen,
-    textoOriginal,
-    textoNormalizado,
-    parametroMatch,
-    score,
-    tipoMatch,
-    numeroVisita,
-    tipoEstudio
-  } = datos;
-  
+  await registrarLogsOCRLote([datos]);
+}
+
+/** Una sola ida a SQL para todas las filas del examen (8 columnas por fila). */
+async function registrarLogsOCRLote(entradas) {
+  if (!entradas || entradas.length === 0) return;
+
+  const COLS = 8;
+  const params = [];
+  const valueGroups = entradas.map((_, rowIdx) => {
+    const o = rowIdx * COLS;
+    return `(@p${o},@p${o + 1},@p${o + 2},@p${o + 3},@p${o + 4},@p${o + 5},@p${o + 6},@p${o + 7})`;
+  });
+
+  for (const e of entradas) {
+    params.push(
+      { value: e.idExamen },
+      { value: e.textoOriginal?.substring(0, 500) || '' },
+      { value: e.textoNormalizado?.substring(0, 500) || '' },
+      { value: e.parametroMatch },
+      { value: e.score },
+      { value: e.tipoMatch },
+      { value: e.numeroVisita },
+      { value: e.tipoEstudio }
+    );
+  }
+
   const consulta = `
     INSERT INTO imOCRLog 
     (IdExamenLaboratorio, TextoOriginal, TextoNormalizado, ParametroMatch, 
      Score, TipoMatch, NumeroVisita, TipoEstudio)
-    VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)
+    VALUES ${valueGroups.join(', ')}
   `;
-  
-  await executeQuery(consulta, [
-    { value: idExamen },
-    { value: textoOriginal?.substring(0, 500) || '' },
-    { value: textoNormalizado?.substring(0, 500) || '' },
-    { value: parametroMatch },
-    { value: score },
-    { value: tipoMatch },
-    { value: numeroVisita },
-    { value: tipoEstudio }
-  ]);
+
+  await executeQuery(consulta, params);
 }
 
 /**
@@ -290,8 +307,16 @@ async function crearParametroEnCatalogo(tipoEstudio, nombreParametro, valorRefer
     { value: valorNormal || '' },
     { value: 0 }
   ]);
-  
+
   console.log(`  ✓ Parámetro creado en catálogo: ${nombreParametro}`);
+
+  return {
+    Estudio: nombreParametro,
+    NombreNormalizado: normalizado,
+    ValorMinimo: valorMin || '',
+    ValorMaximo: valorMax || '',
+    ValorNormal: valorNormal || ''
+  };
 }
 
 /**
@@ -320,8 +345,12 @@ module.exports = {
   normalizarTexto,
   parseNumeroOCR,
   buscarParametroOCR,
+  cargarContextoMatcher,
+  buscarParametroConContexto,
+  agregarParametroAlContextoMatcher,
   validarRango,
   registrarLogOCR,
+  registrarLogsOCRLote,
   crearParametroEnCatalogo,
   crearAlias
 };

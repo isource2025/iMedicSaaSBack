@@ -1,11 +1,13 @@
 const { executeQuery } = require('../models/db');
 const ocrService = require('./ocr.service');
 const {
-  buscarParametroOCR,
   validarRango,
-  registrarLogOCR,
   crearParametroEnCatalogo,
-  parseNumeroOCR
+  parseNumeroOCR,
+  cargarContextoMatcher,
+  buscarParametroConContexto,
+  agregarParametroAlContextoMatcher,
+  registrarLogsOCRLote
 } = require('../utils/ocr-matcher');
 
 /**
@@ -139,7 +141,10 @@ const guardarExamen = async (cabecera, detalles) => {
     let parametrosNuevos = 0;
     let parametrosMatcheados = 0;
     let parametrosFueraRango = 0;
-    
+
+    const matcherCtx = await cargarContextoMatcher(cabecera.TipoEstudio);
+    const ocrLogsPendientes = [];
+
     for (let i = 0; i < detalles.length; i++) {
       const detalle = detalles[i];
       
@@ -148,31 +153,23 @@ const guardarExamen = async (cabecera, detalles) => {
       // ─────────────────────────────────────────────────
       // ETAPA 1: MATCHING INTELIGENTE
       // ─────────────────────────────────────────────────
-      const match = await buscarParametroOCR(
-        detalle.NombreParametro,
-        cabecera.TipoEstudio
-      );
-      
+      let match = buscarParametroConContexto(detalle.NombreParametro, matcherCtx);
+
       let nombreFinal = detalle.NombreParametro;
       let parametroCatalogo = match.parametro;
-      
-      // Si es parámetro nuevo, crearlo en catálogo
+
       if (match.esNuevo) {
         console.log(`  → Creando parámetro nuevo en catálogo...`);
-        await crearParametroEnCatalogo(
+        const nuevaFila = await crearParametroEnCatalogo(
           cabecera.TipoEstudio,
           detalle.NombreParametro,
           detalle.ValorReferencia,
           i + 1
         );
         parametrosNuevos++;
-        
-        // Recargar parámetro recién creado
-        const recargado = await buscarParametroOCR(
-          detalle.NombreParametro,
-          cabecera.TipoEstudio
-        );
-        parametroCatalogo = recargado.parametro;
+        agregarParametroAlContextoMatcher(matcherCtx, nuevaFila);
+        match = buscarParametroConContexto(detalle.NombreParametro, matcherCtx);
+        parametroCatalogo = match.parametro;
       } else {
         // Si es fuzzy match que requiere revisión, usar nombre original del OCR
         // para evitar duplicados si el parámetro real aparece después
@@ -198,9 +195,9 @@ const guardarExamen = async (cabecera, detalles) => {
       }
       
       // ─────────────────────────────────────────────────
-      // ETAPA 3: LOG DE AUDITORÍA
+      // ETAPA 3: LOG (se envía en lote al final)
       // ─────────────────────────────────────────────────
-      await registrarLogOCR({
+      ocrLogsPendientes.push({
         idExamen: idExamen,
         textoOriginal: detalle.NombreParametro,
         textoNormalizado: match.textoNormalizado || '',
@@ -210,9 +207,9 @@ const guardarExamen = async (cabecera, detalles) => {
         numeroVisita: cabecera.NumeroVisita,
         tipoEstudio: cabecera.TipoEstudio
       });
-      
+
       // ─────────────────────────────────────────────────
-      // ETAPA 4: PERSISTENCIA
+      // ETAPA 4: acumular detalle
       // ─────────────────────────────────────────────────
       detallesProcesados.push({
         nombreFinal,
@@ -221,28 +218,38 @@ const guardarExamen = async (cabecera, detalles) => {
         orden: i + 1
       });
     }
-    
+
+    await registrarLogsOCRLote(ocrLogsPendientes);
+
     // ═══════════════════════════════════════════════════════════════
-    // INSERCIÓN MASIVA DE DETALLES
+    // INSERCIÓN DE DETALLES (un INSERT con varias filas = 1 round-trip)
     // ═══════════════════════════════════════════════════════════════
     console.log(`\n--- Insertando ${detallesProcesados.length} detalles en BD ---`);
-    
-    for (let i = 0; i < detallesProcesados.length; i++) {
-      const det = detallesProcesados[i];
-      
-      const consultaDetalle = `
+
+    if (detallesProcesados.length > 0) {
+      const COLS = 5;
+      const paramsDet = [];
+      const gruposValores = detallesProcesados.map((_, rowIdx) => {
+        const o = rowIdx * COLS;
+        return `(@p${o},@p${o + 1},@p${o + 2},@p${o + 3},@p${o + 4})`;
+      });
+      for (const det of detallesProcesados) {
+        paramsDet.push(
+          { value: idExamen },
+          { value: det.orden },
+          { value: cabecera.TipoEstudio },
+          { value: det.nombreFinal },
+          { value: det.resultado }
+        );
+      }
+      await executeQuery(
+        `
         INSERT INTO imHCExamenesLabDetalle
         (IdExamenLaboratorio, Orden, IdTipoLaboratorio, Estudio, Valor)
-        VALUES (@p0, @p1, @p2, @p3, @p4)
-      `;
-
-      await executeQuery(consultaDetalle, [
-        { value: idExamen },
-        { value: det.orden },
-        { value: cabecera.TipoEstudio },
-        { value: det.nombreFinal },
-        { value: det.resultado }
-      ]);
+        VALUES ${gruposValores.join(', ')}
+        `,
+        paramsDet
+      );
     }
     
     // ═══════════════════════════════════════════════════════════════
