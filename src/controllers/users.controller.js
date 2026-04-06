@@ -61,7 +61,8 @@ const crearUsuario = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear usuario:', error);
-    res.status(500).json({
+    const status = error.statusCode && Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    res.status(status).json({
       success: false,
       mensaje: error.message || 'Error al crear el usuario'
     });
