@@ -149,13 +149,14 @@ const crearUsuario = async (userData) => {
         NumeroDocumento,
         Legajo,
         FechaActual,
-        MarcadeBaja
+        MarcadeBaja,
+        Grupo
       )
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, GETDATE(), 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, GETDATE(), 0, 0)
     `;
     
     const parametros = [
-      { value: nuevoValorPersonal },
+      { value: nuevoValorPersonal, type: 'Int' },
       { value: codOperador || '', type: 'VarChar' },
       { value: apellido, type: 'VarChar' },
       { value: nombres, type: 'VarChar' },
