@@ -12,6 +12,38 @@ const {
  * Servicio simplificado para laboratorios usando tablas existentes
  */
 
+let _cabeceraColumnsCache = null;
+let _cabeceraColumnsPromise = null;
+
+/** Columnas reales de imHCExamenesLabCabecera (cache por proceso). */
+async function getCabeceraColumnNames() {
+  if (_cabeceraColumnsCache) return _cabeceraColumnsCache;
+  if (_cabeceraColumnsPromise) return _cabeceraColumnsPromise;
+  _cabeceraColumnsPromise = (async () => {
+    // INFORMATION_SCHEMA mezcla tablas del mismo nombre en distintos esquemas;
+    // hay que usar la tabla real (prioridad dbo) como en imPassword.
+    const objs = await executeQuery(`
+      SELECT TOP 1 t.object_id AS oid
+      FROM sys.tables t
+      INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+      WHERE LOWER(t.name) = N'imhcexameneslabcabecera'
+      ORDER BY CASE WHEN s.name = N'dbo' THEN 0 ELSE 1 END, s.name
+    `);
+    if (!objs || !objs.length) {
+      _cabeceraColumnsCache = new Set();
+      return _cabeceraColumnsCache;
+    }
+    const rows = await executeQuery(
+      `SELECT name AS COLUMN_NAME FROM sys.columns WHERE object_id = @p0 ORDER BY column_id`,
+      [{ value: objs[0].oid }]
+    );
+    const set = new Set(rows.map((r) => String(r.COLUMN_NAME).toLowerCase()));
+    _cabeceraColumnsCache = set;
+    return set;
+  })();
+  return _cabeceraColumnsPromise;
+}
+
 /**
  * Procesa archivo con OCR
  */
@@ -52,22 +84,44 @@ const guardarExamen = async (cabecera, detalles) => {
     const idExamen = resultMaxId[0].NuevoId;
     console.log('Nuevo ID generado:', idExamen);
 
-    // 2. Insertar cabecera con el ID generado
+    // 2. Insertar cabecera: NumeroVisita no existe en todas las BDs (solo IdPaciente).
+    const col = await getCabeceraColumnNames();
+    const nv = col.has('numerovisita');
+    const idp = col.has('idpaciente');
+    const visitaVal = cabecera.NumeroVisita;
+
+    const insertCols = ['IdExamenLaboratorio'];
+    const params = [{ value: idExamen }];
+    if (nv) {
+      insertCols.push('NumeroVisita');
+      params.push({ value: visitaVal });
+    }
+    insertCols.push('NroProtocolo', 'FechaEstudio');
+    params.push(
+      { value: cabecera.Protocolo || '' },
+      { value: fechaExamen }
+    );
+    if (idp) {
+      insertCols.push('IdPaciente');
+      params.push({ value: visitaVal });
+    }
+    insertCols.push('IdTipoLaboratorio');
+    params.push({ value: cabecera.TipoEstudio });
+
+    if (!nv && !idp) {
+      throw new Error(
+        'imHCExamenesLabCabecera: no hay columna NumeroVisita ni IdPaciente para vincular la visita.'
+      );
+    }
+
+    const placeholders = insertCols.map((_, i) => `@p${i}`).join(', ');
     const consultaCabecera = `
       INSERT INTO imHCExamenesLabCabecera 
-      (IdExamenLaboratorio, NumeroVisita, NroProtocolo, FechaEstudio, IdPaciente, IdTipoLaboratorio)
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5)
+      (${insertCols.join(', ')})
+      VALUES (${placeholders})
     `;
 
-    const params = [
-      { value: idExamen },
-      { value: cabecera.NumeroVisita },
-      { value: cabecera.Protocolo || '' },
-      { value: fechaExamen },
-      { value: cabecera.NumeroVisita }, // Guardar también en IdPaciente por compatibilidad
-      { value: cabecera.TipoEstudio }
-    ];
-
+    console.log('INSERT cabecera columnas:', insertCols.join(', '));
     console.log('Parámetros SQL:', params);
     await executeQuery(consultaCabecera, params);
     console.log('✓ Cabecera guardada con ID:', idExamen);
@@ -218,20 +272,33 @@ const guardarExamen = async (cabecera, detalles) => {
  */
 const obtenerExamenesPorVisita = async (numeroVisita) => {
   try {
-    // Obtener cabeceras
-    // IdSector no existe en todas las instalaciones (ver scripts/verificar-idsector-cabecera.js).
-    // Se devuelven NULL para conservar el contrato del API sin JOIN a imSectores.
+    const col = await getCabeceraColumnNames();
+    const visitCol = col.has('idpaciente')
+      ? 'c.IdPaciente'
+      : col.has('numerovisita')
+        ? 'c.NumeroVisita'
+        : null;
+    if (!visitCol) {
+      throw new Error(
+        'imHCExamenesLabCabecera: falta IdPaciente o NumeroVisita para listar por visita.'
+      );
+    }
+    const visitSelect = col.has('idpaciente')
+      ? 'c.IdPaciente as NumeroVisita'
+      : 'c.NumeroVisita as NumeroVisita';
+
+    // IdSector no existe en todas las instalaciones.
     const consultaCabecera = `
       SELECT 
         c.IdExamenLaboratorio as IdExamen,
         c.NroProtocolo as Protocolo,
         c.FechaEstudio as FechaExamen,
         c.IdTipoLaboratorio as TipoEstudio,
-        c.IdPaciente as NumeroVisita,
+        ${visitSelect},
         CAST(NULL AS VARCHAR(20)) AS IdSector,
         CAST(NULL AS VARCHAR(255)) AS SectorDescripcion
       FROM imHCExamenesLabCabecera c
-      WHERE c.IdPaciente = @p0
+      WHERE ${visitCol} = @p0
       ORDER BY c.FechaEstudio DESC
     `;
 
@@ -284,13 +351,20 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
  */
 const obtenerExamenPorId = async (idExamen) => {
   try {
+    const col = await getCabeceraColumnNames();
+    const visitSelect = col.has('idpaciente')
+      ? 'IdPaciente as NumeroVisita'
+      : col.has('numerovisita')
+        ? 'NumeroVisita as NumeroVisita'
+        : 'CAST(NULL AS INT) as NumeroVisita';
+
     const consultaCabecera = `
       SELECT 
         IdExamenLaboratorio as IdExamen,
         NroProtocolo as Protocolo,
         FechaEstudio as FechaExamen,
         IdTipoLaboratorio as TipoEstudio,
-        IdPaciente as NumeroVisita,
+        ${visitSelect},
         CAST(NULL AS VARCHAR(20)) AS IdSector,
         CAST(NULL AS VARCHAR(255)) AS SectorDescripcion
       FROM imHCExamenesLabCabecera

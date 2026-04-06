@@ -1,10 +1,51 @@
 const pdf = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const sharp = require('sharp');
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
 /**
  * Servicio para procesamiento OCR de documentos de laboratorio
  */
+
+/**
+ * Texto del PDF con pdf.js (muchas veces funciona cuando pdf-parse falla).
+ * No usa worker en Node (evita dependencias nativas en Render).
+ */
+const extraerTextoConPdfJs = async (buffer) => {
+  try {
+    const uint8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const loadingTask = pdfjsLib.getDocument({
+      data: uint8,
+      disableWorker: true,
+      verbosity: 0
+    });
+    const doc = await loadingTask.promise;
+    let fullText = '';
+    const numPages = doc.numPages;
+    for (let p = 1; p <= numPages; p++) {
+      const page = await doc.getPage(p);
+      const textContent = await page.getTextContent();
+      for (const item of textContent.items) {
+        if (item.str) fullText += item.str;
+        if (item.hasEOL) fullText += '\n';
+      }
+      fullText += '\n';
+    }
+    const t = fullText.trim();
+    if (t.length > 10) {
+      console.log('\n=== PDF EXTRAÍDO (pdfjs-dist) ===');
+      console.log('Páginas:', numPages);
+      console.log('Longitud del texto:', t.length);
+      console.log('Primeros 500 caracteres:', t.substring(0, 500));
+      console.log('==================\n');
+    }
+    await doc.destroy();
+    return fullText;
+  } catch (e) {
+    console.warn('⚠ pdfjs-dist falló:', e.message);
+    return '';
+  }
+};
 
 /**
  * Extrae texto de un PDF
@@ -12,7 +53,7 @@ const sharp = require('sharp');
  * @returns {Promise<string>} Texto extraído
  */
 const extraerTextoDePDF = async (buffer) => {
-  // Intento 1: pdf-parse normal
+  // Intento 1: pdf-parse
   try {
     const data = await pdf(buffer, { max: 0 });
     console.log('\n=== PDF EXTRAÍDO (pdf-parse) ===');
@@ -23,35 +64,22 @@ const extraerTextoDePDF = async (buffer) => {
     if (data.text && data.text.trim().length > 10) {
       return data.text;
     }
-    console.log('⚠ pdf-parse devolvió texto vacío o muy corto, intentando OCR...');
+    console.log('⚠ pdf-parse devolvió texto vacío o muy corto, intentando pdf.js...');
   } catch (error) {
     console.warn('⚠ pdf-parse falló:', error.message);
-    console.log('Intentando fallback con Tesseract OCR...');
   }
 
-  // Intento 2: Intentar Tesseract directamente con el buffer
-  // (funciona si el PDF es en realidad una imagen con extensión .pdf)
-  try {
-    console.log('Intentando Tesseract OCR directamente con el buffer...');
-    const { data: { text } } = await Tesseract.recognize(
-      buffer,
-      'spa',
-      { logger: m => { if (m.status === 'recognizing text') console.log(`  OCR: ${Math.round(m.progress * 100)}%`); } }
-    );
-    
-    if (text && text.trim().length > 10) {
-      console.log('\n=== PDF EXTRAÍDO (Tesseract fallback) ===');
-      console.log('Longitud del texto:', text.length);
-      console.log('Primeros 500 caracteres:', text.substring(0, 500));
-      console.log('==================\n');
-      return text;
-    }
-  } catch (ocrError) {
-    console.warn('Tesseract OCR también falló:', ocrError.message);
+  // Intento 2: pdf.js (texto embebido; no es OCR)
+  const textoJs = await extraerTextoConPdfJs(buffer);
+  if (textoJs && textoJs.trim().length > 10) {
+    return textoJs;
   }
 
-  // Si llegamos aquí, el PDF está corrupto y no se puede procesar
-  throw new Error('PDF corrupto o con formato no soportado. Por favor, convierta el documento a imagen (JPG/PNG) o use un PDF válido.');
+  // No pasar el buffer del PDF a Tesseract: no lee PDF y en Node puede tumbar el proceso.
+  throw new Error(
+    'No se pudo extraer texto del PDF (puede ser escaneado o con codificación rara). ' +
+      'Exportá cada página como imagen (JPG o PNG) y subila así, o probá otro PDF.'
+  );
 };
 
 /**
