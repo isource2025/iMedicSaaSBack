@@ -219,6 +219,8 @@ const guardarExamen = async (cabecera, detalles) => {
 const obtenerExamenesPorVisita = async (numeroVisita) => {
   try {
     // Obtener cabeceras
+    // IdSector no existe en todas las instalaciones (ver scripts/verificar-idsector-cabecera.js).
+    // Se devuelven NULL para conservar el contrato del API sin JOIN a imSectores.
     const consultaCabecera = `
       SELECT 
         c.IdExamenLaboratorio as IdExamen,
@@ -226,10 +228,9 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
         c.FechaEstudio as FechaExamen,
         c.IdTipoLaboratorio as TipoEstudio,
         c.IdPaciente as NumeroVisita,
-        c.IdSector,
-        s.Descripcion as SectorDescripcion
+        CAST(NULL AS VARCHAR(20)) AS IdSector,
+        CAST(NULL AS VARCHAR(255)) AS SectorDescripcion
       FROM imHCExamenesLabCabecera c
-      LEFT JOIN imSectores s ON c.IdSector = s.Valor
       WHERE c.IdPaciente = @p0
       ORDER BY c.FechaEstudio DESC
     `;
@@ -290,7 +291,8 @@ const obtenerExamenPorId = async (idExamen) => {
         FechaEstudio as FechaExamen,
         IdTipoLaboratorio as TipoEstudio,
         IdPaciente as NumeroVisita,
-        IdSector
+        CAST(NULL AS VARCHAR(20)) AS IdSector,
+        CAST(NULL AS VARCHAR(255)) AS SectorDescripcion
       FROM imHCExamenesLabCabecera
       WHERE IdExamenLaboratorio = @p0
     `;

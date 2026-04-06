@@ -1,4 +1,27 @@
 const { executeQuery } = require('../models/db');
+const { convertirFechaAClarion } = require('../utils/dateUtils');
+
+/** @type {string|null} 'int' | otros — cache por proceso */
+let cachedFechaActualTipo = null;
+
+/**
+ * imPassword.FechaActual es int (días Clarion) en muchas bases legacy; en otras es datetime.
+ */
+async function getImPasswordFechaActualTipo() {
+  if (cachedFechaActualTipo) return cachedFechaActualTipo;
+  try {
+    const rows = await executeQuery(`
+      SELECT DATA_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE UPPER(TABLE_NAME) = 'IMPASSWORD' AND UPPER(COLUMN_NAME) = 'FECHAACTUAL'
+    `);
+    const t = (rows[0]?.DATA_TYPE || 'datetime').toLowerCase();
+    cachedFechaActualTipo = ['int', 'smallint', 'bigint', 'tinyint'].includes(t) ? 'int' : t;
+  } catch {
+    cachedFechaActualTipo = 'datetime';
+  }
+  return cachedFechaActualTipo;
+}
 
 /**
  * Obtiene todos los usuarios con sus sectores asignados
@@ -137,8 +160,31 @@ const crearUsuario = async (userData) => {
     const maxIdQuery = `SELECT MAX(ValorPersonal) as maxId FROM imPassword`;
     const maxIdResult = await executeQuery(maxIdQuery);
     const nuevoValorPersonal = (maxIdResult[0].maxId || 0) + 1;
-    
-    const consulta = `
+
+    const fechaTipo = await getImPasswordFechaActualTipo();
+    const hoy = new Date();
+    const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+    const fechaClarionHoy = convertirFechaAClarion(fechaLocalStr);
+
+    const consulta =
+      fechaTipo === 'int'
+        ? `
+      INSERT INTO imPassword (
+        ValorPersonal,
+        CodOperador,
+        Apellido,
+        Nombres,
+        NombreRed,
+        Password,
+        NumeroDocumento,
+        Legajo,
+        FechaActual,
+        MarcadeBaja,
+        Grupo
+      )
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, 0, 0)
+    `
+        : `
       INSERT INTO imPassword (
         ValorPersonal,
         CodOperador,
@@ -154,7 +200,7 @@ const crearUsuario = async (userData) => {
       )
       VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, GETDATE(), 0, 0)
     `;
-    
+
     const parametros = [
       { value: nuevoValorPersonal, type: 'Int' },
       { value: codOperador || '', type: 'VarChar' },
@@ -165,7 +211,10 @@ const crearUsuario = async (userData) => {
       { value: numeroDocumento || '', type: 'VarChar' },
       { value: legajo || '', type: 'VarChar' }
     ];
-    
+    if (fechaTipo === 'int') {
+      parametros.push({ value: fechaClarionHoy, type: 'Int' });
+    }
+
     await executeQuery(consulta, parametros);
     
     return await obtenerUsuarioPorId(nuevoValorPersonal);
