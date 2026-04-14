@@ -7,6 +7,9 @@
   1) Cambiar USE por tu base.
   2) Revisar resultado: filas con OK = NO son problemas; FALTA / ERROR indican qué migrar.
 
+  Para alinear producción con local: ejecutar migracion_produccion_pipeline_ocr.sql
+  (script integral: añade NumeroVisita/IdPaciente en cabecera + pipeline OCR).
+
   No modifica datos (solo SELECT / metadatos).
 */
 

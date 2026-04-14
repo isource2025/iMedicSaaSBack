@@ -513,11 +513,24 @@ const eliminarExamen = async (idExamen) => {
   }
 };
 
+/**
+ * Nombre de columna en imHCExamenesLabCabecera que enlaza con imVisita.NumeroVisita.
+ * En BDs legacy suele usarse solo IdPaciente con el mismo valor numérico que la visita.
+ * @returns {Promise<'NumeroVisita'|'IdPaciente'|null>}
+ */
+async function getLabCabeceraVisitSqlColumn() {
+  const col = await getCabeceraColumnNames();
+  if (col.has('numerovisita')) return 'NumeroVisita';
+  if (col.has('idpaciente')) return 'IdPaciente';
+  return null;
+}
+
 module.exports = {
   procesarArchivoConOCR,
   guardarExamen,
   obtenerExamenesPorVisita,
   obtenerExamenPorId,
   actualizarExamen,
-  eliminarExamen
+  eliminarExamen,
+  getLabCabeceraVisitSqlColumn
 };

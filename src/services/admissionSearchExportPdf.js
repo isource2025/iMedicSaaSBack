@@ -22,6 +22,9 @@ function safeText(val, maxLen = null) {
   if (val == null || val === '') return '';
   let s = String(val);
   s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  s = s.replace(/Ð/g, '\n');
+  s = s.replace(/\uFFFD/g, '');
+  s = s.replace(/\n{3,}/g, '\n\n');
   if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
   return s;
 }
@@ -78,6 +81,159 @@ const SECTION_LABEL_ES = {
   protocolos: 'Protocolos',
   adjuntos: 'Adjuntos',
 };
+
+const HCI_SECCIONES_CONFIG = {
+  PF: 'PIEL Y FANERAS',
+  TCS: 'TEJIDO CELULAR SUBCUTÁNEO',
+  SL: 'SISTEMA LINFÁTICO',
+  SOAM: 'SISTEMA OSTEOARTICULOMUSCULAR',
+  C: 'CABEZA',
+  CU: 'CUELLO',
+  M: 'MAMAS',
+  AR: 'APARATO RESPIRATORIO',
+  AC: 'APARATO CARDIOVASCULAR',
+  ACV: 'APARATO CARDIOVASCULAR',
+  A: 'ABDOMEN',
+  AUG: 'APARATO UROGENITAL',
+  AIG: 'APARATO DIGESTIVO INFERIOR',
+  SN: 'SISTEMA NERVIOSO',
+  EC: 'ELECTROCARDIOGRAMA',
+  RDT: 'RADIOGRAFÍA DE TÓRAX',
+  PD: 'PLAN DIAGNÓSTICO',
+  PT: 'PLAN TERAPÉUTICO',
+  AD: 'ANTECEDENTES',
+  EN: 'ENFERMEDAD',
+  EG: 'EXAMEN GINECOLÓGICO',
+  DIA: 'DIAGNÓSTICO',
+  CTRL: 'CONTROL FRECUENTE (ASOCIADO A LA HC)',
+};
+
+const SV_VENOSO_HEADS = new Set(['VARICES', 'FLEBITIS', 'TROMBOSIS', 'CIRCULACIONCOLATERAL']);
+const EO_OFTALMO_HEADS = new Set([
+  'FONDODEOJO',
+  'MEDIOSBIREFRINGENTES',
+  'CRUCES',
+  'RELACION',
+  'HEMORRAGIAEXUDADOS',
+]);
+
+const HCI_IGNORE_KEYS = new Set([
+  'IdHCIngreso',
+  'NumeroVisita',
+  'IdSector',
+  'IdProfecional',
+  'Fecha',
+  'FechaFormateada',
+  'HoraFormateada',
+  'ProfesionalNombre',
+  'SectorDescripcion',
+  'MotivoConsulta',
+  'EnfermedadActual',
+]);
+
+const HCI_CAMPOS_TEXTO_LIBRE = {
+  ModMedica: 'MODIFICACIÓN MÉDICA',
+  Semiologia: 'SEMIOLOGÍA',
+  IMPRESIONDIAGNOSTICA: 'IMPRESIÓN DIAGNÓSTICA',
+  COMENTARIODEINGRESO: 'COMENTARIO DE INGRESO',
+  EXAMENCOMPLEMENTARIO: 'EXÁMENES COMPLEMENTARIOS',
+};
+
+const HCI_SECTION_ORDER = [
+  'SIGNOS VITALES',
+  'SISTEMA VENOSO',
+  'PIEL Y FANERAS',
+  'TEJIDO CELULAR SUBCUTÁNEO',
+  'SISTEMA LINFÁTICO',
+  'SISTEMA OSTEOARTICULOMUSCULAR',
+  'CABEZA',
+  'CUELLO',
+  'MAMAS',
+  'MAMAS — INSPECCIÓN',
+  'MAMAS — PALPACIÓN',
+  'APARATO RESPIRATORIO',
+  'APARATO CARDIOVASCULAR',
+  'ABDOMEN',
+  'APARATO UROGENITAL',
+  'APARATO DIGESTIVO INFERIOR',
+  'SISTEMA NERVIOSO',
+  'EXAMEN OBSTÉTRICO',
+  'EXAMEN OFTALMOLÓGICO',
+  'ELECTROCARDIOGRAMA',
+  'RADIOGRAFÍA DE TÓRAX',
+  'PLAN DIAGNÓSTICO',
+  'PLAN TERAPÉUTICO',
+  'ANTECEDENTES',
+  'ENFERMEDAD',
+  'EXAMEN GINECOLÓGICO',
+  'DIAGNÓSTICO',
+  'CONTROL FRECUENTE (ASOCIADO A LA HC)',
+  'OTROS DATOS DE LA HC',
+];
+
+function hciHeadAfterPrefix(key, prefixLen) {
+  const rest = key.slice(prefixLen + 1);
+  return rest.split('_')[0] || rest;
+}
+
+function hciTituloSeccion(fieldKey) {
+  const key = String(fieldKey || '').toUpperCase();
+  if (key.startsWith('CTRL_')) return HCI_SECCIONES_CONFIG.CTRL;
+  const match = key.match(/^([A-Z]+)_/);
+  if (!match) return null;
+  const pref = match[1];
+  const head = hciHeadAfterPrefix(key, pref.length);
+  if (pref === 'SV') {
+    if (SV_VENOSO_HEADS.has(head)) return 'SISTEMA VENOSO';
+    return 'SIGNOS VITALES';
+  }
+  if (pref === 'EO') {
+    if (EO_OFTALMO_HEADS.has(head)) return 'EXAMEN OFTALMOLÓGICO';
+    return 'EXAMEN OBSTÉTRICO';
+  }
+  if (pref === 'MI') return 'MAMAS — INSPECCIÓN';
+  if (pref === 'MP') return 'MAMAS — PALPACIÓN';
+  return HCI_SECCIONES_CONFIG[pref] || null;
+}
+
+function hciLabelCampo(key) {
+  const norm = String(key || '').toUpperCase();
+  const sinPrefijo = norm.replace(/^[A-Z]+_/, '');
+  return sinPrefijo
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (s) => s.toUpperCase())
+    .trim();
+}
+
+function buildHcDisplaySections(row) {
+  const map = {};
+  Object.keys(row || {}).forEach((keyRaw) => {
+    const key = String(keyRaw || '').trim();
+    const keyUpper = key.toUpperCase();
+    const ignore =
+      HCI_IGNORE_KEYS.has(key) ||
+      HCI_IGNORE_KEYS.has(keyUpper) ||
+      Object.prototype.hasOwnProperty.call(HCI_CAMPOS_TEXTO_LIBRE, key) ||
+      Object.prototype.hasOwnProperty.call(HCI_CAMPOS_TEXTO_LIBRE, keyUpper);
+    if (ignore) return;
+    const value = row[key];
+    if (value == null || value === '' || typeof value === 'object') return;
+    const sec = hciTituloSeccion(keyUpper) || (keyUpper.includes('_') ? 'OTROS DATOS DE LA HC' : null);
+    if (!sec) return;
+    if (!map[sec]) map[sec] = [];
+    map[sec].push({ label: hciLabelCampo(keyUpper), valor: String(value) });
+  });
+  return Object.keys(map)
+    .sort((a, b) => {
+      const ia = HCI_SECTION_ORDER.indexOf(a);
+      const ib = HCI_SECTION_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b, 'es');
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    })
+    .map((titulo) => ({ titulo, campos: map[titulo] }));
+}
 
 function humanizarSecciones(list) {
   if (!Array.isArray(list)) return '';
@@ -405,53 +561,54 @@ async function buildSelectiveExportPdf(payload) {
           ['Profesional', str(row.ProfesionalNombre)],
           ['Sector', str(row.SectorDescripcion)],
           ['Fecha', str(row.FechaFormateada || row.Fecha)],
-          ['Motivo consulta', safeText(row.MotivoConsulta)],
-          ['Enfermedad actual', safeText(row.EnfermedadActual)],
         ]);
-        const keys = Object.keys(row).filter(
-          (k) =>
-            ![
-              'IdHCIngreso',
-              'ProfesionalNombre',
-              'SectorDescripcion',
-              'FechaFormateada',
-              'Fecha',
-              'MotivoConsulta',
-              'EnfermedadActual',
-            ].includes(k)
-        );
-        const extra = keys
-          .map((k) => {
-            const v = row[k];
-            if (v == null || v === '' || typeof v === 'object') return null;
-            return [k, str(v)];
-          })
-          .filter(Boolean);
-        if (extra.length) {
-          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#64748b').text('Otros datos (completo, 2 columnas):', {
+        if (safeText(row.MotivoConsulta)) {
+          ensureSpace(doc, 30);
+          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Motivo de consulta:', {
             width: contentWidth(doc),
           });
-          const leftH = doc.page.margins.left;
-          const wH = contentWidth(doc);
-          const halfH = (wH - 8) / 2;
-          for (let j = 0; j < extra.length; j += 2) {
-            ensureSpace(doc, 24);
-            const yy = doc.y;
-            const pA = extra[j];
-            const pB = extra[j + 1];
-            const lineA = `${pA[0]}: ${safeText(pA[1])}`;
-            doc.font('Helvetica').fontSize(7).fillColor('#475569').text(lineA, leftH, yy, {
-              width: halfH - 4,
-            });
-            let rowH = doc.y - yy;
-            if (pB) {
-              const lineB = `${pB[0]}: ${safeText(pB[1])}`;
-              doc.text(lineB, leftH + halfH + 4, yy, { width: halfH - 4 });
-              rowH = Math.max(rowH, doc.y - yy);
-            }
-            doc.y = yy + rowH + 2;
-          }
+          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(safeText(row.MotivoConsulta), {
+            width: contentWidth(doc),
+          });
+          doc.moveDown(0.2);
         }
+        // Enfermedad actual: fila completa (sin columnas) como solicitó usuario.
+        if (safeText(row.EnfermedadActual)) {
+          ensureSpace(doc, 32);
+          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Enfermedad actual:', {
+            width: contentWidth(doc),
+          });
+          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(safeText(row.EnfermedadActual), {
+            width: contentWidth(doc),
+          });
+          doc.moveDown(0.2);
+        }
+
+        Object.entries(HCI_CAMPOS_TEXTO_LIBRE).forEach(([field, label]) => {
+          const text = safeText(row[field]);
+          if (!text) return;
+          ensureSpace(doc, 30);
+          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text(`${label}:`, {
+            width: contentWidth(doc),
+          });
+          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(text, {
+            width: contentWidth(doc),
+          });
+          doc.moveDown(0.2);
+        });
+
+        const secciones = buildHcDisplaySections(row);
+        secciones.forEach((sec) => {
+          ensureSpace(doc, 26);
+          doc.font('Helvetica-Bold').fontSize(8).fillColor('#0369a1').text(sec.titulo, {
+            width: contentWidth(doc),
+          });
+          keyValRow2(
+            doc,
+            sec.campos.map((c) => [c.label, safeText(c.valor)])
+          );
+          doc.moveDown(0.15);
+        });
         doc.moveDown(0.35);
       });
     }
@@ -543,55 +700,50 @@ async function buildSelectiveExportPdf(payload) {
     }
 
     if (adjuntosResueltos.length) {
-      sectionTitle(doc, 'Adjuntos');
-      doc.font('Helvetica').fontSize(8).fillColor('#334155').text(
-        'A continuación se incluyen las vistas previas o el documento completo según el tipo de archivo. Los PDF se anexan al final del documento.',
-        { width: contentWidth(doc) }
-      );
-      doc.moveDown(0.35);
-
       adjuntosResueltos.forEach((adj, i) => {
-        const meta = adj.meta;
-        const titulo = `${i + 1}. ${adj.nombreArchivo} · ${str(meta.TipoImagenNombre)} · ${formatFechaHoraAR(meta.FechaCarga)}`;
-        ensureSpace(doc, 28);
-        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(titulo, { width: contentWidth(doc) });
-        doc.moveDown(0.15);
+        // Requisito UX: cada adjunto ocupa una hoja exclusiva.
+        doc.addPage();
+        sectionTitle(doc, `Adjunto ${i + 1} de ${adjuntosResueltos.length}`);
+
+        const meta = adj.meta || {};
+        const titulo = `${adj.nombreArchivo} · ${str(meta.TipoImagenNombre)} · ${formatFechaHoraAR(meta.FechaCarga)}`;
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(titulo, {
+          width: contentWidth(doc),
+        });
+        doc.moveDown(0.2);
 
         if (adj.kind === 'image' && adj.buffer) {
           try {
-            ensureSpace(doc, 220);
             const left = doc.page.margins.left;
+            const top = doc.y;
             const fw = contentWidth(doc);
-            doc.image(adj.buffer, left, doc.y, {
-              fit: [fw, 200],
+            const fh = Math.max(80, doc.page.height - doc.page.margins.bottom - top);
+            doc.image(adj.buffer, left, top, {
+              fit: [fw, fh],
               align: 'center',
+              valign: 'center',
             });
-            doc.moveDown(0.2);
           } catch (e) {
             doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(`No se pudo incrustar la imagen: ${e.message}`, {
               width: contentWidth(doc),
             });
-            doc.moveDown(0.2);
           }
         } else if (adj.kind === 'pdf' && adj.buffer) {
-          doc.font('Helvetica').fontSize(8).fillColor('#0369a1').text(
-            '→ Documento PDF anexado al final de este informe.',
+          doc.font('Helvetica').fontSize(9).fillColor('#0369a1').text(
+            'Documento PDF adjunto: se anexa completo al final de este informe.',
             { width: contentWidth(doc) }
           );
           pdfAnnexBuffers.push(adj.buffer);
-          doc.moveDown(0.35);
         } else if (adj.kind === 'unsupported') {
           doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(
             'Formato no incrustable en PDF; descargá el archivo desde el sistema con el IdAdjunto indicado.',
             { width: contentWidth(doc) }
           );
-          doc.moveDown(0.25);
         } else {
           doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(
             `No se pudo obtener el archivo${adj.error ? `: ${adj.error}` : '.'}`,
             { width: contentWidth(doc) }
           );
-          doc.moveDown(0.25);
         }
       });
     }

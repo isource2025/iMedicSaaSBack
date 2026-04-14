@@ -7,6 +7,12 @@ function parseEvolucionSectorIds(body) {
   return [...new Set(raw.map((x) => String(x).trim()))];
 }
 
+function parseEvolucionServicioIds(body) {
+  const raw = body?.evolucionServicioIds;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
+}
+
 /** Bloques que usan rango de fechas cuando exportAll es false */
 function sectionsRequireDateFilter(sections) {
   const NEED_DATE = new Set([
@@ -121,6 +127,7 @@ async function exportSelectivo(req, res) {
     const fechaInicio = body.fechaInicio != null ? String(body.fechaInicio).trim() : '';
     const fechaFin = body.fechaFin != null ? String(body.fechaFin).trim() : '';
     const evolucionSectorIds = parseEvolucionSectorIds(body);
+    const evolucionServicioIds = parseEvolucionServicioIds(body);
 
     const needDates = sectionsRequireDateFilter(sections);
     if (!exportAll && needDates && !fechaInicio && !fechaFin) {
@@ -135,6 +142,7 @@ async function exportSelectivo(req, res) {
       exportAll,
       fechaInicio,
       fechaFin,
+      evolucionServicioIds,
       evolucionSectorIds,
     });
 

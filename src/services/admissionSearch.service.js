@@ -47,6 +47,13 @@ async function buscarAdmisiones({
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
   const offset = (safePage - 1) * safeLimit;
 
+  const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn();
+  if (!labVisCol) {
+    throw new Error(
+      'imHCExamenesLabCabecera: falta columna NumeroVisita o IdPaciente para contar laboratorios. Ejecute la migración SQL integral en producción.'
+    );
+  }
+
   const countQuery = `
     SELECT COUNT(1) AS total
     FROM imVisita v
@@ -66,9 +73,9 @@ async function buscarAdmisiones({
       (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
       (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
       (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
-      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.NumeroVisita = v.NumeroVisita) AS CntLaboratorios,
+      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios,
       (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab2
-        WHERE lab2.NumeroVisita = v.NumeroVisita
+        WHERE lab2.${labVisCol} = v.NumeroVisita
         AND NULLIF(LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))), '') IS NOT NULL
         AND LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))) <> '0') AS CntProtocolos,
       (SELECT COUNT(1) FROM dbo.imPedidosEstudiosAdjuntos adj WHERE adj.NumeroVisita = v.NumeroVisita) AS CntAdjuntos,
@@ -204,6 +211,16 @@ function filterEvoluciones(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(toYmd(r.FechaEv), fechaInicio, fechaFin, exportAll));
 }
 
+function getEvolucionServicioKey(row) {
+  return String(
+    row?.EspecialidadDescripcion ||
+      row?.SectorDescripcion ||
+      (row?.IdSector != null && String(row.IdSector).trim() !== '' ? `SERVICIO_${String(row.IdSector).trim()}` : '')
+  )
+    .trim()
+    .toLowerCase();
+}
+
 function filterLabs(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(toYmd(r.FechaExamen), fechaInicio, fechaFin, exportAll));
 }
@@ -228,7 +245,8 @@ function slimLabRow(ex) {
  * @param {boolean} opts.exportAll
  * @param {string} [opts.fechaInicio] YYYY-MM-DD
  * @param {string} [opts.fechaFin] YYYY-MM-DD
- * @param {string[]} [opts.evolucionSectorIds] Valores de IdSector a incluir; vacío = todos los servicios
+ * @param {string[]} [opts.evolucionSectorIds] Compat legacy: IdSector a incluir (vacío = todos)
+ * @param {string[]} [opts.evolucionServicioIds] Servicio a incluir (preferido; vacío = todos)
  */
 async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   const visita = await obtenerResumenAdmision(numeroVisita);
@@ -240,6 +258,9 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   const fechaFin = String(opts.fechaFin || '').trim();
   const evolucionSectorIds = Array.isArray(opts.evolucionSectorIds)
     ? [...new Set(opts.evolucionSectorIds.map((x) => String(x).trim()))]
+    : [];
+  const evolucionServicioIds = Array.isArray(opts.evolucionServicioIds)
+    ? [...new Set(opts.evolucionServicioIds.map((x) => String(x).trim().toLowerCase()).filter(Boolean))]
     : [];
 
   if (sections.length === 0) {
@@ -286,6 +307,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
       fechaInicio: exportAll ? null : fechaInicio || null,
       fechaFin: exportAll ? null : fechaFin || null,
       sections,
+      evolucionServicioIds: evolucionServicioIds.length ? evolucionServicioIds : null,
       evolucionSectorIds: evolucionSectorIds.length ? evolucionSectorIds : null,
     },
   };
@@ -308,7 +330,10 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
   if (sections.includes('evoluciones')) {
     let ev = evolucionesMedicas || [];
-    if (evolucionSectorIds.length > 0) {
+    if (evolucionServicioIds.length > 0) {
+      const servicioSet = new Set(evolucionServicioIds);
+      ev = ev.filter((r) => servicioSet.has(getEvolucionServicioKey(r)));
+    } else if (evolucionSectorIds.length > 0) {
       const sectorSet = new Set(evolucionSectorIds.map((s) => String(s)));
       ev = ev.filter((r) => sectorSet.has(String(r.IdSector ?? '').trim()));
     }
