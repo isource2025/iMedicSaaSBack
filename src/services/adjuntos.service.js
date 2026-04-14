@@ -1,7 +1,11 @@
 const sql = require('mssql');
+const axios = require('axios');
 const { connectDB } = require('../config/database');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
+
+const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 
 class AdjuntosService {
   /**
@@ -13,6 +17,10 @@ class AdjuntosService {
 
       // Usar patchServidor (ruta en servidor SQL) en lugar de file.path (ruta local temporal)
       const rutaArchivo = patchServidor || file.path;
+      const idTipo =
+        data.idTipoImagen != null && String(data.idTipoImagen).trim() !== ''
+          ? String(data.idTipoImagen).trim()
+          : null;
 
       const result = await pool.request()
         .input('numeroVisita', sql.Int, data.numeroVisita)
@@ -21,10 +29,11 @@ class AdjuntosService {
         .input('patchServidor', sql.NVarChar(500), rutaArchivo)
         .input('fecha', sql.DateTime, new Date())
         .input('idOperador', sql.Int, cargadoPor)
+        .input('idtipoimagen', sql.VarChar(20), idTipo)
         .query(`
-          INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, PatchServidor, Fecha, IdOperador)
+          INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, PatchServidor, Fecha, IdOperador, idtipoimagen)
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@numeroVisita, @descripcion, @patch, @patchServidor, @fecha, @idOperador)
+          VALUES (@numeroVisita, @descripcion, @patch, @patchServidor, @fecha, @idOperador, @idtipoimagen)
         `);
 
       const idAdjunto = result.recordset[0].IdAdjunto;
@@ -47,6 +56,31 @@ class AdjuntosService {
   }
 
   /**
+   * Catálogo HCTiposImagenes (código + descripción) para adjuntos.
+   */
+  async listarTiposImagen() {
+    try {
+      const pool = await connectDB();
+      const result = await pool.request().query(`
+        SELECT
+          LTRIM(RTRIM(CAST(tipoimagen AS VARCHAR(20)))) AS TipoImagen,
+          LTRIM(RTRIM(CAST(desctipoimagen AS VARCHAR(120)))) AS DescTipoImagen
+        FROM dbo.hctiposimagenes
+        WHERE tipoimagen IS NOT NULL
+          AND LTRIM(RTRIM(CAST(tipoimagen AS VARCHAR(20)))) <> ''
+        ORDER BY desctipoimagen
+      `);
+      return (result.recordset || []).map((r) => ({
+        TipoImagen: r.TipoImagen,
+        DescTipoImagen: r.DescTipoImagen || r.TipoImagen,
+      }));
+    } catch (error) {
+      console.error('❌ Error al listar HCTiposImagenes:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Obtener tipo MIME desde nombre de archivo
    */
   getTipoFromNombre(nombre) {
@@ -61,6 +95,51 @@ class AdjuntosService {
       'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     };
     return tipos[ext] || 'application/octet-stream';
+  }
+
+  normalizarRutaPatch(rutaOriginal) {
+    if (!rutaOriginal) return rutaOriginal;
+    let ruta = rutaOriginal;
+    if (ruta.startsWith('D:\\')) ruta = ruta.replace(/^D:\\/, 'E:\\');
+    if (ruta.startsWith('F:\\')) ruta = ruta.replace(/^F:\\/, 'E:\\');
+    return ruta;
+  }
+
+  /**
+   * Descarga el archivo binario de un adjunto (servidor HTTP de archivos o disco local).
+   * @returns {Promise<{ buffer: Buffer | null, nombreArchivo: string, error?: string }>}
+   */
+  async fetchAdjuntoFileBuffer(idAdjunto) {
+    const adj = await this.getAdjuntoPorId(idAdjunto);
+    if (!adj?.RutaArchivo) {
+      return { buffer: null, nombreArchivo: adj?.NombreArchivo || '', error: 'Sin ruta de archivo' };
+    }
+    const rutaN = this.normalizarRutaPatch(adj.RutaArchivo);
+    const nombreArchivo = adj.NombreArchivo || path.basename(String(adj.RutaArchivo)) || 'adjunto';
+    try {
+      const url = `${FILE_SERVER_URL}/file?path=${encodeURIComponent(rutaN)}`;
+      const res = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        maxContentLength: 50 * 1024 * 1024,
+        maxBodyLength: 50 * 1024 * 1024,
+      });
+      return { buffer: Buffer.from(res.data), nombreArchivo };
+    } catch (e) {
+      const candidates = [rutaN, adj.RutaArchivo].filter((p) => typeof p === 'string' && p.length > 0);
+      for (const p of candidates) {
+        try {
+          if (fsSync.existsSync(p)) {
+            const buffer = await fs.readFile(p);
+            return { buffer, nombreArchivo };
+          }
+        } catch (_) {
+          /* siguiente candidato */
+        }
+      }
+      console.warn(`[fetchAdjuntoFileBuffer] id=${idAdjunto}:`, e.message);
+      return { buffer: null, nombreArchivo, error: e.message || 'No se pudo leer el archivo' };
+    }
   }
 
   /**

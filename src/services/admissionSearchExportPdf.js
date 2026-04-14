@@ -1,0 +1,610 @@
+const PDFDocument = require('pdfkit');
+const path = require('path');
+const { PDFDocument: PDFLibDocument } = require('pdf-lib');
+const sharp = require('sharp');
+const adjuntosService = require('./adjuntos.service');
+
+const MARGIN = 48;
+const SECTION_BG = '#d6eff5';
+const SECTION_BORDER = '#5eb8cc';
+const TZ_AR = 'America/Argentina/Buenos_Aires';
+
+function contentWidth(doc) {
+  return doc.page.width - doc.page.margins.left - doc.page.margins.right;
+}
+
+function str(v) {
+  if (v == null || v === '') return '';
+  return String(v);
+}
+
+function safeText(val, maxLen = 4000) {
+  if (val == null || val === '') return '';
+  let s = String(val);
+  s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  if (s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
+  return s;
+}
+
+function formatFechaHoraAR(value) {
+  if (value == null || value === '') return '—';
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return str(value);
+    return new Intl.DateTimeFormat('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ_AR,
+    }).format(d);
+  } catch {
+    return str(value);
+  }
+}
+
+function formatMedFechaHora(m) {
+  const fd = str(m.FechaControl);
+  const ht = str(m.HoraControl);
+  if (!fd && !ht) return '—';
+  if (fd.includes('T') || /^\d{4}-\d{2}-\d{2}/.test(fd)) {
+    try {
+      const t = ht ? `${fd.split('T')[0]}T${String(ht).replace(/:/g, ':').slice(0, 8)}` : fd;
+      const d = new Date(t);
+      if (!Number.isNaN(d.getTime())) return formatFechaHoraAR(d);
+    } catch (_) {
+      /* fallthrough */
+    }
+  }
+  return `${fd} ${ht}`.trim() || '—';
+}
+
+function ensureSpace(doc, minBottom = 72) {
+  const mb = doc.page.margins.bottom;
+  const limit = doc.page.height - mb - minBottom;
+  if (doc.y > limit) {
+    doc.addPage();
+  }
+}
+
+const SECTION_LABEL_ES = {
+  admision: 'Admisión',
+  hcIngreso: 'HC ingreso',
+  practicas: 'Prácticas',
+  medicamentos: 'Medicamentos',
+  evoluciones: 'Evoluciones',
+  estudios: 'Estudios laboratorio',
+  protocolos: 'Protocolos',
+  adjuntos: 'Adjuntos',
+};
+
+function humanizarSecciones(list) {
+  if (!Array.isArray(list)) return '';
+  return list.map((s) => SECTION_LABEL_ES[s] || s).join(' · ');
+}
+
+function sectionTitle(doc, title) {
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  ensureSpace(doc, 30);
+  const y = doc.y;
+  doc.save();
+  doc.roundedRect(left, y, w, 22, 3).fill(SECTION_BG).stroke(SECTION_BORDER);
+  doc.fillColor('#0a4a5c').font('Helvetica-Bold').fontSize(10.5).text(title, left + 10, y + 5, { width: w - 20 });
+  doc.restore();
+  doc.y = y + 28;
+  doc.fillColor('#0f172a').font('Helvetica');
+}
+
+function drawCoverBlock(doc, payload) {
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  const c = payload.criterios || {};
+  const colW = (w - 14) / 2;
+  const y0 = doc.y;
+
+  doc.save();
+  doc.roundedRect(left, y0, w, 96, 4).fill('#f0f9fc').stroke('#9dd5e8');
+  doc.restore();
+
+  let y = y0 + 10;
+  const padL = left + 12;
+  const mid = padL + colW + 6;
+
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('#0083a9').text('Exportación clínica', padL, y0 + 8, { width: w - 24 });
+  y = y0 + 30;
+
+  doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(`Visita: ${str(payload.numeroVisita)}`, padL, y, {
+    width: colW,
+  });
+  doc.text(`Generado: ${formatFechaHoraAR(payload.generadoEn)}`, mid, y, { width: colW });
+  y += 16;
+
+  const crit = c.exportAll ? 'Sin filtro de fechas' : `Desde ${str(c.fechaInicio) || '—'} hasta ${str(c.fechaFin) || '—'}`;
+  doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Criterios: ', padL, y, { continued: true });
+  doc.font('Helvetica').fillColor('#0f172a').text(crit, { width: w - 24 });
+  y += 14;
+
+  if (Array.isArray(c.sections) && c.sections.length) {
+    doc.font('Helvetica-Bold').fontSize(8).text('Secciones: ', padL, y, { continued: true });
+    doc.font('Helvetica').fontSize(7.5).text(humanizarSecciones(c.sections), { width: w - 24 });
+    y += 14;
+  }
+
+  if (c.evolucionSectorIds && c.evolucionSectorIds.length) {
+    doc.font('Helvetica-Bold').fontSize(7.5).text('Evoluciones por servicio (IdSector): ', padL, y, { continued: true });
+    doc.font('Helvetica').text(c.evolucionSectorIds.join(', '), { width: w - 24 });
+    y += 12;
+  }
+
+  doc.y = y0 + 102;
+  doc.fillColor('#0f172a').font('Helvetica');
+}
+
+function keyValRow2(doc, pairs) {
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  const colW = (w - 10) / 2;
+  for (let i = 0; i < pairs.length; i += 2) {
+    ensureSpace(doc, 26);
+    const yy = doc.y;
+    const [k1, v1] = pairs[i];
+    const p2 = pairs[i + 1];
+    const t1 = `${k1}: ${safeText(v1, 220)}`;
+    doc.font('Helvetica').fontSize(7.5).fillColor('#0f172a').text(t1, left, yy, { width: colW - 4, height: 22, ellipsis: true });
+    if (p2) {
+      const [k2, v2] = p2;
+      const t2 = `${k2}: ${safeText(v2, 220)}`;
+      doc.text(t2, left + colW + 6, yy, { width: colW - 4, height: 22, ellipsis: true });
+    }
+    doc.y = yy + 24;
+  }
+}
+
+function renderIndicacionesGrid(doc, items) {
+  if (!items.length) return;
+  sectionTitle(doc, 'Prácticas / indicaciones');
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  const cols = 3;
+  const gap = 6;
+  const cellW = (w - gap * (cols - 1)) / cols;
+  const cellH = 102;
+  const pad = 4;
+
+  let idx = 0;
+  while (idx < items.length) {
+    ensureSpace(doc, cellH + 16);
+    const rowTop = doc.y;
+    for (let c = 0; c < cols && idx < items.length; c += 1, idx += 1) {
+      const ind = items[idx];
+      const x = left + c * (cellW + gap);
+      doc.save();
+      doc.roundedRect(x, rowTop, cellW, cellH, 3).fill('#ffffff').stroke('#cbd5e1');
+      doc.restore();
+
+      const head = `#${idx + 1}  Nº ${str(ind.nroIndicacion)}`;
+      doc.font('Helvetica-Bold').fontSize(6.8).fillColor('#0f172a').text(head, x + pad, rowTop + pad, {
+        width: cellW - pad * 2,
+      });
+
+      const lines = [
+        `Desc.: ${safeText(ind.descripcion, 180)}`,
+        `Med.: ${safeText(ind.medicamento, 120)}`,
+        `Freq.: ${safeText(ind.frecuencia, 80)}`,
+        `Prof.: ${safeText(ind.fullName, 100)}`,
+        `Obs.: ${safeText(ind.observaciones, 120)}`,
+      ];
+      if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
+        const hij = ind.indicacionesHijas.map((h) => safeText(h.descripcion || h.medicamento, 40)).join(' · ');
+        lines.push(`Hijas: ${hij.slice(0, 140)}`);
+      }
+      const body = lines.join('\n');
+      doc.font('Helvetica').fontSize(6.3).fillColor('#334155').text(body, x + pad, rowTop + pad + 12, {
+        width: cellW - pad * 2,
+        height: cellH - pad * 2 - 14,
+        ellipsis: true,
+      });
+    }
+    doc.y = rowTop + cellH + 8;
+  }
+  doc.moveDown(0.2);
+}
+
+function renderMedicamentosTable(doc, items) {
+  if (!items.length) return;
+  sectionTitle(doc, 'Medicamentos suministrados');
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  const cw = [w * 0.34, w * 0.2, w * 0.14, w * 0.32];
+  const headerH = 16;
+  const bodyRowH = 26;
+
+  function rowCellsAt(y, cells, header) {
+    let x = left;
+    doc.fillColor(header ? '#0f172a' : '#334155');
+    doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(header ? 8 : 7);
+    for (let i = 0; i < 4; i += 1) {
+      doc.text(safeText(cells[i], 800), x + 3, y + 3, {
+        width: cw[i] - 6,
+        height: header ? headerH - 6 : bodyRowH - 6,
+        ellipsis: !header,
+      });
+      x += cw[i];
+    }
+  }
+
+  ensureSpace(doc, headerH + 8);
+  let y = doc.y;
+  doc.save();
+  doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
+  doc.restore();
+  rowCellsAt(y, ['Medicamento', 'Fecha / hora', 'Cantidad', 'Observaciones'], true);
+  doc.y = y + headerH + 2;
+
+  items.forEach((m, i) => {
+    ensureSpace(doc, bodyRowH + 4);
+    y = doc.y;
+    doc.save();
+    doc.rect(left, y, w, bodyRowH).fill(i % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
+    doc.restore();
+    const med = str(m.NombreMedicamento || m.AliasMedicamento || m.DescripcionMedicamento || '—');
+    const cant = `${str(m.Cantidad)} ${str(m.TipoUnidad)}`.trim();
+    rowCellsAt(y, [med, formatMedFechaHora(m), cant || '—', str(m.Observaciones)], false);
+    doc.y = y + bodyRowH + 2;
+  });
+  doc.moveDown(0.3);
+}
+
+async function prepareAdjuntosResueltos(adjuntosMeta) {
+  const list = Array.isArray(adjuntosMeta) ? adjuntosMeta : [];
+  const out = [];
+  for (const a of list) {
+    const id = a.IdAdjunto;
+    const fetched = await adjuntosService.fetchAdjuntoFileBuffer(id);
+    const nombre = fetched.nombreArchivo || a.NombreArchivo || 'archivo';
+    const ext = path.extname(nombre).toLowerCase();
+    let kind = 'none';
+    let buffer = fetched.buffer;
+    let prepared = null;
+
+    if (buffer && buffer.length > 0) {
+      if (['.jpg', '.jpeg', '.png'].includes(ext)) {
+        kind = 'image';
+        prepared = buffer;
+      } else if (['.gif', '.webp', '.tif', '.tiff'].includes(ext)) {
+        try {
+          prepared = await sharp(buffer).png().toBuffer();
+          kind = 'image';
+        } catch (e) {
+          kind = 'error';
+          fetched.error = e.message;
+        }
+      } else if (ext === '.pdf') {
+        kind = 'pdf';
+        prepared = buffer;
+      } else {
+        kind = 'unsupported';
+      }
+    } else {
+      kind = 'error';
+    }
+
+    out.push({
+      meta: a,
+      nombreArchivo: nombre,
+      ext,
+      kind,
+      buffer: prepared || buffer,
+      error: fetched.error,
+    });
+  }
+  return out;
+}
+
+function bodyParagraph(doc, text) {
+  const w = contentWidth(doc);
+  const t = safeText(text);
+  if (!t) return;
+  ensureSpace(doc, 36);
+  doc.fontSize(8).font('Helvetica').fillColor('#1e293b').text(t, { width: w, lineGap: 1 });
+  doc.moveDown(0.25);
+}
+
+/**
+ * @param {object} payload - resultado de exportarAdmisionSelectivo
+ * @returns {Promise<Buffer>}
+ */
+async function buildSelectiveExportPdf(payload) {
+  const adjuntosResueltos =
+    payload.adjuntos && payload.adjuntos.length ? await prepareAdjuntosResueltos(payload.adjuntos) : [];
+
+  const pdfAnnexBuffers = [];
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      margin: MARGIN,
+      size: 'A4',
+      info: {
+        Title: `Exportación visita ${payload.numeroVisita || ''}`,
+        Author: 'iMedicWS',
+      },
+    });
+
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('error', reject);
+    doc.on('end', async () => {
+      try {
+        let buf = Buffer.concat(chunks);
+        if (pdfAnnexBuffers.length > 0) {
+          const mainDoc = await PDFLibDocument.load(buf);
+          for (const annexBuf of pdfAnnexBuffers) {
+            try {
+              const annex = await PDFLibDocument.load(annexBuf);
+              const copied = await mainDoc.copyPages(annex, annex.getPageIndices());
+              copied.forEach((p) => mainDoc.addPage(p));
+            } catch (err) {
+              console.warn('[PDF export] Anexo PDF omitido:', err.message);
+            }
+          }
+          buf = Buffer.from(await mainDoc.save());
+        }
+        resolve(buf);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    drawCoverBlock(doc, payload);
+
+    if (payload.admision) {
+      sectionTitle(doc, 'Datos de admisión');
+      const a = payload.admision;
+      keyValRow2(doc, [
+        ['Paciente', str(a.ApellidoYNombre)],
+        ['DNI', str(a.NumeroDocumento)],
+        ['HC', str(a.NumeroHC)],
+        ['Fecha admisión', str(a.FechaAdmision)],
+        ['Hora', str(a.HoraAdmision)],
+        ['Id paciente', str(a.IdPaciente)],
+      ]);
+      doc.moveDown(0.3);
+    }
+
+    if (payload.historialClinico && payload.historialClinico.length) {
+      sectionTitle(doc, 'HC de ingreso');
+      payload.historialClinico.forEach((row, idx) => {
+        ensureSpace(doc, 72);
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(`Registro ${idx + 1} — ID ${str(row.IdHCIngreso)}`, {
+          width: contentWidth(doc),
+        });
+        doc.font('Helvetica');
+        keyValRow2(doc, [
+          ['Profesional', str(row.ProfesionalNombre)],
+          ['Sector', str(row.SectorDescripcion)],
+          ['Fecha', str(row.FechaFormateada || row.Fecha)],
+          ['Motivo consulta', safeText(row.MotivoConsulta, 400)],
+          ['Enfermedad actual', safeText(row.EnfermedadActual, 400)],
+        ]);
+        const keys = Object.keys(row).filter(
+          (k) =>
+            ![
+              'IdHCIngreso',
+              'ProfesionalNombre',
+              'SectorDescripcion',
+              'FechaFormateada',
+              'Fecha',
+              'MotivoConsulta',
+              'EnfermedadActual',
+            ].includes(k)
+        );
+        const extra = keys
+          .map((k) => {
+            const v = row[k];
+            if (v == null || v === '' || typeof v === 'object') return null;
+            return [k, str(v)];
+          })
+          .filter(Boolean)
+          .slice(0, 16);
+        if (extra.length) {
+          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#64748b').text('Otros datos (resumen, 2 columnas):', {
+            width: contentWidth(doc),
+          });
+          const leftH = doc.page.margins.left;
+          const wH = contentWidth(doc);
+          const halfH = (wH - 8) / 2;
+          for (let j = 0; j < extra.length; j += 2) {
+            ensureSpace(doc, 24);
+            const yy = doc.y;
+            const pA = extra[j];
+            const pB = extra[j + 1];
+            const lineA = `${pA[0]}: ${safeText(pA[1], 160)}`;
+            doc.font('Helvetica').fontSize(7).fillColor('#475569').text(lineA, leftH, yy, {
+              width: halfH - 4,
+              height: 20,
+              ellipsis: true,
+            });
+            if (pB) {
+              const lineB = `${pB[0]}: ${safeText(pB[1], 160)}`;
+              doc.text(lineB, leftH + halfH + 4, yy, { width: halfH - 4, height: 20, ellipsis: true });
+            }
+            doc.y = yy + 22;
+          }
+        }
+        doc.moveDown(0.35);
+      });
+    }
+
+    if (payload.indicaciones && payload.indicaciones.length) {
+      renderIndicacionesGrid(doc, payload.indicaciones);
+    }
+
+    if (payload.medicamentos && payload.medicamentos.length) {
+      renderMedicamentosTable(doc, payload.medicamentos);
+    }
+
+    if (payload.evolucionesMedicas && payload.evolucionesMedicas.length) {
+      sectionTitle(doc, 'Evoluciones médicas');
+      const left = doc.page.margins.left;
+      const w = contentWidth(doc);
+      const half = (w - 10) / 2;
+      let rowTop = doc.y;
+      payload.evolucionesMedicas.forEach((e, ei) => {
+        if (ei % 2 === 0) {
+          ensureSpace(doc, 52);
+          rowTop = doc.y;
+        }
+        const x = left + (ei % 2) * (half + 8);
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#0f172a').text(`${str(e.FechaEv)} ${str(e.HoraEv)}`, x, rowTop, {
+          width: half - 4,
+        });
+        doc.font('Helvetica').fontSize(7).fillColor('#475569').text(str(e.ProfesionalNombreCompleto), x, rowTop + 10, {
+          width: half - 4,
+          height: 11,
+          ellipsis: true,
+        });
+        doc.font('Helvetica').fontSize(7.5).fillColor('#1e293b').text(safeText(e.Evolucion, 3500), x, rowTop + 22, {
+          width: half - 4,
+          height: 64,
+          ellipsis: true,
+        });
+        if (ei % 2 === 1) {
+          doc.y = rowTop + 90;
+        }
+      });
+      if (payload.evolucionesMedicas.length % 2 === 1) {
+        doc.y = rowTop + 90;
+      }
+      doc.moveDown(0.2);
+    }
+
+    if (payload.practicas && payload.practicas.laboratorios && payload.practicas.laboratorios.length) {
+      sectionTitle(doc, 'Estudios solicitados (laboratorio)');
+      payload.practicas.laboratorios.forEach((ex) => {
+        ensureSpace(doc, 48);
+        doc.font('Helvetica-Bold').fontSize(9).text(`${str(ex.TipoEstudio)} — ${str(ex.FechaExamen)} ${str(ex.HoraExamen)}`, {
+          width: contentWidth(doc),
+        });
+        doc.font('Helvetica').fontSize(8);
+        if (ex.Protocolo) doc.fillColor('#475569').text(`Protocolo: ${str(ex.Protocolo)}`, { width: contentWidth(doc) });
+        doc.fillColor('#1e293b');
+        if (ex.detalles && ex.detalles.length) {
+          const leftL = doc.page.margins.left;
+          const wL = contentWidth(doc);
+          const c2 = (wL - 8) / 2;
+          const det = ex.detalles.slice(0, 80);
+          for (let di = 0; di < det.length; di += 2) {
+            ensureSpace(doc, 14);
+            const rowY = doc.y;
+            const d0 = det[di];
+            const d1 = det[di + 1];
+            const line0 = `• ${str(d0.NombreParametro)}: ${str(d0.Resultado)} (ref. ${str(d0.ValorReferencia)})`;
+            doc.fontSize(6.8).fillColor('#1e293b').text(safeText(line0, 280), leftL, rowY, {
+              width: c2 - 4,
+              height: 12,
+              ellipsis: true,
+            });
+            if (d1) {
+              const line1 = `• ${str(d1.NombreParametro)}: ${str(d1.Resultado)} (ref. ${str(d1.ValorReferencia)})`;
+              doc.text(safeText(line1, 280), leftL + c2 + 6, rowY, { width: c2 - 4, height: 12, ellipsis: true });
+            }
+            doc.y = rowY + 13;
+          }
+          if (ex.detalles.length > 80) {
+            doc.fontSize(7.5).fillColor('#64748b').text(`… y ${ex.detalles.length - 80} parámetros más`, {
+              width: contentWidth(doc),
+            });
+          }
+        }
+        doc.moveDown(0.25);
+      });
+    }
+
+    if (payload.protocolos && payload.protocolos.length) {
+      sectionTitle(doc, 'Protocolos');
+      const left = doc.page.margins.left;
+      const w = contentWidth(doc);
+      const c3 = (w - 12) / 3;
+      let rowTop = doc.y;
+      payload.protocolos.forEach((p, n) => {
+        const col = n % 3;
+        if (col === 0) {
+          ensureSpace(doc, 34);
+          rowTop = doc.y;
+        }
+        const x = left + col * (c3 + 4);
+        const line = `Prot. ${str(p.Protocolo)} · ${str(p.TipoEstudio)}\n${str(p.FechaExamen)} · ${str(p.Laboratorio)}`;
+        doc.fontSize(7).fillColor('#1e293b').text(safeText(line, 400), x, rowTop, { width: c3 - 4, height: 28, ellipsis: true });
+        if (col === 2) {
+          doc.y = rowTop + 30;
+        }
+      });
+      if (payload.protocolos.length % 3 !== 0) {
+        doc.y = rowTop + 30;
+      }
+      doc.moveDown(0.2);
+    }
+
+    if (adjuntosResueltos.length) {
+      sectionTitle(doc, 'Adjuntos');
+      doc.font('Helvetica').fontSize(8).fillColor('#334155').text(
+        'A continuación se incluyen las vistas previas o el documento completo según el tipo de archivo. Los PDF se anexan al final del documento.',
+        { width: contentWidth(doc) }
+      );
+      doc.moveDown(0.35);
+
+      adjuntosResueltos.forEach((adj, i) => {
+        const meta = adj.meta;
+        const titulo = `${i + 1}. ${adj.nombreArchivo} · ${str(meta.TipoImagenNombre)} · ${formatFechaHoraAR(meta.FechaCarga)}`;
+        ensureSpace(doc, 28);
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(titulo, { width: contentWidth(doc) });
+        doc.moveDown(0.15);
+
+        if (adj.kind === 'image' && adj.buffer) {
+          try {
+            ensureSpace(doc, 220);
+            const left = doc.page.margins.left;
+            const fw = contentWidth(doc);
+            doc.image(adj.buffer, left, doc.y, {
+              fit: [fw, 200],
+              align: 'center',
+            });
+            doc.moveDown(0.2);
+          } catch (e) {
+            doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(`No se pudo incrustar la imagen: ${e.message}`, {
+              width: contentWidth(doc),
+            });
+            doc.moveDown(0.2);
+          }
+        } else if (adj.kind === 'pdf' && adj.buffer) {
+          doc.font('Helvetica').fontSize(8).fillColor('#0369a1').text(
+            '→ Documento PDF anexado al final de este informe.',
+            { width: contentWidth(doc) }
+          );
+          pdfAnnexBuffers.push(adj.buffer);
+          doc.moveDown(0.35);
+        } else if (adj.kind === 'unsupported') {
+          doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(
+            'Formato no incrustable en PDF; descargá el archivo desde el sistema con el IdAdjunto indicado.',
+            { width: contentWidth(doc) }
+          );
+          doc.moveDown(0.25);
+        } else {
+          doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(
+            `No se pudo obtener el archivo${adj.error ? `: ${adj.error}` : '.'}`,
+            { width: contentWidth(doc) }
+          );
+          doc.moveDown(0.25);
+        }
+      });
+    }
+
+    doc.end();
+  });
+}
+
+module.exports = {
+  buildSelectiveExportPdf,
+};

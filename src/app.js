@@ -47,6 +47,8 @@ const signosVitalesRoutes = require('./routes/signosVitales.routes');
 const usersRoutes = require('./routes/users.routes');
 const laboratoriosRoutes = require('./routes/laboratorios.routes');
 const sectoresRoutes = require('./routes/sectores.routes');
+const notificacionesRoutes = require('./routes/notificaciones.routes');
+const admissionSearchRoutes = require('./routes/admissionSearch.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -121,6 +123,8 @@ app.use('/api/signos-vitales', signosVitalesRoutes);
 app.use('/api/admin/users', usersRoutes);
 app.use('/api/laboratorios', laboratoriosRoutes);
 app.use('/api/sectores', sectoresRoutes);
+app.use('/api/notificaciones', notificacionesRoutes);
+app.use('/api/admission-search', admissionSearchRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

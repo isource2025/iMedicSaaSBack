@@ -5,6 +5,37 @@ const {
 } = require("../utils/dateUtils");
 
 /**
+ * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).
+ * Sin TRY_CONVERT (requiere SQL 2012+): solo dígitos vía PATINDEX, luego CAST — compatible SQL 2005.
+ */
+const SQL_GLUCEMIA_OUTER_APPLY = `
+        OUTER APPLY (
+            SELECT TOP 1 g.Glucemia AS Glucemia
+            FROM (
+                SELECT
+                    CASE
+                        WHEN cf.Hgt IS NULL THEN NULL
+                        WHEN LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200)))) = '' THEN NULL
+                        WHEN PATINDEX('%[^0-9]%', LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200))))) > 0 THEN NULL
+                        ELSE CAST(LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200)))) AS INT)
+                    END AS Glucemia,
+                    cf.FechaControl,
+                    cf.HoraControl
+                FROM dbo.imInterCtrlFrecuente AS cf
+                WHERE cf.NumeroVisita = ev.IdVisita
+                  AND (
+                    cf.FechaControl < ev.FechaEv
+                    OR (
+                      cf.FechaControl = ev.FechaEv
+                      AND ISNULL(cf.HoraControl, 0) <= ISNULL(NULLIF(ev.HoraEv, 0), 99999999)
+                    )
+                  )
+            ) AS g
+            WHERE g.Glucemia IS NOT NULL AND g.Glucemia <> 0
+            ORDER BY g.FechaControl DESC, g.HoraControl DESC
+        ) AS glu`;
+
+/**
  * Obtener evoluciones por visita y fecha/período
  * @param {number} idVisita - Número de visita
  * @param {string} fecha - Fecha en formato YYYY-MM-DD (fecha de referencia)
@@ -42,15 +73,19 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
             CONVERT(varchar(10), DATEADD(day, ev.FechaEv, '1800-12-28'), 23) AS FechaEv,
             CONVERT(varchar(5), DATEADD(ms, (ev.HoraEv - 1) * 10, 0), 108) AS HoraEv,
             ev.IdSector,
+            sec.Descripcion AS SectorDescripcion,
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
             per.ApellidoNombre AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
-            esp.Descripcion AS EspecialidadDescripcion
+            esp.Descripcion AS EspecialidadDescripcion,
+            glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
+        LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
         LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
+        ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ${whereClause}
         ORDER BY ev.FechaEv DESC, ev.HoraEv DESC
     `;
@@ -128,15 +163,19 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
             CONVERT(varchar(10), DATEADD(day, ev.FechaEv, '1800-12-28'), 23) AS FechaEv,
             CONVERT(varchar(5), DATEADD(ms, (ev.HoraEv - 1) * 10, 0), 108) AS HoraEv,
             ev.IdSector,
+            sec.Descripcion AS SectorDescripcion,
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
             per.ApellidoNombre AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
-            esp.Descripcion AS EspecialidadDescripcion
+            esp.Descripcion AS EspecialidadDescripcion,
+            glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
+        LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
         LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
+        ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ev.IdHCEvolucion = @param0
     `;
 

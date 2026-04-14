@@ -1,0 +1,349 @@
+const { executeQuery } = require('../models/db');
+const indicacionesService = require('./indicaciones.service');
+const medicacionControlService = require('./medicacionControl.service');
+const laboratoriosService = require('./laboratorios.service');
+const adjuntosService = require('./adjuntos.service');
+const evolucionesService = require('./evoluciones.service');
+const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
+
+function normalizeLike(value) {
+  return `%${String(value || '').trim().replace(/\s+/g, '%')}%`;
+}
+
+async function buscarAdmisiones({
+  dni = '',
+  nombreApellido = '',
+  fechaInicio = '',
+  fechaFin = '',
+  page = 1,
+  limit = 25,
+}) {
+  const whereParts = [];
+  const params = [];
+
+  if (String(dni).trim()) {
+    whereParts.push(`CAST(p.NumeroDocumento AS VARCHAR(50)) LIKE @param${params.length}`);
+    params.push({ value: normalizeLike(dni) });
+  }
+
+  if (String(nombreApellido).trim()) {
+    whereParts.push(`p.ApellidoYNombre LIKE @param${params.length}`);
+    params.push({ value: normalizeLike(nombreApellido) });
+  }
+
+  if (String(fechaInicio).trim()) {
+    whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) >= @param${params.length}`);
+    params.push({ value: fechaInicio });
+  }
+
+  if (String(fechaFin).trim()) {
+    whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) <= @param${params.length}`);
+    params.push({ value: fechaFin });
+  }
+
+  const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
+  const offset = (safePage - 1) * safeLimit;
+
+  const countQuery = `
+    SELECT COUNT(1) AS total
+    FROM imVisita v
+    INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+    ${whereClause}
+  `;
+
+  const listQuery = `
+    SELECT
+      v.NumeroVisita,
+      v.IdPaciente,
+      p.ApellidoYNombre,
+      p.NumeroDocumento,
+      p.NumeroHC,
+      CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
+      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
+      (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
+      (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
+      (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
+      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.NumeroVisita = v.NumeroVisita) AS CntLaboratorios,
+      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab2
+        WHERE lab2.NumeroVisita = v.NumeroVisita
+        AND NULLIF(LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))), '') IS NOT NULL
+        AND LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))) <> '0') AS CntProtocolos,
+      (SELECT COUNT(1) FROM dbo.imPedidosEstudiosAdjuntos adj WHERE adj.NumeroVisita = v.NumeroVisita) AS CntAdjuntos,
+      (SELECT COUNT(1) FROM dbo.imHCEvolucion ev WHERE ev.IdVisita = v.NumeroVisita) AS CntEvoluciones
+    FROM imVisita v
+    INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+    ${whereClause}
+    ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+    OFFSET @param${params.length} ROWS FETCH NEXT @param${params.length + 1} ROWS ONLY
+  `;
+
+  const [countRows, data] = await Promise.all([
+    executeQuery(countQuery, params),
+    executeQuery(listQuery, [...params, { value: offset }, { value: safeLimit }]),
+  ]);
+
+  const total = Number(countRows?.[0]?.total || 0);
+  return {
+    data: data || [],
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.ceil(total / safeLimit) || 0,
+    },
+  };
+}
+
+async function obtenerResumenAdmision(numeroVisita) {
+  const rows = await executeQuery(
+    `
+      SELECT TOP 1
+        v.NumeroVisita,
+        v.IdPaciente,
+        p.ApellidoYNombre,
+        p.NumeroDocumento,
+        p.NumeroHC,
+        CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
+        CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision
+      FROM imVisita v
+      INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+      WHERE v.NumeroVisita = @param0
+    `,
+    [{ value: numeroVisita }]
+  );
+  return rows?.[0] || null;
+}
+
+async function exportarAdmisionCompleta(numeroVisita) {
+  const visita = await obtenerResumenAdmision(numeroVisita);
+  if (!visita) return null;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [
+    historiaClinica,
+    indicaciones,
+    medicamentos,
+    practicasLaboratorio,
+    evolucionesMedicas,
+    adjuntos,
+  ] = await Promise.all([
+    obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
+    indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 500).catch(() => []),
+    medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []),
+    laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []),
+    evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
+    adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []),
+  ]);
+
+  return {
+    generadoEn: new Date().toISOString(),
+    admision: visita,
+    historialClinico: historiaClinica,
+    practicas: {
+      laboratorios: practicasLaboratorio,
+      adjuntos,
+    },
+    medicamentos,
+    indicaciones,
+    evolucionesMedicas,
+  };
+}
+
+/** YYYY-MM-DD o null si no se puede inferir */
+function toYmd(val) {
+  if (val == null || val === '') return null;
+  const s = String(val).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return val.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function inDateRange(ymd, fechaInicio, fechaFin, exportAll) {
+  if (exportAll) return true;
+  const ini = String(fechaInicio || '').trim();
+  const fin = String(fechaFin || '').trim();
+  if (!ini && !fin) return true;
+  if (!ymd) return true;
+  if (ini && ymd < ini) return false;
+  if (fin && ymd > fin) return false;
+  return true;
+}
+
+function filterHc(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => {
+    const ymd = toYmd(r.FechaFormateada) || toYmd(r.Fecha);
+    return inDateRange(ymd, fechaInicio, fechaFin, exportAll);
+  });
+}
+
+function indicacionYmd(row) {
+  return (
+    toYmd(row.vigenteDesde) ||
+    toYmd(row.FechaCargaISO) ||
+    toYmd(row.proximo) ||
+    (row.proximaAplicacion ? toYmd(String(row.proximaAplicacion).replace(/\//g, '-')) : null) ||
+    (row.ultimaAplicacion ? toYmd(String(row.ultimaAplicacion).replace(/\//g, '-')) : null)
+  );
+}
+
+function filterIndicaciones(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(indicacionYmd(r), fechaInicio, fechaFin, exportAll));
+}
+
+function filterMedicamentos(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(toYmd(r.FechaControl), fechaInicio, fechaFin, exportAll));
+}
+
+function filterEvoluciones(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(toYmd(r.FechaEv), fechaInicio, fechaFin, exportAll));
+}
+
+function filterLabs(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(toYmd(r.FechaExamen), fechaInicio, fechaFin, exportAll));
+}
+
+function filterAdjuntosMeta(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => {
+    const ymd = toYmd(r.FechaCarga) || toYmd(r.Fecha);
+    return inDateRange(ymd, fechaInicio, fechaFin, exportAll);
+  });
+}
+
+function slimLabRow(ex) {
+  const { detalles, totalParametros, parametrosFueraDeRango, ...rest } = ex;
+  return rest;
+}
+
+/**
+ * Export JSON parcial según secciones y rango de fechas (o todo).
+ * @param {number} numeroVisita
+ * @param {Object} opts
+ * @param {string[]} opts.sections - claves: admision, hcIngreso, practicas, medicamentos, evoluciones, estudios, protocolos, adjuntos
+ * @param {boolean} opts.exportAll
+ * @param {string} [opts.fechaInicio] YYYY-MM-DD
+ * @param {string} [opts.fechaFin] YYYY-MM-DD
+ * @param {string[]} [opts.evolucionSectorIds] Valores de IdSector a incluir; vacío = todos los servicios
+ */
+async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
+  const visita = await obtenerResumenAdmision(numeroVisita);
+  if (!visita) return null;
+
+  const sections = Array.isArray(opts.sections) ? opts.sections.map(String) : [];
+  const exportAll = Boolean(opts.exportAll);
+  const fechaInicio = String(opts.fechaInicio || '').trim();
+  const fechaFin = String(opts.fechaFin || '').trim();
+  const evolucionSectorIds = Array.isArray(opts.evolucionSectorIds)
+    ? [...new Set(opts.evolucionSectorIds.map((x) => String(x).trim()))]
+    : [];
+
+  if (sections.length === 0) {
+    const err = new Error('Debe seleccionar al menos un bloque para exportar');
+    err.code = 'NO_SECTIONS';
+    throw err;
+  }
+
+  const need = {
+    hc: sections.includes('hcIngreso'),
+    ind: sections.includes('practicas'),
+    med: sections.includes('medicamentos'),
+    evo: sections.includes('evoluciones'),
+    lab: sections.includes('estudios') || sections.includes('protocolos'),
+    adj: sections.includes('adjuntos'),
+  };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [
+    historiaClinica,
+    indicaciones,
+    medicamentos,
+    practicasLaboratorio,
+    evolucionesMedicas,
+    adjuntos,
+  ] = await Promise.all([
+    need.hc ? obtenerHCIngresoPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.ind
+      ? indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => [])
+      : Promise.resolve([]),
+    need.med ? medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.lab ? laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.evo
+      ? evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => [])
+      : Promise.resolve([]),
+    need.adj ? adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  const out = {
+    generadoEn: new Date().toISOString(),
+    numeroVisita,
+    criterios: {
+      exportAll,
+      fechaInicio: exportAll ? null : fechaInicio || null,
+      fechaFin: exportAll ? null : fechaFin || null,
+      sections,
+      evolucionSectorIds: evolucionSectorIds.length ? evolucionSectorIds : null,
+    },
+  };
+
+  if (sections.includes('admision')) {
+    out.admision = visita;
+  }
+
+  if (sections.includes('hcIngreso')) {
+    out.historialClinico = filterHc(historiaClinica, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (sections.includes('practicas')) {
+    out.indicaciones = filterIndicaciones(indicaciones, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (sections.includes('medicamentos')) {
+    out.medicamentos = filterMedicamentos(medicamentos, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (sections.includes('evoluciones')) {
+    let ev = evolucionesMedicas || [];
+    if (evolucionSectorIds.length > 0) {
+      const sectorSet = new Set(evolucionSectorIds.map((s) => String(s)));
+      ev = ev.filter((r) => sectorSet.has(String(r.IdSector ?? '').trim()));
+    }
+    out.evolucionesMedicas = filterEvoluciones(ev, fechaInicio, fechaFin, exportAll);
+  }
+
+  const labsFiltered = filterLabs(practicasLaboratorio, fechaInicio, fechaFin, exportAll);
+
+  if (sections.includes('estudios')) {
+    out.practicas = out.practicas || {};
+    out.practicas.laboratorios = labsFiltered;
+  }
+
+  if (sections.includes('protocolos')) {
+    const prot = labsFiltered.map(slimLabRow);
+    out.protocolos = prot;
+  }
+
+  if (sections.includes('adjuntos')) {
+    const meta = filterAdjuntosMeta(adjuntos, fechaInicio, fechaFin, exportAll);
+    out.adjuntos = meta.map((a) => ({
+      IdAdjunto: a.IdAdjunto,
+      NumeroVisita: a.NumeroVisita,
+      NombreArchivo: a.NombreArchivo,
+      TipoArchivo: a.TipoArchivo,
+      FechaCarga: a.FechaCarga,
+      TipoImagenNombre: a.TipoImagenNombre,
+      RutaArchivo: a.RutaArchivo,
+    }));
+  }
+
+  return out;
+}
+
+module.exports = {
+  buscarAdmisiones,
+  exportarAdmisionCompleta,
+  exportarAdmisionSelectivo,
+};

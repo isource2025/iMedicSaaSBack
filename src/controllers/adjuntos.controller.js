@@ -3,11 +3,28 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const FormData = require('form-data');
 const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
+const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
+
+/** Si el servidor HTTP de archivos no responde (timeout/red), guardar ruta absoluta del archivo en disco del backend. */
+const FILE_SERVER_FALLBACK_LOCAL =
+  process.env.FILE_SERVER_FALLBACK_LOCAL === '1' || process.env.ADJUNTOS_LOCAL_FALLBACK === '1';
+
+function isFileServerNetworkError(err) {
+  const code = err && (err.code || (err.cause && err.cause.code));
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'ECONNABORTED'
+  );
+}
 
 /**
  * Normaliza la ruta del archivo (mapea D:\ y F:\ a E:\)
@@ -28,6 +45,20 @@ function normalizarRuta(rutaOriginal) {
   }
   
   return ruta;
+}
+
+function contentTypeForAdjuntoFileName(fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeTypes = {
+    '.pdf': 'application/pdf',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
 }
 
 // Configurar multer para upload de archivos
@@ -84,7 +115,7 @@ const upload = multer({
  */
 router.post('/upload', upload.single('archivo'), async (req, res) => {
   try {
-    const { numeroVisita } = req.body;
+    const { numeroVisita, tipoImagen } = req.body;
     const userId = req.user?.id || req.body.userId || 1;
 
     // Validaciones
@@ -102,6 +133,14 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'No se proporcionó ningún archivo'
+      });
+    }
+
+    if (!tipoImagen || !String(tipoImagen).trim()) {
+      await fs.unlink(req.file.path).catch(() => {});
+      return res.status(400).json({
+        success: false,
+        error: 'tipoImagen es obligatorio (código de HCTiposImagenes, ej. RAD, LABC)'
       });
     }
 
@@ -123,34 +162,52 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
 
     console.log(`👤 Paciente: ${nombrePaciente}`);
 
-    // Enviar archivo al servidor PowerShell vía túnel
-    const formData = new FormData();
-    const fileStream = require('fs').createReadStream(req.file.path);
-    formData.append('file', fileStream, req.file.originalname);
-    formData.append('numeroVisita', numeroVisita);
-    formData.append('nombrePaciente', nombrePaciente);
+    let filePath;
+    try {
+      const formData = new FormData();
+      const fileStream = fsSync.createReadStream(req.file.path);
+      formData.append('file', fileStream, req.file.originalname);
+      formData.append('numeroVisita', numeroVisita);
+      formData.append('nombrePaciente', nombrePaciente);
 
-    const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
-      headers: {
-        ...formData.getHeaders()
-      },
-      timeout: 60000
-    });
+      const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+        headers: {
+          ...formData.getHeaders()
+        },
+        timeout: 60000
+      });
 
-    // Limpiar archivo temporal local
-    await fs.unlink(req.file.path).catch(() => {});
+      if (!uploadResponse.data.success) {
+        await fs.unlink(req.file.path).catch(() => {});
+        throw new Error(uploadResponse.data.error || 'Error al subir archivo al servidor');
+      }
 
-    if (!uploadResponse.data.success) {
-      throw new Error(uploadResponse.data.error || 'Error al subir archivo al servidor');
+      filePath = uploadResponse.data.filePath;
+      await fs.unlink(req.file.path).catch(() => {});
+      console.log(`✅ Archivo guardado en servidor de archivos: ${filePath}`);
+    } catch (remoteErr) {
+      if (FILE_SERVER_FALLBACK_LOCAL && isFileServerNetworkError(remoteErr)) {
+        filePath = path.resolve(req.file.path);
+        console.warn(
+          `📁 Adjunto: servidor de archivos no alcanzable; FILE_SERVER_FALLBACK_LOCAL=1 → ruta local: ${filePath}`
+        );
+      } else {
+        await fs.unlink(req.file.path).catch(() => {});
+        const msg = isFileServerNetworkError(remoteErr)
+          ? 'No se pudo contactar el servidor de archivos (timeout o red). Revise VPN/red y FILE_SERVER_URL. Si no usa servidor remoto, defina FILE_SERVER_FALLBACK_LOCAL=1 en .env para guardar en disco del backend.'
+          : remoteErr.message || 'Error al subir archivo';
+        return res.status(503).json({
+          success: false,
+          error: msg
+        });
+      }
     }
-
-    const { filePath } = uploadResponse.data;
-    console.log(`✅ Archivo guardado en servidor SQL: ${filePath}`);
 
     // Guardar referencia en base de datos con PatchServidor
     const result = await adjuntosService.subirAdjunto(
       {
-        numeroVisita: parseInt(numeroVisita)
+        numeroVisita: parseInt(numeroVisita),
+        idTipoImagen: String(tipoImagen).trim(),
       },
       req.file,
       userId,
@@ -159,14 +216,20 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
 
     console.log(`✅ Adjunto registrado en BD por usuario ${userId} para visita ${numeroVisita}`);
 
+    await notificarNuevoAdjunto({
+      numeroVisita: parseInt(numeroVisita, 10),
+      idAdjunto: result.idAdjunto,
+      nombreArchivo: req.file.originalname,
+      valorPersonalUploader: userId,
+    });
+
     res.status(201).json({
       success: true,
       data: result
     });
   } catch (error) {
     console.error('❌ Error al subir adjunto:', error);
-    
-    // Limpiar archivo temporal si hubo error
+
     if (req.file) {
       await fs.unlink(req.file.path).catch(() => {});
     }
@@ -184,7 +247,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
  */
 router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) => {
   try {
-    const { numeroVisita } = req.body;
+    const { numeroVisita, tipoImagen } = req.body;
     const userId = req.user?.id || req.body.userId || 1;
 
     // Validaciones
@@ -207,15 +270,25 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
       });
     }
 
+    if (!tipoImagen || !String(tipoImagen).trim()) {
+      for (const file of req.files) {
+        await fs.unlink(file.path).catch(() => {});
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'tipoImagen es obligatorio (código de HCTiposImagenes, ej. RAD, LABC)'
+      });
+    }
+
     console.log(`📤 Enviando ${req.files.length} archivos al servidor SQL`);
 
     // Subir todos los adjuntos al servidor PowerShell
     const resultados = [];
     for (const file of req.files) {
+      let filePath;
       try {
-        // Enviar archivo al servidor PowerShell vía túnel
         const formData = new FormData();
-        const fileStream = require('fs').createReadStream(file.path);
+        const fileStream = fsSync.createReadStream(file.path);
         formData.append('file', fileStream, file.originalname);
 
         const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
@@ -225,32 +298,46 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
           timeout: 60000
         });
 
-        // Limpiar archivo temporal local
-        await fs.unlink(file.path).catch(() => {});
-
         if (!uploadResponse.data.success) {
+          await fs.unlink(file.path).catch(() => {});
           console.error(`❌ Error al subir ${file.originalname} al servidor`);
           continue;
         }
 
-        const { filePath } = uploadResponse.data;
+        filePath = uploadResponse.data.filePath;
+        await fs.unlink(file.path).catch(() => {});
         console.log(`✅ ${file.originalname} guardado en: ${filePath}`);
+      } catch (error) {
+        if (FILE_SERVER_FALLBACK_LOCAL && isFileServerNetworkError(error)) {
+          filePath = path.resolve(file.path);
+          console.warn(`📁 Fallback local ${file.originalname}: ${filePath}`);
+        } else {
+          console.error(`❌ Error al subir archivo ${file.originalname}:`, error);
+          await fs.unlink(file.path).catch(() => {});
+          continue;
+        }
+      }
 
-        // Guardar referencia en base de datos
+      try {
         const result = await adjuntosService.subirAdjunto(
           {
-            numeroVisita: parseInt(numeroVisita)
+            numeroVisita: parseInt(numeroVisita),
+            idTipoImagen: String(tipoImagen).trim(),
           },
           file,
           userId,
           filePath
         );
         resultados.push(result);
-      } catch (error) {
-        console.error(`❌ Error al subir archivo ${file.originalname}:`, error);
-        // Limpiar archivo temporal
+        await notificarNuevoAdjunto({
+          numeroVisita: parseInt(numeroVisita, 10),
+          idAdjunto: result.idAdjunto,
+          nombreArchivo: file.originalname,
+          valorPersonalUploader: userId,
+        });
+      } catch (dbErr) {
+        console.error(`❌ Error BD adjunto ${file.originalname}:`, dbErr);
         await fs.unlink(file.path).catch(() => {});
-        // Continuar con los demás archivos
       }
     }
 
@@ -274,6 +361,23 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
     res.status(500).json({
       success: false,
       error: 'Error al subir archivos adjuntos'
+    });
+  }
+});
+
+/**
+ * GET /api/adjuntos/tipos-imagenes
+ * Catálogo para tipo de adjunto (HCTiposImagenes).
+ */
+router.get('/tipos-imagenes', async (req, res) => {
+  try {
+    const tipos = await adjuntosService.listarTiposImagen();
+    res.json({ success: true, data: tipos });
+  } catch (error) {
+    console.error('❌ Error al listar tipos de imagen:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error al listar tipos de imagen',
     });
   }
 });
@@ -396,22 +500,8 @@ router.get('/:idAdjunto/download', async (req, res) => {
         timeout: 60000 // 60 segundos (túnel puede ser lento)
       });
       
-      // Obtener nombre del archivo desde la ruta si no hay descripción
       const fileName = adjunto.NombreArchivo || path.basename(rutaNormalizada);
-      
-      // Determinar el tipo MIME del archivo
-      const ext = path.extname(fileName).toLowerCase();
-      const mimeTypes = {
-        '.pdf': 'application/pdf',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.doc': 'application/msword',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      };
-      
-      const contentType = mimeTypes[ext] || 'application/octet-stream';
+      const contentType = contentTypeForAdjuntoFileName(fileName);
       
       // Configurar headers para visualización inline
       res.setHeader('Content-Type', contentType);
@@ -426,7 +516,32 @@ router.get('/:idAdjunto/download', async (req, res) => {
       
     } catch (fileError) {
       console.error(`❌ Error al obtener archivo del servidor HTTP:`, fileError.message);
-      
+
+      const candidates = [rutaNormalizada, adjunto.RutaArchivo].filter(
+        (p) => typeof p === 'string' && p.length > 0
+      );
+      let localPath;
+      for (const p of candidates) {
+        if (fsSync.existsSync(p)) {
+          localPath = p;
+          break;
+        }
+      }
+
+      if (localPath) {
+        const fileName = adjunto.NombreArchivo || path.basename(localPath);
+        const contentType = contentTypeForAdjuntoFileName(fileName);
+        res.setHeader('Content-Type', contentType);
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+        );
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        console.log(`✅ Sirviendo adjunto desde disco local: ${localPath}`);
+        fsSync.createReadStream(localPath).pipe(res);
+        return;
+      }
+
       if (fileError.response?.status === 404) {
         return res.status(404).json({
           success: false,
@@ -435,7 +550,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
           rutaNormalizada
         });
       }
-      
+
       return res.status(500).json({
         success: false,
         error: 'Error al obtener archivo del servidor de archivos',
