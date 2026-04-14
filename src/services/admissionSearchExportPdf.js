@@ -18,11 +18,11 @@ function str(v) {
   return String(v);
 }
 
-function safeText(val, maxLen = 4000) {
+function safeText(val, maxLen = null) {
   if (val == null || val === '') return '';
   let s = String(val);
   s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-  if (s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
+  if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
   return s;
 }
 
@@ -147,18 +147,20 @@ function keyValRow2(doc, pairs) {
   const w = contentWidth(doc);
   const colW = (w - 10) / 2;
   for (let i = 0; i < pairs.length; i += 2) {
-    ensureSpace(doc, 26);
+    ensureSpace(doc, 30);
     const yy = doc.y;
     const [k1, v1] = pairs[i];
     const p2 = pairs[i + 1];
-    const t1 = `${k1}: ${safeText(v1, 220)}`;
-    doc.font('Helvetica').fontSize(7.5).fillColor('#0f172a').text(t1, left, yy, { width: colW - 4, height: 22, ellipsis: true });
+    const t1 = `${k1}: ${safeText(v1)}`;
+    doc.font('Helvetica').fontSize(7.5).fillColor('#0f172a').text(t1, left, yy, { width: colW - 4 });
+    let rowH = doc.y - yy;
     if (p2) {
       const [k2, v2] = p2;
-      const t2 = `${k2}: ${safeText(v2, 220)}`;
-      doc.text(t2, left + colW + 6, yy, { width: colW - 4, height: 22, ellipsis: true });
+      const t2 = `${k2}: ${safeText(v2)}`;
+      doc.text(t2, left + colW + 6, yy, { width: colW - 4 });
+      rowH = Math.max(rowH, doc.y - yy);
     }
-    doc.y = yy + 24;
+    doc.y = yy + rowH + 2;
   }
 }
 
@@ -170,44 +172,61 @@ function renderIndicacionesGrid(doc, items) {
   const cols = 3;
   const gap = 6;
   const cellW = (w - gap * (cols - 1)) / cols;
-  const cellH = 102;
   const pad = 4;
 
-  let idx = 0;
-  while (idx < items.length) {
-    ensureSpace(doc, cellH + 16);
+  for (let rowStart = 0; rowStart < items.length; rowStart += cols) {
+    const rowItems = items.slice(rowStart, rowStart + cols);
+    const heights = rowItems.map((ind, idx) => {
+      const lines = [
+        `#${rowStart + idx + 1}  Nº ${str(ind.nroIndicacion)}`,
+        `Desc.: ${safeText(ind.descripcion)}`,
+        `Med.: ${safeText(ind.medicamento)}`,
+        `Freq.: ${safeText(ind.frecuencia)}`,
+        `Prof.: ${safeText(ind.fullName)}`,
+        `Obs.: ${safeText(ind.observaciones)}`,
+      ];
+      if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
+        const hij = ind.indicacionesHijas
+          .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
+          .join(' | ');
+        lines.push(`Hijas: ${hij}`);
+      }
+      doc.font('Helvetica').fontSize(6.3);
+      const h = doc.heightOfString(lines.join('\n'), { width: cellW - pad * 2 });
+      return Math.max(36, h + 12);
+    });
+    const cellH = Math.max(...heights);
+    ensureSpace(doc, cellH + 8);
     const rowTop = doc.y;
-    for (let c = 0; c < cols && idx < items.length; c += 1, idx += 1) {
-      const ind = items[idx];
+
+    rowItems.forEach((ind, c) => {
       const x = left + c * (cellW + gap);
       doc.save();
       doc.roundedRect(x, rowTop, cellW, cellH, 3).fill('#ffffff').stroke('#cbd5e1');
       doc.restore();
 
-      const head = `#${idx + 1}  Nº ${str(ind.nroIndicacion)}`;
-      doc.font('Helvetica-Bold').fontSize(6.8).fillColor('#0f172a').text(head, x + pad, rowTop + pad, {
-        width: cellW - pad * 2,
-      });
-
       const lines = [
-        `Desc.: ${safeText(ind.descripcion, 180)}`,
-        `Med.: ${safeText(ind.medicamento, 120)}`,
-        `Freq.: ${safeText(ind.frecuencia, 80)}`,
-        `Prof.: ${safeText(ind.fullName, 100)}`,
-        `Obs.: ${safeText(ind.observaciones, 120)}`,
+        `#${rowStart + c + 1}  Nº ${str(ind.nroIndicacion)}`,
+        `Desc.: ${safeText(ind.descripcion)}`,
+        `Med.: ${safeText(ind.medicamento)}`,
+        `Freq.: ${safeText(ind.frecuencia)}`,
+        `Prof.: ${safeText(ind.fullName)}`,
+        `Obs.: ${safeText(ind.observaciones)}`,
       ];
       if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
-        const hij = ind.indicacionesHijas.map((h) => safeText(h.descripcion || h.medicamento, 40)).join(' · ');
-        lines.push(`Hijas: ${hij.slice(0, 140)}`);
+        const hij = ind.indicacionesHijas
+          .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
+          .join(' | ');
+        lines.push(`Hijas: ${hij}`);
       }
-      const body = lines.join('\n');
-      doc.font('Helvetica').fontSize(6.3).fillColor('#334155').text(body, x + pad, rowTop + pad + 12, {
+
+      doc.font('Helvetica').fontSize(6.3).fillColor('#334155').text(lines.join('\n'), x + pad, rowTop + pad, {
         width: cellW - pad * 2,
-        height: cellH - pad * 2 - 14,
-        ellipsis: true,
       });
-    }
-    doc.y = rowTop + cellH + 8;
+    });
+
+    // Reducimos ~50% el espacio vertical entre filas de indicaciones.
+    doc.y = rowTop + cellH + 4;
   }
   doc.moveDown(0.2);
 }
@@ -259,47 +278,48 @@ function renderMedicamentosTable(doc, items) {
 
 async function prepareAdjuntosResueltos(adjuntosMeta) {
   const list = Array.isArray(adjuntosMeta) ? adjuntosMeta : [];
-  const out = [];
-  for (const a of list) {
-    const id = a.IdAdjunto;
-    const fetched = await adjuntosService.fetchAdjuntoFileBuffer(id);
-    const nombre = fetched.nombreArchivo || a.NombreArchivo || 'archivo';
-    const ext = path.extname(nombre).toLowerCase();
-    let kind = 'none';
-    let buffer = fetched.buffer;
-    let prepared = null;
+  const out = await Promise.all(
+    list.map(async (a) => {
+      const id = a.IdAdjunto;
+      const fetched = await adjuntosService.fetchAdjuntoFileBuffer(id);
+      const nombre = fetched.nombreArchivo || a.NombreArchivo || 'archivo';
+      const ext = path.extname(nombre).toLowerCase();
+      let kind = 'none';
+      let buffer = fetched.buffer;
+      let prepared = null;
 
-    if (buffer && buffer.length > 0) {
-      if (['.jpg', '.jpeg', '.png'].includes(ext)) {
-        kind = 'image';
-        prepared = buffer;
-      } else if (['.gif', '.webp', '.tif', '.tiff'].includes(ext)) {
-        try {
-          prepared = await sharp(buffer).png().toBuffer();
+      if (buffer && buffer.length > 0) {
+        if (['.jpg', '.jpeg', '.png'].includes(ext)) {
           kind = 'image';
-        } catch (e) {
-          kind = 'error';
-          fetched.error = e.message;
+          prepared = buffer;
+        } else if (['.gif', '.webp', '.tif', '.tiff'].includes(ext)) {
+          try {
+            prepared = await sharp(buffer).png().toBuffer();
+            kind = 'image';
+          } catch (e) {
+            kind = 'error';
+            fetched.error = e.message;
+          }
+        } else if (ext === '.pdf') {
+          kind = 'pdf';
+          prepared = buffer;
+        } else {
+          kind = 'unsupported';
         }
-      } else if (ext === '.pdf') {
-        kind = 'pdf';
-        prepared = buffer;
       } else {
-        kind = 'unsupported';
+        kind = 'error';
       }
-    } else {
-      kind = 'error';
-    }
 
-    out.push({
-      meta: a,
-      nombreArchivo: nombre,
-      ext,
-      kind,
-      buffer: prepared || buffer,
-      error: fetched.error,
-    });
-  }
+      return {
+        meta: a,
+        nombreArchivo: nombre,
+        ext,
+        kind,
+        buffer: prepared || buffer,
+        error: fetched.error,
+      };
+    })
+  );
   return out;
 }
 
@@ -385,8 +405,8 @@ async function buildSelectiveExportPdf(payload) {
           ['Profesional', str(row.ProfesionalNombre)],
           ['Sector', str(row.SectorDescripcion)],
           ['Fecha', str(row.FechaFormateada || row.Fecha)],
-          ['Motivo consulta', safeText(row.MotivoConsulta, 400)],
-          ['Enfermedad actual', safeText(row.EnfermedadActual, 400)],
+          ['Motivo consulta', safeText(row.MotivoConsulta)],
+          ['Enfermedad actual', safeText(row.EnfermedadActual)],
         ]);
         const keys = Object.keys(row).filter(
           (k) =>
@@ -406,10 +426,9 @@ async function buildSelectiveExportPdf(payload) {
             if (v == null || v === '' || typeof v === 'object') return null;
             return [k, str(v)];
           })
-          .filter(Boolean)
-          .slice(0, 16);
+          .filter(Boolean);
         if (extra.length) {
-          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#64748b').text('Otros datos (resumen, 2 columnas):', {
+          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#64748b').text('Otros datos (completo, 2 columnas):', {
             width: contentWidth(doc),
           });
           const leftH = doc.page.margins.left;
@@ -420,17 +439,17 @@ async function buildSelectiveExportPdf(payload) {
             const yy = doc.y;
             const pA = extra[j];
             const pB = extra[j + 1];
-            const lineA = `${pA[0]}: ${safeText(pA[1], 160)}`;
+            const lineA = `${pA[0]}: ${safeText(pA[1])}`;
             doc.font('Helvetica').fontSize(7).fillColor('#475569').text(lineA, leftH, yy, {
               width: halfH - 4,
-              height: 20,
-              ellipsis: true,
             });
+            let rowH = doc.y - yy;
             if (pB) {
-              const lineB = `${pB[0]}: ${safeText(pB[1], 160)}`;
-              doc.text(lineB, leftH + halfH + 4, yy, { width: halfH - 4, height: 20, ellipsis: true });
+              const lineB = `${pB[0]}: ${safeText(pB[1])}`;
+              doc.text(lineB, leftH + halfH + 4, yy, { width: halfH - 4 });
+              rowH = Math.max(rowH, doc.y - yy);
             }
-            doc.y = yy + 22;
+            doc.y = yy + rowH + 2;
           }
         }
         doc.moveDown(0.35);
@@ -447,37 +466,13 @@ async function buildSelectiveExportPdf(payload) {
 
     if (payload.evolucionesMedicas && payload.evolucionesMedicas.length) {
       sectionTitle(doc, 'Evoluciones médicas');
-      const left = doc.page.margins.left;
-      const w = contentWidth(doc);
-      const half = (w - 10) / 2;
-      let rowTop = doc.y;
       payload.evolucionesMedicas.forEach((e, ei) => {
-        if (ei % 2 === 0) {
-          ensureSpace(doc, 52);
-          rowTop = doc.y;
-        }
-        const x = left + (ei % 2) * (half + 8);
-        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#0f172a').text(`${str(e.FechaEv)} ${str(e.HoraEv)}`, x, rowTop, {
-          width: half - 4,
-        });
-        doc.font('Helvetica').fontSize(7).fillColor('#475569').text(str(e.ProfesionalNombreCompleto), x, rowTop + 10, {
-          width: half - 4,
-          height: 11,
-          ellipsis: true,
-        });
-        doc.font('Helvetica').fontSize(7.5).fillColor('#1e293b').text(safeText(e.Evolucion, 3500), x, rowTop + 22, {
-          width: half - 4,
-          height: 64,
-          ellipsis: true,
-        });
-        if (ei % 2 === 1) {
-          doc.y = rowTop + 90;
-        }
+        ensureSpace(doc, 34);
+        const head = `#${ei + 1} · ${str(e.FechaEv)} ${str(e.HoraEv)} · ${str(e.ProfesionalNombreCompleto)}`;
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(head, { width: contentWidth(doc) });
+        bodyParagraph(doc, safeText(e.Evolucion));
+        doc.moveDown(0.1);
       });
-      if (payload.evolucionesMedicas.length % 2 === 1) {
-        doc.y = rowTop + 90;
-      }
-      doc.moveDown(0.2);
     }
 
     if (payload.practicas && payload.practicas.laboratorios && payload.practicas.laboratorios.length) {

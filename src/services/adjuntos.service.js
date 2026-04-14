@@ -120,7 +120,7 @@ class AdjuntosService {
       const url = `${FILE_SERVER_URL}/file?path=${encodeURIComponent(rutaN)}`;
       const res = await axios.get(url, {
         responseType: 'arraybuffer',
-        timeout: 120000,
+        timeout: 6000,
         maxContentLength: 50 * 1024 * 1024,
         maxBodyLength: 50 * 1024 * 1024,
       });

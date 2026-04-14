@@ -1,7 +1,8 @@
 const { executeQuery } = require('../models/db');
 const indicacionesService = require('./indicaciones.service');
 const medicacionControlService = require('./medicacionControl.service');
-const laboratoriosService = require('./laboratorios.service');
+// Usamos la versión compatible con esquema legacy/remoto (WEBDEV).
+const laboratoriosService = require('./laboratorios-simple.service');
 const adjuntosService = require('./adjuntos.service');
 const evolucionesService = require('./evoluciones.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
