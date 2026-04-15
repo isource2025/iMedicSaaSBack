@@ -165,7 +165,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     adjuntos,
   ] = await Promise.all([
     obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
-    indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 500).catch(() => []),
+    indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => []),
     medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []),
     laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []),
     evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
@@ -233,7 +233,11 @@ function isControlEnfermeriaIndicacion(row) {
 }
 
 function filterIndicacionesClinicas(rows) {
-  return (rows || []).filter((r) => !isControlEnfermeriaIndicacion(r));
+  return (rows || []).filter((r) => {
+    const tipo = String(r?.tipo ?? r?.TipoIndicacion ?? '').trim().toUpperCase();
+    // A/C = controles (asistenciales/enfermería). En aclysa no se muestran en Prácticas/Indicaciones.
+    return tipo !== 'C' && tipo !== 'A';
+  });
 }
 
 function filterIndicaciones(rows, fechaInicio, fechaFin, exportAll) {
