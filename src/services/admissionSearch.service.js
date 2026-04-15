@@ -131,7 +131,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
   const today = new Date().toISOString().slice(0, 10);
   const [
     historiaClinica,
-    indicaciones,
+    indicacionesRaw,
     medicamentos,
     practicasLaboratorio,
     evolucionesMedicas,
@@ -144,6 +144,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
     adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []),
   ]);
+  const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
   return {
     generadoEn: new Date().toISOString(),
@@ -197,6 +198,15 @@ function indicacionYmd(row) {
     (row.proximaAplicacion ? toYmd(String(row.proximaAplicacion).replace(/\//g, '-')) : null) ||
     (row.ultimaAplicacion ? toYmd(String(row.ultimaAplicacion).replace(/\//g, '-')) : null)
   );
+}
+
+function isControlEnfermeriaIndicacion(row) {
+  const tipo = String(row?.tipo ?? row?.TipoIndicacion ?? '').trim().toUpperCase();
+  return tipo === 'C';
+}
+
+function filterIndicacionesClinicas(rows) {
+  return (rows || []).filter((r) => !isControlEnfermeriaIndicacion(r));
 }
 
 function filterIndicaciones(rows, fechaInicio, fechaFin, exportAll) {
@@ -281,7 +291,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   const today = new Date().toISOString().slice(0, 10);
   const [
     historiaClinica,
-    indicaciones,
+    indicacionesRaw,
     medicamentos,
     practicasLaboratorio,
     evolucionesMedicas,
@@ -298,6 +308,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
       : Promise.resolve([]),
     need.adj ? adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
   ]);
+  const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
   const out = {
     generadoEn: new Date().toISOString(),
