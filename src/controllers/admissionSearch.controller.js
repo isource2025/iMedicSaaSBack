@@ -18,6 +18,7 @@ function sectionsRequireDateFilter(sections) {
   const NEED_DATE = new Set([
     'hcIngreso',
     'practicas',
+    'indicaciones',
     'medicamentos',
     'estudios',
     'protocolos',
@@ -95,6 +96,7 @@ const EXPORT_SECTIONS = new Set([
   'admision',
   'hcIngreso',
   'practicas',
+  'indicaciones',
   'medicamentos',
   'evoluciones',
   'estudios',

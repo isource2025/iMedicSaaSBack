@@ -75,6 +75,7 @@ const SECTION_LABEL_ES = {
   admision: 'Admisión',
   hcIngreso: 'HC ingreso',
   practicas: 'Prácticas',
+  indicaciones: 'Indicaciones',
   medicamentos: 'Medicamentos',
   evoluciones: 'Evoluciones',
   estudios: 'Estudios laboratorio',
@@ -322,7 +323,7 @@ function keyValRow2(doc, pairs) {
 
 function renderIndicacionesGrid(doc, items) {
   if (!items.length) return;
-  sectionTitle(doc, 'Prácticas / indicaciones');
+  sectionTitle(doc, 'Indicaciones');
   const left = doc.page.margins.left;
   const w = contentWidth(doc);
   const cols = 3;
@@ -385,6 +386,53 @@ function renderIndicacionesGrid(doc, items) {
     doc.y = rowTop + cellH + 4;
   }
   doc.moveDown(0.2);
+}
+
+function renderPracticasPacienteTable(doc, items) {
+  if (!items.length) return;
+  sectionTitle(doc, 'Prácticas por paciente');
+  const left = doc.page.margins.left;
+  const w = contentWidth(doc);
+  const colW = [w * 0.25, w * 0.2, w * 0.27, w * 0.28];
+  const headerH = 16;
+  const rowH = 20;
+
+  const drawRow = (y, cells, header) => {
+    let x = left;
+    doc.fillColor(header ? '#0f172a' : '#334155');
+    doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(header ? 8 : 7.2);
+    for (let i = 0; i < colW.length; i += 1) {
+      doc.text(safeText(cells[i]), x + 3, y + 3, {
+        width: colW[i] - 6,
+        height: (header ? headerH : rowH) - 6,
+        ellipsis: true,
+      });
+      x += colW[i];
+    }
+  };
+
+  ensureSpace(doc, headerH + 6);
+  let y = doc.y;
+  doc.save();
+  doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
+  doc.restore();
+  drawRow(y, ['Práctica', 'Cantidad', 'Fecha', 'Hora inicio'], true);
+  doc.y = y + headerH + 2;
+
+  items.forEach((p, i) => {
+    ensureSpace(doc, rowH + 4);
+    y = doc.y;
+    doc.save();
+    doc.rect(left, y, w, rowH).fill(i % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
+    doc.restore();
+    drawRow(
+      y,
+      [str(p.Practica), str(p.CantidadPractica), str(p.FechaPractica), str(p.HoraPracticaInicio)],
+      false
+    );
+    doc.y = y + rowH + 2;
+  });
+  doc.moveDown(0.25);
 }
 
 function renderMedicamentosTable(doc, items) {
@@ -615,6 +663,10 @@ async function buildSelectiveExportPdf(payload) {
 
     if (payload.indicaciones && payload.indicaciones.length) {
       renderIndicacionesGrid(doc, payload.indicaciones);
+    }
+
+    if (payload.practicasPaciente && payload.practicasPaciente.length) {
+      renderPracticasPacienteTable(doc, payload.practicasPaciente);
     }
 
     if (payload.medicamentos && payload.medicamentos.length) {

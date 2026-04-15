@@ -151,6 +151,24 @@ async function obtenerResumenAdmision(numeroVisita) {
   return rows?.[0] || null;
 }
 
+async function obtenerPracticasPorVisita(numeroVisita) {
+  const rows = await executeQuery(
+    `
+      SELECT
+        fp.NumeroVisita,
+        fp.Practica,
+        fp.CantidadPractica,
+        CONVERT(VARCHAR(10), fp.FechaPractica, 23) AS FechaPractica,
+        CONVERT(VARCHAR(8), fp.HoraPracticaInicio, 108) AS HoraPracticaInicio
+      FROM dbo.imFacpracticas fp
+      WHERE fp.NumeroVisita = @param0
+      ORDER BY fp.FechaPractica DESC, fp.HoraPracticaInicio DESC
+    `,
+    [{ value: numeroVisita }]
+  );
+  return rows || [];
+}
+
 async function exportarAdmisionCompleta(numeroVisita) {
   const visita = await obtenerResumenAdmision(numeroVisita);
   if (!visita) return null;
@@ -159,6 +177,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
   const [
     historiaClinica,
     indicacionesRaw,
+    practicasPaciente,
     medicamentos,
     practicasLaboratorio,
     evolucionesMedicas,
@@ -166,6 +185,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
   ] = await Promise.all([
     obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
     indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => []),
+    obtenerPracticasPorVisita(numeroVisita).catch(() => []),
     medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []),
     laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []),
     evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
@@ -177,6 +197,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     generadoEn: new Date().toISOString(),
     admision: visita,
     historialClinico: historiaClinica,
+    practicasPaciente,
     practicas: {
       laboratorios: practicasLaboratorio,
       adjuntos,
@@ -244,6 +265,10 @@ function filterIndicaciones(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(indicacionYmd(r), fechaInicio, fechaFin, exportAll));
 }
 
+function filterPracticasPaciente(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(toYmd(r.FechaPractica), fechaInicio, fechaFin, exportAll));
+}
+
 function filterMedicamentos(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(toYmd(r.FechaControl), fechaInicio, fechaFin, exportAll));
 }
@@ -282,7 +307,7 @@ function slimLabRow(ex) {
  * Export JSON parcial según secciones y rango de fechas (o todo).
  * @param {number} numeroVisita
  * @param {Object} opts
- * @param {string[]} opts.sections - claves: admision, hcIngreso, practicas, medicamentos, evoluciones, estudios, protocolos, adjuntos
+ * @param {string[]} opts.sections - claves: admision, hcIngreso, practicas, indicaciones, medicamentos, evoluciones, estudios, protocolos, adjuntos
  * @param {boolean} opts.exportAll
  * @param {string} [opts.fechaInicio] YYYY-MM-DD
  * @param {string} [opts.fechaFin] YYYY-MM-DD
@@ -312,7 +337,8 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
   const need = {
     hc: sections.includes('hcIngreso'),
-    ind: sections.includes('practicas'),
+    ind: sections.includes('indicaciones') || (sections.includes('practicas') && !sections.includes('indicaciones')),
+    prac: sections.includes('practicas'),
     med: sections.includes('medicamentos'),
     evo: sections.includes('evoluciones'),
     lab: sections.includes('estudios') || sections.includes('protocolos'),
@@ -323,6 +349,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   const [
     historiaClinica,
     indicacionesRaw,
+    practicasRaw,
     medicamentos,
     practicasLaboratorio,
     evolucionesMedicas,
@@ -332,6 +359,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     need.ind
       ? indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => [])
       : Promise.resolve([]),
+    need.prac ? obtenerPracticasPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.med ? medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.lab ? laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.evo
@@ -363,6 +391,10 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   }
 
   if (sections.includes('practicas')) {
+    out.practicasPaciente = filterPracticasPaciente(practicasRaw, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (sections.includes('indicaciones') || (sections.includes('practicas') && !sections.includes('indicaciones'))) {
     out.indicaciones = filterIndicaciones(indicaciones, fechaInicio, fechaFin, exportAll);
   }
 
