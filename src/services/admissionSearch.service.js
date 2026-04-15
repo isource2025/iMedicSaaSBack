@@ -15,6 +15,33 @@ function normalizeDigits(value) {
   return String(value || '').replace(/\D+/g, '');
 }
 
+let practicasNomencladorResolverPromise = null;
+async function getPracticasNomencladorResolver() {
+  if (practicasNomencladorResolverPromise) return practicasNomencladorResolverPromise;
+  practicasNomencladorResolverPromise = (async () => {
+    try {
+      const cols = await executeQuery(
+        `
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'VUnionModuladasNomenclador'
+        `
+      );
+      const set = new Set((cols || []).map((r) => String(r.COLUMN_NAME || '').trim().toLowerCase()).filter(Boolean));
+      if (set.size === 0) return null;
+
+      const pick = (candidates) => candidates.find((c) => set.has(c.toLowerCase())) || null;
+      const codeCol = pick(['Practica', 'CodigoPractica', 'Codigo', 'CodPractica', 'IdPractica', 'Valor']);
+      const descCol = pick(['DescPractica', 'DescripcionPractica', 'Descripcion', 'Prestacion', 'Denominacion', 'Detalle']);
+      if (!codeCol || !descCol) return null;
+      return { codeCol, descCol };
+    } catch (_) {
+      return null;
+    }
+  })();
+  return practicasNomencladorResolverPromise;
+}
+
 async function buscarAdmisiones({
   dni = '',
   nombreApellido = '',
@@ -99,6 +126,7 @@ async function buscarAdmisiones({
         ELSE 'Sin clasificar'
       END AS TipoAtencion,
       (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
+      (SELECT COUNT(1) FROM dbo.imFacpracticas fp WHERE fp.NumeroVisita = v.NumeroVisita) AS CntPracticas,
       (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
       (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
       (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios,
@@ -155,15 +183,33 @@ async function obtenerResumenAdmision(numeroVisita) {
 }
 
 async function obtenerPracticasPorVisita(numeroVisita) {
+  const nomenclador = await getPracticasNomencladorResolver();
+  const joinNomenclador = nomenclador
+    ? `LEFT JOIN dbo.VUnionModuladasNomenclador n
+         ON LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica))) = LTRIM(RTRIM(CONVERT(VARCHAR(50), n.[${nomenclador.codeCol}])))`
+    : '';
+  const practicaDescripcionSql = nomenclador
+    ? `COALESCE(
+         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${nomenclador.descCol}]))), ''),
+         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+         CONVERT(VARCHAR(50), fp.Practica)
+       ) AS PracticaDescripcion`
+    : `COALESCE(
+         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+         CONVERT(VARCHAR(50), fp.Practica)
+       ) AS PracticaDescripcion`;
+
   const rows = await executeQuery(
     `
       SELECT
         fp.NumeroVisita,
         fp.Practica,
+        ${practicaDescripcionSql},
         fp.CantidadPractica,
         CONVERT(VARCHAR(10), fp.FechaPractica, 23) AS FechaPractica,
         CONVERT(VARCHAR(8), fp.HoraPracticaInicio, 108) AS HoraPracticaInicio
       FROM dbo.imFacpracticas fp
+      ${joinNomenclador}
       WHERE fp.NumeroVisita = @param0
       ORDER BY fp.FechaPractica DESC, fp.HoraPracticaInicio DESC
     `,
@@ -340,7 +386,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
   const need = {
     hc: sections.includes('hcIngreso'),
-    ind: sections.includes('indicaciones') || (sections.includes('practicas') && !sections.includes('indicaciones')),
+    ind: sections.includes('indicaciones'),
     prac: sections.includes('practicas'),
     med: sections.includes('medicamentos'),
     evo: sections.includes('evoluciones'),
@@ -397,7 +443,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     out.practicasPaciente = filterPracticasPaciente(practicasRaw, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('indicaciones') || (sections.includes('practicas') && !sections.includes('indicaciones'))) {
+  if (sections.includes('indicaciones')) {
     out.indicaciones = filterIndicaciones(indicaciones, fechaInicio, fechaFin, exportAll);
   }
 

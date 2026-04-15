@@ -427,7 +427,7 @@ function renderPracticasPacienteTable(doc, items) {
     doc.restore();
     drawRow(
       y,
-      [str(p.Practica), str(p.CantidadPractica), str(p.FechaPractica), str(p.HoraPracticaInicio)],
+      [str(p.PracticaDescripcion || p.Practica), str(p.CantidadPractica), str(p.FechaPractica), str(p.HoraPracticaInicio)],
       false
     );
     doc.y = y + rowH + 2;
