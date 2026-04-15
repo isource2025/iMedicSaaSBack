@@ -752,14 +752,18 @@ async function buildSelectiveExportPdf(payload) {
     }
 
     if (adjuntosResueltos.length) {
-      adjuntosResueltos.forEach((adj, i) => {
-        // Requisito UX: cada adjunto ocupa una hoja exclusiva.
-        doc.addPage();
-        sectionTitle(doc, `Adjunto ${i + 1} de ${adjuntosResueltos.length}`);
+      adjuntosResueltos.forEach((adj) => {
+        // PDFs: se anexan directo, sin página intermedia.
+        if (adj.kind === 'pdf' && adj.buffer) {
+          pdfAnnexBuffers.push(adj.buffer);
+          return;
+        }
 
-        const meta = adj.meta || {};
-        const titulo = `${adj.nombreArchivo} · ${str(meta.TipoImagenNombre)} · ${formatFechaHoraAR(meta.FechaCarga)}`;
-        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(titulo, {
+        // Para el resto, cada adjunto mantiene su hoja dedicada.
+        doc.addPage();
+
+        const titulo = str(adj.nombreArchivo || 'Adjunto');
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(titulo, {
           width: contentWidth(doc),
         });
         doc.moveDown(0.2);
@@ -780,12 +784,6 @@ async function buildSelectiveExportPdf(payload) {
               width: contentWidth(doc),
             });
           }
-        } else if (adj.kind === 'pdf' && adj.buffer) {
-          doc.font('Helvetica').fontSize(9).fillColor('#0369a1').text(
-            'Documento PDF adjunto: se anexa completo al final de este informe.',
-            { width: contentWidth(doc) }
-          );
-          pdfAnnexBuffers.push(adj.buffer);
         } else if (adj.kind === 'unsupported') {
           doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(
             'Formato no incrustable en PDF; descargá el archivo desde el sistema con el IdAdjunto indicado.',
