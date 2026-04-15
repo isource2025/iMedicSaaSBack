@@ -83,10 +83,13 @@ async function buscarAdmisiones({
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
       v.TipoPaciente,
+      v.ClasePaciente,
       tp.Descripcion AS TipoPacienteDescripcion,
       v.EstadoAmbulatorio,
       ea.Descripcion AS EstadoAmbulatorioDescripcion,
       CASE
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'A' THEN 'Ambulatorio'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I' THEN 'Internado'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%INTERN%' THEN 'Internado'
