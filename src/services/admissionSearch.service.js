@@ -11,6 +11,10 @@ function normalizeLike(value) {
   return `%${String(value || '').trim().replace(/\s+/g, '%')}%`;
 }
 
+function normalizeDigits(value) {
+  return String(value || '').replace(/\D+/g, '');
+}
+
 async function buscarAdmisiones({
   dni = '',
   nombreApellido = '',
@@ -23,8 +27,16 @@ async function buscarAdmisiones({
   const params = [];
 
   if (String(dni).trim()) {
-    whereParts.push(`CAST(p.NumeroDocumento AS VARCHAR(50)) LIKE @param${params.length}`);
-    params.push({ value: normalizeLike(dni) });
+    const digits = normalizeDigits(dni);
+    if (digits) {
+      whereParts.push(
+        `REPLACE(REPLACE(REPLACE(CAST(p.NumeroDocumento AS VARCHAR(50)), '.', ''), '-', ''), ' ', '') LIKE @param${params.length}`
+      );
+      params.push({ value: `%${digits}%` });
+    } else {
+      whereParts.push(`CAST(p.NumeroDocumento AS VARCHAR(50)) LIKE @param${params.length}`);
+      params.push({ value: normalizeLike(dni) });
+    }
   }
 
   if (String(nombreApellido).trim()) {
@@ -70,6 +82,19 @@ async function buscarAdmisiones({
       p.NumeroHC,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
+      v.TipoPaciente,
+      tp.Descripcion AS TipoPacienteDescripcion,
+      v.EstadoAmbulatorio,
+      ea.Descripcion AS EstadoAmbulatorioDescripcion,
+      CASE
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%INTERN%' THEN 'Internado'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%INTERN%' THEN 'Internado'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.TipoPaciente, '')))) IN ('A', 'AMB', 'AMBU', 'AMBULATORIO') THEN 'Ambulatorio'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.TipoPaciente, '')))) IN ('I', 'INT', 'INTERNADO') THEN 'Internado'
+        ELSE 'Sin clasificar'
+      END AS TipoAtencion,
       (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
       (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
       (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
@@ -82,6 +107,8 @@ async function buscarAdmisiones({
       (SELECT COUNT(1) FROM dbo.imHCEvolucion ev WHERE ev.IdVisita = v.NumeroVisita) AS CntEvoluciones
     FROM imVisita v
     INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+    LEFT JOIN imTipoPaciente tp ON v.TipoPaciente = tp.Valor
+    LEFT JOIN imEstadoAmbulatorio ea ON v.EstadoAmbulatorio = ea.Valor
     ${whereClause}
     ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
     OFFSET @param${params.length} ROWS FETCH NEXT @param${params.length + 1} ROWS ONLY
