@@ -49,6 +49,7 @@ const laboratoriosRoutes = require('./routes/laboratorios.routes');
 const sectoresRoutes = require('./routes/sectores.routes');
 const notificacionesRoutes = require('./routes/notificaciones.routes');
 const admissionSearchRoutes = require('./routes/admissionSearch.routes');
+const rendicionesRoutes = require('./routes/rendiciones.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -125,6 +126,7 @@ app.use('/api/laboratorios', laboratoriosRoutes);
 app.use('/api/sectores', sectoresRoutes);
 app.use('/api/notificaciones', notificacionesRoutes);
 app.use('/api/admission-search', admissionSearchRoutes);
+app.use('/api/rendiciones', rendicionesRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
