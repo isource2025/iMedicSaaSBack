@@ -50,6 +50,7 @@ const sectoresRoutes = require('./routes/sectores.routes');
 const notificacionesRoutes = require('./routes/notificaciones.routes');
 const admissionSearchRoutes = require('./routes/admissionSearch.routes');
 const rendicionesRoutes = require('./routes/rendiciones.routes');
+const personalRoutes = require('./routes/personal.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -127,6 +128,7 @@ app.use('/api/sectores', sectoresRoutes);
 app.use('/api/notificaciones', notificacionesRoutes);
 app.use('/api/admission-search', admissionSearchRoutes);
 app.use('/api/rendiciones', rendicionesRoutes);
+app.use('/api/personal', personalRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
