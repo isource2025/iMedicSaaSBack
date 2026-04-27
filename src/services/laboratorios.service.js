@@ -1,5 +1,14 @@
 const { executeQuery } = require('../models/db');
 const ocrService = require('./ocr.service');
+const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+
+/** Texto VARCHAR legacy (ANSI / Windows-1252). */
+function labStr(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (s === '') return null;
+  return normalizarTextoParaClarionAnsi(s);
+}
 
 /**
  * Servicio para gestión de exámenes de laboratorio
@@ -137,13 +146,13 @@ const guardarExamen = async (cabecera, detalles, pacienteInfo = {}) => {
       { value: cabecera.numeroVisita },
       { value: cabecera.fechaExamen },
       { value: cabecera.horaExamen || '00:00' },
-      { value: cabecera.tipoEstudio },
-      { value: cabecera.laboratorio || null },
-      { value: cabecera.protocolo || null },
-      { value: cabecera.observaciones || null },
-      { value: cabecera.archivoAdjunto || null },
-      { value: cabecera.usuarioCarga || 'SISTEMA' },
-      { value: cabecera.estado || 'PENDIENTE' }
+      { value: labStr(cabecera.tipoEstudio) || '' },
+      { value: labStr(cabecera.laboratorio) },
+      { value: labStr(cabecera.protocolo) },
+      { value: labStr(cabecera.observaciones) },
+      { value: labStr(cabecera.archivoAdjunto) },
+      { value: labStr(cabecera.usuarioCarga || 'SISTEMA') || 'SISTEMA' },
+      { value: labStr(cabecera.estado || 'PENDIENTE') || 'PENDIENTE' }
     ];
 
     const resultadoCabecera = await executeQuery(consultaCabecera, paramsCabecera);
@@ -185,15 +194,15 @@ const guardarExamen = async (cabecera, detalles, pacienteInfo = {}) => {
       const paramsDetalle = [
         { value: idExamen },
         { value: config ? config.CodigoParametro : null },
-        { value: detalle.nombreParametro },
-        { value: detalle.resultado },
-        { value: detalle.unidadMedida || (config ? config.UnidadMedida : null) },
-        { value: detalle.valorReferencia || null },
+        { value: labStr(detalle.nombreParametro) || '' },
+        { value: detalle.resultado == null || detalle.resultado === '' ? null : labStr(String(detalle.resultado)) },
+        { value: labStr(detalle.unidadMedida) || labStr(config ? config.UnidadMedida : null) },
+        { value: labStr(detalle.valorReferencia) },
         { value: validacion.valorMinimo },
         { value: validacion.valorMaximo },
         { value: validacion.fueraDeRango ? 1 : 0 },
-        { value: detalle.metodo || null },
-        { value: detalle.marcaReactivo || null },
+        { value: labStr(detalle.metodo) },
+        { value: labStr(detalle.marcaReactivo) },
         { value: i + 1 }
       ];
 
@@ -352,11 +361,11 @@ const actualizarExamen = async (idExamen, datos) => {
     const params = [
       { value: datos.fechaExamen },
       { value: datos.horaExamen },
-      { value: datos.tipoEstudio },
-      { value: datos.laboratorio },
-      { value: datos.protocolo },
-      { value: datos.observaciones },
-      { value: datos.estado },
+      { value: labStr(datos.tipoEstudio) || '' },
+      { value: labStr(datos.laboratorio) },
+      { value: labStr(datos.protocolo) },
+      { value: labStr(datos.observaciones) },
+      { value: datos.estado == null ? null : labStr(datos.estado) },
       { value: idExamen }
     ];
 

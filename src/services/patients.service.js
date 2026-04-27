@@ -4,6 +4,7 @@
 const { executeQuery } = require('../models/db');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const { v4: uuidv4 } = require('uuid');
+const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
 // Flags de cache para evitar repetir DDL constantemente
 let searchIndexesEnsured = false;
@@ -525,7 +526,7 @@ const crearPaciente = async (pacienteData) => {
 	try {
 		await ensureExtraColumns();
 		const limitLength = (str, max) =>
-			str == null ? null : str.toString().substring(0, max);
+			str == null ? null : normalizarTextoParaClarionAnsi(str).substring(0, max);
 		// Fallbacks alias del front (acepta TelefonoCelular, nAfiliado, Cobertura)
 		const telefonoNegocioIn = pacienteData.TelefonoNegocio ?? pacienteData.TelefonoCelular;
 		const numeroSSNIn = pacienteData.NumeroSSN ?? pacienteData.nAfiliado;
@@ -677,7 +678,8 @@ const crearPaciente = async (pacienteData) => {
 const actualizarPaciente = async (id, pacienteData) => {
 	try {
 		await ensureExtraColumns();
-		const limitLength = (s, m) => (s == null ? '' : s.toString().substring(0, m));
+		const limitLength = (s, m) =>
+			s == null ? '' : normalizarTextoParaClarionAnsi(s).substring(0, m);
 		const getNacQuery = `SELECT Valor FROM imNacionalidad WHERE Descripcion = @p0`;
 		const nacRows = await executeQuery(getNacQuery, [
 			{ value: pacienteData.Nacionalidad },

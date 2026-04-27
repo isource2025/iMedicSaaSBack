@@ -3,6 +3,14 @@ const {
     convertirFechaAClarion,
     convertirHoraAClarion,
 } = require("../utils/dateUtils");
+const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+
+/** Texto libre / memos hacia imHCI (ANSI Clarion). */
+function valorTextoHci(v) {
+    if (v === undefined || v === null) return "";
+    if (typeof v === "string") return normalizarTextoParaClarionAnsi(v);
+    return String(v);
+}
 
 /**
  * Guardar signos vitales en tabla de controles frecuentes
@@ -251,12 +259,12 @@ const buildDynamicFields = (data) => {
     
     columns.push('MotivoConsulta');
     values.push(`@param${paramIndex}`);
-    params.push({ value: data.MotivoConsulta || '' });
+    params.push({ value: valorTextoHci(data.MotivoConsulta || '') });
     paramIndex++;
     
     columns.push('EnfermedadActual');
     values.push(`@param${paramIndex}`);
-    params.push({ value: data.EnfermedadActual || '' });
+    params.push({ value: valorTextoHci(data.EnfermedadActual || '') });
     paramIndex++;
     
     columns.push('IdProfecional');
@@ -279,7 +287,7 @@ const buildDynamicFields = (data) => {
         
         columns.push(`[${mapColumnName(key)}]`);
         values.push(`@param${paramIndex}`);
-        params.push({ value: String(valor) });
+        params.push({ value: valorTextoHci(valor) });
         paramIndex++;
     });
     
@@ -288,7 +296,7 @@ const buildDynamicFields = (data) => {
         if (data[campo] !== undefined && data[campo] !== null) {
             columns.push(`[${campo}]`);
             values.push(`@param${paramIndex}`);
-            params.push({ value: String(data[campo]) });
+            params.push({ value: valorTextoHci(data[campo]) });
             paramIndex++;
         }
     });
@@ -345,11 +353,11 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
         paramIndex++;
         
         setClauses.push(`MotivoConsulta = @param${paramIndex}`);
-        params.push({ value: data.MotivoConsulta || '' });
+        params.push({ value: valorTextoHci(data.MotivoConsulta || '') });
         paramIndex++;
         
         setClauses.push(`EnfermedadActual = @param${paramIndex}`);
-        params.push({ value: data.EnfermedadActual || '' });
+        params.push({ value: valorTextoHci(data.EnfermedadActual || '') });
         paramIndex++;
         
         setClauses.push(`IdProfecional = @param${paramIndex}`);
@@ -369,7 +377,7 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
             if (valor === undefined) return;
             
             setClauses.push(`[${mapColumnName(key)}] = @param${paramIndex}`);
-            params.push({ value: valor !== null ? String(valor) : '' });
+            params.push({ value: valor !== null ? valorTextoHci(valor) : '' });
             paramIndex++;
         });
         
@@ -377,7 +385,7 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
         ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO'].forEach(campo => {
             if (data[campo] !== undefined) {
                 setClauses.push(`[${campo}] = @param${paramIndex}`);
-                params.push({ value: data[campo] !== null ? String(data[campo]) : '' });
+                params.push({ value: data[campo] !== null ? valorTextoHci(data[campo]) : '' });
                 paramIndex++;
             }
         });

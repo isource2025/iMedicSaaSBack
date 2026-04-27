@@ -4,6 +4,7 @@ const { connectDB } = require('../config/database');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
+const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 
@@ -24,7 +25,7 @@ class AdjuntosService {
 
       const result = await pool.request()
         .input('numeroVisita', sql.Int, data.numeroVisita)
-        .input('descripcion', sql.NVarChar(255), file.originalname)
+        .input('descripcion', sql.NVarChar(255), normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }))
         .input('patch', sql.NVarChar(500), rutaArchivo)
         .input('patchServidor', sql.NVarChar(500), rutaArchivo)
         .input('fecha', sql.DateTime, new Date())

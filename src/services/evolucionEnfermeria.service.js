@@ -3,6 +3,7 @@ const {
     convertirFechaAClarion,
     convertirHoraAClarion,
 } = require("../utils/dateUtils");
+const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 
 /**
  * Obtener evoluciones de enfermería por número de visita y fecha
@@ -171,7 +172,7 @@ const crearEvolucion = async (data) => {
         { value: data.Profesional || null },
         { value: fechaClarion },
         { value: horaClarion },
-        { value: data.Observaciones },
+        { value: normalizarTextoParaClarionAnsi(data.Observaciones) },
         { value: data.OperadorCarga || data.Profesional || null }
     ];
 

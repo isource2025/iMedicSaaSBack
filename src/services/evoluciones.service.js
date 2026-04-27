@@ -3,6 +3,7 @@ const {
     convertirFechaAClarion,
     convertirHoraAClarion,
 } = require("../utils/dateUtils");
+const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 
 /**
  * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).
@@ -137,7 +138,7 @@ const crearEvolucion = async (data) => {
         { value: fechaClarion },
         { value: horaClarion },
         { value: data.IdSector },
-        { value: data.Evolucion },
+        { value: normalizarTextoParaClarionAnsi(data.Evolucion) },
         { value: data.NumeroDocumento },
         { value: data.Profecional || null }
     ];
@@ -234,7 +235,7 @@ const actualizarEvolucion = async (id, data) => {
         { value: fechaClarion },
         { value: horaClarion },
         { value: data.IdSector },
-        { value: data.Evolucion },
+        { value: normalizarTextoParaClarionAnsi(data.Evolucion) },
         { value: data.NumeroDocumento }
     ];
 

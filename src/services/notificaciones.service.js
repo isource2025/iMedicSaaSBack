@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const { resolveImNotificacionesColumns, sqlEscapeIdent } = require('./notificacionesColumns');
+const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
 function safeParseJson(s) {
   try {
@@ -179,7 +180,7 @@ async function crear({
   const params = [
     { value: valorPersonal },
     { value: tipo },
-    { value: String(descripcion).substring(0, 250) },
+    { value: normalizarTextoParaClarionAnsi(descripcion, { maxLength: 250 }) },
     { value: entidadTipo },
     { value: entidadId },
     { value: datosStr },

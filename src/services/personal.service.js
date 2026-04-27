@@ -13,6 +13,7 @@ const {
 	convertirFechaAClarion,
 	convertirFechaClarionADate,
 } = require('../utils/dateUtils');
+const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const { connectDB } = require('../config/database');
 
 const ADMIN_VALOR_THRESHOLD = 900000; // Valor >= 900000 se considera "reservado" (admin/sistema)
@@ -869,7 +870,11 @@ async function actualizarAdicionalesPersonal(valor, body) {
 	let pi = 1;
 	if (hasObs) {
 		sets.push(`Observaciones = @p${pi}`);
-		params.push({ value: strOrNull(body.Observaciones), type: 'VarChar' });
+		const obs = strOrNull(body.Observaciones);
+		params.push({
+			value: obs == null ? null : normalizarTextoParaClarionAnsi(obs),
+			type: 'VarChar',
+		});
 		pi += 1;
 	}
 	if (hasCuit) {

@@ -2,11 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 
 const app = express();
-const PORT = process.env.FILE_SERVER_PORT || 3002;
+const PORT = process.env.FILE_SERVER_PORT || 3902;
+const DEFAULT_UPLOAD_ROOT = process.env.FILE_SERVER_ROOT || 'E:\\adjuntos';
 
 app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+const upload = multer({ dest: path.join(process.cwd(), '.tmp-uploads') });
 
 /**
  * Normaliza la ruta del archivo (mapea D:\ y F:\ a E:\)
@@ -25,6 +30,11 @@ function normalizarRuta(rutaOriginal) {
   }
   
   return ruta;
+}
+
+function ensureFolderForFile(filePath) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
 }
 
 /**
@@ -90,6 +100,70 @@ app.get('/file', (req, res) => {
 });
 
 /**
+ * POST /upload
+ * multipart/form-data:
+ *  - file: archivo
+ *  - path: ruta destino absoluta o relativa a E:\adjuntos
+ */
+app.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'Archivo requerido (field: file)' });
+    }
+
+    const requestedPath = (req.body?.path || '').trim();
+    const destinationPath = requestedPath
+      ? normalizarRuta(requestedPath)
+      : path.join(DEFAULT_UPLOAD_ROOT, req.file.originalname);
+
+    ensureFolderForFile(destinationPath);
+    fs.renameSync(req.file.path, destinationPath);
+
+    console.log(`✅ Archivo subido: ${destinationPath}`);
+    return res.status(201).json({
+      success: true,
+      path: destinationPath,
+      originalName: req.file.originalname,
+      size: req.file.size
+    });
+  } catch (error) {
+    console.error('❌ Error al subir archivo:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al subir archivo',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /file?path=E:\ruta\archivo.ext
+ */
+app.delete('/file', (req, res) => {
+  try {
+    const filePath = normalizarRuta(req.query.path);
+    if (!filePath) {
+      return res.status(400).json({ success: false, error: 'Parámetro path es requerido' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: 'Archivo no encontrado' });
+    }
+
+    fs.unlinkSync(filePath);
+    console.log(`🗑️ Archivo eliminado: ${filePath}`);
+    return res.json({ success: true, path: filePath });
+  } catch (error) {
+    console.error('❌ Error al eliminar archivo:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al eliminar archivo',
+      details: error.message
+    });
+  }
+});
+
+/**
  * GET /health
  * Health check del servidor
  */
@@ -103,5 +177,6 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor de archivos corriendo en puerto ${PORT}`);
-  console.log(`📁 Listo para servir archivos desde rutas locales`);
+  console.log(`📁 Base por defecto para subidas: ${DEFAULT_UPLOAD_ROOT}`);
+  console.log(`📌 Endpoints: GET /health, GET /file, POST /upload, DELETE /file`);
 });

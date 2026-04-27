@@ -1,5 +1,6 @@
 const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion, convertirHoraAClarion } = require("../utils/dateUtils");
+const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -240,7 +241,7 @@ const crearControl = async (data) => {
         { value: data.idSector || '' },                                     // @param18
         { value: 0 },                                                       // @param19 IdTurno
         { value: 0 },                                                       // @param20 Nroindicacion
-        { value: data.observaciones || '' },                                // @param21
+        { value: normalizarTextoParaClarionAnsi(data.observaciones || '') }, // @param21
         { value: data.idHci || 0 },                                         // @param22 IdHci (0 = no viene de HC)
     ];
 

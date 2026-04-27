@@ -10,10 +10,13 @@ const adjuntosService = require('../services/adjuntos.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
+const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
 /** Si el servidor HTTP de archivos no responde (timeout/red), guardar ruta absoluta del archivo en disco del backend. */
 const FILE_SERVER_FALLBACK_LOCAL =
-  process.env.FILE_SERVER_FALLBACK_LOCAL === '1' || process.env.ADJUNTOS_LOCAL_FALLBACK === '1';
+  process.env.FILE_SERVER_FALLBACK_LOCAL === '1' ||
+  process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
+  process.env.NODE_ENV !== 'production';
 
 function isFileServerNetworkError(err) {
   const code = err && (err.code || (err.cause && err.cause.code));
@@ -174,7 +177,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
         headers: {
           ...formData.getHeaders()
         },
-        timeout: 60000
+        timeout: FILE_SERVER_TIMEOUT_MS
       });
 
       if (!uploadResponse.data.success) {
@@ -295,7 +298,7 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
           headers: {
             ...formData.getHeaders()
           },
-          timeout: 60000
+          timeout: FILE_SERVER_TIMEOUT_MS
         });
 
         if (!uploadResponse.data.success) {
@@ -497,7 +500,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
       
       const response = await axios.get(fileUrl, {
         responseType: 'stream',
-        timeout: 60000 // 60 segundos (túnel puede ser lento)
+        timeout: FILE_SERVER_TIMEOUT_MS
       });
       
       const fileName = adjunto.NombreArchivo || path.basename(rutaNormalizada);

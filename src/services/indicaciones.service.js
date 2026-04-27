@@ -5,9 +5,11 @@ const {
     convertirFechaClarionADate,
     convertirHoraClarionAString,
 } = require("../utils/dateUtils");
+const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 
+/** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
 const limitLength = (str, max) =>
-    str == null ? null : str.toString().substring(0, max);
+    str == null ? null : normalizarTextoParaClarionAnsi(str).substring(0, max);
 
 const toNumberOrNull = (v) =>
     v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
