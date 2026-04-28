@@ -1,10 +1,6 @@
 const authService = require('../services/auth.service');
 const jwt = require('jsonwebtoken');
-
-// Clave secreta para firmar los tokens JWT
-// En un entorno de producción, esto debería estar en variables de entorno
-const JWT_SECRET = 'iMedicWs_secret_key_2025';
-const TOKEN_EXPIRATION = '24h'; // El token expira en 24 horas
+const { JWT_SECRET, TOKEN_EXPIRATION } = require('../config/jwt');
 
 /**
  * Genera un token JWT con la información del usuario
