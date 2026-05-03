@@ -64,7 +64,6 @@ const obtenerProduccionMes = async (req, res) => {
 		const data = await miPerfilService.obtenerProduccionConFiltros(req.valorPersonal, {
 			desde: req.query.desde,
 			hasta: req.query.hasta,
-			idConvenio: req.query.idConvenio,
 		});
 		res.json({ success: true, data });
 	} catch (error) {
