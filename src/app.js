@@ -52,6 +52,8 @@ const admissionSearchRoutes = require('./routes/admissionSearch.routes');
 const rendicionesRoutes = require('./routes/rendiciones.routes');
 const personalRoutes = require('./routes/personal.routes');
 const miPerfilRoutes = require('./routes/miPerfil.routes');
+const rolesRoutes = require('./routes/roles.routes');
+const permisosRoutes = require('./routes/permisos.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -131,6 +133,8 @@ app.use('/api/admission-search', admissionSearchRoutes);
 app.use('/api/rendiciones', rendicionesRoutes);
 app.use('/api/personal', personalRoutes);
 app.use('/api/mi-perfil', miPerfilRoutes);
+app.use('/api/roles', rolesRoutes);
+app.use('/api/permisos', permisosRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

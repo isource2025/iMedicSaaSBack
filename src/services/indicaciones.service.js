@@ -322,6 +322,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 tipoUnidad: r.TipoUnidad,
                 descripcion: r.DescripcionIndicacion,
                 profesional: r.ProfesionalAsiste,
+                OperadorCarga: r.OperadorCarga ?? null, // para control de propiedad
                 fullName: r.FullName,
                 frecuencia: r.Frecuencia,
                 intervalo: r.Intervalo,

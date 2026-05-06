@@ -2,24 +2,33 @@ const { executeQuery } = require('../models/db');
 
 const autenticarUsuario = async (username, contraseña) => {
   try {
-    // Verificar credenciales contra la tabla impassword
-    // Usar UPPER y RTRIM/LTRIM para comparación case-insensitive y sin espacios
+    // Verificar credenciales contra impassword e incluir el rol del usuario
+    // resolviendo desde imPersonal.Rol (varchar(20) con el IdRol como string).
+    // imPassword.Grupo = 11 sigue siendo "admin" como fallback histórico.
     const consulta = `
-      SELECT * FROM impassword 
-      WHERE UPPER(RTRIM(LTRIM(nombrered))) = UPPER(RTRIM(LTRIM(@p0))) 
-      AND password = @p1
+      SELECT TOP 1
+        pw.*,
+        r.IdRol      AS RolId,
+        r.Nombre     AS RolNombre,
+        r.Nivel      AS RolNivel
+      FROM impassword pw
+      LEFT JOIN imPersonal p ON p.Valor = pw.ValorPersonal
+      LEFT JOIN imRoles r    ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol))
+                              AND r.Activo = 1
+      WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+        AND pw.password = @p1
     `;
     const parametros = [
       { value: username, type: 'VarChar' },
       { value: contraseña, type: 'VarChar' }
     ];
-    
+
     const resultado = await executeQuery(consulta, parametros);
-    
+
     if (resultado && resultado.length > 0) {
       return resultado[0];
     }
-    
+
     return null;
   } catch (error) {
     console.error('Error al autenticar usuario:', error.message);

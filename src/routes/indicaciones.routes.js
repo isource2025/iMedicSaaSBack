@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const indicacionesController = require("../controllers/indicaciones.controller");
+const { requireAuth } = require("../middlewares/authJwt.middleware");
+const { requirePropietario } = require("../middlewares/propietario.middleware");
 
 // Obtener datos para el formulario de creación de indicaciones
 router.get("/formulario/datos", indicacionesController.obtenerDatosFormulario);
@@ -28,14 +30,18 @@ router.post("/", indicacionesController.nuevaIndicacion);
 // Crear indicación hija
 router.post("/hija", indicacionesController.crearIndicacionHija);
 
-router.delete("/:nroIndicacion", indicacionesController.deleteIndicacion);
+const _ownIndicacion = requirePropietario({
+    tabla: 'imInterIndMedicas', pkCol: 'Valor', autorCol: 'OperadorCarga', pkParam: 'nroIndicacion'
+});
+
+router.delete("/:nroIndicacion", requireAuth, _ownIndicacion, indicacionesController.deleteIndicacion);
 
 // Eliminar indicación hija (adicional)
 router.delete("/hija/:nroIndicacion", indicacionesController.deleteIndicacionHija);
 
 router.get("/:nroIndicacion", indicacionesController.getIndicacionById);
 
-router.put("/:nroIndicacion", indicacionesController.updateIndicacion);
+router.put("/:nroIndicacion", requireAuth, _ownIndicacion, indicacionesController.updateIndicacion);
 
 router.post("/:nroIndicacion/aplicar", indicacionesController.aplicarIndicacion);
 

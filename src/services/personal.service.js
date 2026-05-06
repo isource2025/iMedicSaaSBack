@@ -134,6 +134,14 @@ function mapRow(row) {
 		Estado: row.Estado != null ? Number(row.Estado) : null,
 		CUIT: strOrNull(row.CUIT),
 		Observaciones: strOrNull(row.Observaciones),
+		// Rol: en imPersonal.Rol (varchar(20)) se persiste el IdRol como string.
+		// La asignación se hace por el endpoint dedicado PUT /api/roles/personal/:valor.
+		Rol: (() => {
+			const r = strOrNull(row.Rol);
+			if (!r) return null;
+			const n = Number(r);
+			return Number.isFinite(n) ? n : null;
+		})(),
 	};
 }
 
@@ -165,7 +173,8 @@ const SELECT_COLS = `
 	p.IdEspecialidadME,
 	p.Estado,
 	p.CUIT,
-	p.Observaciones
+	p.Observaciones,
+	p.Rol
 `;
 
 /**

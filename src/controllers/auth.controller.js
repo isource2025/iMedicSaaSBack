@@ -1,4 +1,5 @@
 const authService = require('../services/auth.service');
+const permisosService = require('../services/permisos.service');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, TOKEN_EXPIRATION } = require('../config/jwt');
 
@@ -7,6 +8,26 @@ const { JWT_SECRET, TOKEN_EXPIRATION } = require('../config/jwt');
  * @param {Object} userData - Datos del usuario para incluir en el token
  * @returns {string} Token JWT generado
  */
+/**
+ * Resuelve el rol del usuario al hacer login.
+ * Prioriza el rol en imPersonal.Rol; si no hay, usa el fallback Grupo=11 → ADMIN.
+ * Devuelve null si el usuario no tiene rol asignado.
+ */
+const resolverRol = (userData) => {
+  if (userData.RolId != null) {
+    return {
+      id: Number(userData.RolId),
+      nombre: String(userData.RolNombre || '').trim(),
+      nivel: Number(userData.RolNivel || 0),
+    };
+  }
+  // Fallback histórico: imPassword.Grupo = 11 -> admin
+  if (Number(userData.Grupo) === 11) {
+    return { id: 1, nombre: 'ADMIN', nivel: 100 };
+  }
+  return null;
+};
+
 const generarToken = (userData) => {
   const payload = {
     usuario: {
@@ -16,6 +37,7 @@ const generarToken = (userData) => {
       apellido: userData.Apellido,
       codOperador: userData.CodOperador
     },
+    rol: resolverRol(userData),
     // La fecha de emisión se incluye automáticamente (iat)
   };
 
@@ -58,9 +80,22 @@ const inicioSesion = async (req, res) => {
           sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
         }
         
-        // Generar token JWT con la información del usuario
+        // Generar token JWT con la información del usuario (incluye el rol)
         const token = generarToken(usuario);
-        
+        const rol = resolverRol(usuario);
+
+        // Cargar los permisos efectivos del rol desde BD (con caché).
+        // Se devuelven en el BODY del response (no en el JWT, para no inflar
+        // el token).
+        let permisos = [];
+        try {
+          if (rol?.id != null) {
+            permisos = await permisosService.permisosDeRol(rol.id, rol.nombre);
+          }
+        } catch (e) {
+          console.error('[auth.login] Error al cargar permisos:', e.message);
+        }
+
         return res.json({
           success: true,
           mensaje: 'Inicio de sesión exitoso',
@@ -70,6 +105,8 @@ const inicioSesion = async (req, res) => {
             nombre: usuario.Nombres,
             apellido: usuario.Apellido,
           },
+          rol,
+          permisos,
           sectorSeleccionado: {
             idPersonal: sector,
             idSector: sectorInfo ? sectorInfo.idSector : '',

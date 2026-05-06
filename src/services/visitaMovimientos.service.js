@@ -44,11 +44,27 @@ async function obtenerMovimientosVisita(numeroVisita) {
 
   const sql = `
     SELECT
-      NumeroVisita, FechaAdmision, HoraAdmision,
-      FechaEgreso, HoraEgreso, DisposicionEgreso
-    FROM imVisitaMovimiento
-    WHERE NumeroVisita = @p0
-    ORDER BY FechaAdmision DESC, HoraAdmision DESC
+      m.NumeroVisita,
+      m.FechaAdmision,
+      m.HoraAdmision,
+      m.FechaEgreso,
+      m.HoraEgreso,
+      m.DisposicionEgreso,
+      m.Diagnostico,
+      m.ValorHabitacionCama,
+      m.ValorSector,
+      -- Cama: solo existe código, no descripción en imHabitacionCamas
+      LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS NombreCama,
+      LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
+      -- Fechas como ISO string para el frontend
+      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
+      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaEgreso,0),  '1800-12-28'), 23) AS FechaEgresoISO,
+      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraEgreso,0)-1)*10, 0), 108)  AS HoraEgresoISO
+    FROM dbo.imVisitaMovimiento m
+    LEFT JOIN dbo.imSectores s ON s.Valor = LTRIM(RTRIM(m.ValorSector))
+    WHERE m.NumeroVisita = @p0
+    ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
   `;
   return await executeQuery(sql, [{ value: num }]);
 }

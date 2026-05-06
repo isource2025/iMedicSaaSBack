@@ -84,6 +84,25 @@ const eliminarEvolucion = async (req, res) => {
             });
         }
 
+        // Verificación de propiedad: solo el creador puede eliminar.
+        const { executeQuery } = require('../models/db');
+        const registros = await executeQuery(
+            `SELECT TOP 1 OperadorCarga FROM dbo.imInterCtrlEvolucion
+             WHERE NumeroVisita = @p0 AND FechaControl = @p1 AND HoraControl = @p2`,
+            [{ value: numeroVisitaInt }, { value: fechaControlInt }, { value: horaControlInt }],
+        );
+        if (registros.length) {
+            const autorCarga = Number(registros[0].OperadorCarga);
+            const codOperadorSesion = Number(req.auth?.usuario?.codOperador);
+            if (autorCarga && codOperadorSesion && autorCarga !== codOperadorSesion) {
+                return res.status(403).json({
+                    success: false,
+                    mensaje: 'Por restricciones legales, no puede eliminar registros creados por otro profesional.',
+                    codigoError: 'REGISTRO_AJENO',
+                });
+            }
+        }
+
         await evolucionEnfermeriaService.eliminarEvolucion(
             numeroVisitaInt,
             fechaControlInt,
