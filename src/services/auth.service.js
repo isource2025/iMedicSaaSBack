@@ -1,5 +1,14 @@
 const { executeQuery } = require('../models/db');
 
+const esErrorEsquemaRoles = (error) => {
+  const msg = String(error?.message || '').toLowerCase();
+  return (
+    msg.includes("invalid object name 'imroles'") ||
+    msg.includes("invalid column name 'rol'") ||
+    msg.includes("invalid object name 'impersonal'")
+  );
+};
+
 const autenticarUsuario = async (username, contraseña) => {
   try {
     // Verificar credenciales contra impassword e incluir el rol del usuario
@@ -23,7 +32,25 @@ const autenticarUsuario = async (username, contraseña) => {
       { value: contraseña, type: 'VarChar' }
     ];
 
-    const resultado = await executeQuery(consulta, parametros);
+    let resultado;
+    try {
+      resultado = await executeQuery(consulta, parametros);
+    } catch (errorConsultaRoles) {
+      // Compatibilidad con entornos que aun no tienen imRoles/imPersonal.Rol.
+      if (!esErrorEsquemaRoles(errorConsultaRoles)) throw errorConsultaRoles;
+
+      const consultaLegacy = `
+        SELECT TOP 1
+          pw.*,
+          CAST(NULL AS INT)           AS RolId,
+          CAST(NULL AS VARCHAR(50))   AS RolNombre,
+          CAST(NULL AS INT)           AS RolNivel
+        FROM impassword pw
+        WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+          AND pw.password = @p1
+      `;
+      resultado = await executeQuery(consultaLegacy, parametros);
+    }
 
     if (resultado && resultado.length > 0) {
       return resultado[0];
