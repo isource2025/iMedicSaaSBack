@@ -67,7 +67,7 @@ const MODULOS = Object.freeze([
 		label: 'Admisión',
 		submodulos: [
 			{ id: 'PACIENTES', label: 'Pacientes',          path: '/dashboard/patients',         acciones: [...CRUD] },
-			{ id: 'BUSQUEDA',  label: 'Búsqueda Integral',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
+			{ id: 'BUSQUEDA',  label: 'Consultar Historia Clínica',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
 			{ id: 'NUEVA',     label: 'Nueva Admisión',     path: '/dashboard/admission/new',    acciones: [ACCIONES.CREAR] },
 			{ id: 'VIGENTES',  label: 'Admisiones Vigentes',path: '/dashboard/admission/current',acciones: [...CRUD, ACCIONES.GESTIONAR] },
 			{ id: 'TABLA',     label: 'Tabla de Admisiones',path: '/dashboard/admission/tables', acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },

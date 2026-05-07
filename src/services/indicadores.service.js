@@ -1,6 +1,29 @@
 const { executeQuery, sql } = require('../models/db');
 const { connectDB } = require('../config/database');
 
+const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
+
+async function obtenerMapaCamasInternacionPorSector() {
+  const rows = await executeQuery(
+    `
+      SELECT
+        LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector,
+        COUNT(*) AS TotalCamasInternacion
+      FROM dbo.imHabitacionCamas hc
+      WHERE ${CAMA_ONLY_WHERE}
+      GROUP BY LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))
+    `,
+  );
+
+  const mapa = new Map();
+  for (const row of rows || []) {
+    const key = String(row.ValorSector || '').trim().toUpperCase();
+    if (!key) continue;
+    mapa.set(key, Number(row.TotalCamasInternacion || 0));
+  }
+  return mapa;
+}
+
 /**
  * Obtiene indicadores de pacientes usando la función fn_GetIndicadores
  * @param {string} tipoIndicador - Tipo de indicador (ej: 'Ingresos')
@@ -228,6 +251,28 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
     console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
     
     let datos = result || [];
+
+    // Ajuste funcional: analizar solo camas de internación (Tipo='cama').
+    // La función SQL histórica incluye todo tipo de "cama", por eso
+    // recalculamos TotalCamas/Ocupación con el universo válido.
+    const camasPorSector = await obtenerMapaCamasInternacionPorSector();
+    datos = datos
+      .map((row) => {
+        const sectorKey = String(row.ValorSector || '').trim().toUpperCase();
+        const totalCamasInternacion = Number(camasPorSector.get(sectorKey) || 0);
+        if (totalCamasInternacion <= 0) return null;
+
+        const pacientesDia = toNumberSafe(row.PacientesDia);
+        const ocupacionPromedioPct =
+          totalCamasInternacion > 0 ? Number(((pacientesDia / totalCamasInternacion) * 100).toFixed(2)) : 0;
+
+        return {
+          ...row,
+          TotalCamas: totalCamasInternacion,
+          OcupacionPromedioPct: ocupacionPromedioPct,
+        };
+      })
+      .filter(Boolean);
     
     // Log de muestra de datos
     if (datos.length > 0) {
@@ -499,6 +544,7 @@ const obtenerEstadoActualCamas = async () => {
         SUM(CASE WHEN hc.NumeroVisita > 0 THEN 1 ELSE 0 END) AS CamasOcupadas,
         SUM(CASE WHEN hc.NumeroVisita = 0 OR hc.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS CamasDisponibles
       FROM dbo.imHabitacionCamas hc
+      WHERE ${CAMA_ONLY_WHERE}
     `;
     
     console.log(`📋 [ESTADO-ACTUAL] Ejecutando query de estado real`);

@@ -202,7 +202,9 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
       CAST(v.Valor AS VARCHAR(64)) AS idMatch,
       CAST(MIN(v.Practica) AS VARCHAR(50)) AS codigoPractica,
       MIN(v.PracticaDescripcion) AS descripcionPractica,
+      MIN(v.FuncionDescripcion) AS funcionDescripcion,
       CAST(MAX(v.CantidadPractica) AS DECIMAL(19, 4)) AS cantidad,
+      CAST(MAX(v.NumeroVisita) AS VARCHAR(50)) AS numeroVisita,
       LTRIM(RTRIM(ISNULL(CONVERT(VARCHAR(20), MAX(v.NumeroDocumento)), ''))) AS dniPaciente,
       LTRIM(RTRIM(ISNULL(MIN(v.ApellidoyNombre), ''))) AS nombrePaciente,
       COALESCE(NULLIF(LTRIM(RTRIM(MIN(v.RazonSocial))), ''), '(Sin convenio)') AS cobertura,
@@ -210,7 +212,12 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
       CAST(ISNULL(SUM(v.CantidadDetalle), 0) AS DECIMAL(19, 4)) AS cantidadDetalle,
       CAST(ISNULL(MAX(v.Importe_Unitario), 0) AS DECIMAL(19, 4)) AS importeUnitario,
       CAST(ISNULL(SUM(v.Importe_Final), 0) AS DECIMAL(19, 4)) AS total,
-      CASE WHEN ISNULL(SUM(v.Importe_Final), 0) > 0 THEN 1 ELSE 0 END AS valorizada,
+      CASE
+        WHEN MAX(CASE WHEN ISNULL(v.NoFacturable, 0) = 1 THEN 1 ELSE 0 END) = 1 THEN 0
+        WHEN ISNULL(SUM(v.Importe_Final), 0) > 0 THEN 1
+        ELSE 0
+      END AS valorizada,
+      MAX(CASE WHEN ISNULL(v.NoFacturable, 0) = 1 THEN 1 ELSE 0 END) AS noFacturable,
       MAX(v.NroRendicion) AS nroRendicion
     FROM dbo.VProduccionProfesionales v
     WHERE v.Matricula = @p0
@@ -244,13 +251,16 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 			valorizada: !!r.valorizada,
 			codigoPractica: String(r.codigoPractica || ''),
 			descripcionPractica: String(r.descripcionPractica || '').trim(),
+			funcionDescripcion: String(r.funcionDescripcion || '').trim(),
 			cantidad,
+			numeroVisita: String(r.numeroVisita || '').trim(),
 			dniPaciente: String(r.dniPaciente || ''),
 			nombrePaciente: String(r.nombrePaciente || '').trim(),
 			cobertura: String(r.cobertura || '(Sin convenio)'),
 			porcentajeFacturado: Number(r.porcentajeFacturado || 0),
 			importeUnitario,
 			total,
+			noFacturable: Number(r.noFacturable || 0) === 1,
 			nroRendicion: Number.isFinite(nroRendicion) ? nroRendicion : null,
 		};
 	});
