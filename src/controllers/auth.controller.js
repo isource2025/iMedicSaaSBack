@@ -104,6 +104,12 @@ const inicioSesion = async (req, res) => {
             idValorpersonal: usuario.ValorPersonal,
             nombre: usuario.Nombres,
             apellido: usuario.Apellido,
+            nombreRed:
+              usuario.Nombrered ||
+              usuario.nombrered ||
+              usuario.NombreRed ||
+              String(username || '').trim() ||
+              null,
           },
           rol,
           permisos,
