@@ -29,13 +29,18 @@ const resolverRol = (userData) => {
 };
 
 const generarToken = (userData) => {
+  const matricula =
+    userData.Matricula != null && Number(userData.Matricula) > 0
+      ? Number(userData.Matricula)
+      : null;
   const payload = {
     usuario: {
       id: userData.ValorPersonal,
       username: userData.NombreRed,
       nombre: userData.Nombres,
       apellido: userData.Apellido,
-      codOperador: userData.CodOperador
+      codOperador: userData.CodOperador,
+      matricula, // requerido por el módulo Agenda para FK lógica con imPersonalHorarios/imTurnos
     },
     rol: resolverRol(userData),
     // La fecha de emisión se incluye automáticamente (iat)
@@ -102,6 +107,10 @@ const inicioSesion = async (req, res) => {
           usuario: {
             idCodOperador: usuario.CodOperador,
             idValorpersonal: usuario.ValorPersonal,
+            matricula:
+              usuario.Matricula != null && Number(usuario.Matricula) > 0
+                ? Number(usuario.Matricula)
+                : null,
             nombre: usuario.Nombres,
             apellido: usuario.Apellido,
             nombreRed:

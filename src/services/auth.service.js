@@ -17,6 +17,7 @@ const autenticarUsuario = async (username, contraseña) => {
     const consulta = `
       SELECT TOP 1
         pw.*,
+        p.Matricula  AS Matricula,
         r.IdRol      AS RolId,
         r.Nombre     AS RolNombre,
         r.Nivel      AS RolNivel
@@ -42,6 +43,7 @@ const autenticarUsuario = async (username, contraseña) => {
       const consultaLegacy = `
         SELECT TOP 1
           pw.*,
+          CAST(NULL AS INT)           AS Matricula,
           CAST(NULL AS INT)           AS RolId,
           CAST(NULL AS VARCHAR(50))   AS RolNombre,
           CAST(NULL AS INT)           AS RolNivel

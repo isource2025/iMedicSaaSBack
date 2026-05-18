@@ -236,10 +236,10 @@ const crearControl = async (data) => {
         { value: data.glucemia ? String(data.glucemia) : '0' },             // @param13 (Hgt es varchar)
         { value: data.presionMedia || 0 },                                  // @param14
         { value: data.saturacion || 0 },                                    // @param15
-        { value: 0 },                                                       // @param16 Peso
-        { value: 0 },                                                       // @param17 Talla
+        { value: data.peso || 0 },                                          // @param16 Peso
+        { value: data.talla || 0 },                                         // @param17 Talla
         { value: data.idSector || '' },                                     // @param18
-        { value: 0 },                                                       // @param19 IdTurno
+        { value: data.idTurno || 0 },                                       // @param19 IdTurno
         { value: 0 },                                                       // @param20 Nroindicacion
         { value: normalizarTextoParaClarionAnsi(data.observaciones || '') }, // @param21
         { value: data.idHci || 0 },                                         // @param22 IdHci (0 = no viene de HC)

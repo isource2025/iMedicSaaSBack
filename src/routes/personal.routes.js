@@ -2,11 +2,15 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const personalController = require('../controllers/personal.controller');
+const { requireAuth } = require('../middlewares/authJwt.middleware');
 
 const uploadFirma = multer({
 	storage: multer.memoryStorage(),
 	limits: { fileSize: 3 * 1024 * 1024 },
 });
+
+// Todas las rutas de personal requieren autenticación.
+router.use(requireAuth);
 
 // Orden: rutas más específicas primero
 router.get('/next-id', personalController.obtenerProximoId);

@@ -58,7 +58,7 @@ const MODULOS = Object.freeze([
 			{ id: 'AGENDA',        label: 'Agenda',           path: '/dashboard/turnos/agenda',        acciones: [...CRUD] },
 			{ id: 'ADMIN',         label: 'Admin de Turnos',  path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
 			{ id: 'EXCEPCIONES',   label: 'Excepciones',      path: '/dashboard/turnos/excepciones',   acciones: [...CRUD] },
-			{ id: 'CONFIGURACION', label: 'Configuración',    path: '/dashboard/turnos/configuracion', acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
+			{ id: 'CONFIGURACION', label: 'Configuración',    path: '/dashboard/turnos/configuracion', acciones: [ACCIONES.VER, ACCIONES.EDITAR, ACCIONES.GESTIONAR] },
 			{ id: 'TABLA',         label: 'Tabla de Turnos',  path: '/dashboard/turnos/tabla',         acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
 		],
 	},
@@ -168,9 +168,16 @@ const PLANTILLAS = Object.freeze({
 	MEDICO: Object.freeze([
 		'DASHBOARD.INICIO.VER',
 
+		// Agenda propia (el back fuerza matricula = req.auth.matricula)
 		'TURNOS.AGENDA.VER',
 		'TURNOS.AGENDA.CREAR',
 		'TURNOS.AGENDA.EDITAR',
+		'TURNOS.AGENDA.ELIMINAR',
+		'TURNOS.EXCEPCIONES.VER',
+		'TURNOS.EXCEPCIONES.CREAR',
+		'TURNOS.EXCEPCIONES.EDITAR',
+		'TURNOS.EXCEPCIONES.ELIMINAR',
+		'TURNOS.CONFIGURACION.VER', // sólo lectura de su propia config
 		'TURNOS.TABLA.VER',
 
 		'ADMISION.PACIENTES.VER',
@@ -269,10 +276,21 @@ const PLANTILLAS = Object.freeze({
 	ADMINISTRATIVO: Object.freeze([
 		'DASHBOARD.INICIO.VER',
 
+		// Gestión total de agenda (cualquier médico)
 		'TURNOS.AGENDA.VER',
 		'TURNOS.AGENDA.CREAR',
 		'TURNOS.AGENDA.EDITAR',
+		'TURNOS.AGENDA.ELIMINAR',
+		'TURNOS.EXCEPCIONES.VER',
+		'TURNOS.EXCEPCIONES.CREAR',
+		'TURNOS.EXCEPCIONES.EDITAR',
+		'TURNOS.EXCEPCIONES.ELIMINAR',
+		'TURNOS.CONFIGURACION.VER',
+		'TURNOS.CONFIGURACION.EDITAR',
+		'TURNOS.CONFIGURACION.GESTIONAR',
 		'TURNOS.TABLA.VER',
+		'TURNOS.TABLA.EXPORTAR',
+		..._todas('TURNOS', 'ADMIN'),
 
 		'ADMISION.PACIENTES.VER',
 		'ADMISION.PACIENTES.CREAR',
@@ -306,6 +324,8 @@ const PLANTILLAS = Object.freeze({
 		'REPORTES.OCUPACION.VER',
 
 		'CONFIGURACION.PERSONAL.VER',
+		'CONFIGURACION.PERSONAL.EDITAR',
+		'CONFIGURACION.PERSONAL.GESTIONAR', // necesario para abrir la solapa "Agenda" del modal de Personal
 
 		'USUARIO.PERFIL.VER',
 		'USUARIO.PERFIL.EDITAR',

@@ -4,7 +4,13 @@ const matriz = require('../utils/permisos');
 /** GET /api/permisos/me — devuelve rol y permisos del usuario logueado. */
 const obtenerMisPermisos = async (req, res) => {
 	try {
-		const { rol, permisos } = await permisosService.permisosDeUsuario(req.valorPersonal);
+		let { rol, permisos } = await permisosService.permisosDeUsuario(req.valorPersonal);
+		// Misma capacidad que administrativo: JWT ADMIN siempre ve plantilla completa
+		const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
+		if (rn === 'ADMIN') {
+			permisos = [...matriz.permisosDeRol('ADMIN')];
+			if (rol) rol = { ...rol, nombre: 'ADMIN' };
+		}
 		res.json({ success: true, data: { rol, permisos } });
 	} catch (error) {
 		console.error('[permisos.obtenerMisPermisos]', error);

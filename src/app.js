@@ -54,6 +54,8 @@ const personalRoutes = require('./routes/personal.routes');
 const miPerfilRoutes = require('./routes/miPerfil.routes');
 const rolesRoutes = require('./routes/roles.routes');
 const permisosRoutes = require('./routes/permisos.routes');
+const agendaConfigRoutes = require('./routes/agendaConfig.routes');
+const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 
 // Importar conexión a la base de datos
 const { connectDB } = require('./config/database');
@@ -135,6 +137,8 @@ app.use('/api/personal', personalRoutes);
 app.use('/api/mi-perfil', miPerfilRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/permisos', permisosRoutes);
+app.use('/api/agenda', agendaConfigRoutes);
+app.use('/api/turnos-admin', turnosAdminRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

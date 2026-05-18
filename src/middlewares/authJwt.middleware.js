@@ -19,6 +19,9 @@ function requireAuth(req, res, next) {
 		req.auth = decoded;
 		const id = decoded?.usuario?.id;
 		req.valorPersonal = id != null ? Number(id) : null;
+		const mat = decoded?.usuario?.matricula;
+		req.matricula = mat != null && Number.isFinite(Number(mat)) && Number(mat) > 0 ? Number(mat) : null;
+		req.rolNombre = decoded?.rol?.nombre ? String(decoded.rol.nombre).toUpperCase() : null;
 		if (req.valorPersonal == null || !Number.isFinite(req.valorPersonal)) {
 			return res.status(401).json({ success: false, mensaje: 'Token sin identificador de usuario' });
 		}

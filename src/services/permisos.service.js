@@ -37,6 +37,12 @@ async function _leerDeBD(idRol) {
  * @returns {Promise<string[]>}
  */
 async function permisosDeRol(idRol, nombreRol) {
+	// ADMIN siempre con matriz completa (misma capacidad operativa que en plantilla;
+	// evita que un imRolPermisos incompleto en BD deje sin gestión de médicos/agenda).
+	const nombre = nombreRol ? String(nombreRol).trim().toUpperCase() : '';
+	if (nombre === 'ADMIN') {
+		return [...matriz.permisosDeRol('ADMIN')];
+	}
 	if (idRol == null || !Number.isFinite(Number(idRol))) {
 		return matriz.permisosDeRol(nombreRol || null);
 	}
