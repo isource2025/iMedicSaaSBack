@@ -169,7 +169,45 @@ async function cerrarTurno(req, res) {
 		const m = _enforceAlcance(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
-		const data = await service.cerrarTurno({ matricula: m, idTurno });
+		// Enfermeros no pueden cerrar turnos (solo médico o administrativo)
+		if (req.rolNombre === 'ENFERMERO') {
+			return res
+				.status(403)
+				.json({ success: false, mensaje: 'Sólo médico o administrativo pueden cerrar turnos' });
+		}
+		const body = req.body || {};
+		const data = await service.cerrarTurno({
+			matricula: m,
+			idTurno,
+			codOperador: req.valorPersonal != null ? Number(req.valorPersonal) : 0,
+			diagnostico: body.diagnostico,
+			contrato: body.contrato,
+			hci: body.hci || null,
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function buscarDiagnosticos(req, res) {
+	try {
+		const data = await service.buscarDiagnosticos({
+			q: req.query.q ? String(req.query.q) : '',
+			limit: req.query.limit ? Number(req.query.limit) : 30,
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function buscarClientes(req, res) {
+	try {
+		const data = await service.buscarClientes({
+			q: req.query.q ? String(req.query.q) : '',
+			limit: req.query.limit ? Number(req.query.limit) : 30,
+		});
 		res.json({ success: true, data });
 	} catch (e) {
 		_err(res, e);
@@ -225,4 +263,6 @@ module.exports = {
 	cancelarTurno,
 	borrarTurno,
 	cerrarTurno,
+	buscarDiagnosticos,
+	buscarClientes,
 };

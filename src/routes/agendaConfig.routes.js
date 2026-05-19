@@ -57,6 +57,20 @@ router.patch(
 	racCtrl.actualizarTriage,
 );
 
+// Búsqueda CIE-10 (para cierre de turno)
+router.get(
+	'/diagnosticos/buscar',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.buscarDiagnosticos,
+);
+
+// Búsqueda clientes/coberturas (para cierre de turno)
+router.get(
+	'/clientes/buscar',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.buscarClientes,
+);
+
 // Turnos históricos de un paciente (búsqueda en agenda)
 router.get(
 	'/turnos-por-paciente',

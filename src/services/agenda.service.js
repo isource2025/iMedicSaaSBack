@@ -1396,9 +1396,87 @@ async function borrarTurno({ matricula, idTurno }) {
 }
 
 /**
- * Cierra el turno: Status = atendido y HoraSalida = hora actual (legacy).
+ * Trae el código de práctica de consulta desde XPARAMETROS.
+ * Default fallback: 420101.
  */
-async function cerrarTurno({ matricula, idTurno }) {
+async function _getCodPracticaConsulta() {
+	try {
+		const rows = await executeQuery(
+			`SELECT TOP 1 VALOR_STRING, VALOR_INTEGER FROM dbo.XPARAMETROS
+			 WHERE IDPARAMETRO = 'CODPRACTICACONSULTA'`,
+		);
+		if (!rows.length) return 420101;
+		const s = rows[0].VALOR_STRING && String(rows[0].VALOR_STRING).trim();
+		const n = s ? Number(s) : Number(rows[0].VALOR_INTEGER || 0);
+		return Number.isFinite(n) && n > 0 ? n : 420101;
+	} catch {
+		return 420101;
+	}
+}
+
+/** Devuelve el próximo NUMEROVISITA disponible (MAX+1). */
+async function _proximoNumeroVisita() {
+	const rows = await executeQuery(
+		`SELECT ISNULL(MAX(NUMEROVISITA), 0) + 1 AS next FROM dbo.imVisita`,
+	);
+	return Number(rows[0].next) || 1;
+}
+
+/** Devuelve el próximo Valor para imFacPracticas. */
+async function _proximoValorFacPractica() {
+	const rows = await executeQuery(
+		`SELECT ISNULL(MAX(Valor), 0) + 1 AS next FROM dbo.imFacPracticas`,
+	);
+	return Number(rows[0].next) || 1;
+}
+
+/** Devuelve el próximo IDFacProfesional. */
+async function _proximoIdFacProfesional() {
+	const rows = await executeQuery(
+		`SELECT ISNULL(MAX(IDFacProfesional), 0) + 1 AS next FROM dbo.imFacProfesionales`,
+	);
+	return Number(rows[0].next) || 1;
+}
+
+/** Devuelve el próximo IdHCIngreso. */
+async function _proximoIdHCIngreso() {
+	const rows = await executeQuery(
+		`SELECT ISNULL(MAX(IdHCIngreso), 0) + 1 AS next FROM dbo.imHCI`,
+	);
+	return Number(rows[0].next) || 1;
+}
+
+/** Padding a 6 caracteres del código de diagnóstico. */
+function _padDiag(d) {
+	const s = String(d || '').trim().toUpperCase();
+	if (!s) return '';
+	return s.length >= 6 ? s.slice(0, 8) : s.padEnd(6, ' ');
+}
+
+/** Normaliza string seguro. */
+function _s(v, max) {
+	if (v == null) return '';
+	const s = String(v);
+	return max != null ? s.slice(0, max) : s;
+}
+
+/**
+ * Cierra el turno con flujo completo:
+ *  - Inserta imVisita (clasePaciente='A')
+ *  - Inserta imHCI esqueleto con datos del form
+ *  - Inserta imFacPracticas (consulta) e imFacProfesionales (matrícula del médico, funcion=1)
+ *  - Actualiza imTurnos (Status=Atendido, HoraSalida, NumeroVisita)
+ *  - Actualiza imInterCtrlFrecuente / imInterCtrlMedicamento con el NumeroVisita generado
+ *
+ * @param {Object} args
+ * @param {number} args.matricula - matrícula del profesional del turno
+ * @param {number} args.idTurno
+ * @param {number} args.codOperador - operador logueado (puede ser médico o administrativo)
+ * @param {string} [args.diagnostico] - código CIE-10 (ej. "R100")
+ * @param {number} [args.contrato] - Valor de imClientes (cobertura)
+ * @param {Object} [args.hci] - campos de imHCI a guardar
+ */
+async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contrato, hci }) {
 	const m = _validarMatricula(matricula);
 	const id = Number(idTurno);
 	if (!Number.isFinite(id) || id <= 0) {
@@ -1406,6 +1484,8 @@ async function cerrarTurno({ matricula, idTurno }) {
 		e.statusCode = 400;
 		throw e;
 	}
+	const codOp = Number(codOperador) || 0;
+
 	const row = await _obtenerTurnoProfesional(m, id);
 	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
 	const idP = Number(row.IDPaciente) || 0;
@@ -1425,24 +1505,242 @@ async function cerrarTurno({ matricula, idTurno }) {
 		e.statusCode = 409;
 		throw e;
 	}
+
+	// ── Datos de fecha/hora del cierre ──
 	const now = new Date();
-	const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-	const horaSalidaClarion = convertirHoraAClarion(horaStr);
-	await executeQuery(
-		`UPDATE dbo.imTurnos
-		 SET Status = @p0, HoraSalida = @p1
-		 WHERE IdTurno = @p2`,
-		[
-			{ value: STATUS_ATENDIDO, type: 'TinyInt' },
-			{ value: horaSalidaClarion, type: 'Int' },
-			{ value: id, type: 'Int' },
-		],
+	const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+	const fechaIso = _isoDate(now);
+	const fechaClarion = convertirFechaAClarion(fechaIso);
+	const horaClarion = convertirHoraAClarion(horaStr);
+
+	// ── Datos adicionales del turno (sector, paciente) ──
+	const detalle = await executeQuery(
+		`SELECT TOP 1 t.IdTurno, t.IDPaciente, t.Sector, t.Profesional, t.NumeroVisita,
+		        p.ApellidoyNombre, p.Cobertura AS PacienteCobertura
+		 FROM dbo.imTurnos t
+		 LEFT JOIN dbo.imPacientes p ON p.IDPaciente = t.IDPaciente
+		 WHERE t.IdTurno = @p0`,
+		[{ value: id, type: 'Int' }],
 	);
-	return {
-		idTurno: id,
-		status: STATUS_ATENDIDO,
-		horaSalida: _hhmm(horaSalidaClarion),
-	};
+	const sector = String(detalle[0]?.Sector || '').trim().padEnd(4, ' ').slice(0, 4);
+
+	// Si el turno ya tenía NumeroVisita, lo reutilizamos
+	let numeroVisita = Number(detalle[0]?.NumeroVisita) || 0;
+	const yaTieneVisita = numeroVisita > 0;
+	if (!yaTieneVisita) numeroVisita = await _proximoNumeroVisita();
+
+	const diagPadded = _padDiag(diagnostico);
+	const contratoId = Number(contrato) > 0 ? Number(contrato) : 0;
+
+	// Para rollback parcial si algo falla luego del INSERT visita
+	const creados = { visita: null, hci: null, practica: null, profesional: null };
+
+	try {
+		if (!yaTieneVisita) {
+			// 1) imVisita
+			await executeQuery(
+				`INSERT INTO dbo.imVisita (
+					NUMEROVISITA, IDPACIENTE, IDDESCONOCIDA, FECHAADMISIONS, TIPOADMISION,
+					VALORSECTOR, CLASEPACIENTE, DOCTORADMISOR, DOCTORASISTIENDO,
+					DIAGNOSTICO, CLIENTE, CONTRATO, CLASEFINANCIERA,
+					FECHAEGRESO, HORAEGRESO, FECHACARGA, HORACARGA,
+					ESTADO, ESTADOAMBULATORIO, OPERADOR, OperadorEgreso, ORIGENADMISION,
+					STATUS
+				) VALUES (
+					@p0, @p1, 0, @p2, ' ',
+					@p3, 'A', @p4, @p4,
+					@p5, 0, @p6, ' ',
+					@p7, @p8, @p7, @p8,
+					'', '', @p9, @p10, 0,
+					0
+				)`,
+				[
+					{ value: numeroVisita, type: 'Int' },
+					{ value: idP, type: 'Int' },
+					{ value: now, type: 'DateTime' },
+					{ value: sector, type: 'VarChar' },
+					{ value: m, type: 'Int' },
+					{ value: diagPadded, type: 'VarChar' },
+					{ value: contratoId, type: 'Int' },
+					{ value: fechaClarion, type: 'Int' },
+					{ value: horaClarion, type: 'Int' },
+					{ value: _s(String(codOp), 10), type: 'VarChar' },
+					{ value: codOp, type: 'Int' },
+				],
+			);
+			creados.visita = numeroVisita;
+		} else {
+			// La visita ya existe — solo actualizar egreso/diagnóstico/operador egreso
+			await executeQuery(
+				`UPDATE dbo.imVisita
+				 SET FECHAEGRESO = @p1, HORAEGRESO = @p2,
+				     DIAGNOSTICO = CASE WHEN LEN(LTRIM(RTRIM(@p3))) > 0 THEN @p3 ELSE DIAGNOSTICO END,
+				     CONTRATO = CASE WHEN @p4 > 0 THEN @p4 ELSE CONTRATO END,
+				     OperadorEgreso = @p5
+				 WHERE NUMEROVISITA = @p0`,
+				[
+					{ value: numeroVisita, type: 'Int' },
+					{ value: fechaClarion, type: 'Int' },
+					{ value: horaClarion, type: 'Int' },
+					{ value: diagPadded, type: 'VarChar' },
+					{ value: contratoId, type: 'Int' },
+					{ value: codOp, type: 'Int' },
+				],
+			);
+		}
+
+		// 2) imHCI esqueleto + form (si vino algo)
+		const h = hci || {};
+		const idHci = await _proximoIdHCIngreso();
+		await executeQuery(
+			`INSERT INTO dbo.imHCI (
+				IdHCIngreso, NumeroVisita, Fecha, IdSector, IdProfecional,
+				MotivoConsulta, EnfermedadActual, Semiologia,
+				SV_PA, SV_FC, SV_FR, SV_TAX, SV_GLUCEMIA,
+				SV_TALLA, SV_PESOACTUAL, SV_IMPRESIONGENERAL
+			) VALUES (
+				@p0, @p1, @p2, @p3, @p4,
+				@p5, @p6, @p7,
+				@p8, @p9, @p10, @p11, @p12,
+				@p13, @p14, @p15
+			)`,
+			[
+				{ value: idHci, type: 'Int' },
+				{ value: numeroVisita, type: 'Int' },
+				{ value: now, type: 'DateTime' },
+				{ value: sector, type: 'VarChar' },
+				{ value: m, type: 'Int' },
+				{ value: _s(h.motivoConsulta, 500), type: 'VarChar' },
+				{ value: _s(h.enfermedadActual, 8000), type: 'VarChar' },
+				{ value: _s(h.semiologia, 255), type: 'VarChar' },
+				{ value: _s(h.pa, 40), type: 'VarChar' },
+				{ value: _s(h.fc, 40), type: 'VarChar' },
+				{ value: _s(h.fr, 40), type: 'VarChar' },
+				{ value: _s(h.tax, 40), type: 'VarChar' },
+				{ value: _s(h.glucemia, 40), type: 'VarChar' },
+				{ value: _s(h.talla, 40), type: 'VarChar' },
+				{ value: _s(h.peso, 40), type: 'VarChar' },
+				{ value: _s(h.impresionGeneral, 200), type: 'VarChar' },
+			],
+		);
+		creados.hci = idHci;
+
+		// 3) imFacPracticas (consulta)
+		const codConsulta = await _getCodPracticaConsulta();
+		const valorPractica = await _proximoValorFacPractica();
+		await executeQuery(
+			`INSERT INTO dbo.imFacPracticas (
+				Valor, Numero, NumeroVisita, TipoPractica, Practica,
+				CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
+				ValorSector, FechaPrograma, HoraPrograma, CodOperador,
+				FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
+				NroInforme, NroAutorizacion, IdPaciente
+			) VALUES (
+				@p0, 0, @p1, 'NO', @p2,
+				1, @p3, @p4, 0,
+				@p5, @p3, @p4, @p6,
+				@p3, @p4, 0, 2, 2, 0,
+				0, '', @p7
+			)`,
+			[
+				{ value: valorPractica, type: 'Int' },
+				{ value: numeroVisita, type: 'Int' },
+				{ value: codConsulta, type: 'Int' },
+				{ value: fechaClarion, type: 'Int' },
+				{ value: horaClarion, type: 'Int' },
+				{ value: sector, type: 'VarChar' },
+				{ value: codOp, type: 'Int' },
+				{ value: idP, type: 'Int' },
+			],
+		);
+		creados.practica = valorPractica;
+
+		// 4) imFacProfesionales (titular)
+		const idFacProf = await _proximoIdFacProfesional();
+		await executeQuery(
+			`INSERT INTO dbo.imFacProfesionales (
+				IDFacProfesional, Valor, Matricula, Funcion, CodOperador,
+				FachaGraba, HoraGraba, Factura, Status
+			) VALUES (
+				@p0, @p1, @p2, 1, @p3,
+				@p4, @p5, 0, 0
+			)`,
+			[
+				{ value: idFacProf, type: 'Int' },
+				{ value: valorPractica, type: 'Int' },
+				{ value: m, type: 'Int' },
+				{ value: codOp, type: 'Int' },
+				{ value: fechaClarion, type: 'Int' },
+				{ value: horaClarion, type: 'Int' },
+			],
+		);
+		creados.profesional = idFacProf;
+
+		// 5) UPDATE imInterCtrlFrecuente (controles RAC del turno)
+		await executeQuery(
+			`UPDATE dbo.imInterCtrlFrecuente SET NumeroVisita = @p0 WHERE IdTurno = @p1`,
+			[
+				{ value: numeroVisita, type: 'Int' },
+				{ value: id, type: 'Int' },
+			],
+		);
+
+		// 6) UPDATE imInterCtrlMedicamento (medicaciones RAC del turno)
+		await executeQuery(
+			`UPDATE dbo.imInterCtrlMedicamento SET NumeroVisita = @p0 WHERE IdTurno = @p1`,
+			[
+				{ value: numeroVisita, type: 'Int' },
+				{ value: id, type: 'Int' },
+			],
+		);
+
+		// 7) UPDATE imTurnos (cerrar + NumeroVisita)
+		await executeQuery(
+			`UPDATE dbo.imTurnos
+			 SET Status = @p0, HoraSalida = @p1, NumeroVisita = @p2
+			 WHERE IdTurno = @p3`,
+			[
+				{ value: STATUS_ATENDIDO, type: 'TinyInt' },
+				{ value: horaClarion, type: 'Int' },
+				{ value: numeroVisita, type: 'Int' },
+				{ value: id, type: 'Int' },
+			],
+		);
+
+		return {
+			idTurno: id,
+			status: STATUS_ATENDIDO,
+			horaSalida: _hhmm(horaClarion),
+			numeroVisita,
+			idHci: creados.hci,
+			valorPractica: creados.practica,
+			idFacProfesional: creados.profesional,
+		};
+	} catch (err) {
+		// Rollback best-effort en orden inverso
+		try {
+			if (creados.profesional)
+				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
+					{ value: creados.profesional, type: 'Int' },
+				]);
+			if (creados.practica)
+				await executeQuery(`DELETE FROM dbo.imFacPracticas WHERE Valor = @p0`, [
+					{ value: creados.practica, type: 'Int' },
+				]);
+			if (creados.hci)
+				await executeQuery(`DELETE FROM dbo.imHCI WHERE IdHCIngreso = @p0`, [
+					{ value: creados.hci, type: 'Int' },
+				]);
+			if (creados.visita)
+				await executeQuery(`DELETE FROM dbo.imVisita WHERE NUMEROVISITA = @p0`, [
+					{ value: creados.visita, type: 'Int' },
+				]);
+		} catch (rollbackErr) {
+			console.error('[cerrarTurno] rollback parcial falló:', rollbackErr.message);
+		}
+		err.statusCode = err.statusCode || 500;
+		throw err;
+	}
 }
 
 /**
@@ -1506,6 +1804,61 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 	}));
 }
 
+/**
+ * Búsqueda de diagnósticos CIE-10 en imDiagnosticos.
+ */
+async function buscarDiagnosticos({ q, limit = 30 }) {
+	const term = String(q || '').trim();
+	const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
+	if (term.length < 2) return [];
+	const like = `%${term}%`;
+	const rows = await executeQuery(
+		`SELECT TOP ${lim} Valor, RTRIM(LTRIM(CodigoOMS)) AS codigo, RTRIM(LTRIM(Descripcion)) AS descripcion
+		 FROM dbo.imDiagnosticos
+		 WHERE CIE = 10 AND (
+		   CodigoOMS LIKE @p0 OR Descripcion LIKE @p0
+		 )
+		 ORDER BY CASE WHEN CodigoOMS LIKE @p1 THEN 0 ELSE 1 END, CodigoOMS`,
+		[
+			{ value: like, type: 'VarChar' },
+			{ value: `${term}%`, type: 'VarChar' },
+		],
+	);
+	return rows.map((r) => ({
+		valor: r.Valor,
+		codigo: r.codigo,
+		descripcion: r.descripcion,
+	}));
+}
+
+/**
+ * Búsqueda de clientes (obras sociales / coberturas) en imClientes.
+ */
+async function buscarClientes({ q, limit = 30 }) {
+	const term = String(q || '').trim();
+	const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
+	const like = term ? `%${term}%` : null;
+	const params = [];
+	let where = '';
+	if (like) {
+		where = `WHERE RazonSocial LIKE @p0 OR CAST(Valor AS VARCHAR(20)) LIKE @p0`;
+		params.push({ value: like, type: 'VarChar' });
+	}
+	const rows = await executeQuery(
+		`SELECT TOP ${lim} Valor, RTRIM(LTRIM(RazonSocial)) AS razonSocial,
+		        RTRIM(LTRIM(ValorCliente)) AS tipo
+		 FROM dbo.imClientes
+		 ${where}
+		 ORDER BY RazonSocial`,
+		params,
+	);
+	return rows.map((r) => ({
+		valor: r.Valor,
+		razonSocial: r.razonSocial,
+		tipo: r.tipo,
+	}));
+}
+
 module.exports = {
 	generarSlots,
 	resumenDia,
@@ -1518,4 +1871,6 @@ module.exports = {
 	cancelarTurno,
 	borrarTurno,
 	cerrarTurno,
+	buscarDiagnosticos,
+	buscarClientes,
 };
