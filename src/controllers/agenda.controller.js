@@ -183,6 +183,7 @@ async function cerrarTurno(req, res) {
 			diagnostico: body.diagnostico,
 			contrato: body.contrato,
 			hci: body.hci || null,
+			porIdTurno: req.rolNombre !== 'MEDICO',
 		});
 		res.json({ success: true, data });
 	} catch (e) {

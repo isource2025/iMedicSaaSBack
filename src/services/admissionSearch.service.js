@@ -1,4 +1,11 @@
 const { executeQuery } = require('../models/db');
+const {
+	convertirFechaClarionADate,
+	convertirHoraClarionAString,
+} = require('../utils/dateUtils');
+
+/** Matrícula genérica de sistema/admin en legacy (no es médico de turno). */
+const MATRICULA_SISTEMA = 999999;
 const indicacionesService = require('./indicaciones.service');
 const medicacionControlService = require('./medicacionControl.service');
 // Usamos la versión compatible con esquema legacy/remoto (WEBDEV).
@@ -31,7 +38,7 @@ async function getPracticasNomencladorResolver() {
       if (set.size === 0) return null;
 
       const pick = (candidates) => candidates.find((c) => set.has(c.toLowerCase())) || null;
-      const codeCol = pick(['Practica', 'CodigoPractica', 'Codigo', 'CodPractica', 'IdPractica', 'Valor']);
+      const codeCol = pick(['Practica', 'CodigoPractica', 'CodPractica', 'Codigo', 'IdPractica', 'Valor']);
       const descCol = pick(['DescPractica', 'DescripcionPractica', 'Descripcion', 'Prestacion', 'Denominacion', 'Detalle']);
       if (!codeCol || !descCol) return null;
       return { codeCol, descCol };
@@ -182,40 +189,161 @@ async function obtenerResumenAdmision(numeroVisita) {
   return rows?.[0] || null;
 }
 
-async function obtenerPracticasPorVisita(numeroVisita) {
-  const nomenclador = await getPracticasNomencladorResolver();
-  const joinNomenclador = nomenclador
-    ? `LEFT JOIN dbo.VUnionModuladasNomenclador n
-         ON LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica))) = LTRIM(RTRIM(CONVERT(VARCHAR(50), n.[${nomenclador.codeCol}])))`
-    : '';
-  const practicaDescripcionSql = nomenclador
-    ? `COALESCE(
-         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${nomenclador.descCol}]))), ''),
-         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
-         CONVERT(VARCHAR(50), fp.Practica)
-       ) AS PracticaDescripcion`
-    : `COALESCE(
-         NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
-         CONVERT(VARCHAR(50), fp.Practica)
-       ) AS PracticaDescripcion`;
+function _clarionFechaIso(fechaClarion) {
+	const d = convertirFechaClarionADate(fechaClarion);
+	return d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : null;
+}
 
-  const rows = await executeQuery(
-    `
+function _clarionHoraHm(horaClarion) {
+	const s = convertirHoraClarionAString(horaClarion);
+	return s ? s.slice(0, 5) : null;
+}
+
+/** Una descripción por código (evita duplicados del nomenclador). */
+function _sqlDescripcionPractica(nomenclador) {
+	if (!nomenclador) {
+		return `COALESCE(
+      NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+      CONVERT(VARCHAR(50), fp.Practica)
+    )`;
+	}
+	const { codeCol, descCol } = nomenclador;
+	return `COALESCE(
+    (
+      SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}])))
+      FROM dbo.VUnionModuladasNomenclador n
+      WHERE LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica))) =
+            LTRIM(RTRIM(CONVERT(VARCHAR(50), n.[${codeCol}])))
+      ORDER BY
+        CASE WHEN UPPER(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}])))) LIKE '%PRE ANEST%' THEN 1 ELSE 0 END,
+        LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}]))))
+    ),
+    NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+    CONVERT(VARCHAR(50), fp.Practica)
+  )`;
+}
+
+async function _profesionalesPorPracticas(valoresPractica) {
+	const ids = [...new Set(valoresPractica.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0))];
+	if (!ids.length) return new Map();
+
+	const params = ids.map((v, i) => ({ value: v, type: 'Int' }));
+	const inList = ids.map((_, i) => `@p${i}`).join(', ');
+	const rows = await executeQuery(
+		`
       SELECT
+        fprof.Valor,
+        fprof.Matricula,
+        fprof.Funcion,
+        fn.Descripcion AS FuncionDescripcion,
+        LTRIM(RTRIM(per.ApellidoNombre)) AS ProfesionalNombre
+      FROM dbo.imFacProfesionales fprof
+      LEFT JOIN dbo.imPersonal per ON per.Matricula = fprof.Matricula
+      LEFT JOIN dbo.imFunciones fn ON fn.Valor = fprof.Funcion
+      WHERE fprof.Valor IN (${inList})
+      ORDER BY fprof.Valor, fprof.Funcion, fprof.Matricula
+    `,
+		params,
+	);
+
+	const map = new Map();
+	for (const r of rows || []) {
+		const valor = Number(r.Valor);
+		if (!map.has(valor)) map.set(valor, []);
+		const nombre = String(r.ProfesionalNombre || '').trim() || `Mat. ${r.Matricula}`;
+		const funcion = String(r.FuncionDescripcion || '').trim();
+		const etiqueta = funcion ? `${nombre} (${funcion})` : nombre;
+		map.get(valor).push(etiqueta);
+	}
+	return map;
+}
+
+async function _medicoDelTurnoPorVisita(numeroVisita) {
+	const turno = await executeQuery(
+		`SELECT TOP 1 t.Profesional, t.HoraSalida, t.FechaAsignada
+		 FROM dbo.imTurnos t
+		 WHERE t.NumeroVisita = @p0
+		 ORDER BY t.IdTurno DESC`,
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+	if (!turno.length) return null;
+	const matricula = Number(turno[0].Profesional) || 0;
+	if (matricula <= 0 || matricula === MATRICULA_SISTEMA) return null;
+	const pers = await executeQuery(
+		`SELECT TOP 1 LTRIM(RTRIM(ApellidoNombre)) AS Nombre, Matricula
+		 FROM dbo.imPersonal WHERE Matricula = @p0`,
+		[{ value: matricula, type: 'Int' }],
+	);
+	const nombre = String(pers[0]?.Nombre || '').trim();
+	return {
+		matricula,
+		nombre: nombre || `Mat. ${matricula}`,
+		horaSalida: _clarionHoraHm(turno[0].HoraSalida),
+	};
+}
+
+async function obtenerPracticasPorVisita(numeroVisita) {
+	const nomenclador = await getPracticasNomencladorResolver();
+	const descSql = _sqlDescripcionPractica(nomenclador);
+	const medicoTurno = await _medicoDelTurnoPorVisita(numeroVisita);
+
+	const rows = await executeQuery(
+		`
+      SELECT
+        fp.Valor,
         fp.NumeroVisita,
         fp.Practica,
-        ${practicaDescripcionSql},
+        ${descSql} AS PracticaDescripcion,
+        fp.TipoPractica,
         fp.CantidadPractica,
-        CONVERT(VARCHAR(10), fp.FechaPractica, 23) AS FechaPractica,
-        CONVERT(VARCHAR(8), fp.HoraPracticaInicio, 108) AS HoraPracticaInicio
-      FROM dbo.imFacpracticas fp
-      ${joinNomenclador}
-      WHERE fp.NumeroVisita = @param0
-      ORDER BY fp.FechaPractica DESC, fp.HoraPracticaInicio DESC
+        fp.FechaPractica,
+        fp.HoraPracticaInicio,
+        fp.HoraPracticaFin,
+        LTRIM(RTRIM(fp.ValorSector)) AS ValorSector,
+        fp.Estado,
+        fp.Factura,
+        fp.Autorizada,
+        fp.CodOperador,
+        fp.NroInforme,
+        fp.NroAutorizacion
+      FROM dbo.imFacPracticas fp
+      WHERE fp.NumeroVisita = @p0
+      ORDER BY fp.FechaPractica DESC, fp.HoraPracticaInicio DESC, fp.Valor DESC
     `,
-    [{ value: numeroVisita }]
-  );
-  return rows || [];
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+
+	const profMap = await _profesionalesPorPracticas((rows || []).map((r) => r.Valor));
+
+	return (rows || []).map((r) => {
+		const valor = Number(r.Valor);
+		const profFact = profMap.get(valor) || [];
+		const horaPractica =
+			_clarionHoraHm(r.HoraPracticaInicio) || medicoTurno?.horaSalida || null;
+		// Priorizar siempre el médico asignado al turno (imTurnos.Profesional)
+		const profesionales = medicoTurno?.nombre ? [medicoTurno.nombre] : profFact;
+		return {
+			Valor: valor,
+			NumeroVisita: Number(r.NumeroVisita),
+			Practica: r.Practica,
+			PracticaDescripcion: String(r.PracticaDescripcion || r.Practica || '').trim(),
+			TipoPractica: r.TipoPractica != null ? String(r.TipoPractica).trim() : '',
+			CantidadPractica: r.CantidadPractica,
+			FechaPractica: _clarionFechaIso(r.FechaPractica),
+			HoraPracticaInicio: horaPractica,
+			HoraPracticaFin: _clarionHoraHm(r.HoraPracticaFin),
+			ValorSector: r.ValorSector,
+			Estado: r.Estado,
+			Factura: r.Factura,
+			Autorizada: r.Autorizada,
+			CodOperador: r.CodOperador,
+			NroInforme: r.NroInforme,
+			NroAutorizacion: r.NroAutorizacion,
+			MatriculaMedicoTurno: medicoTurno?.matricula ?? null,
+			Profesionales: profesionales.join(' · '),
+			ProfesionalesLista: profesionales,
+		};
+	});
 }
 
 async function exportarAdmisionCompleta(numeroVisita) {
@@ -493,6 +621,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
 module.exports = {
   buscarAdmisiones,
+  obtenerPracticasPorVisita,
   exportarAdmisionCompleta,
   exportarAdmisionSelectivo,
 };

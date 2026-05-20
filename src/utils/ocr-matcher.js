@@ -105,7 +105,9 @@ function buscarParametroConContexto(textoOCR, contexto) {
   console.log(`\n🔍 Buscando match para: "${textoOCR}" → "${normalizado}"`);
 
   const matchExacto = contexto.confRows.filter(
-    (r) => (r.NombreNormalizado || '') === normalizado
+    (r) =>
+      (r.NombreNormalizado || '') === normalizado ||
+      normalizarTexto(r.Estudio) === normalizado
   );
   if (matchExacto.length > 0) {
     const p = matchExacto[0];
@@ -273,16 +275,39 @@ async function registrarLogsOCRLote(entradas) {
 }
 
 /**
- * Crea o actualiza parámetro en catálogo
+ * Crea parámetro en catálogo si no existe (PK: IdTipoLaboratorio + Orden).
  */
-async function crearParametroEnCatalogo(tipoEstudio, nombreParametro, valorReferencia, orden) {
+async function crearParametroEnCatalogo(tipoEstudio, nombreParametro, valorReferencia, _ordenIgnorado) {
   const normalizado = normalizarTexto(nombreParametro);
-  
-  // Parsear valor de referencia para extraer min/max
-  let valorMin = null, valorMax = null, valorNormal = null;
-  
+  const estudio = String(nombreParametro || '').trim().toUpperCase();
+
+  const existente = await executeQuery(
+    `
+    SELECT TOP 1 Estudio, NombreNormalizado, ValorMinimo, ValorMaximo, ValorNormal
+    FROM imHCExamenesLabDetalleConf
+    WHERE IdTipoLaboratorio = @p0
+      AND (
+        LTRIM(RTRIM(Estudio)) = @p1
+        OR LTRIM(RTRIM(NombreNormalizado)) = @p2
+      )
+    `,
+    [
+      { value: tipoEstudio },
+      { value: estudio },
+      { value: normalizado },
+    ]
+  );
+  if (existente.length > 0) {
+    console.log(`  ✓ Parámetro ya existe en catálogo: ${existente[0].Estudio}`);
+    return existente[0];
+  }
+
+  let valorMin = null;
+  let valorMax = null;
+  let valorNormal = null;
+
   if (valorReferencia) {
-    const rangoMatch = valorReferencia.match(/^([\d\.\,]+)\s*[-–]\s*([\d\.\,]+)/);
+    const rangoMatch = String(valorReferencia).match(/^([\d.,]+)\s*[-–]\s*([\d.,]+)/);
     if (rangoMatch) {
       valorMin = rangoMatch[1];
       valorMax = rangoMatch[2];
@@ -290,32 +315,59 @@ async function crearParametroEnCatalogo(tipoEstudio, nombreParametro, valorRefer
       valorNormal = valorReferencia;
     }
   }
-  
+
+  const ordenRows = await executeQuery(
+    `
+    SELECT ISNULL(MAX(Orden), 0) + 1 AS SiguienteOrden
+    FROM imHCExamenesLabDetalleConf
+    WHERE IdTipoLaboratorio = @p0
+    `,
+    [{ value: tipoEstudio }]
+  );
+  const siguienteOrden = Number(ordenRows[0]?.SiguienteOrden) || 1;
+
   const consulta = `
     INSERT INTO imHCExamenesLabDetalleConf
     (IdTipoLaboratorio, Orden, Estudio, NombreNormalizado, ValorMinimo, ValorMaximo, ValorNormal, AlertaCritica)
     VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)
   `;
-  
-  await executeQuery(consulta, [
-    { value: tipoEstudio },
-    { value: orden },
-    { value: nombreParametro },
-    { value: normalizado },
-    { value: valorMin || '' },
-    { value: valorMax || '' },
-    { value: valorNormal || '' },
-    { value: 0 }
-  ]);
 
-  console.log(`  ✓ Parámetro creado en catálogo: ${nombreParametro}`);
+  try {
+    await executeQuery(consulta, [
+      { value: tipoEstudio },
+      { value: siguienteOrden },
+      { value: estudio },
+      { value: normalizado },
+      { value: valorMin || '' },
+      { value: valorMax || '' },
+      { value: valorNormal || '' },
+      { value: 0 },
+    ]);
+    console.log(`  ✓ Parámetro creado en catálogo: ${estudio} (orden ${siguienteOrden})`);
+  } catch (err) {
+    if (err.number === 2627) {
+      const dup = await executeQuery(
+        `
+        SELECT TOP 1 Estudio, NombreNormalizado, ValorMinimo, ValorMaximo, ValorNormal
+        FROM imHCExamenesLabDetalleConf
+        WHERE IdTipoLaboratorio = @p0 AND LTRIM(RTRIM(Estudio)) = @p1
+        `,
+        [{ value: tipoEstudio }, { value: estudio }]
+      );
+      if (dup.length > 0) {
+        console.log(`  ✓ Parámetro en catálogo (concurrencia): ${dup[0].Estudio}`);
+        return dup[0];
+      }
+    }
+    throw err;
+  }
 
   return {
-    Estudio: nombreParametro,
+    Estudio: estudio,
     NombreNormalizado: normalizado,
     ValorMinimo: valorMin || '',
     ValorMaximo: valorMax || '',
-    ValorNormal: valorNormal || ''
+    ValorNormal: valorNormal || '',
   };
 }
 

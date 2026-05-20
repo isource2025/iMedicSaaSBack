@@ -47,35 +47,53 @@ const extraerTextoConPdfJs = async (buffer) => {
   }
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const textoPdfUtil = (texto) => texto && String(texto).trim().length > 10;
+
 /**
- * Extrae texto de un PDF
+ * Extrae texto de un PDF (pdf.js primero; reintentos por fallos intermitentes en Node).
  * @param {Buffer} buffer - Buffer del archivo PDF
  * @returns {Promise<string>} Texto extraído
  */
 const extraerTextoDePDF = async (buffer) => {
-  // Intento 1: pdf-parse
-  try {
-    const data = await pdf(buffer, { max: 0 });
-    console.log('\n=== PDF EXTRAÍDO (pdf-parse) ===');
-    console.log('Número de páginas:', data.numpages);
-    console.log('Longitud del texto:', data.text.length);
-    console.log('Primeros 500 caracteres:', data.text.substring(0, 500));
-    console.log('==================\n');
-    if (data.text && data.text.trim().length > 10) {
-      return data.text;
+  const MAX_INTENTOS = 3;
+  let ultimoError = null;
+
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    if (intento > 1) {
+      console.log(`⚠ Reintento ${intento}/${MAX_INTENTOS} extracción PDF...`);
+      await sleep(250 * intento);
     }
-    console.log('⚠ pdf-parse devolvió texto vacío o muy corto, intentando pdf.js...');
-  } catch (error) {
-    console.warn('⚠ pdf-parse falló:', error.message);
+
+    const textoJs = await extraerTextoConPdfJs(buffer);
+    if (textoPdfUtil(textoJs)) {
+      return textoJs;
+    }
+
+    try {
+      const data = await pdf(buffer, { max: 0 });
+      console.log('\n=== PDF EXTRAÍDO (pdf-parse) ===');
+      console.log('Número de páginas:', data.numpages);
+      console.log('Longitud del texto:', data.text?.length ?? 0);
+      if (data.text) {
+        console.log('Primeros 500 caracteres:', data.text.substring(0, 500));
+      }
+      console.log('==================\n');
+      if (textoPdfUtil(data.text)) {
+        return data.text;
+      }
+      console.log('⚠ pdf-parse devolvió texto vacío o muy corto');
+    } catch (error) {
+      ultimoError = error;
+      console.warn('⚠ pdf-parse falló:', error.message);
+    }
   }
 
-  // Intento 2: pdf.js (texto embebido; no es OCR)
-  const textoJs = await extraerTextoConPdfJs(buffer);
-  if (textoJs && textoJs.trim().length > 10) {
-    return textoJs;
+  if (ultimoError) {
+    console.warn('Último error pdf-parse:', ultimoError.message);
   }
 
-  // No pasar el buffer del PDF a Tesseract: no lee PDF y en Node puede tumbar el proceso.
   throw new Error(
     'No se pudo extraer texto del PDF (puede ser escaneado o con codificación rara). ' +
       'Exportá cada página como imagen (JPG o PNG) y subila así, o probá otro PDF.'
@@ -252,8 +270,8 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
   const titulosSecciones = [
     'hemograma', 'quimica clinica', 'hematologia', 'ionograma', 'hepatograma',
     'coagulograma', 'gasometria', 'estado acido base', 'formula leucocitaria',
-    'perfil lipidico', 'recuento de plaquetas', 'serie roja', 'serie blanca',
-    'valores de referencia'
+    'perfil lipidico', 'serie roja', 'serie blanca',
+    'valores de referencia', 'dosajeresultado'
   ];
 
   // Líneas de metadata a ignorar
@@ -266,16 +284,18 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
       low.includes('corrientes') || low.includes('capital') || low.includes('firma') ||
       low.includes('bioquim') || low.includes('matricula') || /^cód/i.test(low) ||
       low.includes('practica') || low.includes('dosaje') ||
-      low.includes('metodo:') || low.includes('marca de reactivo');
+      low.includes('metodo:') || low.includes('marca de reactivo') ||
+      low.replace(/\s/g, '').includes('dosajeresultado');
   };
 
   const esTituloSeccion = (l) => {
+    if (/\d/.test(l)) return false;
     const low = l.toLowerCase().replace(/\s+/g, ' ').trim();
-    return titulosSecciones.some(t => low.includes(t));
+    return titulosSecciones.some((t) => low === t || low === `${t}:`);
   };
 
   // Unidades de laboratorio conocidas (con trim del espacio inicial)
-  const UNIDADES_REGEX = /^\s*(mg\/dl|g\/dl|g%|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos|fl|pg|p'g)/i;
+  const UNIDADES_REGEX = /^\s*(mil\/mm3|mg\/dl|g\/dl|g%|meq\/l|mmol\/l|U\/[lL]|mmHg|%|\/mm3|mEq\/L|ml\/min|seg|segundos|fl|pg|p'g)/i;
 
   const agregarParametro = (nombre, valor, unidad, valorRef) => {
     const key = nombre.toUpperCase().replace(/[:\s]+$/g, '').trim();
@@ -335,6 +355,27 @@ const extraerParametros = (textoOriginal, tipoEstudio) => {
     // Saltar líneas de observaciones textuales sin parámetros
     if (/^Serie (Roja|Blanca):/i.test(linea)) continue;
     if (/^Se observan/i.test(linea)) continue;
+
+    // ═══════════════════════════════════════════════
+    // FORMATO PEGADO: "HEMATOCRITO25.0 %", "RECUENTO DE PLAQUETAS326000 /mm3"
+    // (nombre y valor sin espacio — común en PDFs de laboratorio)
+    // ═══════════════════════════════════════════════
+    if (!/^Resultado:/i.test(linea)) {
+      const fmtPegado = linea.match(
+        /^([A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s\-\+\.'']+?)(-?\d+(?:[\.,]\d+)*)\s*(.*)$/
+      );
+      if (fmtPegado) {
+        const nombre = fmtPegado[1].trim();
+        const valor = fmtPegado[2];
+        const resto = fmtPegado[3].trim();
+        if (nombre.length >= 2 && !/^\d+$/.test(nombre)) {
+          const { unidad, valorRef } = extraerUnidadYRef(resto);
+          if (agregarParametro(nombre, valor, unidad, valorRef)) {
+            continue;
+          }
+        }
+      }
+    }
 
     // ═══════════════════════════════════════════════
     // FORMATO D (PRIMERO): "Resultado:  210 .000 /mm3" (plaquetas y similares)

@@ -393,9 +393,9 @@ function renderPracticasPacienteTable(doc, items) {
   sectionTitle(doc, 'Prácticas por paciente');
   const left = doc.page.margins.left;
   const w = contentWidth(doc);
-  const colW = [w * 0.25, w * 0.2, w * 0.27, w * 0.28];
+  const colW = [w * 0.09, w * 0.22, w * 0.08, w * 0.07, w * 0.1, w * 0.08, w * 0.08, w * 0.07, w * 0.24];
   const headerH = 16;
-  const rowH = 20;
+  const rowH = 22;
 
   const drawRow = (y, cells, header) => {
     let x = left;
@@ -416,7 +416,11 @@ function renderPracticasPacienteTable(doc, items) {
   doc.save();
   doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
   doc.restore();
-  drawRow(y, ['Práctica', 'Cantidad', 'Fecha', 'Hora inicio'], true);
+  drawRow(
+    y,
+    ['Código', 'Práctica', 'Tipo', 'Cant.', 'Fecha', 'Hora', 'Sector', 'Est.', 'Profesional'],
+    true
+  );
   doc.y = y + headerH + 2;
 
   items.forEach((p, i) => {
@@ -425,9 +429,21 @@ function renderPracticasPacienteTable(doc, items) {
     doc.save();
     doc.rect(left, y, w, rowH).fill(i % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
     doc.restore();
+    const hora =
+      [str(p.HoraPracticaInicio), str(p.HoraPracticaFin)].filter(Boolean).join('–') || '—';
     drawRow(
       y,
-      [str(p.PracticaDescripcion || p.Practica), str(p.CantidadPractica), str(p.FechaPractica), str(p.HoraPracticaInicio)],
+      [
+        str(p.Practica),
+        str(p.PracticaDescripcion || p.Practica),
+        str(p.TipoPractica),
+        str(p.CantidadPractica),
+        str(p.FechaPractica),
+        hora,
+        str(p.ValorSector),
+        str(p.Estado),
+        str(p.Profesionales),
+      ],
       false
     );
     doc.y = y + rowH + 2;

@@ -1237,13 +1237,29 @@ async function asignarTurno({
 
 async function _obtenerTurnoProfesional(matricula, idTurno) {
 	const rows = await executeQuery(
-		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional
+		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida
 		 FROM dbo.imTurnos
 		 WHERE IdTurno = @p0 AND Profesional = @p1`,
 		[
 			{ value: idTurno, type: 'Int' },
 			{ value: matricula, type: 'Int' },
 		],
+	);
+	if (!rows.length) {
+		const e = new Error('Turno no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+	return rows[0];
+}
+
+/** Administrativo: localiza el turno solo por IdTurno (sin exigir matrícula en la URL). */
+async function _obtenerTurnoPorId(idTurno) {
+	const rows = await executeQuery(
+		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida
+		 FROM dbo.imTurnos
+		 WHERE IdTurno = @p0`,
+		[{ value: idTurno, type: 'Int' }],
 	);
 	if (!rows.length) {
 		const e = new Error('Turno no encontrado');
@@ -1422,30 +1438,6 @@ async function _proximoNumeroVisita() {
 	return Number(rows[0].next) || 1;
 }
 
-/** Devuelve el próximo Valor para imFacPracticas. */
-async function _proximoValorFacPractica() {
-	const rows = await executeQuery(
-		`SELECT ISNULL(MAX(Valor), 0) + 1 AS next FROM dbo.imFacPracticas`,
-	);
-	return Number(rows[0].next) || 1;
-}
-
-/** Devuelve el próximo IDFacProfesional. */
-async function _proximoIdFacProfesional() {
-	const rows = await executeQuery(
-		`SELECT ISNULL(MAX(IDFacProfesional), 0) + 1 AS next FROM dbo.imFacProfesionales`,
-	);
-	return Number(rows[0].next) || 1;
-}
-
-/** Devuelve el próximo IdHCIngreso. */
-async function _proximoIdHCIngreso() {
-	const rows = await executeQuery(
-		`SELECT ISNULL(MAX(IdHCIngreso), 0) + 1 AS next FROM dbo.imHCI`,
-	);
-	return Number(rows[0].next) || 1;
-}
-
 /** Padding a 6 caracteres del código de diagnóstico. */
 function _padDiag(d) {
 	const s = String(d || '').trim().toUpperCase();
@@ -1476,7 +1468,7 @@ function _s(v, max) {
  * @param {number} [args.contrato] - Valor de imClientes (cobertura)
  * @param {Object} [args.hci] - campos de imHCI a guardar
  */
-async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contrato, hci }) {
+async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contrato, hci, porIdTurno }) {
 	const m = _validarMatricula(matricula);
 	const id = Number(idTurno);
 	if (!Number.isFinite(id) || id <= 0) {
@@ -1486,7 +1478,13 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 	}
 	const codOp = Number(codOperador) || 0;
 
-	const row = await _obtenerTurnoProfesional(m, id);
+	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
+	const matriculaMedico = Number(row.Profesional) || m;
+	if (!matriculaMedico || matriculaMedico <= 0) {
+		const e = new Error('El turno no tiene médico asignado');
+		e.statusCode = 409;
+		throw e;
+	}
 	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
 	const idP = Number(row.IDPaciente) || 0;
 	if (idP <= 0) {
@@ -1505,6 +1503,11 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 		e.statusCode = 409;
 		throw e;
 	}
+	if (!String(diagnostico || '').trim()) {
+		const e = new Error('El diagnóstico es obligatorio para cerrar el turno');
+		e.statusCode = 400;
+		throw e;
+	}
 
 	// ── Datos de fecha/hora del cierre ──
 	const now = new Date();
@@ -1516,9 +1519,10 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 	// ── Datos adicionales del turno (sector, paciente) ──
 	const detalle = await executeQuery(
 		`SELECT TOP 1 t.IdTurno, t.IDPaciente, t.Sector, t.Profesional, t.NumeroVisita,
-		        p.ApellidoyNombre, p.Cobertura AS PacienteCobertura
+		        p.NumeroCuenta, c.RazonSocial AS CoberturaNombre, c.Valor AS ContratoValor
 		 FROM dbo.imTurnos t
 		 LEFT JOIN dbo.imPacientes p ON p.IDPaciente = t.IDPaciente
+		 LEFT JOIN dbo.imClientes c ON c.Valor = p.NumeroCuenta
 		 WHERE t.IdTurno = @p0`,
 		[{ value: id, type: 'Int' }],
 	);
@@ -1530,7 +1534,9 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 	if (!yaTieneVisita) numeroVisita = await _proximoNumeroVisita();
 
 	const diagPadded = _padDiag(diagnostico);
-	const contratoId = Number(contrato) > 0 ? Number(contrato) : 0;
+	const contratoDesdePaciente =
+		Number(detalle[0]?.NumeroCuenta) || Number(detalle[0]?.ContratoValor) || 0;
+	const contratoId = Number(contrato) > 0 ? Number(contrato) : contratoDesdePaciente;
 
 	// Para rollback parcial si algo falla luego del INSERT visita
 	const creados = { visita: null, hci: null, practica: null, profesional: null };
@@ -1559,7 +1565,7 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 					{ value: idP, type: 'Int' },
 					{ value: now, type: 'DateTime' },
 					{ value: sector, type: 'VarChar' },
-					{ value: m, type: 'Int' },
+					{ value: matriculaMedico, type: 'Int' },
 					{ value: diagPadded, type: 'VarChar' },
 					{ value: contratoId, type: 'Int' },
 					{ value: fechaClarion, type: 'Int' },
@@ -1589,27 +1595,26 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 			);
 		}
 
-		// 2) imHCI esqueleto + form (si vino algo)
+		// 2) imHCI esqueleto + form (IdHCIngreso es IDENTITY)
 		const h = hci || {};
-		const idHci = await _proximoIdHCIngreso();
-		await executeQuery(
+		const hciRows = await executeQuery(
 			`INSERT INTO dbo.imHCI (
-				IdHCIngreso, NumeroVisita, Fecha, IdSector, IdProfecional,
+				NumeroVisita, Fecha, IdSector, IdProfecional,
 				MotivoConsulta, EnfermedadActual, Semiologia,
 				SV_PA, SV_FC, SV_FR, SV_TAX, SV_GLUCEMIA,
 				SV_TALLA, SV_PESOACTUAL, SV_IMPRESIONGENERAL
 			) VALUES (
-				@p0, @p1, @p2, @p3, @p4,
-				@p5, @p6, @p7,
-				@p8, @p9, @p10, @p11, @p12,
-				@p13, @p14, @p15
-			)`,
+				@p0, @p1, @p2, @p3,
+				@p4, @p5, @p6,
+				@p7, @p8, @p9, @p10, @p11,
+				@p12, @p13, @p14
+			);
+			SELECT SCOPE_IDENTITY() AS IdHCIngreso`,
 			[
-				{ value: idHci, type: 'Int' },
 				{ value: numeroVisita, type: 'Int' },
 				{ value: now, type: 'DateTime' },
 				{ value: sector, type: 'VarChar' },
-				{ value: m, type: 'Int' },
+				{ value: matriculaMedico, type: 'Int' },
 				{ value: _s(h.motivoConsulta, 500), type: 'VarChar' },
 				{ value: _s(h.enfermedadActual, 8000), type: 'VarChar' },
 				{ value: _s(h.semiologia, 255), type: 'VarChar' },
@@ -1623,27 +1628,32 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 				{ value: _s(h.impresionGeneral, 200), type: 'VarChar' },
 			],
 		);
+		const idHci = Number(hciRows[0]?.IdHCIngreso) || 0;
+		if (idHci <= 0) {
+			const e = new Error('No se pudo crear el registro de historia clínica');
+			e.statusCode = 500;
+			throw e;
+		}
 		creados.hci = idHci;
 
-		// 3) imFacPracticas (consulta)
+		// 3) imFacPracticas (consulta; Valor es IDENTITY)
 		const codConsulta = await _getCodPracticaConsulta();
-		const valorPractica = await _proximoValorFacPractica();
-		await executeQuery(
+		const practicaRows = await executeQuery(
 			`INSERT INTO dbo.imFacPracticas (
-				Valor, Numero, NumeroVisita, TipoPractica, Practica,
+				Numero, NumeroVisita, TipoPractica, Practica,
 				CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
 				ValorSector, FechaPrograma, HoraPrograma, CodOperador,
 				FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
 				NroInforme, NroAutorizacion, IdPaciente
 			) VALUES (
-				@p0, 0, @p1, 'NO', @p2,
-				1, @p3, @p4, 0,
-				@p5, @p3, @p4, @p6,
-				@p3, @p4, 0, 2, 2, 0,
-				0, '', @p7
-			)`,
+				0, @p0, 'NO', @p1,
+				1, @p2, @p3, 0,
+				@p4, @p2, @p3, @p5,
+				@p2, @p3, 0, 2, 2, 0,
+				0, '', @p6
+			);
+			SELECT SCOPE_IDENTITY() AS Valor`,
 			[
-				{ value: valorPractica, type: 'Int' },
 				{ value: numeroVisita, type: 'Int' },
 				{ value: codConsulta, type: 'Int' },
 				{ value: fechaClarion, type: 'Int' },
@@ -1653,27 +1663,38 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 				{ value: idP, type: 'Int' },
 			],
 		);
+		const valorPractica = Number(practicaRows[0]?.Valor) || 0;
+		if (valorPractica <= 0) {
+			const e = new Error('No se pudo registrar la práctica de consulta');
+			e.statusCode = 500;
+			throw e;
+		}
 		creados.practica = valorPractica;
 
-		// 4) imFacProfesionales (titular)
-		const idFacProf = await _proximoIdFacProfesional();
-		await executeQuery(
+		// 4) imFacProfesionales (titular; IDFacProfesional es IDENTITY)
+		const profRows = await executeQuery(
 			`INSERT INTO dbo.imFacProfesionales (
-				IDFacProfesional, Valor, Matricula, Funcion, CodOperador,
+				Valor, Matricula, Funcion, CodOperador,
 				FachaGraba, HoraGraba, Factura, Status
 			) VALUES (
-				@p0, @p1, @p2, 1, @p3,
-				@p4, @p5, 0, 0
-			)`,
+				@p0, @p1, 1, @p2,
+				@p3, @p4, 0, 0
+			);
+			SELECT SCOPE_IDENTITY() AS IDFacProfesional`,
 			[
-				{ value: idFacProf, type: 'Int' },
 				{ value: valorPractica, type: 'Int' },
-				{ value: m, type: 'Int' },
+				{ value: matriculaMedico, type: 'Int' },
 				{ value: codOp, type: 'Int' },
 				{ value: fechaClarion, type: 'Int' },
 				{ value: horaClarion, type: 'Int' },
 			],
 		);
+		const idFacProf = Number(profRows[0]?.IDFacProfesional) || 0;
+		if (idFacProf <= 0) {
+			const e = new Error('No se pudo registrar el profesional de la práctica');
+			e.statusCode = 500;
+			throw e;
+		}
 		creados.profesional = idFacProf;
 
 		// 5) UPDATE imInterCtrlFrecuente (controles RAC del turno)
