@@ -26,9 +26,9 @@ async function verificarTablas(pool) {
     FROM INFORMATION_SCHEMA.TABLES
     WHERE TABLE_SCHEMA = 'dbo'
       AND TABLE_NAME IN (
-        'imEmpresaModuloPack',
-        'imEmpresaOnboarding',
-        'imEmpresaSuscripcion',
+        'EmpresasModuloPack',
+        'EmpresasOnboarding',
+        'EmpresasSuscripcion',
         'imPlataformaConfig'
       )
     ORDER BY TABLE_NAME
@@ -40,7 +40,7 @@ async function backfillPacksLegacy(pool) {
 	const rows = await pool.request().query(`
     SELECT e.IDEMPRESA
     FROM dbo.Empresas e
-    LEFT JOIN dbo.imEmpresaModuloPack p
+    LEFT JOIN dbo.EmpresasModuloPack p
       ON p.IdEmpresa = e.IDEMPRESA AND p.Activo = 1
     GROUP BY e.IDEMPRESA
     HAVING COUNT(p.CodigoPack) = 0
@@ -53,10 +53,10 @@ async function backfillPacksLegacy(pool) {
 			await pool.request().input('idEmpresa', idEmpresa).input('codigoPack', codigoPack).query(`
         IF NOT EXISTS (
           SELECT 1
-          FROM dbo.imEmpresaModuloPack
+          FROM dbo.EmpresasModuloPack
           WHERE IdEmpresa = @idEmpresa AND CodigoPack = @codigoPack
         )
-        INSERT INTO dbo.imEmpresaModuloPack (IdEmpresa, CodigoPack, Activo)
+        INSERT INTO dbo.EmpresasModuloPack (IdEmpresa, CodigoPack, Activo)
         VALUES (@idEmpresa, @codigoPack, 1)
       `);
 		}
@@ -82,7 +82,7 @@ async function backfillPacksLegacy(pool) {
 	const tablas = await verificarTablas(pool);
 	console.log('• Tablas presentes:', tablas.join(', ') || '(ninguna)');
 
-	const faltan = ['imEmpresaModuloPack', 'imEmpresaOnboarding', 'imEmpresaSuscripcion'].filter(
+	const faltan = ['EmpresasModuloPack', 'EmpresasOnboarding', 'EmpresasSuscripcion'].filter(
 		(t) => !tablas.includes(t),
 	);
 	if (faltan.length) {

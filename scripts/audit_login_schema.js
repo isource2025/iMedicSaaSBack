@@ -11,7 +11,7 @@ const TABLES = [
 	'imPersonalSectores',
 	'imSectores',
 	'imUsuarioEmpresaLogin',
-	'imEmpresaModuloPack',
+	'EmpresasModuloPack',
 	'imIVA',
 	'Empresas',
 ];

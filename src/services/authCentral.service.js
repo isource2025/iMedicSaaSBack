@@ -250,7 +250,7 @@ async function obtenerPacksEmpresa(idEmpresa) {
 	const rows = await query(
 		`
     SELECT CodigoPack, Activo
-    FROM \`imEmpresaModuloPack\`
+    FROM \`EmpresasModuloPack\`
     WHERE IdEmpresa = ? AND Activo = 1
     ORDER BY CodigoPack
     `,

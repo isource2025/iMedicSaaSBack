@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS `imUsuarioEmpresaLogin` (
   KEY `IX_imUsuarioEmpresaLogin_Empresa` (`IdEmpresa`)
 );
 
-CREATE TABLE IF NOT EXISTS `imEmpresaModuloPack` (
+CREATE TABLE IF NOT EXISTS `EmpresasModuloPack` (
   `IdEmpresa` INT NOT NULL,
   `CodigoPack` VARCHAR(30) NOT NULL,
   `Activo` TINYINT(1) NOT NULL DEFAULT 1,

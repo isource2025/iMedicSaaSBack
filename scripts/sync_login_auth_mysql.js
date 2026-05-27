@@ -9,7 +9,7 @@ const {
 } = require('../src/config/tenantDb');
 const { authDbConfig } = require('../src/config/authCentralDb');
 
-const PLATFORM_ONLY_TABLES = ['Empresas', 'imUsuarioEmpresaLogin', 'imEmpresaModuloPack', 'imIVA'];
+const PLATFORM_ONLY_TABLES = ['Empresas', 'imUsuarioEmpresaLogin', 'EmpresasModuloPack', 'imIVA'];
 const TENANT_TABLES = [
 	'imPassword',
 	'imPersonal',
@@ -360,7 +360,7 @@ async function getMySqlCounts(mysqlPool, tables) {
 	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'Empresas');
 	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imIVA');
 	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imUsuarioEmpresaLogin');
-	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imEmpresaModuloPack');
+	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'EmpresasModuloPack');
 
 	const tenantSources = await resolveTenantSources(platformPool);
 	for (const source of tenantSources) {
@@ -380,7 +380,7 @@ async function getMySqlCounts(mysqlPool, tables) {
 		'imPermisos',
 		'imRolPermisos',
 		'imUsuarioEmpresaLogin',
-		'imEmpresaModuloPack',
+		'EmpresasModuloPack',
 	]);
 
 	console.log('\n=== Totales destino Railway ===');

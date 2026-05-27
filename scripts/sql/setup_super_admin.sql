@@ -15,25 +15,25 @@ AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 5)
 -- 2) Packs modulares por empresa (AGENDA, INTERNACION, FACTURACION)
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imEmpresaModuloPack'
+    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'EmpresasModuloPack'
 )
 BEGIN
-    CREATE TABLE dbo.imEmpresaModuloPack (
+    CREATE TABLE dbo.EmpresasModuloPack (
         IdEmpresa   INT           NOT NULL,
         CodigoPack  VARCHAR(30)   NOT NULL,
         Activo      BIT           NOT NULL DEFAULT 1,
         FechaAlta   DATETIME      NOT NULL DEFAULT GETDATE(),
-        CONSTRAINT PK_imEmpresaModuloPack PRIMARY KEY (IdEmpresa, CodigoPack)
+        CONSTRAINT PK_EmpresasModuloPack PRIMARY KEY (IdEmpresa, CodigoPack)
     );
 END;
 
 -- 3) Onboarding por empresa
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imEmpresaOnboarding'
+    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'EmpresasOnboarding'
 )
 BEGIN
-    CREATE TABLE dbo.imEmpresaOnboarding (
+    CREATE TABLE dbo.EmpresasOnboarding (
         IdEmpresa         INT           NOT NULL PRIMARY KEY,
         PasoActual        VARCHAR(50)   NOT NULL DEFAULT 'DATOS',
         Completado        BIT           NOT NULL DEFAULT 0,
@@ -47,10 +47,10 @@ END;
 -- 4) Suscripción / cobranza por empresa
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imEmpresaSuscripcion'
+    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'EmpresasSuscripcion'
 )
 BEGIN
-    CREATE TABLE dbo.imEmpresaSuscripcion (
+    CREATE TABLE dbo.EmpresasSuscripcion (
         IdEmpresa           INT             NOT NULL PRIMARY KEY,
         [Plan]              VARCHAR(50)     NOT NULL DEFAULT 'STARTER',
         Estado              VARCHAR(30)     NOT NULL DEFAULT 'PRUEBA',

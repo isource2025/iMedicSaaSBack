@@ -89,7 +89,7 @@ async function obtenerPacksEmpresa(idEmpresa) {
 	}
 	try {
 		const rows = await executeQuery(
-			`SELECT CodigoPack, Activo FROM dbo.imEmpresaModuloPack WHERE IdEmpresa = @p0 AND Activo = 1`,
+			`SELECT CodigoPack, Activo FROM dbo.EmpresasModuloPack WHERE IdEmpresa = @p0 AND Activo = 1`,
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		return rows.map((r) => String(r.CodigoPack));
@@ -116,7 +116,7 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 	try {
 		const rows = await executeQuery(
 			`SELECT PasoActual, Completado, Notas, FechaInicio, FechaCompletado, ConfigJson
-       FROM dbo.imEmpresaOnboarding WHERE IdEmpresa = @p0`,
+       FROM dbo.EmpresasOnboarding WHERE IdEmpresa = @p0`,
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		if (!rows.length) {
@@ -141,7 +141,7 @@ async function obtenerSuscripcionEmpresa(idEmpresa) {
 	try {
 		const rows = await executeQuery(
 			`SELECT [Plan], Estado, ImporteMensual, Moneda, FechaInicio, FechaProximoCobro, MetodoPago, Notas
-       FROM dbo.imEmpresaSuscripcion WHERE IdEmpresa = @p0`,
+       FROM dbo.EmpresasSuscripcion WHERE IdEmpresa = @p0`,
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		if (!rows.length) {
@@ -299,12 +299,12 @@ async function actualizarPacksEmpresa(idEmpresa, packsActivos) {
 	const activos = (packsActivos || []).filter((c) => validos.has(String(c).toUpperCase()));
 
 	try {
-		await executeQuery(`DELETE FROM dbo.imEmpresaModuloPack WHERE IdEmpresa = @p0`, [
+		await executeQuery(`DELETE FROM dbo.EmpresasModuloPack WHERE IdEmpresa = @p0`, [
 			{ value: idEmpresa, type: 'Int' },
 		]);
 		for (const codigo of activos) {
 			await executeQuery(
-				`INSERT INTO dbo.imEmpresaModuloPack (IdEmpresa, CodigoPack, Activo) VALUES (@p0, @p1, 1)`,
+				`INSERT INTO dbo.EmpresasModuloPack (IdEmpresa, CodigoPack, Activo) VALUES (@p0, @p1, 1)`,
 				[
 					{ value: idEmpresa, type: 'Int' },
 					{ value: codigo, type: 'VarChar' },
@@ -312,7 +312,7 @@ async function actualizarPacksEmpresa(idEmpresa, packsActivos) {
 			);
 		}
 	} catch (e) {
-		console.warn('[superAdmin] imEmpresaModuloPack no disponible:', e.message);
+		console.warn('[superAdmin] EmpresasModuloPack no disponible:', e.message);
 	}
 
 	return {
@@ -325,7 +325,7 @@ async function actualizarPacksEmpresa(idEmpresa, packsActivos) {
 async function upsertOnboarding(idEmpresa, data) {
 	try {
 		const exists = await executeQuery(
-			`SELECT IdEmpresa, ConfigJson FROM dbo.imEmpresaOnboarding WHERE IdEmpresa = @p0`,
+			`SELECT IdEmpresa, ConfigJson FROM dbo.EmpresasOnboarding WHERE IdEmpresa = @p0`,
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 
@@ -356,13 +356,13 @@ async function upsertOnboarding(idEmpresa, data) {
 				params.push({ value: configJson, type: 'NVarChar' });
 			}
 			await executeQuery(
-				`UPDATE dbo.imEmpresaOnboarding SET ${sets.join(', ')} WHERE IdEmpresa = @p0`,
+				`UPDATE dbo.EmpresasOnboarding SET ${sets.join(', ')} WHERE IdEmpresa = @p0`,
 				params,
 			);
 		} else {
 			await executeQuery(
 				`
-        INSERT INTO dbo.imEmpresaOnboarding (IdEmpresa, PasoActual, Completado, Notas, FechaInicio, ConfigJson)
+        INSERT INTO dbo.EmpresasOnboarding (IdEmpresa, PasoActual, Completado, Notas, FechaInicio, ConfigJson)
         VALUES (@p0, @p1, @p2, @p3, GETDATE(), @p4)
         `,
 				[
@@ -375,7 +375,7 @@ async function upsertOnboarding(idEmpresa, data) {
 			);
 		}
 	} catch (e) {
-		console.warn('[superAdmin] imEmpresaOnboarding:', e.message);
+		console.warn('[superAdmin] EmpresasOnboarding:', e.message);
 	}
 	return obtenerOnboardingEmpresa(idEmpresa);
 }
@@ -562,9 +562,9 @@ async function eliminarEmpresa(idEmpresa) {
 	}
 
 	const tablas = [
-		'imEmpresaModuloPack',
-		'imEmpresaOnboarding',
-		'imEmpresaSuscripcion',
+		'EmpresasModuloPack',
+		'EmpresasOnboarding',
+		'EmpresasSuscripcion',
 		'imPersonalEmpresas',
 	];
 	for (const t of tablas) {
@@ -680,7 +680,7 @@ async function eliminarSector(valor) {
 async function upsertSuscripcion(idEmpresa, data) {
 	try {
 		const exists = await executeQuery(
-			`SELECT IdEmpresa FROM dbo.imEmpresaSuscripcion WHERE IdEmpresa = @p0`,
+			`SELECT IdEmpresa FROM dbo.EmpresasSuscripcion WHERE IdEmpresa = @p0`,
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		const params = [
@@ -696,7 +696,7 @@ async function upsertSuscripcion(idEmpresa, data) {
 		if (exists.length) {
 			await executeQuery(
 				`
-        UPDATE dbo.imEmpresaSuscripcion SET
+        UPDATE dbo.EmpresasSuscripcion SET
           [Plan] = @p1, Estado = @p2, ImporteMensual = @p3, Moneda = @p4,
           FechaProximoCobro = @p5, MetodoPago = @p6, Notas = @p7
         WHERE IdEmpresa = @p0
@@ -706,7 +706,7 @@ async function upsertSuscripcion(idEmpresa, data) {
 		} else {
 			await executeQuery(
 				`
-        INSERT INTO dbo.imEmpresaSuscripcion
+        INSERT INTO dbo.EmpresasSuscripcion
           (IdEmpresa, [Plan], Estado, ImporteMensual, Moneda, FechaInicio, FechaProximoCobro, MetodoPago, Notas)
         VALUES (@p0, @p1, @p2, @p3, @p4, GETDATE(), @p5, @p6, @p7)
         `,
@@ -714,7 +714,7 @@ async function upsertSuscripcion(idEmpresa, data) {
 			);
 		}
 	} catch (e) {
-		console.warn('[superAdmin] imEmpresaSuscripcion:', e.message);
+		console.warn('[superAdmin] EmpresasSuscripcion:', e.message);
 	}
 	return obtenerSuscripcionEmpresa(idEmpresa);
 }

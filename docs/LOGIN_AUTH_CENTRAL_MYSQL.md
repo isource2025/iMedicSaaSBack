@@ -14,7 +14,7 @@ Este backend puede usar una base MySQL central en Railway para resolver el login
 - `imPersonalSectores`
 - `imSectores`
 - `imUsuarioEmpresaLogin`
-- `imEmpresaModuloPack`
+- `EmpresasModuloPack`
 - `imIVA`
 
 ## Setup
