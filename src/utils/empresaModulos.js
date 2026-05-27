@@ -67,6 +67,15 @@ function packsActivosToModulos(packsActivos) {
 	return [...set];
 }
 
+/** Todos los módulos disponibles (sin filtrar por packs de la empresa). */
+function todosModulosHabilitados() {
+	const set = new Set(MODULOS_GENERALES);
+	for (const pack of PACKS_PRINCIPALES) {
+		pack.modulos.forEach((m) => set.add(m));
+	}
+	return [...set];
+}
+
 function esSuperAdmin(rolNombre) {
 	return String(rolNombre || '').trim().toUpperCase() === 'SUPER_ADMIN';
 }
@@ -78,5 +87,6 @@ module.exports = {
 	PLANES,
 	ESTADOS_SUSCRIPCION,
 	packsActivosToModulos,
+	todosModulosHabilitados,
 	esSuperAdmin,
 };

@@ -12,6 +12,7 @@ const {
 	PLANES,
 	ESTADOS_SUSCRIPCION,
 	packsActivosToModulos,
+	todosModulosHabilitados,
 } = require('../utils/empresaModulos');
 
 function mapEmpresaRow(r) {
@@ -930,7 +931,7 @@ async function obtenerModulosEmpresaActiva(idEmpresa) {
 	const packs = await obtenerPacksEmpresa(idEmpresa);
 	return {
 		packs,
-		modulosHabilitados: packsActivosToModulos(packs),
+		modulosHabilitados: todosModulosHabilitados(),
 		modulosGenerales: [...MODULOS_GENERALES],
 	};
 }
