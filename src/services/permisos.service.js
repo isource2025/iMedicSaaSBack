@@ -10,6 +10,7 @@
  */
 const { executeQuery } = require('../models/db');
 const matriz = require('../utils/permisos');
+const authCentralService = require('./authCentral.service');
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutos
 const _cache = new Map(); // idRol -> { permisos: string[], expira: number }
@@ -17,6 +18,15 @@ const _cache = new Map(); // idRol -> { permisos: string[], expira: number }
 function _ahora() { return Date.now(); }
 
 async function _leerDeBD(idRol) {
+	if (authCentralService.isAuthCentralEnabled()) {
+		try {
+			const permisosCentral = await authCentralService.permisosDeRol(idRol);
+			if (permisosCentral.length) return permisosCentral;
+		} catch (e) {
+			console.warn('[authCentral] permisosDeRol:', e.message);
+		}
+	}
+
 	const rows = await executeQuery(
 		`
     SELECT p.Codigo
@@ -42,6 +52,9 @@ async function permisosDeRol(idRol, nombreRol) {
 	const nombre = nombreRol ? String(nombreRol).trim().toUpperCase() : '';
 	if (nombre === 'ADMIN') {
 		return [...matriz.permisosDeRol('ADMIN')];
+	}
+	if (nombre === 'SUPER_ADMIN') {
+		return [...matriz.permisosDeRol('SUPER_ADMIN')];
 	}
 	if (idRol == null || !Number.isFinite(Number(idRol))) {
 		return matriz.permisosDeRol(nombreRol || null);

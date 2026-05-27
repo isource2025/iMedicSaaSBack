@@ -3,17 +3,28 @@
  * @module models/db
  */
 const { sql, connectDB } = require('../config/database');
+const { getTenantPool } = require('../config/tenantDb');
+const { getTenantId } = require('../context/tenantContext');
+
+async function resolvePool(forcePlatform = false) {
+  if (forcePlatform) return connectDB();
+  const idEmpresa = getTenantId();
+  if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+    return getTenantPool(idEmpresa);
+  }
+  return connectDB();
+}
 
 /**
  * Ejecuta una consulta SQL y devuelve los resultados
  * @param {string} consulta - Consulta SQL a ejecutar
  * @param {Array} parametros - Array de parámetros
+ * @param {{ platform?: boolean }} [opts] - platform: true fuerza BD catálogo (.env)
  * @returns {Promise<Array>} Resultados de la consulta
  */
-async function executeQuery(consulta, parametros = []) {
+async function executeQuery(consulta, parametros = [], opts = {}) {
   try {
-    // Asegurar que la conexión está activa
-    const pool = await connectDB();
+    const pool = await resolvePool(!!opts.platform);
     const request = pool.request();
     
     console.log('Ejecutando consulta SQL:', consulta);
@@ -53,10 +64,14 @@ async function executeQuery(consulta, parametros = []) {
  * @param {Object} parametros - Objeto con parámetros
  * @returns {Promise<Object>} Resultados del procedimiento
  */
-async function executeProcedure(nombreProcedimiento, parametros = {}) {
+/** Siempre contra la BD plataforma (catálogo Empresas, Super Admin). */
+async function executePlatformQuery(consulta, parametros = []) {
+  return executeQuery(consulta, parametros, { platform: true });
+}
+
+async function executeProcedure(nombreProcedimiento, parametros = {}, opts = {}) {
   try {
-    // Asegurar que la conexión está activa
-    const pool = await connectDB();
+    const pool = await resolvePool(!!opts.platform);
     const request = pool.request();
     
     // Añadir parámetros si existen
@@ -80,6 +95,7 @@ async function executeProcedure(nombreProcedimiento, parametros = {}) {
 
 module.exports = {
   executeQuery,
+  executePlatformQuery,
   executeProcedure,
   sql
 };

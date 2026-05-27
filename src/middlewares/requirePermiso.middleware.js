@@ -40,6 +40,9 @@ function requirePermiso(codigo) {
 			if (rn === 'ADMIN') {
 				permisos = matriz.permisosDeRol('ADMIN');
 			}
+			if (rn === 'SUPER_ADMIN') {
+				permisos = matriz.permisosDeRol('SUPER_ADMIN');
+			}
 
 			if (permisosService.tienePermiso(permisos, codigo)) {
 				req.permisos = permisos;

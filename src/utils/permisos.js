@@ -131,6 +131,18 @@ const MODULOS = Object.freeze([
 		],
 	},
 	{
+		id: 'PLATAFORMA',
+		label: 'Super Admin',
+		submodulos: [
+			{ id: 'PANEL',      label: 'Panel',       path: '/dashboard/super-admin',                    acciones: [ACCIONES.VER] },
+			{ id: 'EMPRESAS',   label: 'Empresas',    path: '/dashboard/super-admin/empresas',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
+			{ id: 'USUARIOS',   label: 'Usuarios',    path: '/dashboard/super-admin/usuarios',         acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
+			{ id: 'ONBOARDING', label: 'Onboarding',  path: '/dashboard/super-admin/onboarding',       acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
+			{ id: 'COBRANZA',   label: 'Cobranza',    path: '/dashboard/super-admin/cobranza',         acciones: [ACCIONES.VER, ACCIONES.GESTIONAR, ACCIONES.EXPORTAR] },
+			{ id: 'CONFIG',     label: 'Configuración', path: '/dashboard/super-admin/configuracion', acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
+		],
+	},
+	{
 		id: 'USUARIO',
 		label: 'Usuario',
 		submodulos: [
@@ -157,6 +169,12 @@ const PLANTILLAS = Object.freeze({
 	// ADMIN — todos los permisos disponibles.
 	// ──────────────────────────────────────────────────────────────────────
 	ADMIN: Object.freeze(
+		MODULOS.filter((m) => m.id !== 'PLATAFORMA').flatMap((m) =>
+			m.submodulos.flatMap((s) => s.acciones.map((a) => `${m.id}.${s.id}.${a}`)),
+		),
+	),
+
+	SUPER_ADMIN: Object.freeze(
 		MODULOS.flatMap((m) =>
 			m.submodulos.flatMap((s) => s.acciones.map((a) => `${m.id}.${s.id}.${a}`)),
 		),

@@ -11,6 +11,10 @@ const obtenerMisPermisos = async (req, res) => {
 			permisos = [...matriz.permisosDeRol('ADMIN')];
 			if (rol) rol = { ...rol, nombre: 'ADMIN' };
 		}
+		if (rn === 'SUPER_ADMIN') {
+			permisos = [...matriz.permisosDeRol('SUPER_ADMIN')];
+			if (rol) rol = { ...rol, nombre: 'SUPER_ADMIN' };
+		}
 		res.json({ success: true, data: { rol, permisos } });
 	} catch (error) {
 		console.error('[permisos.obtenerMisPermisos]', error);

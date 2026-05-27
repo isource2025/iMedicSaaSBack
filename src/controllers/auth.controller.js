@@ -1,5 +1,9 @@
 const authService = require('../services/auth.service');
 const permisosService = require('../services/permisos.service');
+const empresaService = require('../services/empresa.service');
+const superAdminService = require('../services/superAdmin.service');
+const tenantRegistry = require('../services/tenantRegistry.service');
+const { runWithTenant } = require('../context/tenantContext');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, TOKEN_EXPIRATION } = require('../config/jwt');
 
@@ -28,7 +32,7 @@ const resolverRol = (userData) => {
   return null;
 };
 
-const generarToken = (userData) => {
+const generarToken = (userData, idEmpresa = null) => {
   const matricula =
     userData.Matricula != null && Number(userData.Matricula) > 0
       ? Number(userData.Matricula)
@@ -36,62 +40,130 @@ const generarToken = (userData) => {
   const payload = {
     usuario: {
       id: userData.ValorPersonal,
-      username: userData.NombreRed,
+      username: userData.NombreRed || userData.Nombrered || userData.nombrered,
       nombre: userData.Nombres,
       apellido: userData.Apellido,
       codOperador: userData.CodOperador,
       matricula, // requerido por el módulo Agenda para FK lógica con imPersonalHorarios/imTurnos
     },
     rol: resolverRol(userData),
-    // La fecha de emisión se incluye automáticamente (iat)
+    idEmpresa:
+      idEmpresa != null && idEmpresa !== '' && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
+        ? Number(idEmpresa)
+        : null,
   };
 
   return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION });
 };
 
 const inicioSesion = async (req, res) => {
-  const { username, password, sector, idSector } = req.body;
+  const { username, password, sector, idSector, idEmpresa } = req.body;
   
   try {
     console.log(`Intento de inicio de sesión con usuario: ${username}`);
     
     // Intentar autenticación SQL primero, luego recurrir a credenciales temporales si es necesario
     try {
-      const usuario = await authService.autenticarUsuario(username, password);
-      console.log("Usuario autenticado: ", usuario);
-      
-      if (usuario) {
-        console.log(`Inicio de sesión exitoso para usuario ${username} desde SQL Server`);
-        
-        // Obtener información del sector seleccionado
+      const loginResult = await tenantRegistry.resolverLogin(username, password, idEmpresa);
+      const usuario = loginResult.usuario;
+      const idEmpresaSesion = loginResult.idEmpresa;
+
+      console.log(`Inicio de sesión exitoso para usuario ${username} (empresa tenant: ${idEmpresaSesion ?? 'plataforma'})`);
+
+      const completarLogin = async () => {
+        const rolPreliminar = resolverRol(usuario);
+        const esSuperAdmin =
+          rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
+
         let sectorInfo = null;
-        
-        if (idSector) {
-          // Si se recibió el idSector directamente, lo usamos para obtener la descripción
-          console.log(`Usando idSector proporcionado: ${idSector}`);
-          
-          // Consultar la descripción del sector basado en el idSector
+        if (esSuperAdmin) {
+          sectorInfo = {
+            idPersonal: usuario.ValorPersonal,
+            idSector: '',
+            descripcion: 'Plataforma',
+          };
+        } else if (!sector && !idSector) {
+          const sectoresDisponibles = await authService.obtenerSectoresPorUsuarioConTenant(
+            username,
+            idEmpresaSesion,
+          );
+          if (sectoresDisponibles.length === 1) {
+            const unico = sectoresDisponibles[0];
+            sectorInfo = {
+              idPersonal: unico.idPersonal,
+              idSector: unico.idSector,
+              descripcion: unico.descripcionSector || 'Sector Desconocido',
+            };
+          } else {
+            return res.status(400).json({
+              success: false,
+              mensaje: 'Debe seleccionar un sector para continuar',
+            });
+          }
+        } else if (idSector) {
           const sectorDesc = await authService.obtenerDescripcionSector(idSector);
-          console.log("Sector Descripción: ", sectorDesc);
-          
           sectorInfo = {
             idPersonal: sector,
             idSector: idSector,
-            descripcion: sectorDesc ? sectorDesc.descripcion : 'Sector Desconocido'
+            descripcion: sectorDesc ? sectorDesc.descripcion : 'Sector Desconocido',
           };
         } else {
-          // Método anterior: obtener el idSector desde el idPersonal
-          console.log(`Usando método anterior con sector/idPersonal: ${sector}`);
           sectorInfo = await authService.obtenerIdSectorPorIdPersonal(sector);
+          if (!sectorInfo?.idSector) {
+            return res.status(400).json({
+              success: false,
+              mensaje: 'Debe seleccionar un sector válido para continuar',
+            });
+          }
         }
-        
-        // Generar token JWT con la información del usuario (incluye el rol)
-        const token = generarToken(usuario);
-        const rol = resolverRol(usuario);
 
-        // Cargar los permisos efectivos del rol desde BD (con caché).
-        // Se devuelven en el BODY del response (no en el JWT, para no inflar
-        // el token).
+        let empresaSeleccionada = null;
+        let modulosEmpresa = null;
+        try {
+          const empresasUsuario = esSuperAdmin
+            ? await authService.obtenerTodasEmpresas()
+            : await authService.obtenerEmpresasPorUsuario(username, idEmpresaSesion);
+          const idEmpresaNum =
+            idEmpresaSesion ??
+            (idEmpresa != null && idEmpresa !== '' ? Number(idEmpresa) : null);
+
+          if (!esSuperAdmin && empresasUsuario.length > 1 && (!idEmpresaNum || !Number.isFinite(idEmpresaNum))) {
+            return res.status(400).json({
+              success: false,
+              mensaje: 'Debe seleccionar una empresa para continuar',
+            });
+          }
+
+          if (idEmpresaNum && Number.isFinite(idEmpresaNum)) {
+            const permitida =
+              esSuperAdmin ||
+              empresasUsuario.some((e) => Number(e.idEmpresa) === idEmpresaNum);
+            if (empresasUsuario.length > 0 && !permitida) {
+              return res.status(403).json({
+                success: false,
+                mensaje: 'La empresa seleccionada no está asociada a su usuario',
+              });
+            }
+            empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idEmpresaNum);
+            modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(idEmpresaNum);
+          } else if (empresasUsuario.length === 1) {
+            empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(
+              empresasUsuario[0].idEmpresa,
+            );
+            modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(
+              empresasUsuario[0].idEmpresa,
+            );
+          } else if (empresasUsuario.length === 0) {
+            empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+          }
+        } catch (empErr) {
+          console.error('[auth.login] Error al resolver empresa:', empErr.message);
+          empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+        }
+
+        const token = generarToken(usuario, idEmpresaSesion);
+        const rol = rolPreliminar;
+
         let permisos = [];
         try {
           if (rol?.id != null) {
@@ -122,18 +194,38 @@ const inicioSesion = async (req, res) => {
           },
           rol,
           permisos,
+          idEmpresa: idEmpresaSesion,
           sectorSeleccionado: {
-            idPersonal: sector,
+            idPersonal: sectorInfo ? sectorInfo.idPersonal : sector,
             idSector: sectorInfo ? sectorInfo.idSector : '',
-            descripcion: sectorInfo ? sectorInfo.descripcion : ''
+            descripcion: sectorInfo ? sectorInfo.descripcion : '',
           },
+          empresaSeleccionada,
+          modulosEmpresa,
           token: token,
-          fuente: 'db'
+          fuente: 'db',
+        });
+      };
+
+      if (idEmpresaSesion != null) {
+        return runWithTenant(idEmpresaSesion, completarLogin);
+      }
+      return completarLogin();
+    } catch (dbError) {
+      if (dbError.statusCode === 409 && dbError.message === 'MULTI_EMPRESA') {
+        return res.status(409).json({
+          success: false,
+          mensaje: 'Seleccione la empresa para continuar',
+          empresas: dbError.empresas || [],
         });
       }
-    } catch (dbError) {
+      if (dbError.statusCode === 401 || dbError.statusCode === 400) {
+        return res.status(dbError.statusCode).json({
+          success: false,
+          mensaje: dbError.message,
+        });
+      }
       console.error('Error consultando la base de datos:', dbError.message);
-      console.log('Continuando con verificación de credenciales temporales...');
     }
     
     
@@ -179,12 +271,15 @@ const obtenerSectores = async (req, res) => {
  */
 const obtenerSectoresPorUsuario = async (req, res) => {
   const { username } = req.params;
+  const idEmpresa = req.query.idEmpresa;
   
   try {
-    const sectores = await authService.obtenerSectoresPorUsuario(username);
+    const esSuperAdmin = await authService.esSuperAdminPorUsername(username);
+    const sectores = await authService.obtenerSectoresPorUsuarioConTenant(username, idEmpresa);
     res.json({
       success: true,
-      data: sectores
+      data: sectores,
+      requiereSector: !esSuperAdmin,
     });
   } catch (error) {
     console.error(`Error al obtener sectores para usuario ${username}:`, error);
@@ -195,8 +290,29 @@ const obtenerSectoresPorUsuario = async (req, res) => {
   }
 };
 
+const obtenerEmpresasPorUsuario = async (req, res) => {
+  const { username } = req.params;
+
+  try {
+    const { empresas, esSuperAdmin, requiereSector } = await authService.descubrirEmpresasLogin(username);
+    res.json({
+      success: true,
+      data: empresas,
+      esSuperAdmin: !!esSuperAdmin,
+      requiereSector: requiereSector !== false,
+    });
+  } catch (error) {
+    console.error(`Error al obtener empresas para usuario ${username}:`, error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener las empresas para el usuario',
+    });
+  }
+};
+
 module.exports = {
   inicioSesion,
   obtenerSectores,
-  obtenerSectoresPorUsuario
+  obtenerSectoresPorUsuario,
+  obtenerEmpresasPorUsuario,
 };

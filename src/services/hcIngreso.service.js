@@ -12,6 +12,57 @@ function valorTextoHci(v) {
     return String(v);
 }
 
+function normalizarNumero(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+}
+
+/** Fecha/hora de HC como texto local (evita desfase UTC al persistir en SQL Server). */
+function normalizarFechaHci(data) {
+    const pad2 = (n) => String(n).padStart(2, "0");
+
+    const fecha = String(data?.fecha || "").trim();
+    const horaRaw = String(data?.hora || "00:00").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+        const hm = horaRaw.match(/^(\d{1,2}):(\d{2})/);
+        const hh = hm ? pad2(Number(hm[1])) : "00";
+        const mm = hm ? hm[2] : "00";
+        return `${fecha} ${hh}:${mm}:00`;
+    }
+
+    if (data?.Fecha) {
+        const s = String(data.Fecha).trim();
+        const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+        if (m) return `${m[1]} ${m[2]}:${m[3]}:00`;
+    }
+
+    const now = new Date();
+    return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:00`;
+}
+
+function normalizarIdSector(value) {
+    if (value === undefined || value === null) return "";
+
+    if (typeof value === "object") {
+        return normalizarIdSector(value.idSector || value.IdSector || value.sector || "");
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return "";
+
+    if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+        try {
+            return normalizarIdSector(JSON.parse(raw));
+        } catch {
+            // seguir con fallback string
+        }
+    }
+
+    const parts = raw.split("-");
+    const candidate = parts.length >= 2 ? parts[1] : parts[0];
+    return String(candidate || "").trim().slice(0, 4);
+}
+
 /**
  * Guardar signos vitales en tabla de controles frecuentes
  * Esta función se ejecuta automáticamente al crear/editar HC
@@ -82,7 +133,7 @@ const guardarSignosVitalesEnControles = async (data) => {
             );
         `;
         
-        const operador = data.IdProfecional || 0;
+        const operador = normalizarNumero(data.IdProfecional);
         const params = [
             { value: data.NumeroVisita },
             { value: fechaClarion },     // FechaCarga
@@ -102,7 +153,7 @@ const guardarSignosVitalesEnControles = async (data) => {
             { value: talla },
             { value: 0 },                 // Saturometria
             { value: 0 },                 // PAMedia
-            { value: data.IdSector || '' }, // IdSector
+            { value: normalizarIdSector(data.IdSector) }, // IdSector
             { value: 0 },                 // IdTurno
             { value: 0 },                 // Nroindicacion
             { value: 'Cargado desde Historia Clínica' },
@@ -254,7 +305,7 @@ const buildDynamicFields = (data) => {
     
     columns.push('IdSector');
     values.push(`@param${paramIndex}`);
-    params.push({ value: data.IdSector || '' });
+    params.push({ value: normalizarIdSector(data.IdSector) });
     paramIndex++;
     
     columns.push('MotivoConsulta');
@@ -269,7 +320,13 @@ const buildDynamicFields = (data) => {
     
     columns.push('IdProfecional');
     values.push(`@param${paramIndex}`);
-    params.push({ value: data.IdProfecional || 0 });
+    params.push({ value: normalizarNumero(data.IdProfecional) });
+    paramIndex++;
+
+    columns.push('Fecha');
+    values.push(`@param${paramIndex}`);
+    // Sin type DateTime: el driver mssql convierte a UTC y desplaza la hora local
+    params.push({ value: normalizarFechaHci(data) });
     paramIndex++;
     
     // Agregar dinámicamente todos los campos con prefijo (SV_, PF_, TCS_, etc.)
@@ -349,7 +406,7 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
         
         // Campos básicos
         setClauses.push(`IdSector = @param${paramIndex}`);
-        params.push({ value: data.IdSector || '' });
+        params.push({ value: normalizarIdSector(data.IdSector) });
         paramIndex++;
         
         setClauses.push(`MotivoConsulta = @param${paramIndex}`);
@@ -361,7 +418,11 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
         paramIndex++;
         
         setClauses.push(`IdProfecional = @param${paramIndex}`);
-        params.push({ value: data.IdProfecional || 0 });
+        params.push({ value: normalizarNumero(data.IdProfecional) });
+        paramIndex++;
+
+        setClauses.push(`Fecha = @param${paramIndex}`);
+        params.push({ value: normalizarFechaHci(data) });
         paramIndex++;
         
         // Campos dinámicos del examen físico

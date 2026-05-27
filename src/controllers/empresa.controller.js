@@ -10,7 +10,8 @@ const empresaService = require('../services/empresa.service');
  */
 const obtenerInfoEmpresa = async (req, res) => {
   try {
-    const empresaInfo = await empresaService.obtenerInfoEmpresa();
+    const idEmpresa = req.query.id ?? req.query.idEmpresa ?? null;
+    const empresaInfo = await empresaService.obtenerInfoEmpresa(idEmpresa);
     
     res.json({
       success: true,

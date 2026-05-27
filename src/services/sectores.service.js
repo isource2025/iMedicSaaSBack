@@ -8,7 +8,8 @@ const obtenerSectores = async () => {
     const consulta = `
       SELECT 
         Valor as IdSector,
-        Descripcion
+        Descripcion,
+        AmbInt
       FROM imSectores
       ORDER BY Descripcion
     `;

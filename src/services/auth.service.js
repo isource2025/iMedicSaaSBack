@@ -1,4 +1,7 @@
-const { executeQuery } = require('../models/db');
+const { executeQuery, executePlatformQuery } = require('../models/db');
+const { runWithTenant, getTenantId } = require('../context/tenantContext');
+const tenantRegistry = require('./tenantRegistry.service');
+const authCentralService = require('./authCentral.service');
 
 const esErrorEsquemaRoles = (error) => {
   const msg = String(error?.message || '').toLowerCase();
@@ -9,60 +12,10 @@ const esErrorEsquemaRoles = (error) => {
   );
 };
 
-const autenticarUsuario = async (username, contraseña) => {
-  try {
-    // Verificar credenciales contra impassword e incluir el rol del usuario
-    // resolviendo desde imPersonal.Rol (varchar(20) con el IdRol como string).
-    // imPassword.Grupo = 11 sigue siendo "admin" como fallback histórico.
-    const consulta = `
-      SELECT TOP 1
-        pw.*,
-        p.Matricula  AS Matricula,
-        r.IdRol      AS RolId,
-        r.Nombre     AS RolNombre,
-        r.Nivel      AS RolNivel
-      FROM impassword pw
-      LEFT JOIN imPersonal p ON p.Valor = pw.ValorPersonal
-      LEFT JOIN imRoles r    ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol))
-                              AND r.Activo = 1
-      WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
-        AND pw.password = @p1
-    `;
-    const parametros = [
-      { value: username, type: 'VarChar' },
-      { value: contraseña, type: 'VarChar' }
-    ];
-
-    let resultado;
-    try {
-      resultado = await executeQuery(consulta, parametros);
-    } catch (errorConsultaRoles) {
-      // Compatibilidad con entornos que aun no tienen imRoles/imPersonal.Rol.
-      if (!esErrorEsquemaRoles(errorConsultaRoles)) throw errorConsultaRoles;
-
-      const consultaLegacy = `
-        SELECT TOP 1
-          pw.*,
-          CAST(NULL AS INT)           AS Matricula,
-          CAST(NULL AS INT)           AS RolId,
-          CAST(NULL AS VARCHAR(50))   AS RolNombre,
-          CAST(NULL AS INT)           AS RolNivel
-        FROM impassword pw
-        WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
-          AND pw.password = @p1
-      `;
-      resultado = await executeQuery(consultaLegacy, parametros);
-    }
-
-    if (resultado && resultado.length > 0) {
-      return resultado[0];
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error al autenticar usuario:', error.message);
-    throw error;
-  }
+/** Login multi-tenant: resuelve BD por empresa y valida credenciales. */
+const autenticarUsuario = async (username, contraseña, idEmpresa = null) => {
+  const { usuario } = await tenantRegistry.resolverLogin(username, contraseña, idEmpresa);
+  return usuario;
 };
 
 /**
@@ -89,6 +42,37 @@ const obtenerSectores = async () => {
   }
 };
 
+/** true si el usuario de red tiene rol SUPER_ADMIN (IdRol 5). */
+const esSuperAdminPorUsername = async (username) => {
+  if (authCentralService.isAuthCentralEnabled()) {
+    try {
+      if (await authCentralService.esSuperAdmin(username)) return true;
+    } catch (e) {
+      console.warn('[authCentral] esSuperAdminPorUsername:', e.message);
+    }
+  }
+
+  try {
+    const rolRows = await executePlatformQuery(
+      `
+      SELECT TOP 1 LTRIM(RTRIM(ISNULL(r.Nombre, ''))) AS RolNombre, LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS Rol
+      FROM impassword pw
+      LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
+      LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
+      WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+         OR UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
+      `,
+      [{ value: username, type: 'VarChar' }],
+    );
+    if (!rolRows.length) return false;
+    const rolNombre = String(rolRows[0]?.RolNombre || '').trim().toUpperCase();
+    const rolId = String(rolRows[0]?.Rol || '').trim();
+    return rolNombre === 'SUPER_ADMIN' || rolId === '5';
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Obtiene los sectores disponibles para un usuario específico
  * @param {string} username - Nombre de usuario
@@ -96,6 +80,9 @@ const obtenerSectores = async () => {
  */
 const obtenerSectoresPorUsuario = async (username) => {
   try {
+    if (await esSuperAdminPorUsername(username)) {
+      return [];
+    }
     // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
     // Usar UPPER y RTRIM para hacer la comparación case-insensitive y sin espacios
     const consulta = `
@@ -139,6 +126,16 @@ const obtenerIdSectorPorIdPersonal = async (idPersonal) => {
   try {
     if (!idPersonal) {
       return null;
+    }
+
+    const idEmpresa = getTenantId();
+    if (idEmpresa && authCentralService.isAuthCentralEnabled()) {
+      try {
+        const row = await authCentralService.obtenerSectorPorPersonal(idEmpresa, idPersonal);
+        if (row?.idSector) return row;
+      } catch (e) {
+        console.warn(`[authCentral] obtenerIdSectorPorIdPersonal ${idPersonal}:`, e.message);
+      }
     }
     
     const consulta = `
@@ -185,10 +182,141 @@ const autenticarConCredencialesTemporales = async (username, contraseña) => {
  * @param {string} idSector - ID del sector
  * @returns {Promise<Object>} Objeto con la descripción del sector
  */
+/**
+ * Todas las empresas (login SUPER_ADMIN).
+ */
+const obtenerTodasEmpresas = async () => {
+  if (authCentralService.isAuthCentralEnabled()) {
+    try {
+      const rows = await authCentralService.obtenerTodasEmpresas();
+      if (rows.length) return rows;
+    } catch (e) {
+      console.warn('[authCentral] obtenerTodasEmpresas:', e.message);
+    }
+  }
+  try {
+    const rows = await executePlatformQuery(
+      `SELECT IDEMPRESA AS idEmpresa, RTRIM(LTRIM(ISNULL(DESCRIPCION, ''))) AS descripcionEmpresa
+       FROM dbo.Empresas ORDER BY DESCRIPCION`,
+    );
+    return rows || [];
+  } catch (error) {
+    console.error('Error al obtener todas las empresas:', error.message);
+    throw error;
+  }
+};
+
+/** Descubre empresas para el formulario de login (sin contraseña). */
+const descubrirEmpresasLogin = async (username) => {
+  if (await esSuperAdminPorUsername(username)) {
+    return { empresas: [], esSuperAdmin: true, requiereSector: false };
+  }
+
+  const found = await tenantRegistry.descubrirEmpresasPorUsuario(username);
+  const empresas = found.map((e) => ({
+    idEmpresa: e.idEmpresa,
+    descripcionEmpresa: e.descripcionEmpresa,
+  }));
+
+  return { empresas, esSuperAdmin: false, requiereSector: true };
+};
+
+/**
+ * Empresas asociadas al personal del usuario (imPersonalEmpresas).
+ * SUPER_ADMIN recibe el catálogo completo.
+ */
+const obtenerEmpresasPorUsuario = async (username, idEmpresaContexto = null) => {
+  try {
+    const { empresas: descubiertas, esSuperAdmin } = await descubrirEmpresasLogin(username);
+    if (esSuperAdmin) return [];
+    if (descubiertas.length) return descubiertas;
+
+    const idCtx = idEmpresaContexto != null ? Number(idEmpresaContexto) : null;
+    if (idCtx && Number.isFinite(idCtx)) {
+      return runWithTenant(idCtx, () => obtenerEmpresasPorUsuarioEnTenant(username));
+    }
+
+    return [];
+  } catch (error) {
+    console.error(`Error al obtener empresas para usuario ${username}:`, error.message);
+    throw error;
+  }
+};
+
+const obtenerEmpresasPorUsuarioEnTenant = async (username) => {
+  try {
+    const rolRows = await executeQuery(
+      `
+      SELECT TOP 1 LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS Rol, r.Nombre AS RolNombre
+      FROM impassword pw
+      LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
+      LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
+      WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+         OR UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
+      `,
+      [{ value: username, type: 'VarChar' }],
+    );
+    const rolNombre = String(rolRows[0]?.RolNombre || '').trim().toUpperCase();
+    const rolId = String(rolRows[0]?.Rol || '').trim();
+    if (rolNombre === 'SUPER_ADMIN' || rolId === '5') {
+      return obtenerTodasEmpresas();
+    }
+
+    const consulta = `
+      SELECT
+        pe.IdEmpresa AS idEmpresa,
+        RTRIM(LTRIM(ISNULL(e.DESCRIPCION, ''))) AS descripcionEmpresa
+      FROM impassword pw
+      INNER JOIN dbo.imPersonalEmpresas pe ON pe.IdPersonal = pw.ValorPersonal
+      INNER JOIN dbo.Empresas e ON e.IDEMPRESA = pe.IdEmpresa
+      WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+         OR UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
+      ORDER BY e.DESCRIPCION
+    `;
+
+    const parametros = [{ value: username, type: 'VarChar' }];
+    const resultado = await executeQuery(consulta, parametros);
+    return resultado || [];
+  } catch (error) {
+    const msg = String(error?.message || '').toLowerCase();
+    if (msg.includes("invalid object name 'impersonalempresas'")) {
+      console.warn('imPersonalEmpresas no disponible; sin empresas por usuario');
+      return [];
+    }
+    throw error;
+  }
+};
+
+const obtenerSectoresPorUsuarioConTenant = async (username, idEmpresa) => {
+  const id = idEmpresa != null ? Number(idEmpresa) : null;
+  if (id && Number.isFinite(id) && authCentralService.isAuthCentralEnabled()) {
+    try {
+      const central = await authCentralService.obtenerSectores(username, id);
+      if (central.length) return central;
+    } catch (e) {
+      console.warn(`[authCentral] sectores empresa ${id}:`, e.message);
+    }
+  }
+  if (id && Number.isFinite(id)) {
+    return runWithTenant(id, () => obtenerSectoresPorUsuario(username));
+  }
+  return obtenerSectoresPorUsuario(username);
+};
+
 const obtenerDescripcionSector = async (idSector) => {
   try {
     if (!idSector) {
       return null;
+    }
+
+    const idEmpresa = getTenantId();
+    if (idEmpresa && authCentralService.isAuthCentralEnabled()) {
+      try {
+        const row = await authCentralService.obtenerDescripcionSector(idEmpresa, idSector);
+        if (row?.idSector) return row;
+      } catch (e) {
+        console.warn(`[authCentral] obtenerDescripcionSector ${idSector}:`, e.message);
+      }
     }
     
     const consulta = `
@@ -224,6 +352,11 @@ module.exports = {
   autenticarConCredencialesTemporales,
   obtenerSectores,
   obtenerSectoresPorUsuario,
+  obtenerSectoresPorUsuarioConTenant,
+  obtenerEmpresasPorUsuario,
+  descubrirEmpresasLogin,
+  obtenerTodasEmpresas,
   obtenerIdSectorPorIdPersonal,
-  obtenerDescripcionSector
+  obtenerDescripcionSector,
+  esSuperAdminPorUsername,
 };

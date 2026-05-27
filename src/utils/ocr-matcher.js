@@ -30,16 +30,94 @@ function normalizarTexto(texto) {
  * Maneja: "18.560", "2,660,000", "23.8 %"
  */
 function parseNumeroOCR(valorOCR) {
-  if (!valorOCR) return null;
-  
-  const limpio = valorOCR
+  if (valorOCR === null || valorOCR === undefined || valorOCR === '') return null;
+
+  let s = valorOCR
     .toString()
-    .replace(/\s+/g, '') // Eliminar espacios
-    .replace(/,/g, '.') // Comas → puntos
-    .replace(/[^0-9.-]/g, ''); // Solo números, puntos y guiones
-  
-  const numero = parseFloat(limpio);
-  return isNaN(numero) ? null : numero;
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[^0-9.,-]/g, '');
+
+  if (!s) return null;
+
+  // Formato europeo miles: 150.000 o 1.234.567,89
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (/^\d+,\d+$/.test(s)) {
+    s = s.replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    s = s.replace(/\./g, '');
+  } else if (s.includes(',') && !s.includes('.')) {
+    s = s.replace(',', '.');
+  }
+
+  const numero = parseFloat(s);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+/**
+ * Parsea texto de referencia tipo "70-100", "8.5-10.5", "150.000-450.000"
+ */
+function parseRangoReferencia(texto) {
+  if (!texto) return { min: null, max: null };
+  const s = String(texto).trim();
+  const match = s.match(/^(.+?)\s*[-–]\s*(.+)$/);
+  if (!match) return { min: null, max: null };
+  return { min: parseNumeroOCR(match[1]), max: parseNumeroOCR(match[2]) };
+}
+
+/**
+ * Valida resultado contra rangos del catálogo o texto de referencia del informe
+ */
+function validarResultadoDetalle(resultado, opts = {}) {
+  const valorNum = parseNumeroOCR(resultado);
+  if (valorNum === null) return { fueraDeRango: false, tipo: null };
+
+  const param = {
+    ValorMinimo: opts.ValorMinimo,
+    ValorMaximo: opts.ValorMaximo,
+    ValorNormal: opts.ValorNormal,
+  };
+
+  if (
+    (param.ValorMinimo == null || param.ValorMinimo === '') &&
+    (param.ValorMaximo == null || param.ValorMaximo === '') &&
+    opts.ValorReferencia
+  ) {
+    const rango = parseRangoReferencia(opts.ValorReferencia);
+    param.ValorMinimo = rango.min;
+    param.ValorMaximo = rango.max;
+  }
+
+  return validarRango(valorNum, param);
+}
+
+/**
+ * Calcula FueraDeRango en cada detalle al leer desde BD
+ */
+function enriquecerDetallesLaboratorio(detalles) {
+  if (!Array.isArray(detalles)) return [];
+  return detalles.map((d) => {
+    const validacion = validarResultadoDetalle(d.Resultado, {
+      ValorMinimo: d.ValorMinimoConf ?? d.ValorMinimo,
+      ValorMaximo: d.ValorMaximoConf ?? d.ValorMaximo,
+      ValorNormal: d.ValorNormalConf ?? d.ValorNormal,
+      ValorReferencia: d.ValorReferencia,
+    });
+    const {
+      ValorMinimoConf,
+      ValorMaximoConf,
+      ValorNormalConf,
+      ValorMinimo,
+      ValorMaximo,
+      ValorNormal,
+      ...rest
+    } = d;
+    return {
+      ...rest,
+      FueraDeRango: !!validacion.fueraDeRango,
+    };
+  });
 }
 
 /**
@@ -396,6 +474,9 @@ async function crearAlias(tipoEstudio, nombreParametro, alias) {
 module.exports = {
   normalizarTexto,
   parseNumeroOCR,
+  parseRangoReferencia,
+  validarResultadoDetalle,
+  enriquecerDetallesLaboratorio,
   buscarParametroOCR,
   cargarContextoMatcher,
   buscarParametroConContexto,

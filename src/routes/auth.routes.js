@@ -11,4 +11,7 @@ router.get('/sectores', authController.obtenerSectores);
 // Endpoint para obtener sectores filtrados por usuario
 router.get('/sectores/:username', authController.obtenerSectoresPorUsuario);
 
+// Empresas asociadas al personal del usuario (imPersonalEmpresas)
+router.get('/empresas/:username', authController.obtenerEmpresasPorUsuario);
+
 module.exports = router;

@@ -7,8 +7,33 @@ const {
   cargarContextoMatcher,
   buscarParametroConContexto,
   agregarParametroAlContextoMatcher,
-  registrarLogsOCRLote
+  registrarLogsOCRLote,
+  enriquecerDetallesLaboratorio
 } = require('../utils/ocr-matcher');
+
+const SQL_DETALLE_LAB = `
+  SELECT 
+    d.Estudio as NombreParametro,
+    d.Valor as Resultado,
+    d.Orden,
+    conf.ValorMinimo as ValorMinimoConf,
+    conf.ValorMaximo as ValorMaximoConf,
+    conf.ValorNormal as ValorNormalConf,
+    CASE 
+      WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
+      THEN CAST(conf.ValorMinimo AS VARCHAR(50)) + '-' + CAST(conf.ValorMaximo AS VARCHAR(50))
+      WHEN conf.ValorNormal IS NOT NULL 
+      THEN CAST(conf.ValorNormal AS VARCHAR(50))
+      ELSE NULL
+    END as ValorReferencia,
+    '' as UnidadMedida
+  FROM imHCExamenesLabDetalle d
+  LEFT JOIN imHCExamenesLabDetalleConf conf 
+    ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
+    AND d.Estudio = conf.Estudio
+  WHERE d.IdExamenLaboratorio = @p0
+  ORDER BY d.Orden
+`;
 
 /**
  * Servicio simplificado para laboratorios usando tablas existentes
@@ -314,35 +339,14 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
     // Para cada cabecera, obtener sus detalles
     const examenes = [];
     for (const cab of cabeceras) {
-      const consultaDetalle = `
-        SELECT 
-          d.Estudio as NombreParametro,
-          d.Valor as Resultado,
-          d.Orden,
-          CASE 
-            WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
-            THEN conf.ValorMinimo + '-' + conf.ValorMaximo
-            WHEN conf.ValorNormal IS NOT NULL 
-            THEN conf.ValorNormal
-            ELSE NULL
-          END as ValorReferencia,
-          '' as UnidadMedida,
-          0 as FueraDeRango
-        FROM imHCExamenesLabDetalle d
-        LEFT JOIN imHCExamenesLabDetalleConf conf 
-          ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
-          AND d.Estudio = conf.Estudio
-        WHERE d.IdExamenLaboratorio = @p0
-        ORDER BY d.Orden
-      `;
-
-      const detalles = await executeQuery(consultaDetalle, [{ value: cab.IdExamen }]);
+      const detallesRaw = await executeQuery(SQL_DETALLE_LAB, [{ value: cab.IdExamen }]);
+      const detalles = enriquecerDetallesLaboratorio(detallesRaw);
 
       examenes.push({
         ...cab,
         detalles: detalles,
         totalParametros: detalles.length,
-        parametrosFueraDeRango: 0
+        parametrosFueraDeRango: detalles.filter((d) => d.FueraDeRango).length
       });
     }
 
@@ -383,35 +387,14 @@ const obtenerExamenPorId = async (idExamen) => {
 
     const cab = cabeceras[0];
 
-    const consultaDetalle = `
-      SELECT 
-        d.Estudio as NombreParametro,
-        d.Valor as Resultado,
-        d.Orden,
-        CASE 
-          WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
-          THEN conf.ValorMinimo + '-' + conf.ValorMaximo
-          WHEN conf.ValorNormal IS NOT NULL 
-          THEN conf.ValorNormal
-          ELSE NULL
-        END as ValorReferencia,
-        '' as UnidadMedida,
-        0 as FueraDeRango
-      FROM imHCExamenesLabDetalle d
-      LEFT JOIN imHCExamenesLabDetalleConf conf 
-        ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
-        AND d.Estudio = conf.Estudio
-      WHERE d.IdExamenLaboratorio = @p0
-      ORDER BY d.Orden
-    `;
-
-    const detalles = await executeQuery(consultaDetalle, [{ value: idExamen }]);
+    const detallesRaw = await executeQuery(SQL_DETALLE_LAB, [{ value: idExamen }]);
+    const detalles = enriquecerDetallesLaboratorio(detallesRaw);
 
     return {
       ...cab,
       detalles: detalles,
       totalParametros: detalles.length,
-      parametrosFueraDeRango: 0
+      parametrosFueraDeRango: detalles.filter((d) => d.FueraDeRango).length
     };
   } catch (error) {
     console.error('Error al obtener examen:', error);

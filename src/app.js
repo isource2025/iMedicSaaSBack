@@ -54,6 +54,7 @@ const personalRoutes = require('./routes/personal.routes');
 const miPerfilRoutes = require('./routes/miPerfil.routes');
 const rolesRoutes = require('./routes/roles.routes');
 const permisosRoutes = require('./routes/permisos.routes');
+const superAdminRoutes = require('./routes/superAdmin.routes');
 const agendaConfigRoutes = require('./routes/agendaConfig.routes');
 const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 
@@ -137,6 +138,7 @@ app.use('/api/personal', personalRoutes);
 app.use('/api/mi-perfil', miPerfilRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/permisos', permisosRoutes);
+app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/agenda', agendaConfigRoutes);
 app.use('/api/turnos-admin', turnosAdminRoutes);
 
