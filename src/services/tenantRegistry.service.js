@@ -24,52 +24,6 @@ async function listarEmpresasActivas() {
 	return rows.recordset || [];
 }
 
-async function buscarEnIndice(nombreRed) {
-	const pool = await connectDB();
-	try {
-		const rows = await pool.request().input('u', nombreRed).query(`
-    SELECT l.NombreRed, l.IdEmpresa, l.ValorPersonal, e.DESCRIPCION AS descripcionEmpresa
-    FROM dbo.imUsuarioEmpresaLogin l
-    INNER JOIN dbo.Empresas e ON e.IDEMPRESA = l.IdEmpresa
-    WHERE UPPER(RTRIM(LTRIM(l.NombreRed))) = UPPER(RTRIM(LTRIM(@u)))
-    ORDER BY e.DESCRIPCION
-  `);
-		return rows.recordset || [];
-	} catch (err) {
-		const msg = String(err?.message || '').toLowerCase();
-		if (msg.includes("invalid object name 'dbo.imusuarioempresalogin'")) {
-			console.warn('[tenantRegistry] imUsuarioEmpresaLogin no existe; se omite índice de login');
-			return [];
-		}
-		throw err;
-	}
-}
-
-async function registrarLoginIndice(nombreRed, idEmpresa, valorPersonal) {
-	const pool = await connectDB();
-	try {
-		await pool
-			.request()
-			.input('u', nombreRed)
-			.input('e', idEmpresa)
-			.input('v', valorPersonal)
-			.query(`
-    IF EXISTS (SELECT 1 FROM dbo.imUsuarioEmpresaLogin WHERE NombreRed = @u AND IdEmpresa = @e)
-      UPDATE dbo.imUsuarioEmpresaLogin SET ValorPersonal = @v, FechaUltimoLogin = GETDATE()
-        WHERE NombreRed = @u AND IdEmpresa = @e
-    ELSE
-      INSERT INTO dbo.imUsuarioEmpresaLogin (NombreRed, IdEmpresa, ValorPersonal)
-      VALUES (@u, @e, @v)
-  `);
-	} catch (err) {
-		const msg = String(err?.message || '').toLowerCase();
-		if (msg.includes("invalid object name 'dbo.imusuarioempresalogin'")) {
-			console.warn('[tenantRegistry] imUsuarioEmpresaLogin no existe; no se registra índice de login');
-			return;
-		}
-		throw err;
-	}
-}
 
 /**
  * Autentica en una BD tenant concreta.
@@ -206,15 +160,7 @@ async function descubrirEmpresasPorUsuario(username) {
 		return found.sort((a, b) => a.descripcionEmpresa.localeCompare(b.descripcionEmpresa));
 	}
 
-	const fromIndex = await buscarEnIndice(u);
-	return fromIndex
-		.filter((r) => catalogIds.has(Number(r.IdEmpresa)))
-		.map((r) => ({
-			idEmpresa: Number(r.IdEmpresa),
-			descripcionEmpresa: String(r.descripcionEmpresa || '').trim(),
-			valorPersonal: Number(r.ValorPersonal),
-			fuente: 'indice',
-		}));
+	return [];
 }
 
 async function autenticarEnPlataforma(username, password) {
@@ -263,7 +209,6 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			try {
 				const usuarioCentral = await authCentralService.autenticarTenant(id, u, p);
 				if (usuarioCentral) {
-					await registrarLoginIndice(u, id, usuarioCentral.ValorPersonal);
 					return { idEmpresa: id, usuario: usuarioCentral };
 				}
 			} catch (e) {
@@ -277,7 +222,6 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			e.statusCode = 401;
 			throw e;
 		}
-		await registrarLoginIndice(u, id, usuario.ValorPersonal);
 		return { idEmpresa: id, usuario };
 	}
 
@@ -304,7 +248,6 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			}
 			if (matchesCentral.length === 1) {
 				const { idEmpresa, usuario } = matchesCentral[0];
-				await registrarLoginIndice(u, idEmpresa, usuario.ValorPersonal);
 				return { idEmpresa, usuario };
 			}
 		} catch (e) {
@@ -354,7 +297,6 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	}
 
 	const { idEmpresa, usuario } = matches[0];
-	await registrarLoginIndice(u, idEmpresa, usuario.ValorPersonal);
 	return { idEmpresa, usuario };
 }
 
@@ -442,8 +384,6 @@ module.exports = {
 	resolverLogin,
 	autenticarEnTenant,
 	autenticarEnPlataforma,
-	registrarLoginIndice,
 	empresasDelUsuarioEnTenant,
 	guardarConexionEmpresa,
-	buscarEnIndice,
 };
