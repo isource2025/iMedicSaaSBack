@@ -9,6 +9,7 @@ const authCentralService = require('../services/authCentral.service');
 
 /** @type {Map<number, { pool: sql.ConnectionPool, key: string }>} */
 const poolCache = new Map();
+let empresasColumnsCache = null;
 
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
 
@@ -81,12 +82,29 @@ async function loadEmpresaConnectionRow(idEmpresa) {
 		}
 	}
 	const pool = await connectPlatform();
+	if (!empresasColumnsCache) {
+		const cols = await pool.request().query(`
+      SELECT LOWER(name) AS col
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.Empresas')
+    `);
+		empresasColumnsCache = new Set((cols.recordset || []).map((r) => String(r.col || '').trim()));
+	}
+	const c = (name) =>
+		empresasColumnsCache.has(String(name).toLowerCase()) ? name : `NULL AS ${name}`;
 	const result = await pool
 		.request()
 		.input('id', sql.Int, Number(idEmpresa))
 		.query(`
       SELECT TOP 1
-        IDEMPRESA, DESCRIPCION, DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc
+        IDEMPRESA,
+        DESCRIPCION,
+        ${c('DbServer')},
+        ${c('DbPort')},
+        ${c('DbInstance')},
+        ${c('DbName')},
+        ${c('DbUser')},
+        ${c('DbPasswordEnc')}
       FROM dbo.Empresas
       WHERE IDEMPRESA = @id
     `);

@@ -17,7 +17,7 @@ const DISCOVER_MAX = Number(process.env.TENANT_DISCOVER_MAX) || 25;
 async function listarEmpresasActivas() {
 	const pool = await connectDB();
 	const rows = await pool.request().query(`
-    SELECT IDEMPRESA, DESCRIPCION, DbServer, DbName
+    SELECT IDEMPRESA, DESCRIPCION
     FROM dbo.Empresas
     ORDER BY DESCRIPCION
   `);
@@ -380,7 +380,15 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 				: null;
 
 	const pool = await connectDB();
-	await pool
+	const cols = await pool.request().query(`
+    SELECT LOWER(name) AS col
+    FROM sys.columns
+    WHERE object_id = OBJECT_ID('dbo.Empresas')
+  `);
+	const colSet = new Set((cols.recordset || []).map((r) => String(r.col || '').trim()));
+	const has = (name) => colSet.has(String(name).toLowerCase());
+
+	const request = pool
 		.request()
 		.input('id', id)
 		.input('srv', data.dbServer || null)
@@ -388,17 +396,24 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 		.input('inst', data.dbInstance || null)
 		.input('db', data.dbName || null)
 		.input('usr', data.dbUser || null)
-		.input('pwd', enc)
-		.query(`
-    UPDATE dbo.Empresas SET
-      DbServer = COALESCE(@srv, DbServer),
-      DbPort = COALESCE(@port, DbPort),
-      DbInstance = @inst,
-      DbName = COALESCE(@db, DbName),
-      DbUser = COALESCE(@usr, DbUser),
-      DbPasswordEnc = CASE WHEN @pwd IS NOT NULL THEN @pwd ELSE DbPasswordEnc END
-    WHERE IDEMPRESA = @id
-  `);
+		.input('pwd', enc);
+
+	const sets = [];
+	if (has('DbServer')) sets.push('DbServer = COALESCE(@srv, DbServer)');
+	if (has('DbPort')) sets.push('DbPort = COALESCE(@port, DbPort)');
+	if (has('DbInstance')) sets.push('DbInstance = @inst');
+	if (has('DbName')) sets.push('DbName = COALESCE(@db, DbName)');
+	if (has('DbUser')) sets.push('DbUser = COALESCE(@usr, DbUser)');
+	if (has('DbPasswordEnc')) {
+		sets.push('DbPasswordEnc = CASE WHEN @pwd IS NOT NULL THEN @pwd ELSE DbPasswordEnc END');
+	}
+	if (sets.length) {
+		await request.query(`
+      UPDATE dbo.Empresas SET
+        ${sets.join(',\n        ')}
+      WHERE IDEMPRESA = @id
+    `);
+	}
 
 	return loadEmpresaConnectionRow(id);
 }
