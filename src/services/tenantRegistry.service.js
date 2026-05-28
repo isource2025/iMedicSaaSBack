@@ -26,24 +26,34 @@ async function listarEmpresasActivas() {
 
 async function buscarEnIndice(nombreRed) {
 	const pool = await connectDB();
-	const rows = await pool.request().input('u', nombreRed).query(`
+	try {
+		const rows = await pool.request().input('u', nombreRed).query(`
     SELECT l.NombreRed, l.IdEmpresa, l.ValorPersonal, e.DESCRIPCION AS descripcionEmpresa
     FROM dbo.imUsuarioEmpresaLogin l
     INNER JOIN dbo.Empresas e ON e.IDEMPRESA = l.IdEmpresa
     WHERE UPPER(RTRIM(LTRIM(l.NombreRed))) = UPPER(RTRIM(LTRIM(@u)))
     ORDER BY e.DESCRIPCION
   `);
-	return rows.recordset || [];
+		return rows.recordset || [];
+	} catch (err) {
+		const msg = String(err?.message || '').toLowerCase();
+		if (msg.includes("invalid object name 'dbo.imusuarioempresalogin'")) {
+			console.warn('[tenantRegistry] imUsuarioEmpresaLogin no existe; se omite índice de login');
+			return [];
+		}
+		throw err;
+	}
 }
 
 async function registrarLoginIndice(nombreRed, idEmpresa, valorPersonal) {
 	const pool = await connectDB();
-	await pool
-		.request()
-		.input('u', nombreRed)
-		.input('e', idEmpresa)
-		.input('v', valorPersonal)
-		.query(`
+	try {
+		await pool
+			.request()
+			.input('u', nombreRed)
+			.input('e', idEmpresa)
+			.input('v', valorPersonal)
+			.query(`
     IF EXISTS (SELECT 1 FROM dbo.imUsuarioEmpresaLogin WHERE NombreRed = @u AND IdEmpresa = @e)
       UPDATE dbo.imUsuarioEmpresaLogin SET ValorPersonal = @v, FechaUltimoLogin = GETDATE()
         WHERE NombreRed = @u AND IdEmpresa = @e
@@ -51,6 +61,14 @@ async function registrarLoginIndice(nombreRed, idEmpresa, valorPersonal) {
       INSERT INTO dbo.imUsuarioEmpresaLogin (NombreRed, IdEmpresa, ValorPersonal)
       VALUES (@u, @e, @v)
   `);
+	} catch (err) {
+		const msg = String(err?.message || '').toLowerCase();
+		if (msg.includes("invalid object name 'dbo.imusuarioempresalogin'")) {
+			console.warn('[tenantRegistry] imUsuarioEmpresaLogin no existe; no se registra índice de login');
+			return;
+		}
+		throw err;
+	}
 }
 
 /**
