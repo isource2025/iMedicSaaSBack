@@ -2,6 +2,8 @@
  * Servicio para gestionar la información de la empresa
  */
 const { executeQuery, executePlatformQuery } = require('../models/db');
+const { runWithTenant } = require('../context/tenantContext');
+const { isPlatformSqlConfigured } = require('../config/database');
 const authCentralService = require('./authCentral.service');
 
 const EMPRESA_SELECT = `
@@ -74,11 +76,18 @@ const obtenerInfoEmpresaPorId = async (idEmpresa) => {
       try {
         const rowCentral = await authCentralService.obtenerEmpresaPorId(id);
         if (rowCentral) {
-          return mapearEmpresaRow(rowCentral);
+          return runWithTenant(id, () => mapearEmpresaRow(rowCentral));
         }
       } catch (e) {
         console.warn(`[authCentral] obtenerInfoEmpresaPorId ${id}:`, e.message);
       }
+    }
+
+    if (!isPlatformSqlConfigured()) {
+      return {
+        id: String(id),
+        descripcion: 'iMedicWS',
+      };
     }
 
     const consulta = `${EMPRESA_SELECT} WHERE IDEMPRESA = @p0`;

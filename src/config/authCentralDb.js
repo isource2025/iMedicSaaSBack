@@ -51,9 +51,35 @@ async function getAuthCentralPool() {
 	return pool;
 }
 
+function validateAuthDbEnv() {
+	const missing = [];
+	if (!process.env.AUTH_DB_HOST) missing.push('AUTH_DB_HOST');
+	if (!process.env.AUTH_DB_USER) missing.push('AUTH_DB_USER');
+	if (!process.env.AUTH_DB_NAME) missing.push('AUTH_DB_NAME');
+	return { missing };
+}
+
+function logAuthDbEnvStatus() {
+	if (!isAuthCentralEnabled()) {
+		console.log('ℹ AUTH MySQL: desactivado (modo Render/legacy — login en SQL Server plataforma)');
+		return false;
+	}
+	const { missing } = validateAuthDbEnv();
+	if (missing.length > 0) {
+		console.error('❌ AUTH MySQL: faltan variables en Railway:', missing.join(', '));
+		return false;
+	}
+	console.log(
+		`✓ AUTH MySQL → ${process.env.AUTH_DB_HOST}:${process.env.AUTH_DB_PORT || 3306} / ${process.env.AUTH_DB_NAME}`,
+	);
+	return true;
+}
+
 module.exports = {
 	getAuthCentralPool,
 	authDbConfig,
 	isAuthCentralConfigured,
 	isAuthCentralEnabled,
+	validateAuthDbEnv,
+	logAuthDbEnvStatus,
 };

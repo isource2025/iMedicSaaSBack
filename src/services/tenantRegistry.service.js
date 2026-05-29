@@ -15,6 +15,20 @@ const authCentralService = require('./authCentral.service');
 const DISCOVER_MAX = Number(process.env.TENANT_DISCOVER_MAX) || 25;
 
 async function listarEmpresasActivas() {
+	if (authCentralService.isAuthCentralEnabled()) {
+		try {
+			const rows = await authCentralService.obtenerTodasEmpresas();
+			if (rows.length) {
+				return rows.map((r) => ({
+					IDEMPRESA: r.idEmpresa,
+					DESCRIPCION: r.descripcionEmpresa,
+				}));
+			}
+		} catch (e) {
+			console.warn('[authCentral] listarEmpresasActivas:', e.message);
+		}
+	}
+
 	const pool = await connectDB();
 	const rows = await pool.request().query(`
     SELECT IDEMPRESA, DESCRIPCION

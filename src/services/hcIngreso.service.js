@@ -399,37 +399,49 @@ const crearHCIngreso = async (data) => {
  */
 const actualizarHCIngreso = async (idHCIngreso, data) => {
     try {
-        // Construir SET dinámicamente con todos los campos recibidos
+        const sincronizarSignosVitales = data.sincronizarSignosVitales === true;
+
         const setClauses = [];
         const params = [{ value: idHCIngreso }]; // @param0 = WHERE
         let paramIndex = 1;
-        
-        // Campos básicos
-        setClauses.push(`IdSector = @param${paramIndex}`);
-        params.push({ value: normalizarIdSector(data.IdSector) });
-        paramIndex++;
-        
-        setClauses.push(`MotivoConsulta = @param${paramIndex}`);
-        params.push({ value: valorTextoHci(data.MotivoConsulta || '') });
-        paramIndex++;
-        
-        setClauses.push(`EnfermedadActual = @param${paramIndex}`);
-        params.push({ value: valorTextoHci(data.EnfermedadActual || '') });
-        paramIndex++;
-        
-        setClauses.push(`IdProfecional = @param${paramIndex}`);
-        params.push({ value: normalizarNumero(data.IdProfecional) });
-        paramIndex++;
 
-        setClauses.push(`Fecha = @param${paramIndex}`);
-        params.push({ value: normalizarFechaHci(data) });
-        paramIndex++;
+        if (data.IdSector !== undefined) {
+            setClauses.push(`IdSector = @param${paramIndex}`);
+            params.push({ value: normalizarIdSector(data.IdSector) });
+            paramIndex++;
+        }
+
+        if (data.MotivoConsulta !== undefined) {
+            setClauses.push(`MotivoConsulta = @param${paramIndex}`);
+            params.push({ value: valorTextoHci(data.MotivoConsulta) });
+            paramIndex++;
+        }
+
+        if (data.EnfermedadActual !== undefined) {
+            setClauses.push(`EnfermedadActual = @param${paramIndex}`);
+            params.push({ value: valorTextoHci(data.EnfermedadActual) });
+            paramIndex++;
+        }
+
+        if (data.IdProfecional !== undefined) {
+            setClauses.push(`IdProfecional = @param${paramIndex}`);
+            params.push({ value: normalizarNumero(data.IdProfecional) });
+            paramIndex++;
+        }
+
+        if (data.fecha !== undefined || data.hora !== undefined || data.Fecha !== undefined) {
+            setClauses.push(`Fecha = @param${paramIndex}`);
+            params.push({ value: normalizarFechaHci(data) });
+            paramIndex++;
+        }
         
         // Campos dinámicos del examen físico
         const prefijosValidos = ['SV','PF','TCS','SL','SOAM','C','CU','M','AR','AC','A','AUG','AIG','SN','EO','EC','RDT','PD','PT','AD','EN','MI','MP','EG','DIA'];
         
         Object.keys(data).forEach(key => {
+            if (key === 'sincronizarSignosVitales') return;
             if (CAMPOS_BASICOS_HCI.includes(key)) return;
+            if (key === 'fecha' || key === 'hora') return;
             if (!key.includes('_')) return;
             const prefijo = key.split('_')[0];
             if (!prefijosValidos.includes(prefijo)) return;
@@ -451,27 +463,35 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
             }
         });
         
-        const sql = `
-            UPDATE dbo.imHCI
-            SET ${setClauses.join(',\n                ')}
-            WHERE IdHCIngreso = @param0
-        `;
-        
-        console.log('[HC Ingreso] Actualizando', setClauses.length, 'campos para IdHCIngreso:', idHCIngreso);
-        
-        await executeQuery(sql, params);
-        
-        // Guardar datos medibles en controles frecuentes (nuevo registro para historial)
-        const resultadoControles = await guardarSignosVitalesEnControles({
-            ...data,
-            IdHCIngreso: idHCIngreso
-        });
-        
-        console.log('Resultado guardado en controles (actualización):', resultadoControles.message);
-        
-        return { 
+        if (setClauses.length === 0 && !sincronizarSignosVitales) {
+            return { success: true, signosVitalesEnControles: false, sinCambios: true };
+        }
+
+        if (setClauses.length > 0) {
+            const sql = `
+                UPDATE dbo.imHCI
+                SET ${setClauses.join(',\n                ')}
+                WHERE IdHCIngreso = @param0
+            `;
+
+            console.log('[HC Ingreso] Actualizando', setClauses.length, 'campos para IdHCIngreso:', idHCIngreso);
+            await executeQuery(sql, params);
+        }
+
+        let signosVitalesEnControles = false;
+        if (sincronizarSignosVitales) {
+            const resultadoControles = await guardarSignosVitalesEnControles({
+                ...data,
+                IdHCIngreso: idHCIngreso,
+                NumeroVisita: data.NumeroVisita,
+            });
+            signosVitalesEnControles = resultadoControles.success;
+            console.log('Resultado guardado en controles (signos vitales modificados):', resultadoControles.message);
+        }
+
+        return {
             success: true,
-            signosVitalesEnControles: resultadoControles.success
+            signosVitalesEnControles,
         };
     } catch (error) {
         console.error("Error al actualizar HC de Ingreso:", error);

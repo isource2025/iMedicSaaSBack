@@ -1,7 +1,14 @@
 const pdf = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const sharp = require('sharp');
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+
+let pdfjsLib = null;
+function getPdfJsLib() {
+  if (!pdfjsLib) {
+    pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+  }
+  return pdfjsLib;
+}
 
 /**
  * Servicio para procesamiento OCR de documentos de laboratorio
@@ -14,7 +21,7 @@ const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 const extraerTextoConPdfJs = async (buffer) => {
   try {
     const uint8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-    const loadingTask = pdfjsLib.getDocument({
+    const loadingTask = getPdfJsLib().getDocument({
       data: uint8,
       disableWorker: true,
       verbosity: 0

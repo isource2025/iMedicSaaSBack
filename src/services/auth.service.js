@@ -1,4 +1,5 @@
 const { executeQuery, executePlatformQuery } = require('../models/db');
+const { isPlatformSqlConfigured } = require('../config/database');
 const { runWithTenant, getTenantId } = require('../context/tenantContext');
 const tenantRegistry = require('./tenantRegistry.service');
 const authCentralService = require('./authCentral.service');
@@ -50,6 +51,7 @@ const esSuperAdminPorUsername = async (username) => {
     } catch (e) {
       console.warn('[authCentral] esSuperAdminPorUsername:', e.message);
     }
+    if (!isPlatformSqlConfigured()) return false;
   }
 
   try {

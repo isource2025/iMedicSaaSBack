@@ -3,30 +3,59 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const DB_PORT = parseInt(process.env.DB_PORT, 10);
+function getPlatformDbName() {
+  return process.env.DB_NAME || process.env.DB_DATABASE || '';
+}
 
-const server = process.env.DB_INSTANCE
-  ? `${process.env.DB_SERVER}\\${process.env.DB_INSTANCE}`
-  : process.env.DB_SERVER;
+/** @returns {{ missing: string[] }} */
+function validatePlatformDbEnv() {
+  const missing = [];
+  if (!process.env.DB_SERVER) missing.push('DB_SERVER');
+  if (!process.env.DB_USER) missing.push('DB_USER');
+  if (!process.env.DB_PASSWORD) missing.push('DB_PASSWORD');
+  if (!getPlatformDbName()) missing.push('DB_NAME (o DB_DATABASE)');
+  return { missing };
+}
 
-const sqlAuthConfig = {
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  server: process.env.DB_SERVER,
-  port: DB_PORT || 1433,
-  options: {
-    encrypt: false,
-    trustServerCertificate: true,
-    enableArithAbort: true
-  },
-  connectionTimeout: 30000,
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
+function buildSqlAuthConfig() {
+  const { missing } = validatePlatformDbEnv();
+  if (missing.length > 0) {
+    throw new Error(
+      `Variables de entorno de SQL Server incompletas: ${missing.join(', ')}. ` +
+        'Configúralas en Railway (Variables del servicio) o en el archivo .env local.'
+    );
   }
-};
+
+  const dbServer = process.env.DB_SERVER;
+  const server = process.env.DB_INSTANCE
+    ? `${dbServer}\\${process.env.DB_INSTANCE}`
+    : dbServer;
+  const port = parseInt(process.env.DB_PORT, 10) || 1433;
+
+  const config = {
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: getPlatformDbName(),
+    server,
+    options: {
+      encrypt: false,
+      trustServerCertificate: true,
+      enableArithAbort: true
+    },
+    connectionTimeout: 30000,
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000
+    }
+  };
+
+  if (!process.env.DB_INSTANCE) {
+    config.port = port;
+  }
+
+  return config;
+}
 
 let connectionPool;
 
@@ -51,7 +80,9 @@ async function connectDB() {
   }
 
   try {
-    console.log(`Conectando a SQL Server en ${sqlAuthConfig.server}:${sqlAuthConfig.port}`);
+    const sqlAuthConfig = buildSqlAuthConfig();
+    const portLabel = sqlAuthConfig.port != null ? `:${sqlAuthConfig.port}` : '';
+    console.log(`Conectando a SQL Server en ${sqlAuthConfig.server}${portLabel}`);
     connectionPool = new sql.ConnectionPool(sqlAuthConfig);
     await connectionPool.connect();
     console.log('✅ Conexión establecida correctamente con autenticación SQL');
@@ -94,8 +125,33 @@ async function executeQuery(query, params = []) {
   }
 }
 
+/** Modo Render/legacy: catálogo en SQL Server vía .env */
+function isPlatformSqlConfigured() {
+  const { missing } = validatePlatformDbEnv();
+  return missing.length === 0;
+}
+
+/** Log al arranque (Railway no usa .env del repo). */
+function logPlatformDbEnvStatus() {
+  if (!isPlatformSqlConfigured()) {
+    console.log(
+      'ℹ SQL Server plataforma (.env DB_*): no configurado — OK en Railway si AUTH_DB=1 y Empresas en MySQL',
+    );
+    return false;
+  }
+  const port = process.env.DB_INSTANCE ? '(instancia nombrada)' : (process.env.DB_PORT || 1433);
+  console.log(
+    `✓ SQL Server plataforma → ${process.env.DB_SERVER}${typeof port === 'number' || String(port).match(/^\d/) ? `:${port}` : ` ${port}`} / ${getPlatformDbName()}`,
+  );
+  return true;
+}
+
 module.exports = {
   connectDB,
   executeQuery,
-  sql
+  sql,
+  validatePlatformDbEnv,
+  logPlatformDbEnvStatus,
+  getPlatformDbName,
+  isPlatformSqlConfigured,
 };

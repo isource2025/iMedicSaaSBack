@@ -59,7 +59,8 @@ const agendaConfigRoutes = require('./routes/agendaConfig.routes');
 const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 
 // Importar conexión a la base de datos
-const { connectDB } = require('./config/database');
+const { connectDB, isPlatformSqlConfigured } = require('./config/database');
+const { isAuthCentralEnabled } = require('./config/authCentralDb');
 
 // Cargar variables de entorno
 dotenv.config();
@@ -67,16 +68,16 @@ dotenv.config();
 // Inicializar la aplicación Express
 const app = express();
 
-// Inicializar conexión a la base de datos
-connectDB()
-	.then(() => {
-		console.log('Base de datos conectada correctamente');
-	})
-	.catch((err) => {
-		console.error('Error de conexión a la base de datos:', err.message);
-		// No finalizamos el proceso para que el servidor siga funcionando
-		// incluso si la base de datos no está disponible inicialmente
-	});
+// SQL plataforma solo en modo Render/legacy; Railway usa MySQL + Db* por empresa
+if (isPlatformSqlConfigured() || !isAuthCentralEnabled()) {
+	connectDB()
+		.then(() => {
+			console.log('Base de datos plataforma (SQL Server) conectada');
+		})
+		.catch((err) => {
+			console.error('Error de conexión SQL plataforma:', err.message);
+		});
+}
 
 // Configurar middlewares
 configureCors(app); // Configuración CORS
