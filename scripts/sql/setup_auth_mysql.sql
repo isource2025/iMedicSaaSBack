@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS `Empresas` (
   `DbInstance` VARCHAR(120) NULL,
   `DbName` VARCHAR(255) NULL,
   `DbUser` VARCHAR(120) NULL,
+  `DbPassword` VARCHAR(255) NULL COMMENT 'Contraseña SQL en claro (prioridad sobre DbPasswordEnc)',
   `DbPasswordEnc` TEXT NULL,
   PRIMARY KEY (`IDEMPRESA`),
   KEY `IX_Empresas_DESCRIPCION` (`DESCRIPCION`)

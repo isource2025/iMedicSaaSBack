@@ -1,10 +1,13 @@
 /**
  * Pools de conexión por empresa (tenant).
- * La configuración se lee desde dbo.Empresas en la BD plataforma (.env).
+ * Toda la conexión SQL sale de Empresas (MySQL o SQL Server): DbServer, DbPort, DbName, DbUser, DbPassword.
  */
 const sql = require('mssql');
 const { connectDB: connectPlatform, isPlatformSqlConfigured } = require('./database');
-const { decrypt } = require('../utils/dbCrypto');
+const {
+	resolvePasswordFromEmpresaRow,
+	empresaRowHasSqlConnection,
+} = require('../utils/empresaDbConnection');
 const authCentralService = require('../services/authCentral.service');
 
 /** @type {Map<number, { pool: sql.ConnectionPool, key: string }>} */
@@ -32,49 +35,26 @@ function envDefaultConfig() {
 }
 
 function rowToSqlConfig(row) {
-	const useEnv =
-		!row ||
-		(!row.DbServer && !row.DbName && !row.DbUser && !row.DbPasswordEnc);
-
-	if (useEnv) {
-		if (!isPlatformSqlConfigured()) {
-			const err = new Error(
-				'La empresa no tiene DbServer/DbName configurados en el catálogo (MySQL Empresas)',
-			);
-			err.code = 'TENANT_DB_NOT_CONFIGURED';
-			throw err;
+	if (!empresaRowHasSqlConnection(row)) {
+		if (isPlatformSqlConfigured()) {
+			return envDefaultConfig();
 		}
-		return envDefaultConfig();
-	}
-
-	let password = '';
-	if (row.DbPasswordEnc) {
-		try {
-			password = decrypt(row.DbPasswordEnc);
-		} catch (e) {
-			const err = new Error(
-				'No se pudo descifrar DbPasswordEnc (verificar PLATFORM_DB_SECRET en Railway)',
-			);
-			err.code = 'TENANT_DB_DECRYPT_FAILED';
-			throw err;
-		}
-	} else {
-		password = process.env.DB_PASSWORD || '';
-	}
-
-	const server = String(row.DbServer || '').trim();
-	if (!server) {
-		const err = new Error('DbServer vacío en catálogo de empresa');
+		const err = new Error(
+			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPassword (o DbPasswordEnc válido)',
+		);
 		err.code = 'TENANT_DB_NOT_CONFIGURED';
 		throw err;
 	}
 
+	const server = String(row.DbServer).trim();
+	const password = resolvePasswordFromEmpresaRow(row);
+
 	const config = {
 		server,
-		port: row.DbPort != null ? Number(row.DbPort) : parseInt(process.env.DB_PORT, 10) || 1433,
-		database: String(row.DbName || process.env.DB_NAME).trim(),
-		user: String(row.DbUser || process.env.DB_USER).trim(),
-		password: String(password),
+		port: row.DbPort != null && row.DbPort !== '' ? Number(row.DbPort) : 1433,
+		database: String(row.DbName).trim(),
+		user: String(row.DbUser).trim(),
+		password,
 		options: {
 			encrypt: false,
 			trustServerCertificate: true,
@@ -131,6 +111,7 @@ async function loadEmpresaConnectionRow(idEmpresa) {
         ${c('DbInstance')},
         ${c('DbName')},
         ${c('DbUser')},
+        ${c('DbPassword')},
         ${c('DbPasswordEnc')}
       FROM dbo.Empresas
       WHERE IDEMPRESA = @id
