@@ -2,7 +2,7 @@
  * Registro de tenants y descubrimiento de usuario para login multi-BD.
  * Catálogo: BD plataforma (.env). Datos clínicos: BD por empresa.
  */
-const { connectDB } = require('../config/database');
+const { connectDB, isPlatformSqlConfigured } = require('../config/database');
 const {
 	getTenantPool,
 	loadEmpresaConnectionRow,
@@ -132,13 +132,19 @@ async function descubrirEmpresasPorUsuario(username) {
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
 			const central = await authCentralService.descubrirEmpresas(u);
-			if (central.length) return central;
+			return central;
 		} catch (e) {
 			console.warn('[authCentral] descubrirEmpresasPorUsuario:', e.message);
+			if (!isPlatformSqlConfigured()) {
+				return [];
+			}
 		}
 	}
 
 	const catalog = await listarEmpresasActivas();
+	if (!catalog.length) {
+		return [];
+	}
 	const catalogIds = new Set(catalog.map((c) => Number(c.IDEMPRESA)));
 	const groups = await agruparEmpresasPorConexion(catalog);
 

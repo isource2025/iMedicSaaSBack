@@ -114,6 +114,7 @@ async function autenticarEnTodasLasEmpresas(username, password) {
 
 async function descubrirEmpresas(username) {
 	if (!isAuthCentralEnabled()) return [];
+	const u = normalizarUsername(username);
 	const rows = await query(
 		`
     SELECT DISTINCT
@@ -126,7 +127,7 @@ async function descubrirEmpresas(username) {
     WHERE LOWER(TRIM(COALESCE(NULLIF(pw.NombreRed, ''), ''))) = ?
     ORDER BY e.DESCRIPCION
     `,
-		[normalizarUsername(username)],
+		[u],
 	);
 	return rows.map((row) => ({
 		idEmpresa: Number(row.idEmpresa),

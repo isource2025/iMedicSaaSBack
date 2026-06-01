@@ -85,6 +85,19 @@ const obtenerSectoresPorUsuario = async (username) => {
     if (await esSuperAdminPorUsername(username)) {
       return [];
     }
+
+    if (authCentralService.isAuthCentralEnabled() && !isPlatformSqlConfigured()) {
+      try {
+        const empresas = await authCentralService.descubrirEmpresas(username);
+        if (empresas.length === 1) {
+          return authCentralService.obtenerSectores(username, empresas[0].idEmpresa);
+        }
+      } catch (e) {
+        console.warn('[authCentral] obtenerSectoresPorUsuario sin idEmpresa:', e.message);
+      }
+      return [];
+    }
+
     // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
     // Usar UPPER y RTRIM para hacer la comparación case-insensitive y sin espacios
     const consulta = `
@@ -204,23 +217,31 @@ const obtenerTodasEmpresas = async () => {
     return rows || [];
   } catch (error) {
     console.error('Error al obtener todas las empresas:', error.message);
+    if (authCentralService.isAuthCentralEnabled() && !isPlatformSqlConfigured()) {
+      return [];
+    }
     throw error;
   }
 };
 
 /** Descubre empresas para el formulario de login (sin contraseña). */
 const descubrirEmpresasLogin = async (username) => {
-  if (await esSuperAdminPorUsername(username)) {
-    return { empresas: [], esSuperAdmin: true, requiereSector: false };
+  try {
+    if (await esSuperAdminPorUsername(username)) {
+      return { empresas: [], esSuperAdmin: true, requiereSector: false };
+    }
+
+    const found = await tenantRegistry.descubrirEmpresasPorUsuario(username);
+    const empresas = found.map((e) => ({
+      idEmpresa: e.idEmpresa,
+      descripcionEmpresa: e.descripcionEmpresa,
+    }));
+
+    return { empresas, esSuperAdmin: false, requiereSector: true };
+  } catch (error) {
+    console.error('descubrirEmpresasLogin:', error.message);
+    return { empresas: [], esSuperAdmin: false, requiereSector: true };
   }
-
-  const found = await tenantRegistry.descubrirEmpresasPorUsuario(username);
-  const empresas = found.map((e) => ({
-    idEmpresa: e.idEmpresa,
-    descripcionEmpresa: e.descripcionEmpresa,
-  }));
-
-  return { empresas, esSuperAdmin: false, requiereSector: true };
 };
 
 /**
@@ -302,6 +323,22 @@ const obtenerSectoresPorUsuarioConTenant = async (username, idEmpresa) => {
   if (id && Number.isFinite(id)) {
     return runWithTenant(id, () => obtenerSectoresPorUsuario(username));
   }
+
+  if (authCentralService.isAuthCentralEnabled()) {
+    try {
+      const empresas = await authCentralService.descubrirEmpresas(username);
+      if (empresas.length === 1) {
+        const central = await authCentralService.obtenerSectores(username, empresas[0].idEmpresa);
+        if (central.length) return central;
+      }
+    } catch (e) {
+      console.warn('[authCentral] obtenerSectoresPorUsuarioConTenant:', e.message);
+    }
+    if (!isPlatformSqlConfigured()) {
+      return [];
+    }
+  }
+
   return obtenerSectoresPorUsuario(username);
 };
 

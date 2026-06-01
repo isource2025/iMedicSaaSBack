@@ -285,7 +285,8 @@ const obtenerSectoresPorUsuario = async (req, res) => {
     console.error(`Error al obtener sectores para usuario ${username}:`, error);
     res.status(500).json({
       success: false,
-      mensaje: 'Error al obtener los sectores para el usuario'
+      mensaje: 'Error al obtener los sectores para el usuario',
+      error: process.env.NODE_ENV === 'production' ? undefined : error.message,
     });
   }
 };
@@ -306,6 +307,7 @@ const obtenerEmpresasPorUsuario = async (req, res) => {
     res.status(500).json({
       success: false,
       mensaje: 'Error al obtener las empresas para el usuario',
+      error: process.env.NODE_ENV === 'production' ? undefined : error.message,
     });
   }
 };

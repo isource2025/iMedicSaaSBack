@@ -3,7 +3,7 @@
  * La configuración se lee desde dbo.Empresas en la BD plataforma (.env).
  */
 const sql = require('mssql');
-const { connectDB: connectPlatform } = require('./database');
+const { connectDB: connectPlatform, isPlatformSqlConfigured } = require('./database');
 const { decrypt } = require('../utils/dbCrypto');
 const authCentralService = require('../services/authCentral.service');
 
@@ -37,17 +37,44 @@ function rowToSqlConfig(row) {
 		(!row.DbServer && !row.DbName && !row.DbUser && !row.DbPasswordEnc);
 
 	if (useEnv) {
+		if (!isPlatformSqlConfigured()) {
+			const err = new Error(
+				'La empresa no tiene DbServer/DbName configurados en el catálogo (MySQL Empresas)',
+			);
+			err.code = 'TENANT_DB_NOT_CONFIGURED';
+			throw err;
+		}
 		return envDefaultConfig();
 	}
 
-	const password = row.DbPasswordEnc ? decrypt(row.DbPasswordEnc) : process.env.DB_PASSWORD;
+	let password = '';
+	if (row.DbPasswordEnc) {
+		try {
+			password = decrypt(row.DbPasswordEnc);
+		} catch (e) {
+			const err = new Error(
+				'No se pudo descifrar DbPasswordEnc (verificar PLATFORM_DB_SECRET en Railway)',
+			);
+			err.code = 'TENANT_DB_DECRYPT_FAILED';
+			throw err;
+		}
+	} else {
+		password = process.env.DB_PASSWORD || '';
+	}
+
+	const server = String(row.DbServer || '').trim();
+	if (!server) {
+		const err = new Error('DbServer vacío en catálogo de empresa');
+		err.code = 'TENANT_DB_NOT_CONFIGURED';
+		throw err;
+	}
 
 	const config = {
-		server: String(row.DbServer || process.env.DB_SERVER).trim(),
+		server,
 		port: row.DbPort != null ? Number(row.DbPort) : parseInt(process.env.DB_PORT, 10) || 1433,
 		database: String(row.DbName || process.env.DB_NAME).trim(),
 		user: String(row.DbUser || process.env.DB_USER).trim(),
-		password: String(password || ''),
+		password: String(password),
 		options: {
 			encrypt: false,
 			trustServerCertificate: true,
