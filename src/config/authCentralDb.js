@@ -9,12 +9,41 @@ function isTruthy(value) {
 	return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+/** Variables AUTH_DB_* o las que inyecta Railway al vincular MySQL (MYSQLHOST, …). */
+function resolveAuthDbEnv() {
+	return {
+		host:
+			process.env.AUTH_DB_HOST ||
+			process.env.MYSQLHOST ||
+			process.env.MYSQL_HOST ||
+			'',
+		port: Number(
+			process.env.AUTH_DB_PORT ||
+				process.env.MYSQLPORT ||
+				process.env.MYSQL_PORT ||
+				3306,
+		),
+		user:
+			process.env.AUTH_DB_USER ||
+			process.env.MYSQLUSER ||
+			process.env.MYSQL_USER ||
+			'',
+		password:
+			process.env.AUTH_DB_PASSWORD ||
+			process.env.MYSQLPASSWORD ||
+			process.env.MYSQL_PASSWORD ||
+			'',
+		database:
+			process.env.AUTH_DB_NAME ||
+			process.env.MYSQLDATABASE ||
+			process.env.MYSQL_DATABASE ||
+			'',
+	};
+}
+
 function isAuthCentralConfigured() {
-	return !!(
-		process.env.AUTH_DB_HOST &&
-		process.env.AUTH_DB_USER &&
-		process.env.AUTH_DB_NAME
-	);
+	const { host, user, database } = resolveAuthDbEnv();
+	return !!(host && user && database);
 }
 
 function isAuthCentralEnabled() {
@@ -25,13 +54,14 @@ function isAuthCentralEnabled() {
 }
 
 function authDbConfig() {
+	const env = resolveAuthDbEnv();
 	const useSsl = isTruthy(process.env.AUTH_DB_SSL);
 	return {
-		host: process.env.AUTH_DB_HOST,
-		port: Number(process.env.AUTH_DB_PORT || 3306),
-		user: process.env.AUTH_DB_USER,
-		password: process.env.AUTH_DB_PASSWORD || '',
-		database: process.env.AUTH_DB_NAME,
+		host: env.host,
+		port: env.port,
+		user: env.user,
+		password: env.password,
+		database: env.database,
 		waitForConnections: true,
 		connectionLimit: Number(process.env.AUTH_DB_POOL_MAX || 10),
 		queueLimit: 0,
@@ -52,34 +82,49 @@ async function getAuthCentralPool() {
 }
 
 function validateAuthDbEnv() {
+	const env = resolveAuthDbEnv();
 	const missing = [];
-	if (!process.env.AUTH_DB_HOST) missing.push('AUTH_DB_HOST');
-	if (!process.env.AUTH_DB_USER) missing.push('AUTH_DB_USER');
-	if (!process.env.AUTH_DB_NAME) missing.push('AUTH_DB_NAME');
-	return { missing };
+	if (!env.host) missing.push('AUTH_DB_HOST (o MYSQLHOST de Railway)');
+	if (!env.user) missing.push('AUTH_DB_USER (o MYSQLUSER)');
+	if (!env.database) missing.push('AUTH_DB_NAME (o MYSQLDATABASE)');
+	return { missing, env };
+}
+
+async function testAuthCentralConnection() {
+	const pool = await getAuthCentralPool();
+	await pool.query('SELECT 1 AS ok');
 }
 
 function logAuthDbEnvStatus() {
+	if (
+		process.env.AUTH_DB_ENABLED != null &&
+		String(process.env.AUTH_DB_ENABLED).trim() !== '' &&
+		!isTruthy(process.env.AUTH_DB_ENABLED)
+	) {
+		console.error('❌ AUTH MySQL: AUTH_DB_ENABLED=0 — el login usará SQL plataforma (DB_*)');
+		return false;
+	}
 	if (!isAuthCentralEnabled()) {
-		console.log('ℹ AUTH MySQL: desactivado (modo Render/legacy — login en SQL Server plataforma)');
+		console.log('ℹ AUTH MySQL: desactivado — configurá AUTH_DB_* o vinculá MySQL en Railway');
 		return false;
 	}
-	const { missing } = validateAuthDbEnv();
+	const { missing, env } = validateAuthDbEnv();
 	if (missing.length > 0) {
-		console.error('❌ AUTH MySQL: faltan variables en Railway:', missing.join(', '));
+		console.error('❌ AUTH MySQL: faltan variables:', missing.join(', '));
+		console.error('   En Railway: Variables del servicio backend o referencia ${{MySQL.MYSQLHOST}}');
 		return false;
 	}
-	console.log(
-		`✓ AUTH MySQL → ${process.env.AUTH_DB_HOST}:${process.env.AUTH_DB_PORT || 3306} / ${process.env.AUTH_DB_NAME}`,
-	);
+	console.log(`✓ AUTH MySQL → ${env.host}:${env.port} / ${env.database}`);
 	return true;
 }
 
 module.exports = {
 	getAuthCentralPool,
 	authDbConfig,
+	resolveAuthDbEnv,
 	isAuthCentralConfigured,
 	isAuthCentralEnabled,
 	validateAuthDbEnv,
 	logAuthDbEnvStatus,
+	testAuthCentralConnection,
 };

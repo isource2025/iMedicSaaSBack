@@ -68,14 +68,21 @@ dotenv.config();
 // Inicializar la aplicación Express
 const app = express();
 
-// SQL plataforma solo en modo Render/legacy; Railway usa MySQL + Db* por empresa
-if (isPlatformSqlConfigured() || !isAuthCentralEnabled()) {
+// SQL plataforma solo si hay DB_* (Render/legacy). Railway: login en MySQL + SQL por Empresas.Db*
+if (isPlatformSqlConfigured()) {
 	connectDB()
 		.then(() => {
 			console.log('Base de datos plataforma (SQL Server) conectada');
 		})
 		.catch((err) => {
 			console.error('Error de conexión SQL plataforma:', err.message);
+		});
+} else if (isAuthCentralEnabled()) {
+	const { testAuthCentralConnection } = require('./config/authCentralDb');
+	testAuthCentralConnection()
+		.then(() => console.log('✓ MySQL auth (imPassword / imPersonalEmpresas / Empresas) accesible'))
+		.catch((err) => {
+			console.error('❌ No se pudo conectar a MySQL auth:', err.message);
 		});
 }
 
