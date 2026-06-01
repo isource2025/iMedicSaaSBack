@@ -170,7 +170,7 @@ async function obtenerSectores(username, idEmpresa) {
       ON pe.IdPersonal = pw.ValorPersonal
      AND pe.IdEmpresa = ?
     INNER JOIN \`imPersonalSectores\` ps ON ps.idPersonal = pw.ValorPersonal
-    INNER JOIN \`imSectores\` s ON s.Valor = ps.idSector
+    INNER JOIN \`imSectores\` s ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
     WHERE ${USER_MATCH} = ?
     ORDER BY descripcionSector
     `,
@@ -205,7 +205,7 @@ async function obtenerSectorPorPersonal(idEmpresa, idPersonal) {
       ps.idSector AS idSector,
       s.Descripcion AS descripcion
     FROM \`imPersonalSectores\` ps
-    INNER JOIN \`imSectores\` s ON s.Valor = ps.idSector
+    INNER JOIN \`imSectores\` s ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
     INNER JOIN \`imPersonalEmpresas\` pe
       ON pe.IdPersonal = ps.idPersonal
      AND pe.IdEmpresa = ?
