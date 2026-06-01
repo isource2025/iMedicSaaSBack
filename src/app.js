@@ -105,7 +105,12 @@ app.use('/uploads', express.static(uploadsDir)); // legado
 app.use('/media/patients', express.static(patientPhotosDir));
 
 // Configurar rutas
+const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');
+
 app.use('/api/auth', authRoutes);
+// JWT + idEmpresa en contexto (sin esto, /api/beds e indicadores usan DB_* de plataforma y fallan en Railway)
+app.use('/api', apiAuthUnlessPublic);
+
 app.use('/api/beds', bedsRoutes);
 app.use('/api/patients', patientsRoutes);
 app.use('/api/indicaciones', indicacionesRoutes);
@@ -161,10 +166,17 @@ app.use((err, req, res, next) => {
 	if (process.env.NODE_ENV === 'development') {
 		console.error('Stack:', err.stack);
 	}
-	res.status(500).json({
+	const tenantCodes = new Set([
+		'TENANT_DB_NOT_CONFIGURED',
+		'TENANT_DB_DECRYPT_FAILED',
+		'TENANT_EMPRESA_NOT_FOUND',
+	]);
+	const status = tenantCodes.has(err.code) ? 503 : 500;
+	res.status(status).json({
 		success: false,
-		mensaje: 'Error interno del servidor',
-		error: process.env.NODE_ENV === 'development' ? err.message : 'Error interno',
+		mensaje: err.message || 'Error interno del servidor',
+		code: err.code,
+		error: process.env.NODE_ENV === 'development' ? err.message : undefined,
 	});
 });
 

@@ -5,6 +5,7 @@
 const sql = require('mssql');
 const { connectDB: connectPlatform, isPlatformSqlConfigured } = require('./database');
 const {
+	normalizeEmpresaRow,
 	resolvePasswordFromEmpresaRow,
 	empresaRowHasSqlConnection,
 } = require('../utils/empresaDbConnection');
@@ -35,7 +36,8 @@ function envDefaultConfig() {
 }
 
 function rowToSqlConfig(row) {
-	if (!empresaRowHasSqlConnection(row)) {
+	const empresa = normalizeEmpresaRow(row);
+	if (!empresaRowHasSqlConnection(empresa)) {
 		if (isPlatformSqlConfigured()) {
 			return envDefaultConfig();
 		}
@@ -46,14 +48,16 @@ function rowToSqlConfig(row) {
 		throw err;
 	}
 
-	const server = String(row.DbServer).trim();
-	const password = resolvePasswordFromEmpresaRow(row);
+	const server = String(empresa.DbServer).trim();
+	const password = resolvePasswordFromEmpresaRow(empresa);
+	const hasExplicitPort =
+		empresa.DbPort != null && empresa.DbPort !== '' && Number.isFinite(Number(empresa.DbPort));
+	const port = hasExplicitPort ? Number(empresa.DbPort) : 1433;
 
 	const config = {
 		server,
-		port: row.DbPort != null && row.DbPort !== '' ? Number(row.DbPort) : 1433,
-		database: String(row.DbName).trim(),
-		user: String(row.DbUser).trim(),
+		database: String(empresa.DbName).trim(),
+		user: String(empresa.DbUser).trim(),
 		password,
 		options: {
 			encrypt: false,
@@ -64,9 +68,17 @@ function rowToSqlConfig(row) {
 		pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
 	};
 
-	const instance = row.DbInstance != null ? String(row.DbInstance).trim() : '';
-	if (instance) {
-		config.options.instanceName = instance;
+	// Puerto TCP explícito (típico en cloud → SQL on-prem): no mezclar instanceName (SQLEXPRESS).
+	if (hasExplicitPort) {
+		config.port = port;
+	} else {
+		const instance =
+			empresa.DbInstance != null ? String(empresa.DbInstance).trim() : '';
+		if (instance) {
+			config.options.instanceName = instance;
+		} else {
+			config.port = 1433;
+		}
 	}
 
 	return config;
@@ -83,10 +95,25 @@ async function loadEmpresaConnectionRow(idEmpresa) {
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
 			const rowCentral = await authCentralService.obtenerEmpresaPorId(idEmpresa);
-			if (rowCentral) return rowCentral;
+			if (rowCentral) return normalizeEmpresaRow(rowCentral);
+			if (!isPlatformSqlConfigured()) {
+				const err = new Error(
+					`Empresa ${idEmpresa} no encontrada en MySQL (tabla Empresas). Revisá IDEMPRESA y datos DbServer/DbPassword.`,
+				);
+				err.code = 'TENANT_EMPRESA_NOT_FOUND';
+				throw err;
+			}
 		} catch (e) {
+			if (e.code === 'TENANT_EMPRESA_NOT_FOUND') throw e;
 			console.warn(`[authCentral] loadEmpresaConnectionRow ${idEmpresa}:`, e.message);
 		}
+	}
+	if (!isPlatformSqlConfigured()) {
+		const err = new Error(
+			'Catálogo SQL plataforma no configurado y no se pudo leer Empresas desde MySQL.',
+		);
+		err.code = 'TENANT_DB_NOT_CONFIGURED';
+		throw err;
 	}
 	const pool = await connectPlatform();
 	if (!empresasColumnsCache) {
@@ -116,7 +143,7 @@ async function loadEmpresaConnectionRow(idEmpresa) {
       FROM dbo.Empresas
       WHERE IDEMPRESA = @id
     `);
-	return result.recordset[0] || null;
+	return normalizeEmpresaRow(result.recordset[0] || null);
 }
 
 async function getTenantPool(idEmpresa) {
@@ -147,7 +174,15 @@ async function getTenantPool(idEmpresa) {
 	}
 
 	const pool = new sql.ConnectionPool(config);
-	await pool.connect();
+	try {
+		await pool.connect();
+	} catch (e) {
+		console.error(
+			`[tenant] SQL empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}:`,
+			e.message,
+		);
+		throw e;
+	}
 	poolCache.set(id, { pool, key });
 	return pool;
 }
