@@ -240,14 +240,12 @@ async function esSuperAdmin(username) {
 
 async function obtenerEmpresaPorId(idEmpresa) {
 	if (!isAuthCentralEnabled()) return null;
-	const cols = await getEmpresasMysqlColumns();
-	const dbPasswordCol = cols.has('dbpassword') ? 'DbPassword,' : '';
 	const rows = await query(
 		`
     SELECT
       IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
       Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
-      DbServer, DbPort, DbInstance, DbName, DbUser, ${dbPasswordCol} DbPasswordEnc
+      DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc
     FROM \`Empresas\`
     WHERE IDEMPRESA = ?
     LIMIT 1

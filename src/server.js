@@ -12,6 +12,13 @@ const PORT = process.env.PORT || 5000;
 
 const authOk = logAuthDbEnvStatus();
 logPlatformDbEnvStatus();
+if (process.env.PLATFORM_DB_SECRET?.trim()) {
+	console.log('✓ PLATFORM_DB_SECRET configurado (descifrado DbPasswordEnc)');
+} else if (authOk) {
+	console.warn(
+		'⚠ PLATFORM_DB_SECRET no definido — DbPasswordEnc usará JWT_SECRET o valor por defecto; debe coincidir con el cifrado en MySQL',
+	);
+}
 if (authOk && !isPlatformSqlConfigured()) {
   console.log(
     '→ Modo Railway: login vía imPassword + imPersonalEmpresas (MySQL); SQL clínico por Empresas.Db*',

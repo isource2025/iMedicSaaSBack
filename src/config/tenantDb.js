@@ -42,7 +42,7 @@ function rowToSqlConfig(row) {
 			return envDefaultConfig();
 		}
 		const err = new Error(
-			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPassword (o DbPasswordEnc válido)',
+			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPasswordEnc (o DbPassword en texto)',
 		);
 		err.code = 'TENANT_DB_NOT_CONFIGURED';
 		throw err;

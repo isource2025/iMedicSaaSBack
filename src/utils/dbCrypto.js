@@ -7,9 +7,26 @@ const crypto = require('crypto');
 const ALGO = 'aes-256-gcm';
 const IV_LEN = 12;
 
+function getKeyFromSecret(secret) {
+	return crypto.createHash('sha256').update(String(secret)).digest();
+}
+
 function getKey() {
 	const secret = process.env.PLATFORM_DB_SECRET || process.env.JWT_SECRET || 'change-me-platform-db';
-	return crypto.createHash('sha256').update(String(secret)).digest();
+	return getKeyFromSecret(secret);
+}
+
+/** Orden de prueba al descifrar DbPasswordEnc (p. ej. Railway solo tiene JWT_SECRET). */
+function secretsForDecrypt() {
+	const list = [];
+	if (process.env.PLATFORM_DB_SECRET?.trim()) {
+		list.push(process.env.PLATFORM_DB_SECRET.trim());
+	}
+	if (process.env.JWT_SECRET?.trim()) {
+		list.push(process.env.JWT_SECRET.trim());
+	}
+	list.push('change-me-platform-db');
+	return [...new Set(list)];
 }
 
 function encrypt(plainText) {
@@ -21,16 +38,40 @@ function encrypt(plainText) {
 	return Buffer.concat([iv, tag, enc]).toString('base64');
 }
 
-function decrypt(cipherText) {
+function decryptWithKey(cipherText, secret) {
 	if (!cipherText) return '';
 	const buf = Buffer.from(String(cipherText), 'base64');
-	if (buf.length < IV_LEN + 16) return '';
+	if (buf.length < IV_LEN + 16) {
+		throw new Error('DbPasswordEnc inválido (formato base64 corto)');
+	}
 	const iv = buf.subarray(0, IV_LEN);
 	const tag = buf.subarray(IV_LEN, IV_LEN + 16);
 	const data = buf.subarray(IV_LEN + 16);
-	const decipher = crypto.createDecipheriv(ALGO, getKey(), iv);
+	const decipher = crypto.createDecipheriv(ALGO, getKeyFromSecret(secret), iv);
 	decipher.setAuthTag(tag);
 	return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+function decrypt(cipherText) {
+	const secret = process.env.PLATFORM_DB_SECRET || process.env.JWT_SECRET || 'change-me-platform-db';
+	return decryptWithKey(cipherText, secret);
+}
+
+/**
+ * Descifra probando PLATFORM_DB_SECRET, JWT_SECRET y el valor por defecto.
+ * Útil cuando el cifrado se hizo en local con PLATFORM_DB_SECRET y en Railway solo está JWT_SECRET (o viceversa).
+ */
+function decryptTrySecrets(cipherText) {
+	let lastErr;
+	for (const secret of secretsForDecrypt()) {
+		try {
+			const plain = decryptWithKey(cipherText, secret);
+			if (plain) return plain;
+		} catch (e) {
+			lastErr = e;
+		}
+	}
+	throw lastErr || new Error('No se pudo descifrar DbPasswordEnc con ningún secret configurado');
+}
+
+module.exports = { encrypt, decrypt, decryptTrySecrets, secretsForDecrypt };

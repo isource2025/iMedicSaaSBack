@@ -1,4 +1,4 @@
-const { decrypt } = require('./dbCrypto');
+const { decryptTrySecrets } = require('./dbCrypto');
 
 function pickField(row, ...names) {
 	if (!row) return undefined;
@@ -30,27 +30,27 @@ function normalizeEmpresaRow(row) {
 }
 
 /**
- * Contraseña SQL desde fila Empresas: DbPassword (texto) tiene prioridad sobre DbPasswordEnc.
+ * Contraseña SQL desde fila Empresas: DbPasswordEnc (cifrado) es la fuente principal.
  */
 function resolvePasswordFromEmpresaRow(row) {
 	if (!row) return '';
 
-	const plain = pickField(row, 'DbPassword', 'dbpassword');
-	if (plain != null && String(plain).trim() !== '') {
-		return String(plain).trim();
-	}
-
 	const enc = pickField(row, 'DbPasswordEnc', 'dbpasswordenc');
 	if (enc) {
 		try {
-			return decrypt(enc);
+			return decryptTrySecrets(enc);
 		} catch {
 			const err = new Error(
-				'DbPasswordEnc no se pudo descifrar. Usá columna DbPassword en texto o el mismo PLATFORM_DB_SECRET del cifrado.',
+				'DbPasswordEnc no se pudo descifrar. En Railway configurá PLATFORM_DB_SECRET con el mismo valor usado al cifrar (scripts/setup_empresa_conexion.js o Super Admin).',
 			);
 			err.code = 'TENANT_DB_DECRYPT_FAILED';
 			throw err;
 		}
+	}
+
+	const plain = pickField(row, 'DbPassword', 'dbpassword');
+	if (plain != null && String(plain).trim() !== '') {
+		return String(plain).trim();
 	}
 
 	return '';
