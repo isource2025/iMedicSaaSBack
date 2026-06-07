@@ -1,6 +1,7 @@
 const botConversacion = require('./botConversacion.service');
 const botResponder = require('./botResponder.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
+const diag = require('../utils/diagLog');
 const { runWithTenant } = require('../context/tenantContext');
 
 function getVerifyToken() {
@@ -82,42 +83,95 @@ function extraerMensajesEntrantes(body) {
 	return mensajes;
 }
 
+function describeSkippedPayload(body) {
+	if (!body) return 'body vacío';
+	if (body.object !== 'whatsapp_business_account') return `object=${body.object || '?'}`;
+	const fields = [];
+	for (const entry of body.entry || []) {
+		for (const change of entry.changes || []) {
+			fields.push(change.field || '?');
+			const value = change.value || {};
+			if (value.statuses?.length) fields.push(`statuses:${value.statuses.length}`);
+			if (value.messages?.length) fields.push(`messages:${value.messages.length}`);
+		}
+	}
+	return fields.length ? fields.join(',') : 'sin changes reconocibles';
+}
+
 async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 	const resultados = [];
-	await runWithTenant(idEmpresa, async () => {
-		for (const m of mensajes) {
-			try {
-				const r = await botConversacion.registrarMensajeEntrante({
-					telefonoWhatsApp: m.telefono,
-					contenido: m.contenido,
-					idConversacion: m.idConversacion,
-					nombreContacto: m.nombreContacto,
-					metaMessageId: m.metaMessageId,
-				});
-
-				let botReply = null;
-				if (botResponder.gptHabilitado()) {
-					try {
-						botReply = await botResponder.responderMensajeEntrante({
-							idEmpresa,
-							telefonoWhatsApp: m.telefono,
-							idConversacion: r.conversacion.idConversacion,
-						});
-					} catch (gptErr) {
-						console.warn('[whatsappWebhook] GPT:', gptErr.message);
-						botReply = { respondido: false, motivo: gptErr.message };
-					}
-				}
-
-				resultados.push({ ...r, botReply });
-			} catch (err) {
-				console.warn(
-					`[whatsappWebhook] mensaje no registrado (empresa ${idEmpresa}, ${sourceLabel}):`,
-					err.message,
-				);
-			}
-		}
+	diag.logWhatsappEmpresa('procesarGrupo', {
+		idEmpresa,
+		sourceLabel,
+		cantidad: mensajes.length,
+		telefonos: mensajes.map((m) => m.telefono),
+		phoneNumberId: mensajes[0]?.phoneNumberId,
 	});
+	try {
+		await runWithTenant(idEmpresa, async () => {
+			for (const m of mensajes) {
+				try {
+					const r = await botConversacion.registrarMensajeEntrante({
+						telefonoWhatsApp: m.telefono,
+						contenido: m.contenido,
+						idConversacion: m.idConversacion,
+						nombreContacto: m.nombreContacto,
+						metaMessageId: m.metaMessageId,
+					});
+					diag.line('webhook', 'Mensaje registrado en tenant', {
+						idEmpresa,
+						idConversacion: r.conversacion?.idConversacion,
+						telefono: m.telefono,
+					});
+
+					let botReply = null;
+					if (botResponder.gptHabilitado()) {
+						try {
+							botReply = await botResponder.responderMensajeEntrante({
+								idEmpresa,
+								telefonoWhatsApp: m.telefono,
+								idConversacion: r.conversacion.idConversacion,
+							});
+							diag.line('webhook', 'GPT respuesta', {
+								respondido: botReply?.respondido,
+								motivo: botReply?.motivo,
+								textoLen: botReply?.texto?.length,
+							});
+						} catch (gptErr) {
+							diag.warn('webhook', 'GPT error', { error: gptErr.message, code: gptErr.code });
+							console.warn('[whatsappWebhook] GPT:', gptErr.message);
+							botReply = { respondido: false, motivo: gptErr.message };
+						}
+					} else {
+						diag.line('webhook', 'GPT deshabilitado', {
+							BOT_GPT_ENABLED: process.env.BOT_GPT_ENABLED,
+							openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+						});
+					}
+
+					resultados.push({ ...r, botReply });
+				} catch (err) {
+					diag.warn('webhook', 'mensaje no registrado', {
+						idEmpresa,
+						sourceLabel,
+						error: err.message,
+						code: err.code,
+					});
+					console.warn(
+						`[whatsappWebhook] mensaje no registrado (empresa ${idEmpresa}, ${sourceLabel}):`,
+						err.message,
+					);
+				}
+			}
+		});
+	} catch (err) {
+		diag.warn('webhook', 'runWithTenant falló', {
+			idEmpresa,
+			error: err.message,
+			code: err.code,
+		});
+		throw err;
+	}
 	return resultados;
 }
 
@@ -125,7 +179,8 @@ async function procesarWebhookEntrante(body) {
 	const mensajes = extraerMensajesEntrantes(body);
 
 	if (!mensajes.length) {
-		return { procesados: 0, empresas: [] };
+		const skipped = describeSkippedPayload(body);
+		return { procesados: 0, empresas: [], skipped };
 	}
 
 	/** @type {Map<string, typeof mensajes>} */
@@ -145,6 +200,13 @@ async function procesarWebhookEntrante(body) {
 
 		if (phoneKey !== '__default__') {
 			const cfg = await whatsappEmpresa.resolveByPhoneNumberId(phoneKey);
+			diag.logWhatsappEmpresa('resolveByPhoneNumberId', {
+				phoneNumberId: phoneKey,
+				found: Boolean(cfg?.idEmpresa),
+				idEmpresa: cfg?.idEmpresa,
+				source: cfg?.source,
+				hasToken: Boolean(cfg?.accessToken),
+			});
 			if (cfg?.idEmpresa) {
 				idEmpresa = cfg.idEmpresa;
 				sourceLabel = cfg.source || 'phone_number_id';

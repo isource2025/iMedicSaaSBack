@@ -6,6 +6,7 @@ const botConversacion = require('./botConversacion.service');
 const botOpenai = require('./botOpenai.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
+const diag = require('../utils/diagLog');
 
 function gptHabilitado() {
 	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
@@ -76,6 +77,12 @@ async function responderMensajeEntrante({ idEmpresa, telefonoWhatsApp, idConvers
 	const texto = await botOpenai.chat({ system, messages });
 
 	const waCfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
+	diag.logWhatsappEmpresa('botResponder waCfg', {
+		idEmpresa,
+		source: waCfg?.source,
+		phoneNumberId: waCfg?.phoneNumberId,
+		hasToken: Boolean(waCfg?.accessToken),
+	});
 	if (!waCfg?.phoneNumberId || !waCfg?.accessToken) {
 		await botConversacion.registrarMensajeSaliente({
 			idConversacion,

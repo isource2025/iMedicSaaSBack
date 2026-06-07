@@ -14,7 +14,8 @@
 		"setup:whatsapp": "node scripts/setup_whatsapp_bot.js",
 		"setup:whatsapp:all": "node scripts/setup_whatsapp_bot.js all",
 		"setup:empresa-prod-mysql": "node scripts/update_empresa_prod_railway.js",
-		"test:http:bot": "node scripts/test_http_bot.js"
+		"test:http:bot": "node scripts/test_http_bot.js",
+		"diag:crypto": "node scripts/diag_crypto_env.js"
 	},
 	"dependencies": {
 		"axios": "^1.13.6",

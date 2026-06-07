@@ -4,6 +4,7 @@
  */
 const crypto = require('crypto');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
+const diag = require('../utils/diagLog');
 
 function getAppSecret() {
 	return String(process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '').trim();
@@ -19,10 +20,14 @@ function normalizarTelefonoWa(to) {
  */
 function verificarFirmaWebhook(req) {
 	const secret = getAppSecret();
-	if (!secret) return true;
+	if (!secret) {
+		diag.warn('webhook', 'META_APP_SECRET no configurado — firma omitida');
+		return true;
+	}
 
 	const signature = String(req.headers['x-hub-signature-256'] || '').trim();
 	if (!signature) {
+		diag.logSignatureResult(req, { ok: false, error: 'Falta cabecera X-Hub-Signature-256' });
 		const err = new Error('Falta cabecera X-Hub-Signature-256');
 		err.statusCode = 401;
 		throw err;
@@ -30,7 +35,10 @@ function verificarFirmaWebhook(req) {
 
 	const raw = req.rawBody;
 	if (!raw) {
-		console.warn('[whatsappMeta] rawBody no disponible; no se validó firma');
+		diag.warn('webhook', 'rawBody no disponible — firma NO validada (riesgo)', {
+			contentType: req.headers['content-type'],
+			contentLength: req.headers['content-length'],
+		});
 		return true;
 	}
 
@@ -38,6 +46,12 @@ function verificarFirmaWebhook(req) {
 	const receivedHex = signature.replace(/^sha256=/i, '').trim().toLowerCase();
 
 	if (receivedHex.length !== expectedHex.length) {
+		diag.logSignatureResult(req, {
+			ok: false,
+			expectedHex,
+			receivedHex,
+			error: 'Longitud firma distinta',
+		});
 		const err = new Error(
 			'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
 		);
@@ -49,6 +63,12 @@ function verificarFirmaWebhook(req) {
 		const sigBuf = Buffer.from(receivedHex, 'hex');
 		const expBuf = Buffer.from(expectedHex, 'hex');
 		if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+			diag.logSignatureResult(req, {
+				ok: false,
+				expectedHex,
+				receivedHex,
+				error: 'HMAC no coincide',
+			});
 			const err = new Error(
 				'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
 			);
@@ -57,10 +77,13 @@ function verificarFirmaWebhook(req) {
 		}
 	} catch (e) {
 		if (e.statusCode) throw e;
+		diag.logSignatureResult(req, { ok: false, error: e.message });
 		const err = new Error('Firma webhook inválida');
 		err.statusCode = 401;
 		throw err;
 	}
+
+	diag.logSignatureResult(req, { ok: true, expectedHex, receivedHex });
 	return true;
 }
 

@@ -61,7 +61,7 @@ function decrypt(cipherText) {
  * Descifra probando PLATFORM_DB_SECRET, JWT_SECRET y el valor por defecto.
  * Útil cuando el cifrado se hizo en local con PLATFORM_DB_SECRET y en Railway solo está JWT_SECRET (o viceversa).
  */
-function decryptTrySecrets(cipherText) {
+function decryptTrySecrets(cipherText, context) {
 	let lastErr;
 	for (const secret of secretsForDecrypt()) {
 		try {
@@ -71,7 +71,17 @@ function decryptTrySecrets(cipherText) {
 			lastErr = e;
 		}
 	}
+
+	try {
+		const diag = require('./diagLog');
+		if (diag.enabled()) {
+			diag.logDecryptAttempts(context || 'decryptTrySecrets', cipherText);
+		}
+	} catch {
+		/* diag opcional */
+	}
+
 	throw lastErr || new Error('No se pudo descifrar DbPasswordEnc con ningún secret configurado');
 }
 
-module.exports = { encrypt, decrypt, decryptTrySecrets, secretsForDecrypt };
+module.exports = { encrypt, decrypt, decryptTrySecrets, decryptWithKey, secretsForDecrypt };

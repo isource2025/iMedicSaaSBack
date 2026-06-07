@@ -9,6 +9,7 @@
  */
 const { runWithTenant } = require('../context/tenantContext');
 const { encrypt, decryptTrySecrets } = require('../utils/dbCrypto');
+const diag = require('../utils/diagLog');
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
 const botConfigService = require('./botConfig.service');
 
@@ -79,11 +80,22 @@ async function loadFromMysqlByPhone(phoneNumberId) {
 	let accessToken = null;
 	if (r.WhatsAppAccessTokenEnc) {
 		try {
-			accessToken = decryptTrySecrets(r.WhatsAppAccessTokenEnc);
+			accessToken = decryptTrySecrets(r.WhatsAppAccessTokenEnc, 'WhatsAppAccessTokenEnc/mysql');
 		} catch (e) {
+			diag.warn('whatsappEmpresa', 'token MySQL no descifrable', {
+				idEmpresa: r.IDEMPRESA,
+				phoneNumberId: r.WhatsAppPhoneNumberId,
+				error: e.message,
+			});
 			console.warn('[whatsappEmpresa] token MySQL no descifrable:', e.message);
 		}
 	}
+	diag.logWhatsappEmpresa('loadFromMysqlByPhone', {
+		phoneNumberId,
+		idEmpresa: r.IDEMPRESA,
+		hasToken: Boolean(accessToken),
+		tokenEncLen: r.WhatsAppAccessTokenEnc ? String(r.WhatsAppAccessTokenEnc).length : 0,
+	});
 	return configFromPlain({
 		idEmpresa: r.IDEMPRESA,
 		phoneNumberId: r.WhatsAppPhoneNumberId,
@@ -109,7 +121,7 @@ async function loadFromMysqlByEmpresa(idEmpresa) {
 	let accessToken = null;
 	if (r.WhatsAppAccessTokenEnc) {
 		try {
-		 accessToken = decryptTrySecrets(r.WhatsAppAccessTokenEnc);
+		 accessToken = decryptTrySecrets(r.WhatsAppAccessTokenEnc, 'WhatsAppAccessTokenEnc/mysql-empresa');
 		} catch {
 			/* ignore */
 		}
@@ -131,7 +143,7 @@ async function loadFromTenantImBotConfig(idEmpresa) {
 		let accessToken = null;
 		if (map.whatsapp_access_token_enc) {
 			try {
-				accessToken = decryptTrySecrets(String(map.whatsapp_access_token_enc));
+				accessToken = decryptTrySecrets(String(map.whatsapp_access_token_enc), 'WhatsAppAccessTokenEnc/imBotConfig');
 			} catch {
 				/* ignore */
 			}

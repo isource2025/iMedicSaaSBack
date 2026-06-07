@@ -38,13 +38,13 @@ function resolvePasswordFromEmpresaRow(row) {
 	const enc = pickField(row, 'DbPasswordEnc', 'dbpasswordenc');
 	if (enc) {
 		try {
-			return decryptTrySecrets(enc);
-		} catch {
-			const err = new Error(
+			return decryptTrySecrets(enc, 'DbPasswordEnc/tenant');
+		} catch (err) {
+			const e = new Error(
 				'DbPasswordEnc no se pudo descifrar. En Railway configurá PLATFORM_DB_SECRET con el mismo valor usado al cifrar (scripts/setup_empresa_conexion.js o Super Admin).',
 			);
-			err.code = 'TENANT_DB_DECRYPT_FAILED';
-			throw err;
+			e.code = 'TENANT_DB_DECRYPT_FAILED';
+			throw e;
 		}
 	}
 

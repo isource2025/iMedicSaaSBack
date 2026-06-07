@@ -32,6 +32,9 @@ if (authOk && !isPlatformSqlConfigured()) {
 app.listen(PORT, () => {
   console.log(`Servidor ejecutándose en el puerto ${PORT}`);
 
+  const diag = require('./utils/diagLog');
+  diag.logStartupEnv();
+
   if (process.env.WHATSAPP_VERIFY_TOKEN?.trim()) {
     const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
     const base = domain
@@ -48,4 +51,10 @@ app.listen(PORT, () => {
   } else {
     console.warn('⚠ WHATSAPP_VERIFY_TOKEN no definido — webhook Meta inactivo');
   }
+
+  setTimeout(() => {
+    diag.testEmpresa1OnStartup().catch((e) => {
+      diag.warn('startup', 'Diagnóstico empresa 1 error', { error: e.message });
+    });
+  }, 2000);
 });

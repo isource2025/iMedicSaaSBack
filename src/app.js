@@ -98,7 +98,7 @@ app.use(cors());
 // Webhook Meta: body crudo ANTES de express.json (firma X-Hub-Signature-256)
 app.use(
 	'/api/webhook/whatsapp',
-	express.raw({ type: 'application/json', limit: '2mb' }),
+	express.raw({ type: () => true, limit: '2mb' }),
 	(req, _res, next) => {
 		if (req.method === 'POST' && Buffer.isBuffer(req.body)) {
 			req.rawBody = req.body;
