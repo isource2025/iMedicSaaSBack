@@ -1,4 +1,5 @@
 const whatsappWebhook = require('../services/whatsappWebhook.service');
+const whatsappMeta = require('../services/whatsappMeta.service');
 
 /**
  * GET /api/webhook/whatsapp
@@ -21,13 +22,19 @@ function verificar(req, res) {
  */
 async function recibirEventos(req, res) {
 	try {
-		// Meta espera 200 rápido; procesamos en la misma request por ahora.
+		whatsappMeta.verificarFirmaWebhook(req);
 		const result = await whatsappWebhook.procesarWebhookEntrante(req.body);
 		if (result.procesados > 0) {
-			console.log(`[whatsapp] ${result.procesados} mensaje(s) registrado(s)`);
+			console.log(
+				`[whatsapp] ${result.procesados} mensaje(s) → empresa(s) ${result.empresas.join(', ')}`,
+			);
 		}
 		return res.status(200).json({ success: true });
 	} catch (err) {
+		if (err.statusCode === 401) {
+			console.warn('[whatsapp] Firma inválida:', err.message);
+			return res.status(401).json({ success: false, mensaje: err.message });
+		}
 		console.error('[whatsapp] Error procesando webhook:', err.message);
 		// Meta reintenta si no es 200; respondemos 200 igual para evitar loops en errores de BD.
 		return res.status(200).json({ success: false });

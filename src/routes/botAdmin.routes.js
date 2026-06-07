@@ -9,6 +9,8 @@ router.use(requireAuth);
 
 router.get('/config', requirePermiso('TURNOS.ADMIN.VER'), ctrl.obtenerConfigAdmin);
 router.patch('/config', requirePermiso('TURNOS.ADMIN.VER'), ctrl.guardarConfigAdmin);
+router.get('/whatsapp', requirePermiso('TURNOS.ADMIN.VER'), ctrl.obtenerWhatsappConfig);
+router.patch('/whatsapp', requirePermiso('TURNOS.ADMIN.VER'), ctrl.guardarWhatsappConfig);
 router.get('/logs', requirePermiso('TURNOS.ADMIN.VER'), ctrl.listarLogs);
 
 router.get('/conversaciones/estado-almacen', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.estadoAlmacenamiento);

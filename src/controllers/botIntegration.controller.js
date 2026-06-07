@@ -1,4 +1,7 @@
 const botAgenda = require('../services/botAgenda.service');
+const botOpenai = require('../services/botOpenai.service');
+const botResponder = require('../services/botResponder.service');
+const botConversacion = require('../services/botConversacion.service');
 const { mapBotError } = require('../utils/botErrorCodes');
 
 function _err(res, err, fallbackCode) {
@@ -141,8 +144,56 @@ async function cancelar(req, res) {
 	}
 }
 
+async function estadoGpt(req, res) {
+	res.json({
+		success: true,
+		data: {
+			gptHabilitado: botResponder.gptHabilitado(),
+			openaiConfigurado: botOpenai.isConfigured(),
+			modelo: botOpenai.getModel(),
+		},
+	});
+}
+
+/** Prueba HTTP: simula mensaje entrante + respuesta GPT (sin Meta si no hay WA config). */
+async function responderGpt(req, res) {
+	try {
+		const body = req.body || {};
+		const telefono = body.telefono ?? body.telefonoWhatsApp;
+		const mensaje = body.mensaje ?? body.contenido ?? body.text;
+		if (!telefono || !mensaje) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'telefono y mensaje son obligatorios',
+			});
+		}
+
+		const entrante = await botConversacion.registrarMensajeEntrante({
+			telefonoWhatsApp: telefono,
+			contenido: mensaje,
+			idConversacion: body.idConversacion,
+			nombreContacto: body.nombreContacto,
+		});
+
+		const botReply = await botResponder.responderMensajeEntrante({
+			idEmpresa: req.idEmpresa,
+			telefonoWhatsApp: telefono,
+			idConversacion: entrante.conversacion.idConversacion,
+		});
+
+		res.json({
+			success: true,
+			data: { entrante, botReply },
+		});
+	} catch (err) {
+		_err(res, err);
+	}
+}
+
 module.exports = {
 	obtenerConfig,
+	estadoGpt,
+	responderGpt,
 	identificar,
 	buscarPacientes,
 	crearPaciente,

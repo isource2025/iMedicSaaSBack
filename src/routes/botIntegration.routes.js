@@ -13,6 +13,8 @@ router.get('/conversaciones/estado', convCtrl.consultarEstado);
 router.patch('/conversaciones/contexto', convCtrl.actualizarContexto);
 
 router.get('/config', ctrl.obtenerConfig);
+router.get('/gpt/estado', ctrl.estadoGpt);
+router.post('/gpt/responder', ctrl.responderGpt);
 
 /** Puerta de entrada: solo DNI → RENAPER (sexo automático) + ficha local */
 router.post('/identificar', ctrl.identificar);

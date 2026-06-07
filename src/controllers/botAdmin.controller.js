@@ -1,6 +1,7 @@
 const botConfigService = require('../services/botConfig.service');
 const botLogService = require('../services/botLog.service');
 const botAgenda = require('../services/botAgenda.service');
+const whatsappEmpresa = require('../services/whatsappEmpresa.service');
 const { parseApiKeys } = require('../middlewares/botApiKey.middleware');
 
 async function obtenerConfigAdmin(req, res) {
@@ -58,4 +59,45 @@ async function listarLogs(req, res) {
 	}
 }
 
-module.exports = { obtenerConfigAdmin, guardarConfigAdmin, listarLogs };
+async function obtenerWhatsappConfig(req, res) {
+	try {
+		const idEmpresa = req.idEmpresa;
+		if (idEmpresa == null) {
+			return res.status(400).json({ success: false, mensaje: 'Empresa no identificada en la sesión' });
+		}
+		const data = await whatsappEmpresa.getPublicConfigForEmpresa(idEmpresa);
+		res.json({ success: true, data });
+	} catch (err) {
+		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
+	}
+}
+
+async function guardarWhatsappConfig(req, res) {
+	try {
+		const idEmpresa = req.idEmpresa;
+		if (idEmpresa == null) {
+			return res.status(400).json({ success: false, mensaje: 'Empresa no identificada en la sesión' });
+		}
+		const { phoneNumberId, wabaId, accessToken } = req.body || {};
+		const data = await whatsappEmpresa.saveConfigForEmpresa(idEmpresa, {
+			phoneNumberId,
+			wabaId,
+			accessToken,
+		});
+		res.json({
+			success: true,
+			data,
+			mensaje: 'Configuración WhatsApp guardada para esta empresa',
+		});
+	} catch (err) {
+		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
+	}
+}
+
+module.exports = {
+	obtenerConfigAdmin,
+	guardarConfigAdmin,
+	listarLogs,
+	obtenerWhatsappConfig,
+	guardarWhatsappConfig,
+};

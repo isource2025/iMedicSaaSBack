@@ -1,4 +1,6 @@
 const botConversacion = require('../services/botConversacion.service');
+const whatsappEmpresa = require('../services/whatsappEmpresa.service');
+const whatsappMeta = require('../services/whatsappMeta.service');
 
 function agenteDesdeReq(req) {
 	const u = req.auth || {};
@@ -98,11 +100,32 @@ async function enviarMensaje(req, res) {
 			nombreAgente: agente.nombreAgente,
 		});
 
+		let metaEnvio = null;
+		let metaError = null;
+		const idEmpresa = req.idEmpresa;
+		if (idEmpresa != null) {
+			try {
+				const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
+				if (cfg?.phoneNumberId && cfg?.accessToken) {
+					metaEnvio = await whatsappMeta.sendTextMessage({
+						phoneNumberId: cfg.phoneNumberId,
+						accessToken: cfg.accessToken,
+						to: conv.telefonoWhatsApp,
+						text: contenido,
+					});
+				}
+			} catch (err) {
+				metaError = err.message;
+				console.warn('[enviarMensaje] Meta Graph API:', err.message);
+			}
+		}
+
 		res.json({
 			success: true,
 			data: result,
-			pendienteMeta: true,
-			nota: 'Mensaje registrado. Al conectar Meta Cloud API, el envío real se hará vía webhook saliente.',
+			metaEnvio,
+			metaError,
+			pendienteMeta: !metaEnvio?.messageId,
 		});
 	} catch (err) {
 		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });

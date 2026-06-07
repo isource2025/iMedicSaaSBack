@@ -95,7 +95,13 @@ configureCors(app); // Configuración CORS
 //Permitir solo desde tu Frontend (opcion recomendada)
 app.use(cors());
 
-app.use(express.json()); // Parseo de JSON
+app.use(express.json({
+	verify: (req, _res, buf) => {
+		if (req.originalUrl?.startsWith('/api/webhook/whatsapp')) {
+			req.rawBody = buf;
+		}
+	},
+})); // Parseo de JSON
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)
 
 // Asegurar carpetas de uploads

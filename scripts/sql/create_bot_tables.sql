@@ -6,7 +6,7 @@ BEGIN
   CREATE TABLE dbo.imBotConfig (
     IdConfig          INT IDENTITY(1,1) PRIMARY KEY,
     Clave             VARCHAR(50)  NOT NULL,
-    Valor             VARCHAR(500) NULL,
+    Valor             NVARCHAR(MAX) NULL,
     Tipo              VARCHAR(20)  NOT NULL DEFAULT 'string',
     Activo            BIT          NOT NULL DEFAULT 1,
     FechaModificacion DATETIME     NOT NULL DEFAULT GETDATE()

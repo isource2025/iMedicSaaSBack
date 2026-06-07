@@ -190,7 +190,7 @@ async function upsertConfigClave(clave, valor, tipo = 'string') {
 		 VALUES (@p0, @p1, @p2, 1);`,
 		[
 			{ value: clave, type: 'VarChar' },
-			{ value: valStr.slice(0, 4000), type: 'VarChar' },
+			{ value: valStr, type: 'NVarChar' },
 			{ value: tipo, type: 'VarChar' },
 		],
 	);
@@ -264,4 +264,5 @@ module.exports = {
 	getFlujoPasos,
 	defaultFlujoPasos,
 	saveBotConfig,
+	upsertConfigClave,
 };

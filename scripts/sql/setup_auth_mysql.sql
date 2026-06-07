@@ -19,8 +19,12 @@ CREATE TABLE IF NOT EXISTS `Empresas` (
   `DbUser` VARCHAR(120) NULL,
   `DbPassword` VARCHAR(255) NULL COMMENT 'Contraseña SQL en claro (prioridad sobre DbPasswordEnc)',
   `DbPasswordEnc` TEXT NULL,
+  `WhatsAppPhoneNumberId` VARCHAR(32) NULL COMMENT 'Meta Phone Number ID — enruta webhook a IDEMPRESA',
+  `WhatsAppWabaId` VARCHAR(32) NULL COMMENT 'WhatsApp Business Account ID',
+  `WhatsAppAccessTokenEnc` TEXT NULL COMMENT 'Token Graph API cifrado (PLATFORM_DB_SECRET)',
   PRIMARY KEY (`IDEMPRESA`),
-  KEY `IX_Empresas_DESCRIPCION` (`DESCRIPCION`)
+  KEY `IX_Empresas_DESCRIPCION` (`DESCRIPCION`),
+  UNIQUE KEY `UX_Empresas_WhatsAppPhone` (`WhatsAppPhoneNumberId`)
 );
 
 CREATE TABLE IF NOT EXISTS `imRoles` (

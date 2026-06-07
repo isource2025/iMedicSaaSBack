@@ -39,6 +39,12 @@ app.listen(PORT, () => {
       : process.env.PUBLIC_API_BASE_URL?.replace(/\/$/, '') || `http://localhost:${PORT}`;
     console.log(`✓ WhatsApp webhook GET/POST → ${base}/api/webhook/whatsapp`);
     console.log(`  Verify token configurado (WHATSAPP_VERIFY_TOKEN)`);
+    if (process.env.META_APP_SECRET?.trim()) {
+      console.log('  Firma webhook activa (META_APP_SECRET)');
+    }
+    if (process.env.META_APP_ID?.trim()) {
+      console.log(`  Meta App ID: ${process.env.META_APP_ID.trim()}`);
+    }
   } else {
     console.warn('⚠ WHATSAPP_VERIFY_TOKEN no definido — webhook Meta inactivo');
   }

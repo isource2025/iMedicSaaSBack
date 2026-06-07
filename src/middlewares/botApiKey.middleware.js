@@ -72,6 +72,7 @@ function requireBotApiKey(req, res, next) {
 		idEmpresa,
 		codOperador: Number(process.env.BOT_COD_OPERADOR) || 0,
 	};
+	req.idEmpresa = idEmpresa;
 
 	return runWithTenant(idEmpresa, () => next());
 }

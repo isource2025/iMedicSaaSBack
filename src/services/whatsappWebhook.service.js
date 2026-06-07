@@ -1,4 +1,6 @@
 const botConversacion = require('./botConversacion.service');
+const botResponder = require('./botResponder.service');
+const whatsappEmpresa = require('./whatsappEmpresa.service');
 const { runWithTenant } = require('../context/tenantContext');
 
 function getVerifyToken() {
@@ -40,6 +42,9 @@ function extraerMensajesEntrantes(body) {
 		for (const change of entry.changes || []) {
 			if (change.field !== 'messages') continue;
 			const value = change.value || {};
+			const phoneNumberId = value.metadata?.phone_number_id
+				? String(value.metadata.phone_number_id)
+				: null;
 			const contacts = value.contacts || [];
 			const contactByWaId = new Map(
 				contacts.map((c) => [String(c.wa_id || ''), c.profile?.name || null]),
@@ -69,6 +74,7 @@ function extraerMensajesEntrantes(body) {
 					nombreContacto: contactByWaId.get(String(msg.from)) || null,
 					idConversacion: botConversacion.idDesdeTelefono(msg.from),
 					timestamp: msg.timestamp,
+					phoneNumberId,
 				});
 			}
 		}
@@ -76,14 +82,7 @@ function extraerMensajesEntrantes(body) {
 	return mensajes;
 }
 
-async function procesarWebhookEntrante(body) {
-	const idEmpresa = getDefaultEmpresaId();
-	const mensajes = extraerMensajesEntrantes(body);
-
-	if (!mensajes.length) {
-		return { procesados: 0, idEmpresa };
-	}
-
+async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 	const resultados = [];
 	await runWithTenant(idEmpresa, async () => {
 		for (const m of mensajes) {
@@ -95,14 +94,77 @@ async function procesarWebhookEntrante(body) {
 					nombreContacto: m.nombreContacto,
 					metaMessageId: m.metaMessageId,
 				});
-				resultados.push(r);
+
+				let botReply = null;
+				if (botResponder.gptHabilitado()) {
+					try {
+						botReply = await botResponder.responderMensajeEntrante({
+							idEmpresa,
+							telefonoWhatsApp: m.telefono,
+							idConversacion: r.conversacion.idConversacion,
+						});
+					} catch (gptErr) {
+						console.warn('[whatsappWebhook] GPT:', gptErr.message);
+						botReply = { respondido: false, motivo: gptErr.message };
+					}
+				}
+
+				resultados.push({ ...r, botReply });
 			} catch (err) {
-				console.warn('[whatsappWebhook] mensaje no registrado:', err.message);
+				console.warn(
+					`[whatsappWebhook] mensaje no registrado (empresa ${idEmpresa}, ${sourceLabel}):`,
+					err.message,
+				);
 			}
 		}
 	});
+	return resultados;
+}
 
-	return { procesados: resultados.length, idEmpresa, resultados };
+async function procesarWebhookEntrante(body) {
+	const mensajes = extraerMensajesEntrantes(body);
+
+	if (!mensajes.length) {
+		return { procesados: 0, empresas: [] };
+	}
+
+	/** @type {Map<string, typeof mensajes>} */
+	const porPhone = new Map();
+	for (const m of mensajes) {
+		const key = m.phoneNumberId || '__default__';
+		if (!porPhone.has(key)) porPhone.set(key, []);
+		porPhone.get(key).push(m);
+	}
+
+	const resultados = [];
+	const empresas = new Set();
+
+	for (const [phoneKey, grupo] of porPhone) {
+		let idEmpresa = getDefaultEmpresaId();
+		let sourceLabel = 'BOT_EMPRESA_ID default';
+
+		if (phoneKey !== '__default__') {
+			const cfg = await whatsappEmpresa.resolveByPhoneNumberId(phoneKey);
+			if (cfg?.idEmpresa) {
+				idEmpresa = cfg.idEmpresa;
+				sourceLabel = cfg.source || 'phone_number_id';
+			} else {
+				console.warn(
+					`[whatsappWebhook] phone_number_id ${phoneKey} sin mapeo; usando empresa ${idEmpresa}`,
+				);
+			}
+		}
+
+		const batch = await procesarGrupoMensajes(idEmpresa, grupo, sourceLabel);
+		resultados.push(...batch);
+		empresas.add(idEmpresa);
+	}
+
+	return {
+		procesados: resultados.length,
+		empresas: [...empresas],
+		resultados,
+	};
 }
 
 module.exports = {

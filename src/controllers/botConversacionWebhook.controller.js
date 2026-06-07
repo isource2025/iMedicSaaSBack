@@ -1,4 +1,5 @@
 const botConversacion = require('../services/botConversacion.service');
+const botResponder = require('../services/botResponder.service');
 
 /**
  * Webhook entrante — Meta / middleware WhatsApp → iMedic
@@ -36,12 +37,26 @@ async function webhookMensajeEntrante(req, res) {
 
 		const estado = await botConversacion.puedeResponderBot(result.conversacion.idConversacion);
 
+		let botReply = null;
+		if (botResponder.gptHabilitado() && estado.puedeResponderBot) {
+			try {
+				botReply = await botResponder.responderMensajeEntrante({
+					idEmpresa: req.idEmpresa,
+					telefonoWhatsApp: telefono,
+					idConversacion: result.conversacion.idConversacion,
+				});
+			} catch (gptErr) {
+				botReply = { respondido: false, motivo: gptErr.message };
+			}
+		}
+
 		res.json({
 			success: true,
 			data: {
 				...result,
 				puedeResponderBot: estado.puedeResponderBot,
 				modoControl: estado.modoControl,
+				botReply,
 			},
 		});
 	} catch (err) {
