@@ -21,7 +21,7 @@ function verificarFirmaWebhook(req) {
 	const secret = getAppSecret();
 	if (!secret) return true;
 
-	const signature = req.headers['x-hub-signature-256'];
+	const signature = String(req.headers['x-hub-signature-256'] || '').trim();
 	if (!signature) {
 		const err = new Error('Falta cabecera X-Hub-Signature-256');
 		err.statusCode = 401;
@@ -34,14 +34,24 @@ function verificarFirmaWebhook(req) {
 		return true;
 	}
 
-	const expected =
-		'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+	const expectedHex = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+	const receivedHex = signature.replace(/^sha256=/i, '').trim().toLowerCase();
+
+	if (receivedHex.length !== expectedHex.length) {
+		const err = new Error(
+			'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
+		);
+		err.statusCode = 401;
+		throw err;
+	}
 
 	try {
-		const sigBuf = Buffer.from(String(signature));
-		const expBuf = Buffer.from(expected);
+		const sigBuf = Buffer.from(receivedHex, 'hex');
+		const expBuf = Buffer.from(expectedHex, 'hex');
 		if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-			const err = new Error('Firma webhook inválida');
+			const err = new Error(
+				'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
+			);
 			err.statusCode = 401;
 			throw err;
 		}

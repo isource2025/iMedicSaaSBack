@@ -95,13 +95,25 @@ configureCors(app); // Configuración CORS
 //Permitir solo desde tu Frontend (opcion recomendada)
 app.use(cors());
 
-app.use(express.json({
-	verify: (req, _res, buf) => {
-		if (req.originalUrl?.startsWith('/api/webhook/whatsapp')) {
-			req.rawBody = buf;
+// Webhook Meta: body crudo ANTES de express.json (firma X-Hub-Signature-256)
+app.use(
+	'/api/webhook/whatsapp',
+	express.raw({ type: 'application/json', limit: '2mb' }),
+	(req, _res, next) => {
+		if (req.method === 'POST' && Buffer.isBuffer(req.body)) {
+			req.rawBody = req.body;
+			try {
+				req.body = JSON.parse(req.body.toString('utf8'));
+			} catch {
+				req.body = {};
+			}
 		}
+		next();
 	},
-})); // Parseo de JSON
+	whatsappWebhookRoutes,
+);
+
+app.use(express.json()); // Parseo JSON (resto de rutas; webhook ya parseado arriba)
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)
 
 // Asegurar carpetas de uploads
@@ -118,7 +130,6 @@ app.use('/media/patients', express.static(patientPhotosDir));
 const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');
 
 app.use('/api/auth', authRoutes);
-app.use('/api/webhook/whatsapp', whatsappWebhookRoutes);
 // JWT + idEmpresa en contexto (sin esto, /api/beds e indicadores usan DB_* de plataforma y fallan en Railway)
 app.use('/api', apiAuthUnlessPublic);
 
