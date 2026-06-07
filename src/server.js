@@ -31,4 +31,15 @@ if (authOk && !isPlatformSqlConfigured()) {
 
 app.listen(PORT, () => {
   console.log(`Servidor ejecutándose en el puerto ${PORT}`);
+
+  if (process.env.WHATSAPP_VERIFY_TOKEN?.trim()) {
+    const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+    const base = domain
+      ? `https://${domain}`
+      : process.env.PUBLIC_API_BASE_URL?.replace(/\/$/, '') || `http://localhost:${PORT}`;
+    console.log(`✓ WhatsApp webhook GET/POST → ${base}/api/webhook/whatsapp`);
+    console.log(`  Verify token configurado (WHATSAPP_VERIFY_TOKEN)`);
+  } else {
+    console.warn('⚠ WHATSAPP_VERIFY_TOKEN no definido — webhook Meta inactivo');
+  }
 });

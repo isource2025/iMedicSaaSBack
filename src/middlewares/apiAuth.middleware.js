@@ -6,7 +6,12 @@ const { requireAuth } = require('./authJwt.middleware');
  */
 function isPublicApiPath(req) {
 	const path = (req.path || req.url || '').split('?')[0];
-	return path === '/health' || path.startsWith('/auth');
+	return (
+		path === '/health' ||
+		path.startsWith('/auth') ||
+		path.startsWith('/webhook/whatsapp') ||
+		path.startsWith('/integrations/bot')
+	);
 }
 
 function apiAuthUnlessPublic(req, res, next) {

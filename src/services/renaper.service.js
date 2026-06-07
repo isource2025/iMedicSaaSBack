@@ -273,4 +273,28 @@ const renaperService = {
 	},
 };
 
-module.exports = renaperService;
+/**
+ * Busca persona solo por DNI: prueba ambos sexos en RENAPER (F y M).
+ * @returns {Promise<{ok:true, data:any, sexoDetectado?:string, meta?:object} | {ok:false, reason:string}>}
+ */
+async function searchByDni(NumeroDocumento, opts = { debug: false, allowSigned: true }) {
+	for (const sexo of ['M', 'F']) {
+		const result = await renaperService.search(NumeroDocumento, sexo, opts);
+		if (result.ok && result.data) {
+			const rawSexo = result.data.sexo;
+			const sexoDetectado =
+				rawSexo === 'F' || rawSexo === 'M'
+					? rawSexo
+					: sexo === 'F'
+						? 'F'
+						: 'M';
+			return { ...result, sexoDetectado };
+		}
+	}
+	return { ok: false, reason: 'not_found' };
+}
+
+module.exports = {
+	...renaperService,
+	searchByDni,
+};

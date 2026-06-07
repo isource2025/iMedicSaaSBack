@@ -57,6 +57,9 @@ const permisosRoutes = require('./routes/permisos.routes');
 const superAdminRoutes = require('./routes/superAdmin.routes');
 const agendaConfigRoutes = require('./routes/agendaConfig.routes');
 const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
+const botIntegrationRoutes = require('./routes/botIntegration.routes');
+const botAdminRoutes = require('./routes/botAdmin.routes');
+const whatsappWebhookRoutes = require('./routes/whatsappWebhook.routes');
 
 // Importar conexión a la base de datos
 const { connectDB, isPlatformSqlConfigured } = require('./config/database');
@@ -68,8 +71,9 @@ dotenv.config();
 // Inicializar la aplicación Express
 const app = express();
 
-// SQL plataforma solo si hay DB_* (Render/legacy). Railway: login en MySQL + SQL por Empresas.Db*
-if (isPlatformSqlConfigured()) {
+// SQL plataforma: solo precargar pool en modo legacy (sin MySQL auth).
+// En Railway/local con AUTH_DB=1 la conexión clínica sale de Empresas por tenant.
+if (isPlatformSqlConfigured() && !isAuthCentralEnabled()) {
 	connectDB()
 		.then(() => {
 			console.log('Base de datos plataforma (SQL Server) conectada');
@@ -108,6 +112,7 @@ app.use('/media/patients', express.static(patientPhotosDir));
 const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');
 
 app.use('/api/auth', authRoutes);
+app.use('/api/webhook/whatsapp', whatsappWebhookRoutes);
 // JWT + idEmpresa en contexto (sin esto, /api/beds e indicadores usan DB_* de plataforma y fallan en Railway)
 app.use('/api', apiAuthUnlessPublic);
 
@@ -154,6 +159,8 @@ app.use('/api/permisos', permisosRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/agenda', agendaConfigRoutes);
 app.use('/api/turnos-admin', turnosAdminRoutes);
+app.use('/api/integrations/bot', botIntegrationRoutes);
+app.use('/api/admin/bot', botAdminRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
