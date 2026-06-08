@@ -56,6 +56,44 @@ const generarToken = (userData, idEmpresa = null) => {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION });
 };
 
+/** idEmpresa que viaja en el JWT (tenant para camas, indicadores, etc.). */
+const resolverIdEmpresaEfectiva = ({
+  idEmpresaSesion,
+  idEmpresaBody,
+  empresasUsuario,
+  esSuperAdmin,
+}) => {
+  let id =
+    idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0
+      ? Number(idEmpresaSesion)
+      : null;
+
+  if (id == null && idEmpresaBody != null && idEmpresaBody !== '') {
+    const n = Number(idEmpresaBody);
+    if (Number.isFinite(n) && n > 0) id = n;
+  }
+
+  if (id == null && empresasUsuario.length === 1) {
+    id = Number(empresasUsuario[0].idEmpresa);
+  }
+
+  if (id == null) {
+    const fallback = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
+    if (Number.isFinite(fallback) && fallback > 0) {
+      const permitida =
+        empresasUsuario.length === 0 ||
+        empresasUsuario.some((e) => Number(e.idEmpresa) === fallback);
+      if (permitida) id = fallback;
+    }
+  }
+
+  if (id == null && esSuperAdmin && empresasUsuario.length > 0) {
+    id = Number(empresasUsuario[0].idEmpresa);
+  }
+
+  return id;
+};
+
 const inicioSesion = async (req, res) => {
   const { username, password, sector, idSector, idEmpresa } = req.body;
   
@@ -128,48 +166,69 @@ const inicioSesion = async (req, res) => {
 
         let empresaSeleccionada = null;
         let modulosEmpresa = null;
+        let idEmpresaEfectiva = idEmpresaSesion;
         try {
           const empresasUsuario = esSuperAdmin
             ? await authService.obtenerTodasEmpresas()
             : await authService.obtenerEmpresasPorUsuario(username, idEmpresaSesion);
-          const idEmpresaNum =
-            idEmpresaSesion ??
-            (idEmpresa != null && idEmpresa !== '' ? Number(idEmpresa) : null);
 
-          if (!esSuperAdmin && empresasUsuario.length > 1 && (!idEmpresaNum || !Number.isFinite(idEmpresaNum))) {
+          idEmpresaEfectiva = resolverIdEmpresaEfectiva({
+            idEmpresaSesion,
+            idEmpresaBody: idEmpresa,
+            empresasUsuario,
+            esSuperAdmin,
+          });
+
+          if (
+            !esSuperAdmin &&
+            empresasUsuario.length > 1 &&
+            (!idEmpresaEfectiva || !Number.isFinite(idEmpresaEfectiva))
+          ) {
             return res.status(400).json({
               success: false,
               mensaje: 'Debe seleccionar una empresa para continuar',
             });
           }
 
-          if (idEmpresaNum && Number.isFinite(idEmpresaNum)) {
+          if (idEmpresaEfectiva && Number.isFinite(idEmpresaEfectiva)) {
             const permitida =
               esSuperAdmin ||
-              empresasUsuario.some((e) => Number(e.idEmpresa) === idEmpresaNum);
+              empresasUsuario.length === 0 ||
+              empresasUsuario.some((e) => Number(e.idEmpresa) === idEmpresaEfectiva);
             if (empresasUsuario.length > 0 && !permitida) {
               return res.status(403).json({
                 success: false,
                 mensaje: 'La empresa seleccionada no está asociada a su usuario',
               });
             }
-            empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idEmpresaNum);
-            modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(idEmpresaNum);
-          } else if (empresasUsuario.length === 1) {
-            empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(
-              empresasUsuario[0].idEmpresa,
-            );
-            modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(
-              empresasUsuario[0].idEmpresa,
-            );
-          } else if (empresasUsuario.length === 0) {
+            const cargarEmpresaTenant = async () => {
+              empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idEmpresaEfectiva);
+              modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(idEmpresaEfectiva);
+            };
+            if (idEmpresaSesion != null) {
+              await cargarEmpresaTenant();
+            } else {
+              await runWithTenant(idEmpresaEfectiva, cargarEmpresaTenant);
+            }
+          } else if (empresasUsuario.length === 0 && !esSuperAdmin) {
             empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
           }
         } catch (empErr) {
           console.error('[auth.login] Error al resolver empresa:', empErr.message);
           try {
-            if (idEmpresaSesion != null) {
-              empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idEmpresaSesion);
+            const idFallback =
+              idEmpresaSesion ??
+              resolverIdEmpresaEfectiva({
+                idEmpresaSesion,
+                idEmpresaBody: idEmpresa,
+                empresasUsuario: [],
+                esSuperAdmin,
+              });
+            if (idFallback != null) {
+              idEmpresaEfectiva = idFallback;
+              await runWithTenant(idFallback, async () => {
+                empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idFallback);
+              });
             } else if (!esSuperAdmin) {
               empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
             }
@@ -180,7 +239,16 @@ const inicioSesion = async (req, res) => {
           }
         }
 
-        const token = generarToken(usuario, idEmpresaSesion);
+        if (idEmpresaEfectiva == null) {
+          idEmpresaEfectiva = resolverIdEmpresaEfectiva({
+            idEmpresaSesion,
+            idEmpresaBody: idEmpresa,
+            empresasUsuario: [],
+            esSuperAdmin,
+          });
+        }
+
+        const token = generarToken(usuario, idEmpresaEfectiva);
         const rol = rolPreliminar;
 
         let permisos = [];
@@ -213,7 +281,7 @@ const inicioSesion = async (req, res) => {
           },
           rol,
           permisos,
-          idEmpresa: idEmpresaSesion,
+          idEmpresa: idEmpresaEfectiva,
           sectorSeleccionado: {
             idPersonal: sectorInfo ? sectorInfo.idPersonal : sector,
             idSector: sectorInfo ? sectorInfo.idSector : '',
