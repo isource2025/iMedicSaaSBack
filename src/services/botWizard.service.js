@@ -573,49 +573,50 @@ async function intentarRespuestaWizard({
 }
 
 async function _buscarSiguienteTurnoSugerido(idConversacion, ctx, textoRechazo, pasoCfg) {
-	const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
-	let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
-		excluir: ajuste.excluir,
-		preferir: ajuste.preferir,
-	});
-
-	if (!siguiente && ajuste.preferir?.fechas?.length) {
-		siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+	try {
+		const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
+		let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
 			excluir: ajuste.excluir,
-			preferir: { ...ajuste.preferir, fechas: [] },
+			preferir: ajuste.preferir,
 		});
-	}
 
-	if (!siguiente) {
+		if (!siguiente && ajuste.preferir?.fechas?.length) {
+			siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+				excluir: ajuste.excluir,
+				preferir: { ...ajuste.preferir, fechas: [] },
+			});
+		}
+
+		if (!siguiente) {
+			const pref = ajuste.resumen ? ` con *${ajuste.resumen}*` : '';
+			return {
+				handled: true,
+				texto: `No encontré turno disponible${pref} en los próximos días. ¿Querés probar otro día u horario, o otra especialidad?`,
+			};
+		}
+
 		await botConversacion.guardarContextoBot(idConversacion, {
 			tipo: 'turno_sugerido',
 			especialidadValor: ctx.especialidadValor,
 			especialidadNombre: ctx.especialidadNombre,
+			...siguiente,
 		});
-		await botConversacion.actualizarContextoPaciente(idConversacion, {
-			pasoBot: 'ELEGIR_ESPECIALIDAD',
-		});
+		await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
+		return {
+			handled: true,
+			texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
+				alternativa: true,
+				preferencia: ajuste.resumen,
+			}),
+		};
+	} catch (err) {
+		diag.warn('wizard', 'Error buscando turno alternativo', { error: err.message });
 		return {
 			handled: true,
 			texto:
-				'No encontré otro turno disponible con esas restricciones en los próximos días. ¿Querés probar otra especialidad o decime qué días sí podés?',
+				'Estoy teniendo problemas para buscar otro turno en este momento. ¿Podés repetir qué día y horario te vendría bien?',
 		};
 	}
-
-	await botConversacion.guardarContextoBot(idConversacion, {
-		tipo: 'turno_sugerido',
-		especialidadValor: ctx.especialidadValor,
-		especialidadNombre: ctx.especialidadNombre,
-		...siguiente,
-	});
-	await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
-	return {
-		handled: true,
-		texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
-			alternativa: true,
-			preferencia: ajuste.resumen,
-		}),
-	};
 }
 
 module.exports = {

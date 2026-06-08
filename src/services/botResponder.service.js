@@ -224,6 +224,13 @@ async function responderMensajeEntrante({
 						: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
 			return enviarTextoBot({ ...enviarOpts, texto });
 		}
+		if (conv?.pasoBot === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
+			return enviarTextoBot({
+				...enviarOpts,
+				texto:
+					'No pude buscar otro turno ahora. Decime de nuevo qué día y horario te conviene (por ejemplo: jueves a la tarde).',
+			});
+		}
 	}
 
 	const flujo = await botConfigService.getFlujoPasos();

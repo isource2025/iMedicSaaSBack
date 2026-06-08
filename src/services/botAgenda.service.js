@@ -1011,7 +1011,9 @@ function _tokensDesdeTexto(texto) {
 function esConsultaListaEspecialidades(texto) {
 	const t = _normalizarTextoBusqueda(texto);
 	if (!t) return false;
-	if (t === 'especialidades' || t === 'especialidad') return true;
+	if (t === 'especialidades' || t === 'especialidad' || t === 'mostrame' || t === 'mostrar') {
+		return true;
+	}
 	const pregunta = /\b(que|cuales|cual|lista|hay|mostrar|mostrame|decime|ver|conocer)\b/.test(t);
 	const tema = /\b(especialidad|especialidades|areas|servicios|opciones)\b/.test(t);
 	return pregunta && tema;
@@ -1327,17 +1329,31 @@ function interpretarAjusteTurno(texto, sugerenciaActual = null) {
 		const diaSug = new Date(`${fechaSug}T12:00:00`).getDay();
 		const pideMismoDia =
 			preferir.diasSemana.includes(diaSug) ||
-			diasMencionados.some((d) => d.num === diaSug) ||
-			(franja && diaSug === new Date(`${fechaSug}T12:00:00`).getDay());
+			diasMencionados.some((d) => d.num === diaSug);
 		if (pideMismoDia) {
 			preferir.fechas.push(fechaSug);
 		}
 	}
 
-	if (franja === 'tarde' && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
+	const pideOtroDiaSemana =
+		diasMencionados.length > 0 &&
+		sugerenciaActual?.fecha &&
+		!diasMencionados.some(
+			(d) => d.num === new Date(`${String(sugerenciaActual.fecha).slice(0, 10)}T12:00:00`).getDay(),
+		);
+
+	if (
+		franja &&
+		sugerenciaActual?.fecha &&
+		sugerenciaActual?.hora &&
+		!pideOtroDiaSemana
+	) {
+		const fechaSug = String(sugerenciaActual.fecha).slice(0, 10);
 		const hh = Number(String(sugerenciaActual.hora).split(':')[0]);
-		if (hh < 12) {
-			preferir.fechas.push(String(sugerenciaActual.fecha).slice(0, 10));
+		if (hh < 12 && franja === 'tarde') {
+			preferir.fechas.push(fechaSug);
+		} else if (hh >= 12 && franja === 'manana') {
+			preferir.fechas.push(fechaSug);
 		}
 	}
 
@@ -1427,7 +1443,9 @@ async function interpretarAjusteTurnoInteligente(texto, sugerenciaActual = null)
 	const tienePreferencia =
 		local.preferir.fechas.length ||
 		local.preferir.diasSemana.length ||
-		local.preferir.franja;
+		local.preferir.franja ||
+		local.excluir.diasSemana.length ||
+		local.excluir.fechas.length;
 
 	if (tienePreferencia) return local;
 
@@ -1437,6 +1455,23 @@ async function interpretarAjusteTurnoInteligente(texto, sugerenciaActual = null)
 	}
 
 	return local;
+}
+
+function _fechasCandidatasBusqueda(maxDias, excluir, preferir) {
+	if (preferir.fechas.size) {
+		return [...preferir.fechas].filter((f) => !excluir.fechas.has(f)).sort();
+	}
+
+	const fechas = [];
+	for (let d = 0; d <= maxDias; d++) {
+		const fechaIso = _fechaIsoOffset(d);
+		if (excluir.fechas.has(fechaIso)) continue;
+		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
+		if (excluir.diasSemana.has(diaNum)) continue;
+		if (!_diaCumplePreferencias(fechaIso, preferir)) continue;
+		fechas.push(fechaIso);
+	}
+	return fechas;
 }
 
 /**
@@ -1451,13 +1486,9 @@ async function _turnoMasCercanoPorMedico(
 	preferir,
 	maxDias,
 ) {
-	for (let d = 0; d <= maxDias; d++) {
-		const fechaIso = _fechaIsoOffset(d);
-		if (excluir.fechas.has(fechaIso)) continue;
-		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
-		if (excluir.diasSemana.has(diaNum)) continue;
-		if (!_diaCumplePreferencias(fechaIso, preferir)) continue;
+	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
 
+	for (const fechaIso of fechas) {
 		let disp;
 		try {
 			disp = await disponibilidadBot(fechaIso, {
@@ -1495,6 +1526,10 @@ async function _turnoMasCercanoPorMedico(
  * Por cada médico de la especialidad: su turno libre más cercano a ahora.
  * Entre todos, el más próximo; empate → orden alfabético del profesional.
  */
+function _busquedaTurnoTimeoutMs() {
+	return Number(process.env.BOT_TURNO_BUSQUEDA_TIMEOUT_MS || 22_000);
+}
+
 async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const config = await botConfigService.getBotConfig();
 	const esp = Number(especialidadValor);
@@ -1509,9 +1544,11 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const ordenados = [...profesionales].sort((a, b) =>
 		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
 	);
+	const deadline = Date.now() + _busquedaTurnoTimeoutMs();
 
 	const candidatos = [];
 	for (const prof of ordenados) {
+		if (Date.now() > deadline) break;
 		const turno = await _turnoMasCercanoPorMedico(
 			prof.matricula,
 			prof.nombre,
