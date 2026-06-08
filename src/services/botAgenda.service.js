@@ -213,11 +213,7 @@ async function identificarPaciente({
 	if (pacienteLocal) {
 		accionSugerida = 'USAR_PACIENTE_EXISTENTE';
 		if (telefonoWhatsApp) await _actualizarTelefonoPaciente(idPaciente, telefonoWhatsApp);
-	} else if (
-		renaperOk &&
-		!omitirAvancePaso &&
-		(crearSiNoExiste || config.reglas.crearPacienteAutomatico)
-	) {
+	} else if (renaperOk && (crearSiNoExiste || config.reglas.crearPacienteAutomatico)) {
 		const nuevo = await patientsService.crearPaciente({
 			ApellidoyNombre: renaperData.nombreCompleto || `PACIENTE ${dni}`,
 			NumeroDocumento: dni,

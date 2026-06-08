@@ -461,12 +461,13 @@ async function intentarRespuestaWizard({
 		pasoActual = 'IDENTIFICAR';
 	}
 
-	// DNI consultado pero sin confirmar: forzar paso de confirmación.
+	// DNI consultado pero sin confirmar: forzar paso de confirmación (solo al inicio del flujo).
 	if (
 		conv.dniPaciente &&
 		!conv.idPaciente &&
 		pasoConfirmarActivo &&
 		pasoActual !== 'CONFIRMAR_IDENTIDAD' &&
+		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual) &&
 		(!dniEnMensaje || String(dniEnMensaje) === String(conv.dniPaciente))
 	) {
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
@@ -543,6 +544,13 @@ async function intentarRespuestaWizard({
 				idPaciente: data.idPaciente,
 				dniPaciente: String(conv.dniPaciente),
 			});
+			if (!data.idPaciente) {
+				diag.warn('wizard', 'Identidad confirmada sin idPaciente en ficha local', {
+					idConversacion,
+					dni: conv.dniPaciente,
+					accion: data.accionSugerida,
+				});
+			}
 
 			const saludo = primerNombre(nombreWhatsApp(conv));
 			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
@@ -592,14 +600,42 @@ async function intentarRespuestaWizard({
 			};
 		}
 
+		const espEnTexto = await detectarEspecialidadEnTexto(texto);
+		if (espEnTexto && conv.dniPaciente) {
+			const config = await botConfigService.getBotConfig();
+			const data = await botAgenda.identificarPaciente({
+				numeroDocumento: conv.dniPaciente,
+				telefonoWhatsApp,
+				crearSiNoExiste: true,
+				idConversacion,
+				omitirAvancePaso: true,
+			});
+			if (data.idPaciente) {
+				await botConversacion.actualizarContextoPaciente(idConversacion, {
+					idPaciente: data.idPaciente,
+					dniPaciente: String(conv.dniPaciente),
+				});
+				const saludo = primerNombre(nombreWhatsApp(conv));
+				const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+				if (
+					config.reglas.sugerirPrimerTurnoDisponible &&
+					pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+				) {
+					return armarRespuestaBuscarTurnoInicial({
+						idConversacion,
+						telefonoWhatsApp,
+						flujo,
+						esp: espEnTexto,
+						avisoPrefijo: prefijoSaludo,
+					});
+				}
+			}
+		}
+
 		return {
 			handled: true,
-			texto: await reconsultarRenaperParaConfirmacion(
-				conv,
-				telefonoWhatsApp,
-				idConversacion,
-				pasoCfg,
-			),
+			texto:
+				'Para continuar, confirmá la identidad de la persona del turno respondiendo *Sí* o *No*.',
 		};
 	}
 
@@ -613,6 +649,27 @@ async function intentarRespuestaWizard({
 		sugerirTurno &&
 		conv.idPaciente &&
 		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA');
+
+	if (
+		(esPasoEspecialidad || esPasoProfConSugerir) &&
+		!conv.idPaciente &&
+		conv.dniPaciente
+	) {
+		const dataPac = await botAgenda.identificarPaciente({
+			numeroDocumento: conv.dniPaciente,
+			telefonoWhatsApp,
+			crearSiNoExiste: true,
+			idConversacion,
+			omitirAvancePaso: true,
+		});
+		if (dataPac.idPaciente) {
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				idPaciente: dataPac.idPaciente,
+				dniPaciente: String(conv.dniPaciente),
+			});
+			conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+		}
+	}
 
 	if ((esPasoEspecialidad || esPasoProfConSugerir) && conv.idPaciente) {
 		let resolucion = { tipo: 'no_encontrada' };
