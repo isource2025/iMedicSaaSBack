@@ -125,6 +125,14 @@ function defaultFlujoPasos() {
 		},
 		{
 			paso: 2,
+			id: 'CONFIRMAR_IDENTIDAD',
+			titulo: 'Confirmar identidad',
+			mensajeUsuario: '¿Confirmás que sos esta persona? Respondé Sí o No.',
+			descripcion: 'Muestra datos RENAPER y espera confirmación antes de continuar',
+			activo: true,
+		},
+		{
+			paso: 3,
 			id: 'ELEGIR_ESPECIALIDAD',
 			titulo: 'Especialidad',
 			mensajeUsuario: '¿Qué especialidad necesitás? Te muestro las disponibles.',
@@ -132,7 +140,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 3,
+			paso: 4,
 			id: 'ELEGIR_PROFESIONAL',
 			titulo: 'Profesional',
 			mensajeUsuario: 'Elegí el profesional de la especialidad seleccionada.',
@@ -140,7 +148,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 4,
+			paso: 5,
 			id: 'ELEGIR_FECHA_HORA',
 			titulo: 'Fecha y hora',
 			mensajeUsuario: 'Indicá la fecha y te muestro los horarios libres.',
@@ -148,7 +156,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 5,
+			paso: 6,
 			id: 'CONFIRMAR',
 			titulo: 'Confirmación',
 			mensajeUsuario: '¿Confirmás este turno? Te envío el comprobante.',

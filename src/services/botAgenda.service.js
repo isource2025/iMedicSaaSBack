@@ -106,6 +106,7 @@ async function identificarPaciente({
 	telefonoWhatsApp,
 	crearSiNoExiste,
 	idConversacion,
+	omitirAvancePaso = false,
 }) {
 	const config = await botConfigService.getBotConfig();
 	const dni = _validarDni(numeroDocumento);
@@ -186,7 +187,31 @@ async function identificarPaciente({
 		resultado: 'OK',
 	});
 
-	if (idConversacion || telefonoWhatsApp) {
+	if ((idConversacion || telefonoWhatsApp) && !omitirAvancePaso) {
+		try {
+			const botConversacion = require('./botConversacion.service');
+			const botConfigServiceLocal = require('./botConfig.service');
+			const idConv =
+				idConversacion ||
+				(telefonoWhatsApp ? botConversacion.idDesdeTelefono(telefonoWhatsApp) : null);
+			if (idConv) {
+				const flujo = await botConfigServiceLocal.getFlujoPasos();
+				const confirmarActivo = flujo.find((p) => p.id === 'CONFIRMAR_IDENTIDAD' && p.activo);
+				const siguiente = confirmarActivo
+					? 'CONFIRMAR_IDENTIDAD'
+					: flujo.find((p) => p.id === 'ELEGIR_ESPECIALIDAD' && p.activo)?.id ||
+						'ELEGIR_ESPECIALIDAD';
+				await botConversacion.actualizarContextoPaciente(idConv, {
+					idPaciente: confirmarActivo ? null : idPaciente,
+					dniPaciente: String(dni),
+					nombreContacto: pacienteLocal?.nombre || renaperData?.nombreCompleto || null,
+					pasoBot: siguiente,
+				});
+			}
+		} catch (e) {
+			console.warn('[botAgenda] contexto conversación:', e.message);
+		}
+	} else if ((idConversacion || telefonoWhatsApp) && omitirAvancePaso) {
 		try {
 			const botConversacion = require('./botConversacion.service');
 			const idConv =
@@ -194,10 +219,8 @@ async function identificarPaciente({
 				(telefonoWhatsApp ? botConversacion.idDesdeTelefono(telefonoWhatsApp) : null);
 			if (idConv) {
 				await botConversacion.actualizarContextoPaciente(idConv, {
-					idPaciente,
 					dniPaciente: String(dni),
-					nombreContacto: pacienteLocal?.nombreCompleto || renaperData?.nombreCompleto || null,
-					pasoBot: 'ELEGIR_ESPECIALIDAD',
+					nombreContacto: pacienteLocal?.nombre || renaperData?.nombreCompleto || null,
 				});
 			}
 		} catch (e) {
@@ -211,7 +234,7 @@ async function identificarPaciente({
 		idPaciente,
 		pacienteCreado,
 		accionSugerida,
-		siguientePaso: 'ELEGIR_ESPECIALIDAD',
+		siguientePaso: omitirAvancePaso ? null : 'ELEGIR_ESPECIALIDAD',
 	};
 }
 

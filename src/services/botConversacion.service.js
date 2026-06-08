@@ -169,6 +169,24 @@ async function obtenerOCrearConversacion({
 	return mapConversacion(created[0]);
 }
 
+async function existeMensajePorMetaId(metaMessageId) {
+	const mid = String(metaMessageId || '').trim();
+	if (!mid) return null;
+	await checkConversationTables();
+	if (useMemory) {
+		for (const list of memMensajes.values()) {
+			const hit = list.find((m) => m.metaMessageId === mid);
+			if (hit) return mapMensaje(hit);
+		}
+		return null;
+	}
+	const rows = await executeQuery(
+		`SELECT TOP 1 * FROM dbo.imBotMensaje WHERE MetaMessageId = @p0 ORDER BY IdMensaje DESC`,
+		[{ value: mid, type: 'VarChar' }],
+	);
+	return rows[0] ? mapMensaje(rows[0]) : null;
+}
+
 async function registrarMensajeEntrante({
 	telefonoWhatsApp,
 	contenido,
@@ -193,6 +211,16 @@ async function registrarMensajeEntrante({
 		throw err;
 	}
 
+	if (metaMessageId) {
+		const dup = await existeMensajePorMetaId(metaMessageId);
+		if (dup) {
+			return {
+				conversacion: conv,
+				mensaje: dup,
+				duplicado: true,
+			};
+		}
+	}
 	if (useMemory) {
 		const msg = memAddMensaje({
 			idConversacion: conv.idConversacion,
@@ -210,7 +238,7 @@ async function registrarMensajeEntrante({
 				memConversaciones.set(conv.idConversacion, c);
 			}
 		}
-		return { conversacion: mapConversacion(memConversaciones.get(conv.idConversacion)), mensaje: mapMensaje(msg) };
+		return { conversacion: mapConversacion(memConversaciones.get(conv.idConversacion)), mensaje: mapMensaje(msg), duplicado: false };
 	}
 
 	const rows = await executeQuery(
@@ -251,7 +279,11 @@ async function registrarMensajeEntrante({
 		`SELECT TOP 1 * FROM dbo.imBotConversacion WHERE IdConversacion = @p0`,
 		[{ value: conv.idConversacion, type: 'VarChar' }],
 	);
-	return { conversacion: mapConversacion(convRows[0]), mensaje: mapMensaje(msgRows[0]) };
+	return {
+		conversacion: mapConversacion(convRows[0]),
+		mensaje: mapMensaje(msgRows[0]),
+		duplicado: false,
+	};
 }
 
 async function registrarMensajeSaliente({
@@ -554,6 +586,7 @@ module.exports = {
 	idDesdeTelefono,
 	obtenerOCrearConversacion,
 	registrarMensajeEntrante,
+	existeMensajePorMetaId,
 	registrarMensajeSaliente,
 	listarConversaciones,
 	obtenerConversacion,

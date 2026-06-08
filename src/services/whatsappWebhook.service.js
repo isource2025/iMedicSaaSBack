@@ -35,6 +35,23 @@ function verificarSuscripcion(query = {}) {
 	throw err;
 }
 
+function esPayloadSoloEstados(body) {
+	if (!body || body.object !== 'whatsapp_business_account') return false;
+	let tieneEstados = false;
+	let tieneMensajes = false;
+	for (const entry of body.entry || []) {
+		for (const change of entry.changes || []) {
+			if (change.field !== 'messages') continue;
+			const value = change.value || {};
+			if (value.statuses?.length) tieneEstados = true;
+			if (value.messages?.length) tieneMensajes = true;
+		}
+	}
+	return tieneEstados && !tieneMensajes;
+}
+
+const TIPOS_MENSAJE_IGNORAR = new Set(['reaction', 'sticker', 'unsupported', 'system', 'unknown']);
+
 function extraerMensajesEntrantes(body) {
 	const mensajes = [];
 	if (!body || body.object !== 'whatsapp_business_account') return mensajes;
@@ -54,6 +71,9 @@ function extraerMensajesEntrantes(body) {
 			for (const msg of value.messages || []) {
 				if (!msg.from) continue;
 				const tipo = msg.type || 'unknown';
+				if (TIPOS_MENSAJE_IGNORAR.has(tipo)) continue;
+				// Eco de mensajes salientes (evita respuestas duplicadas)
+				if (msg.from === value.metadata?.phone_number_id) continue;
 				let contenido = '';
 				if (tipo === 'text') contenido = msg.text?.body || '';
 				else if (tipo === 'button') contenido = msg.button?.text || msg.button?.payload || '';
@@ -118,6 +138,15 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 						nombreContacto: m.nombreContacto,
 						metaMessageId: m.metaMessageId,
 					});
+
+					if (r.duplicado) {
+						diag.line('webhook', 'Mensaje duplicado (MetaMessageId), skip GPT', {
+							metaMessageId: m.metaMessageId,
+						});
+						resultados.push({ ...r, botReply: { respondido: false, motivo: 'duplicado' } });
+						continue;
+					}
+
 					diag.line('webhook', 'Mensaje registrado en tenant', {
 						idEmpresa,
 						idConversacion: r.conversacion?.idConversacion,
@@ -131,6 +160,7 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 								idEmpresa,
 								telefonoWhatsApp: m.telefono,
 								idConversacion: r.conversacion.idConversacion,
+								contenidoUltimo: m.contenido,
 							});
 							diag.line('webhook', 'GPT respuesta', {
 								respondido: botReply?.respondido,
@@ -176,6 +206,10 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 }
 
 async function procesarWebhookEntrante(body) {
+	if (esPayloadSoloEstados(body)) {
+		return { procesados: 0, empresas: [], skipped: 'statuses-only' };
+	}
+
 	const mensajes = extraerMensajesEntrantes(body);
 
 	if (!mensajes.length) {
