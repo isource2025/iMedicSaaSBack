@@ -234,75 +234,22 @@ function necesitaReinicioPorNuevoPaciente(conv, pasoActual, dniEnMensaje) {
 	return dniDistinto || (!!conv.idPaciente && pasoTurnoAnterior);
 }
 
-function esInicioNuevoTurno(texto) {
-	const t = String(texto || '')
-		.trim()
-		.toLowerCase()
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '');
-	if (/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t)) return true;
-	if (/^\s*un turno\b/.test(t)) return true;
-	if (/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno|otro turno)\b/.test(t)) {
-		return true;
-	}
-	if (/\b(quiero|necesito|busco|estoy queriendo)\b.*\b(turno|consulta)\b/.test(t)) return true;
-	if (/\b(turno|consulta)\b.*\b(para|de)\b/.test(t)) return true;
-	if (/\b(turno|consulta)\b.*\b(ahora|ya|urgente|hoy)\b/.test(t)) return true;
-	if (
-		/\bmi (tio|tia|sobrino|sobrina|primo|prima|abuelo|abuela|viejo|vieja|cuñad|nuera|yerno|suegr|hij|nene|bebe|familia|marido|esposa|pareja)\b/.test(
-			t,
-		) &&
-		/\b(turno|consulta)\b/.test(t)
-	) {
-		return true;
-	}
-	if (
-		/\b(para mi|para el|para la|otra persona|otro paciente|mi familiar)\b/.test(t) &&
-		/\b(turno|consulta|herman|hij|familiar|mama|mami|papa|nene|bebe)\b/.test(t)
-	) {
-		return true;
-	}
-	if (
-		/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)\b/.test(t) &&
-		/\b(turno|consulta|especialidad)\b/.test(t)
-	) {
-		return true;
-	}
-	return false;
+async function resolverEspecialidadDesdeIntencionGpt(texto, conv, idConversacion, pasoBot) {
+	if (!gptHabilitado()) return null;
+	const intent = await botIntencion.interpretarIntencion({
+		texto,
+		conv,
+		idConversacion,
+		pasoBot,
+	});
+	if (!intent) return null;
+	const res = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+	if (res?.tipo !== 'especialidad') return null;
+	return { valor: res.especialidad.valor, nombre: res.especialidad.nombre };
 }
 
-function esSeguimientoSolicitudTurno(texto) {
-	const t = String(texto || '')
-		.trim()
-		.toLowerCase()
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '');
-	if (!t) return false;
-	if (/^(puede ser|podes|podria|se puede|hay chance|dale|ok|si)\??$/.test(t)) return true;
-	return /\b(puede ser|se puede|hay turno|conseguis turno)\b/.test(t);
-}
-
-function esMensajeGratitud(texto) {
-	const t = String(texto || '')
-		.trim()
-		.toLowerCase()
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '');
-	return /^(gracias|muchas gracias|genial|perfecto|listo|buenisimo|de 10|excelente|super|dale super|barbaro|joya|ok gracias|graciass?)$/.test(
-		t,
-	);
-}
-
-async function detectarEspecialidadEnTextoLocal(texto) {
-	if (!texto || extraerDni(texto)) return null;
-	if (botAgenda.esConsultaListaEspecialidades(texto)) return null;
-	const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
-	return esp ? { valor: esp.valor, nombre: esp.nombre } : null;
-}
-
-async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, texto, conSaludo = true }) {
+async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend = null, conSaludo = true }) {
 	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
-	const espPend = await detectarEspecialidadEnTextoLocal(texto);
 	await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
 	if (espPend) {
 		await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
@@ -315,29 +262,106 @@ async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, texto, conS
 	return saludo ? `Hola, ${saludo}. ${msg}` : msg;
 }
 
-async function detectarEspecialidadEnTexto(texto) {
+async function procesarIntencionGptEntrada({
+	idConversacion,
+	telefonoWhatsApp,
+	conv,
+	flujo,
+	texto,
+	pasoActual,
+	pasoIdentificar,
+}) {
+	if (!gptHabilitado() || pasoIdentificar?.activo === false) return null;
+
+	const pasoGpt =
+		pasoActual === 'CONFIRMAR' && conv?.contextoBot?.tipo !== 'turno_sugerido'
+			? 'IDENTIFICAR'
+			: pasoActual;
+	if (!botIntencion.esPasoIdentificacionLibre(pasoActual, conv)) return null;
+
+	const intent = await botIntencion.interpretarIntencion({
+		texto,
+		conv,
+		idConversacion,
+		pasoBot: pasoGpt,
+	});
+	if (!intent?.intencion) return null;
+
+	diag.line('wizard', 'Intención GPT', {
+		idConversacion,
+		paso: pasoActual,
+		intencion: intent.intencion,
+		resumen: intent.parametros?.resumen || null,
+	});
+
+	if (intent.intencion === 'solicitar_turno') {
+		let espPend = null;
+		const resEsp = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+		if (resEsp?.tipo === 'especialidad') {
+			espPend = { valor: resEsp.especialidad.valor, nombre: resEsp.especialidad.nombre };
+		}
+		return {
+			handled: true,
+			texto: await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend }),
+		};
+	}
+
+	if (intent.intencion === 'agradecimiento') {
+		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
+		return {
+			handled: true,
+			texto:
+				'Con gusto. Si necesitás otro turno, indicá el DNI de la persona que va a atenderse (sin puntos).',
+		};
+	}
+
+	if (intent.intencion === 'listar_especialidades') {
+		return {
+			handled: true,
+			texto: botAgenda.mensajeEspecialidadesDisponibles(await botAgenda.listarEspecialidadesBot()),
+		};
+	}
+
+	if (intent.intencion === 'elegir_especialidad') {
+		const resEsp = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+		if (resEsp?.tipo === 'especialidad') {
+			const espPend = { valor: resEsp.especialidad.valor, nombre: resEsp.especialidad.nombre };
+			if (botIntencion.esPasoIdentificacionLibre(pasoActual, conv)) {
+				return {
+					handled: true,
+					texto: await iniciarFlujoNuevoTurno({
+						idConversacion,
+						conv,
+						flujo,
+						espPend,
+						conSaludo: false,
+					}),
+				};
+			}
+			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
+			return null;
+		}
+	}
+
+	if (intent.intencion === 'conversacion') {
+		return { handled: false, motivo: 'gpt-conversacion' };
+	}
+
+	return null;
+}
+
+async function detectarEspecialidadEnTexto(texto, conv, idConversacion, pasoBot) {
 	if (!texto || extraerDni(texto)) return null;
 	if (botAgenda.esConsultaListaEspecialidades(texto)) return null;
 
-	let esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
-	if (!esp && gptHabilitado()) {
-		try {
-			const intent = await botIntencion.interpretarIntencion({
-				texto,
-				conv: null,
-				pasoBot: 'IDENTIFICAR',
-			});
-			const res = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
-			if (res?.tipo === 'especialidad') esp = res.especialidad;
-		} catch (_) {
-			/* GPT opcional */
-		}
-	}
-	return esp ? { valor: esp.valor, nombre: esp.nombre } : null;
+	const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+	if (esp) return { valor: esp.valor, nombre: esp.nombre };
+
+	return resolverEspecialidadDesdeIntencionGpt(texto, conv, idConversacion, pasoBot);
 }
 
-async function capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto) {
-	const esp = await detectarEspecialidadEnTexto(texto);
+async function capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto, pasoBot) {
+	const esp = await detectarEspecialidadEnTexto(texto, conv, idConversacion, pasoBot);
 	if (!esp) return null;
 	const ctx = { ...(conv?.contextoBot || {}), especialidadPendiente: esp };
 	await botConversacion.guardarContextoBot(idConversacion, ctx);
@@ -549,41 +573,33 @@ async function intentarRespuestaWizard({
 		pasoActual = 'CONFIRMAR_IDENTIDAD';
 	}
 
-	// --- Hola / nuevo turno: reiniciar flujo (tras turno confirmado u otra sesión) ---
-	if (esInicioNuevoTurno(texto) && pasoIdentificar?.activo !== false) {
-		return {
-			handled: true,
-			texto: await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, texto }),
-		};
-	}
-
-	if (esSeguimientoSolicitudTurno(texto) && pasoIdentificar?.activo !== false) {
-		return {
-			handled: true,
-			texto: await iniciarFlujoNuevoTurno({
-				idConversacion,
-				conv,
-				flujo,
-				texto,
-				conSaludo: false,
-			}),
-		};
-	}
-
-	if (esMensajeGratitud(texto)) {
-		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
-		return {
-			handled: true,
-			texto:
-				'Con gusto. Si necesitás otro turno, indicá el DNI de la persona que va a atenderse (sin puntos).',
-		};
+	// --- Intención GPT (lenguaje natural: nuevo turno, gracias, especialidad, etc.) ---
+	if (!dniEnMensaje && texto) {
+		const gptEntrada = await procesarIntencionGptEntrada({
+			idConversacion,
+			telefonoWhatsApp,
+			conv,
+			flujo,
+			texto,
+			pasoActual,
+			pasoIdentificar,
+		});
+		if (gptEntrada?.handled && gptEntrada.texto) return gptEntrada;
+		if (gptEntrada?.handled === false && gptEntrada.motivo === 'gpt-conversacion') {
+			return gptEntrada;
+		}
 	}
 
 	const pasoSinPaciente =
 		!conv.idPaciente &&
 		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual);
 	if (pasoSinPaciente && texto && !dniEnMensaje) {
-		await capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto);
+		await capturarEspecialidadPendienteDesdeMensaje(
+			idConversacion,
+			conv,
+			texto,
+			pasoActual,
+		);
 		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 	}
 
@@ -613,6 +629,17 @@ async function intentarRespuestaWizard({
 			});
 			if (intent?.intencion === 'confirmar_identidad') conf = true;
 			if (intent?.intencion === 'rechazar_identidad') conf = false;
+			if (conf == null && intent?.intencion === 'elegir_especialidad') {
+				const resEsp = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+				if (resEsp?.tipo === 'especialidad') {
+					await botConversacion.guardarContextoBot(idConversacion, {
+						especialidadPendiente: {
+							valor: resEsp.especialidad.valor,
+							nombre: resEsp.especialidad.nombre,
+						},
+					});
+				}
+			}
 		}
 
 		if (conf === true) {
@@ -699,7 +726,12 @@ async function intentarRespuestaWizard({
 			};
 		}
 
-		const espEnTexto = await detectarEspecialidadEnTexto(texto);
+		const espEnTexto = await detectarEspecialidadEnTexto(
+			texto,
+			conv,
+			idConversacion,
+			pasoActual,
+		);
 		if (espEnTexto && conv.dniPaciente) {
 			const config = await botConfigService.getBotConfig();
 			let data;
@@ -1046,6 +1078,4 @@ module.exports = {
 	extraerDni,
 	interpretarConfirmacion,
 	interpretarRechazoTurno,
-	esInicioNuevoTurno,
-	esSeguimientoSolicitudTurno,
 };

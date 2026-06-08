@@ -297,20 +297,6 @@ async function responderMensajeEntrante({
 		});
 	}
 
-	if (
-		botWizard.esInicioNuevoTurno(textoEntrada) ||
-		botWizard.esSeguimientoSolicitudTurno(textoEntrada)
-	) {
-		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
-		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
-		return enviarTextoBot({
-			...enviarOpts,
-			texto:
-				pasoId?.mensajeUsuario ||
-				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
-		});
-	}
-
 	// Profesional/fecha: el wizard resuelve turnos; GPT no debe listar médicos.
 	if (
 		config.reglas.sugerirPrimerTurnoDisponible &&

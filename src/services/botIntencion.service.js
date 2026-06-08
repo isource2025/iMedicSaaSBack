@@ -190,9 +190,49 @@ function _promptConfirmarIdentidad(conv) {
 
 Paso: CONFIRMAR_IDENTIDAD (¿es esta persona?).
 
-Intenciones: confirmar_identidad | rechazar_identidad | conversacion
+Intenciones: confirmar_identidad | rechazar_identidad | elegir_especialidad (si menciona especialidad en vez de sí/no) | conversacion
 
-JSON: {"intencion":"...","parametros":{}}`;
+JSON: {"intencion":"...","parametros":{"especialidad":"NOMBRE EXACTO O null","resumen":""}}`;
+}
+
+function _promptIdentificarInicio(conv, especialidades) {
+	const lista = (especialidades || []).map((e) => e.nombre).join(', ');
+	const ctx = [];
+	if (conv?.nombreContacto) ctx.push(`Contacto WhatsApp: ${conv.nombreContacto}`);
+	if (conv?.dniPaciente) ctx.push(`DNI en curso (sin confirmar): ${conv.dniPaciente}`);
+	if (conv?.idPaciente) ctx.push('Ya hay un paciente identificado en esta sesión.');
+	if (conv?.contextoBot?.especialidadPendiente?.nombre) {
+		ctx.push(`Especialidad ya mencionada: ${conv.contextoBot.especialidadPendiente.nombre}`);
+	}
+
+	return `Clasificador de intenciones — bot de turnos médicos (español rioplatense).
+
+Paso: inicio / identificación / post-turno. El paciente escribe en lenguaje natural libre.
+${ctx.length ? `Contexto:\n${ctx.join('\n')}\n` : ''}
+Especialidades válidas (usar nombre EXACTO de la lista si corresponde): ${lista || '(sin catálogo)'}
+
+Intenciones:
+- solicitar_turno: quiere sacar, pedir o gestionar un turno (para sí o para otra persona: tío, hermanita, hijo, etc.). Incluye seguimientos como "puede ser?", "ahora", "otro turno".
+- elegir_especialidad: menciona un área médica concreta (ej. traumato, cardio, clínica)
+- listar_especialidades: pregunta qué especialidades hay / "mostrame"
+- agradecimiento: agradece o cierra cordialmente tras un turno ya confirmado, sin pedir turno nuevo todavía
+- conversacion: charla o pregunta general que no implica acción de agenda
+
+JSON (una sola línea):
+{"intencion":"...","parametros":{"especialidad":"NOMBRE EXACTO O null","resumen":""}}
+
+Reglas:
+- Interpretá el significado, no frases exactas.
+- "un turno para mi tío", "puede ser?", "holaa otro turno" → solicitar_turno
+- "gracias", "genial" tras comprobante → agradecimiento
+- Si menciona especialidad junto con pedir turno → solicitar_turno y completar parametros.especialidad
+- No inventes especialidades fuera de la lista.`;
+}
+
+function _esPasoIdentificacionLibre(paso, conv) {
+	if (paso === 'IDENTIFICAR' || paso === 'inicio' || !paso) return true;
+	if (paso === 'CONFIRMAR' && conv?.contextoBot?.tipo !== 'turno_sugerido') return true;
+	return false;
 }
 
 async function interpretarIntencion({ texto, conv, idConversacion, pasoBot }) {
@@ -208,6 +248,8 @@ async function interpretarIntencion({ texto, conv, idConversacion, pasoBot }) {
 		system = _promptElegirEspecialidad(especialidades);
 	} else if (paso === 'CONFIRMAR_IDENTIDAD') {
 		system = _promptConfirmarIdentidad(conv);
+	} else if (_esPasoIdentificacionLibre(paso, conv)) {
+		system = _promptIdentificarInicio(conv, especialidades);
 	} else {
 		return null;
 	}
@@ -246,7 +288,9 @@ async function resolverEspecialidadDesdeIntencion(intencion) {
 	if (intencion.intencion === 'conversacion') {
 		return { tipo: 'conversacion' };
 	}
-	if (intencion.intencion !== 'elegir_especialidad') {
+	const puedeElegir =
+		intencion.intencion === 'elegir_especialidad' || intencion.intencion === 'solicitar_turno';
+	if (!puedeElegir) {
 		return { tipo: 'no_encontrada' };
 	}
 
@@ -283,4 +327,5 @@ module.exports = {
 	interpretarIntencion,
 	intencionAAjusteTurno,
 	resolverEspecialidadDesdeIntencion,
+	esPasoIdentificacionLibre: _esPasoIdentificacionLibre,
 };
