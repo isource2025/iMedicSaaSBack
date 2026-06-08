@@ -175,10 +175,51 @@ function logWhatsappEmpresa(action, data) {
 	line('whatsappEmpresa', action, data);
 }
 
+async function testMetaAppSecretOnStartup() {
+	const appId = String(process.env.META_APP_ID || '').trim();
+	const secret = String(process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '')
+		.trim()
+		.replace(/^["']+|["']+$/g, '');
+
+	if (!appId || !secret) {
+		warn('startup', 'META_APP_ID o META_APP_SECRET no configurados — skip Graph API test');
+		global.__metaAppSecretGraphOk = false;
+		return false;
+	}
+
+	try {
+		const token = `${appId}|${secret}`;
+		const url = `https://graph.facebook.com/v21.0/${appId}?fields=id,name&access_token=${encodeURIComponent(token)}`;
+		const resp = await fetch(url);
+		const data = await resp.json();
+		if (data.error) {
+			global.__metaAppSecretGraphOk = false;
+			warn('startup', 'META_APP_SECRET inválido para Graph API', {
+				appId,
+				secretLen: secret.length,
+				graphError: data.error.message,
+				code: data.error.code,
+				hint: 'Meta Developers → App → Configuración básica → Clave secreta → copiar de nuevo a Railway META_APP_SECRET',
+			});
+			return false;
+		}
+		global.__metaAppSecretGraphOk = true;
+		line('startup', 'META_APP_SECRET válido (Graph API OK)', {
+			appId: data.id,
+			appName: data.name,
+			secretLen: secret.length,
+		});
+		return true;
+	} catch (e) {
+		global.__metaAppSecretGraphOk = false;
+		warn('startup', 'No se pudo verificar META_APP_SECRET vía Graph API', { error: e.message });
+		return false;
+	}
+}
+
 async function testEmpresa1OnStartup() {
 	try {
 		const { isAuthCentralEnabled, getAuthCentralPool } = require('../config/authCentralDb');
-		if (!isAuthCentralEnabled()) {
 			line('startup', 'Test empresa 1: AUTH_DB deshabilitado, skip');
 			return;
 		}
@@ -238,6 +279,7 @@ module.exports = {
 	logSignatureResult,
 	logWebhookProcess,
 	logWhatsappEmpresa,
+	testMetaAppSecretOnStartup,
 	testEmpresa1OnStartup,
 	sha256Preview,
 	labelSecret,

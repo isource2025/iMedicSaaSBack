@@ -53,8 +53,10 @@ app.listen(PORT, () => {
   }
 
   setTimeout(() => {
-    diag.testEmpresa1OnStartup().catch((e) => {
-      diag.warn('startup', 'Diagnóstico empresa 1 error', { error: e.message });
-    });
+    diag.testMetaAppSecretOnStartup()
+      .then(() => diag.testEmpresa1OnStartup())
+      .catch((e) => {
+        diag.warn('startup', 'Diagnóstico error', { error: e.message });
+      });
   }, 2000);
 });

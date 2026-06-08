@@ -60,6 +60,7 @@ const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 const botIntegrationRoutes = require('./routes/botIntegration.routes');
 const botAdminRoutes = require('./routes/botAdmin.routes');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook.routes');
+const { whatsappRawBody } = require('./middlewares/whatsappRawBody.middleware');
 
 // Importar conexión a la base de datos
 const { connectDB, isPlatformSqlConfigured } = require('./config/database');
@@ -70,6 +71,9 @@ dotenv.config();
 
 // Inicializar la aplicación Express
 const app = express();
+
+// Webhook Meta PRIMERO — stream crudo antes de cors/body-parser (firma X-Hub-Signature-256)
+app.use('/api/webhook/whatsapp', whatsappRawBody, whatsappWebhookRoutes);
 
 // SQL plataforma: solo precargar pool en modo legacy (sin MySQL auth).
 // En Railway/local con AUTH_DB=1 la conexión clínica sale de Empresas por tenant.
@@ -95,25 +99,7 @@ configureCors(app); // Configuración CORS
 //Permitir solo desde tu Frontend (opcion recomendada)
 app.use(cors());
 
-// Webhook Meta: body crudo ANTES de express.json (firma X-Hub-Signature-256)
-app.use(
-	'/api/webhook/whatsapp',
-	express.raw({ type: () => true, limit: '2mb' }),
-	(req, _res, next) => {
-		if (req.method === 'POST' && Buffer.isBuffer(req.body)) {
-			req.rawBody = req.body;
-			try {
-				req.body = JSON.parse(req.body.toString('utf8'));
-			} catch {
-				req.body = {};
-			}
-		}
-		next();
-	},
-	whatsappWebhookRoutes,
-);
-
-app.use(express.json()); // Parseo JSON (resto de rutas; webhook ya parseado arriba)
+app.use(express.json()); // Parseo JSON (webhook ya montado arriba con stream crudo)
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)
 
 // Asegurar carpetas de uploads

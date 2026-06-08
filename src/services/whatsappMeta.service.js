@@ -6,8 +6,35 @@ const crypto = require('crypto');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const diag = require('../utils/diagLog');
 
+function normalizeSecret(val) {
+	return String(val || '')
+		.trim()
+		.replace(/^["']+|["']+$/g, '');
+}
+
 function getAppSecret() {
-	return String(process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '').trim();
+	return normalizeSecret(process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET);
+}
+
+/** Candidatos para validar firma (por si hay typo en nombre de variable). */
+function getAppSecretCandidates() {
+	const out = [];
+	const seen = new Set();
+	for (const key of ['META_APP_SECRET', 'WHATSAPP_APP_SECRET']) {
+		const value = normalizeSecret(process.env[key]);
+		if (!value || seen.has(value)) continue;
+		seen.add(value);
+		out.push({ key, value });
+	}
+	return out;
+}
+
+function secretFingerprint(secret) {
+	return crypto.createHash('sha256').update(String(secret)).digest('hex').slice(0, 8);
+}
+
+function computeSignatureHex(raw, secret) {
+	return crypto.createHmac('sha256', secret).update(raw).digest('hex');
 }
 
 function normalizarTelefonoWa(to) {
@@ -38,53 +65,48 @@ function verificarFirmaWebhook(req) {
 		diag.warn('webhook', 'rawBody no disponible — firma NO validada (riesgo)', {
 			contentType: req.headers['content-type'],
 			contentLength: req.headers['content-length'],
+			contentEncoding: req.headers['content-encoding'] || '(none)',
 		});
 		return true;
 	}
 
-	const expectedHex = crypto.createHmac('sha256', secret).update(raw).digest('hex');
 	const receivedHex = signature.replace(/^sha256=/i, '').trim().toLowerCase();
+	const candidates = getAppSecretCandidates();
 
-	if (receivedHex.length !== expectedHex.length) {
-		diag.logSignatureResult(req, {
-			ok: false,
-			expectedHex,
-			receivedHex,
-			error: 'Longitud firma distinta',
-		});
-		const err = new Error(
-			'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
-		);
-		err.statusCode = 401;
-		throw err;
-	}
-
-	try {
-		const sigBuf = Buffer.from(receivedHex, 'hex');
-		const expBuf = Buffer.from(expectedHex, 'hex');
-		if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+	for (const { key, value } of candidates) {
+		const expectedHex = computeSignatureHex(raw, value);
+		if (expectedHex === receivedHex) {
 			diag.logSignatureResult(req, {
-				ok: false,
+				ok: true,
 				expectedHex,
 				receivedHex,
-				error: 'HMAC no coincide',
+				secretSource: key,
+				secretFingerprint: secretFingerprint(value),
 			});
-			const err = new Error(
-				'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
-			);
-			err.statusCode = 401;
-			throw err;
+			return true;
 		}
-	} catch (e) {
-		if (e.statusCode) throw e;
-		diag.logSignatureResult(req, { ok: false, error: e.message });
-		const err = new Error('Firma webhook inválida');
-		err.statusCode = 401;
-		throw err;
 	}
 
-	diag.logSignatureResult(req, { ok: true, expectedHex, receivedHex });
-	return true;
+	const primary = getAppSecret();
+	const expectedHex = primary ? computeSignatureHex(raw, primary) : null;
+
+	diag.logSignatureResult(req, {
+		ok: false,
+		expectedHex,
+		receivedHex,
+		error: 'HMAC no coincide',
+		contentEncoding: req.headers['content-encoding'] || '(none)',
+		bodyHexPrefix: raw.subarray(0, 32).toString('hex'),
+		secretFingerprint: primary ? secretFingerprint(primary) : null,
+		candidatesChecked: candidates.map((c) => c.key),
+		metaGraphApiOk: global.__metaAppSecretGraphOk ?? null,
+	});
+
+	const err = new Error(
+		'Firma webhook inválida — revisá META_APP_SECRET en Railway (Meta Developers → App → Configuración básica → Clave secreta)',
+	);
+	err.statusCode = 401;
+	throw err;
 }
 
 /**
@@ -146,6 +168,8 @@ async function sendTextMessage({ phoneNumberId, accessToken, to, text }) {
 
 module.exports = {
 	getAppSecret,
+	getAppSecretCandidates,
+	secretFingerprint,
 	normalizarTelefonoWa,
 	verificarFirmaWebhook,
 	sendTextMessage,
