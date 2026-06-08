@@ -272,7 +272,9 @@ async function responderMensajeEntrante({
 		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
 		return enviarTextoBot({
 			...enviarOpts,
-			texto: pasoId?.mensajeUsuario || 'Para comenzar, indicá tu DNI (sin puntos).',
+			texto:
+				pasoId?.mensajeUsuario ||
+				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
 		});
 	}
 

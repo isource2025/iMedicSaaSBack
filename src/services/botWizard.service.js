@@ -195,8 +195,70 @@ function esInicioNuevoTurno(texto) {
 		.toLowerCase()
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '');
-	return /^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t) ||
-		/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno)\b/.test(t);
+	if (/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t)) return true;
+	if (/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno)\b/.test(t)) {
+		return true;
+	}
+	if (/\b(quiero|necesito|busco|estoy queriendo)\b.*\b(turno|consulta)\b/.test(t)) return true;
+	if (
+		/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)\b/.test(t) &&
+		/\b(turno|consulta|especialidad)\b/.test(t)
+	) {
+		return true;
+	}
+	return false;
+}
+
+async function detectarEspecialidadEnTexto(texto) {
+	if (!texto || extraerDni(texto)) return null;
+	if (botAgenda.esConsultaListaEspecialidades(texto)) return null;
+
+	let esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+	if (!esp && gptHabilitado()) {
+		try {
+			const intent = await botIntencion.interpretarIntencion({
+				texto,
+				conv: null,
+				pasoBot: 'IDENTIFICAR',
+			});
+			const res = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+			if (res?.tipo === 'especialidad') esp = res.especialidad;
+		} catch (_) {
+			/* GPT opcional */
+		}
+	}
+	return esp ? { valor: esp.valor, nombre: esp.nombre } : null;
+}
+
+async function capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto) {
+	const esp = await detectarEspecialidadEnTexto(texto);
+	if (!esp) return null;
+	const ctx = { ...(conv?.contextoBot || {}), especialidadPendiente: esp };
+	await botConversacion.guardarContextoBot(idConversacion, ctx);
+	return esp;
+}
+
+function armarRespuestaBuscarTurnoInicial({
+	idConversacion,
+	telefonoWhatsApp,
+	flujo,
+	esp,
+	avisoPrefijo = '',
+}) {
+	const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
+	return {
+		handled: true,
+		accion: 'BUSCAR_TURNO',
+		aviso: `${avisoPrefijo}${botAgenda.mensajeAvisoBusquedaDisponibilidad()}`,
+		buscarTurno: {
+			tipo: 'inicial',
+			idConversacion,
+			telefonoWhatsApp,
+			especialidadValor: esp.valor,
+			especialidadNombre: esp.nombre,
+			pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
+		},
+	};
 }
 
 function mensajeErrorRenaper(err) {
@@ -242,10 +304,19 @@ async function procesarIdentificacionDni({
 
 		if (pasoConfirmarActivo) {
 			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+			const espPendPreservar = conv.contextoBot?.especialidadPendiente || null;
 			if (conv.idPaciente || conv.contextoBot) {
 				await botConversacion.limpiarEstadoWizard(idConversacion);
+				if (espPendPreservar) {
+					await botConversacion.guardarContextoBot(idConversacion, {
+						especialidadPendiente: espPendPreservar,
+					});
+				}
 			} else {
-				await botConversacion.guardarContextoBot(idConversacion, null);
+				await botConversacion.guardarContextoBot(
+					idConversacion,
+					espPendPreservar ? { especialidadPendiente: espPendPreservar } : null,
+				);
 			}
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				dniPaciente: String(dni),
@@ -340,16 +411,30 @@ async function intentarRespuestaWizard({
 
 	// --- Hola / nuevo turno: reiniciar flujo (tras turno confirmado u otra sesión) ---
 	if (esInicioNuevoTurno(texto) && pasoIdentificar?.activo !== false) {
+		const espPend = await detectarEspecialidadEnTexto(texto);
 		await botConversacion.limpiarEstadoWizard(idConversacion);
+		if (espPend) {
+			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
+		}
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
 			pasoBot: 'IDENTIFICAR',
 		});
 		const saludo = primerNombre(nombreWhatsApp(conv));
-		const msg = pasoIdentificar?.mensajeUsuario || 'Para comenzar, indicá tu DNI (sin puntos).';
+		const msg =
+			pasoIdentificar?.mensajeUsuario ||
+			'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
 		return {
 			handled: true,
 			texto: saludo ? `Hola, ${saludo}. ${msg}` : msg,
 		};
+	}
+
+	const pasoSinPaciente =
+		!conv.idPaciente &&
+		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual);
+	if (pasoSinPaciente && texto && !dniEnMensaje) {
+		await capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto);
+		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 	}
 
 	// --- DNI en mensaje: RENAPER siempre antes que GPT (aunque pasoBot esté desfasado) ---
@@ -382,6 +467,7 @@ async function intentarRespuestaWizard({
 
 		if (conf === true) {
 			const config = await botConfigService.getBotConfig();
+			const espPend = conv.contextoBot?.especialidadPendiente;
 			const data = await botAgenda.identificarPaciente({
 				numeroDocumento: conv.dniPaciente,
 				telefonoWhatsApp,
@@ -389,6 +475,28 @@ async function intentarRespuestaWizard({
 				idConversacion,
 				omitirAvancePaso: true,
 			});
+			await botConversacion.guardarContextoBot(idConversacion, null);
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				idPaciente: data.idPaciente,
+				dniPaciente: String(conv.dniPaciente),
+			});
+
+			const saludo = primerNombre(nombreWhatsApp(conv));
+			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+			if (
+				espPend?.valor &&
+				config.reglas.sugerirPrimerTurnoDisponible &&
+				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+			) {
+				return armarRespuestaBuscarTurnoInicial({
+					idConversacion,
+					telefonoWhatsApp,
+					flujo,
+					esp: espPend,
+					avisoPrefijo: prefijoSaludo,
+				});
+			}
+
 			let siguiente = siguientePasoActivo(flujo, 'CONFIRMAR_IDENTIDAD');
 			if (
 				config.reglas.sugerirPrimerTurnoDisponible &&
@@ -397,17 +505,13 @@ async function intentarRespuestaWizard({
 				siguiente = 'ELEGIR_ESPECIALIDAD';
 			}
 			const pasoCfg = pasoPorId(flujo, siguiente);
-			await botConversacion.guardarContextoBot(idConversacion, null);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				idPaciente: data.idPaciente,
-				dniPaciente: String(conv.dniPaciente),
 				pasoBot: siguiente,
 			});
-			const saludo = primerNombre(nombreWhatsApp(conv));
 			return {
 				handled: true,
 				texto: pasoCfg?.mensajeUsuario
-					? `Perfecto${saludo ? `, ${saludo}` : ''}. ${pasoCfg.mensajeUsuario}`
+					? `${prefijoSaludo.trim()} ${pasoCfg.mensajeUsuario}`
 					: `Gracias${saludo ? `, ${saludo}` : ''}. Continuemos con tu turno.`,
 			};
 		}
@@ -498,20 +602,12 @@ async function intentarRespuestaWizard({
 		}
 
 		if (sugerirTurno) {
-			const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
-			return {
-				handled: true,
-				accion: 'BUSCAR_TURNO',
-				aviso: botAgenda.mensajeAvisoBusquedaDisponibilidad({ especialidad: esp.nombre }),
-				buscarTurno: {
-					tipo: 'inicial',
-					idConversacion,
-					telefonoWhatsApp,
-					especialidadValor: esp.valor,
-					especialidadNombre: esp.nombre,
-					pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
-				},
-			};
+			return armarRespuestaBuscarTurnoInicial({
+				idConversacion,
+				telefonoWhatsApp,
+				flujo,
+				esp,
+			});
 		}
 
 		const pasoProf = pasoPorId(flujo, 'ELEGIR_PROFESIONAL');

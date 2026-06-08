@@ -1625,12 +1625,8 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	return null;
 }
 
-function mensajeAvisoBusquedaDisponibilidad(opts = {}) {
-	const partes = [];
-	if (opts.preferencia) partes.push(`*${opts.preferencia}*`);
-	else if (opts.especialidad) partes.push(`*${opts.especialidad}*`);
-	const detalle = partes.length ? ` ${partes.join(' ')}` : '';
-	return `Un momento${detalle}… estoy consultando la *disponibilidad de turnos*.`;
+function mensajeAvisoBusquedaDisponibilidad(_opts = {}) {
+	return 'Voy a consultar la disponibilidad. En breve te respondo.';
 }
 
 function mensajeSugerenciaTurno(sugerencia, pasoCfg, opts = {}) {

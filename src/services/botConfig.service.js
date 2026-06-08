@@ -81,7 +81,7 @@ async function getBotConfig() {
 			bienvenida:
 				db.mensaje_bienvenida ||
 				process.env.BOT_MENSAJE_BIENVENIDA ||
-				'Hola, soy el asistente de turnos. Para comenzar, indicá tu DNI (sin puntos).',
+				'Hola, soy el asistente de turnos. Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
 			confirmacion:
 				db.mensaje_confirmacion ||
 				process.env.BOT_MENSAJE_CONFIRMACION ||
@@ -89,7 +89,7 @@ async function getBotConfig() {
 			pedirDni:
 				db.mensaje_pedir_dni ||
 				process.env.BOT_MENSAJE_PEDIR_DNI ||
-				'Para continuar, decime tu número de DNI (sin puntos).',
+				'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).',
 		},
 		promptSistema:
 			db.prompt_sistema ||
@@ -141,7 +141,8 @@ function defaultFlujoPasos() {
 			paso: 1,
 			id: 'IDENTIFICAR',
 			titulo: 'Identificación',
-			mensajeUsuario: 'Para comenzar, indicá tu DNI (sin puntos).',
+			mensajeUsuario:
+				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
 			descripcion: 'Validación RENAPER y ficha local del paciente',
 			activo: true,
 		},
