@@ -163,6 +163,24 @@ function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
 	return `Encontramos en *${fuente}*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
 }
 
+function mensajeErrorAltaPaciente(err) {
+	if (err?.code === 'PACIENTE_SIN_SEXO') {
+		return 'No pudimos registrar la ficha del paciente: RENAPER no informó el sexo. Contactá admisión para completar el alta.';
+	}
+	return 'Confirmamos los datos en RENAPER pero no pudimos dar de alta la ficha en el sistema. Intentá de nuevo o contactá admisión.';
+}
+
+async function confirmarIdentidadConAlta({ idConversacion, telefonoWhatsApp, dniPaciente }) {
+	return botAgenda.identificarPaciente({
+		numeroDocumento: dniPaciente,
+		telefonoWhatsApp,
+		crearSiNoExiste: true,
+		forzarAltaLocal: true,
+		idConversacion,
+		omitirAvancePaso: true,
+	});
+}
+
 async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo) {
 	return botAgenda.identificarPaciente({
 		numeroDocumento: dni,
@@ -532,25 +550,38 @@ async function intentarRespuestaWizard({
 		if (conf === true) {
 			const config = await botConfigService.getBotConfig();
 			const espPend = conv.contextoBot?.especialidadPendiente;
-			const data = await botAgenda.identificarPaciente({
-				numeroDocumento: conv.dniPaciente,
-				telefonoWhatsApp,
-				crearSiNoExiste: true,
-				idConversacion,
-				omitirAvancePaso: true,
-			});
-			await botConversacion.guardarContextoBot(idConversacion, null);
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				idPaciente: data.idPaciente,
-				dniPaciente: String(conv.dniPaciente),
-			});
+			let data;
+			try {
+				data = await confirmarIdentidadConAlta({
+					idConversacion,
+					telefonoWhatsApp,
+					dniPaciente: conv.dniPaciente,
+				});
+			} catch (altaErr) {
+				diag.warn('wizard', 'Alta paciente falló tras confirmar identidad', {
+					idConversacion,
+					dni: conv.dniPaciente,
+					error: altaErr.message,
+					code: altaErr.code,
+				});
+				return { handled: true, texto: mensajeErrorAltaPaciente(altaErr) };
+			}
 			if (!data.idPaciente) {
 				diag.warn('wizard', 'Identidad confirmada sin idPaciente en ficha local', {
 					idConversacion,
 					dni: conv.dniPaciente,
 					accion: data.accionSugerida,
 				});
+				return {
+					handled: true,
+					texto: mensajeErrorAltaPaciente({ code: 'PACIENTE_NO_CREADO' }),
+				};
 			}
+			await botConversacion.guardarContextoBot(idConversacion, null);
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				idPaciente: data.idPaciente,
+				dniPaciente: String(conv.dniPaciente),
+			});
 
 			const saludo = primerNombre(nombreWhatsApp(conv));
 			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
@@ -603,13 +634,16 @@ async function intentarRespuestaWizard({
 		const espEnTexto = await detectarEspecialidadEnTexto(texto);
 		if (espEnTexto && conv.dniPaciente) {
 			const config = await botConfigService.getBotConfig();
-			const data = await botAgenda.identificarPaciente({
-				numeroDocumento: conv.dniPaciente,
-				telefonoWhatsApp,
-				crearSiNoExiste: true,
-				idConversacion,
-				omitirAvancePaso: true,
-			});
+			let data;
+			try {
+				data = await confirmarIdentidadConAlta({
+					idConversacion,
+					telefonoWhatsApp,
+					dniPaciente: conv.dniPaciente,
+				});
+			} catch (altaErr) {
+				return { handled: true, texto: mensajeErrorAltaPaciente(altaErr) };
+			}
 			if (data.idPaciente) {
 				await botConversacion.actualizarContextoPaciente(idConversacion, {
 					idPaciente: data.idPaciente,
@@ -655,14 +689,12 @@ async function intentarRespuestaWizard({
 		!conv.idPaciente &&
 		conv.dniPaciente
 	) {
-		const dataPac = await botAgenda.identificarPaciente({
-			numeroDocumento: conv.dniPaciente,
-			telefonoWhatsApp,
-			crearSiNoExiste: true,
+		const dataPac = await confirmarIdentidadConAlta({
 			idConversacion,
-			omitirAvancePaso: true,
-		});
-		if (dataPac.idPaciente) {
+			telefonoWhatsApp,
+			dniPaciente: conv.dniPaciente,
+		}).catch(() => null);
+		if (dataPac?.idPaciente) {
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				idPaciente: dataPac.idPaciente,
 				dniPaciente: String(conv.dniPaciente),

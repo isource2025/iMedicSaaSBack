@@ -138,11 +138,62 @@ function _mapRenaperData(p, dni, sexoDetectado, renaperSigned) {
 	};
 }
 
+/** Alta en impacientes con el mismo servicio que admisión → pacientes. */
+async function _crearPacienteDesdeRenaper({
+	renaperData,
+	dni,
+	sexoDetectado,
+	telefonoWhatsApp,
+	idConversacion,
+}) {
+	const sexo = _sexoRenaperToLocal(renaperData?.sexo || sexoDetectado);
+	if (!sexo) {
+		const e = new Error('No se pudo determinar el sexo desde RENAPER para dar de alta al paciente');
+		e.statusCode = 422;
+		e.code = 'PACIENTE_SIN_SEXO';
+		throw e;
+	}
+
+	const nombre =
+		renaperData?.nombreCompleto ||
+		_nombreDesdeRenaper(renaperData) ||
+		`PACIENTE ${dni}`;
+
+	const pacienteData = {
+		ApellidoyNombre: nombre,
+		TipoDocumento: 'DNI',
+		NumeroDocumento: dni,
+		Sexo: sexo,
+		FechaNacimiento: renaperData?.fechaNacimiento
+			? convertirFechaAClarion(renaperData.fechaNacimiento)
+			: null,
+		Domicilio: renaperData?.domicilio || null,
+		TelefonoNegocio: telefonoWhatsApp
+			? String(telefonoWhatsApp).replace(/\D/g, '').slice(-15)
+			: null,
+	};
+
+	const nuevo = await patientsService.crearPaciente(pacienteData);
+	const mapped = _mapPacienteRow(nuevo);
+
+	await botLogService.registrarLog({
+		accion: 'CREAR_PACIENTE',
+		idPaciente: mapped?.idPaciente,
+		telefonoWhatsApp,
+		idConversacion,
+		payload: { dni, fuente: 'renaper', nombre },
+		resultado: 'OK',
+	});
+
+	return mapped;
+}
+
 async function identificarPaciente({
 	numeroDocumento,
 	sexo,
 	telefonoWhatsApp,
 	crearSiNoExiste,
+	forzarAltaLocal = false,
 	idConversacion,
 	omitirAvancePaso = false,
 }) {
@@ -213,21 +264,26 @@ async function identificarPaciente({
 	if (pacienteLocal) {
 		accionSugerida = 'USAR_PACIENTE_EXISTENTE';
 		if (telefonoWhatsApp) await _actualizarTelefonoPaciente(idPaciente, telefonoWhatsApp);
-	} else if (renaperOk && (crearSiNoExiste || config.reglas.crearPacienteAutomatico)) {
-		const nuevo = await patientsService.crearPaciente({
-			ApellidoyNombre: renaperData.nombreCompleto || `PACIENTE ${dni}`,
-			NumeroDocumento: dni,
-			Sexo: renaperData.sexo || sexoDetectado,
-			FechaNacimiento: renaperData.fechaNacimiento
-				? convertirFechaAClarion(renaperData.fechaNacimiento)
-				: null,
-			Domicilio: renaperData.domicilio,
-			TelefonoNegocio: telefonoWhatsApp ? String(telefonoWhatsApp).replace(/\D/g, '').slice(-15) : null,
-		});
-		pacienteLocal = _mapPacienteRow(nuevo);
-		idPaciente = pacienteLocal?.idPaciente ?? null;
-		pacienteCreado = true;
-		accionSugerida = 'PACIENTE_CREADO';
+	} else if (
+		renaperOk &&
+		(crearSiNoExiste || config.reglas.crearPacienteAutomatico || forzarAltaLocal)
+	) {
+		try {
+			pacienteLocal = await _crearPacienteDesdeRenaper({
+				renaperData,
+				dni,
+				sexoDetectado,
+				telefonoWhatsApp,
+				idConversacion,
+			});
+			idPaciente = pacienteLocal?.idPaciente ?? null;
+			pacienteCreado = true;
+			accionSugerida = 'PACIENTE_CREADO';
+		} catch (err) {
+			console.error('[botAgenda] Alta paciente desde RENAPER falló:', err.message, err.code || '');
+			if (forzarAltaLocal) throw err;
+			accionSugerida = 'CREAR_PACIENTE';
+		}
 	} else if (renaperOk) {
 		accionSugerida = 'CREAR_PACIENTE';
 	} else if (!pacienteLocal) {
@@ -299,55 +355,40 @@ async function crearPacienteBot(body) {
 	const dni = body.numeroDocumento != null ? _validarDni(body.numeroDocumento) : null;
 	const sexo = body.sexo ? _validarSexo(body.sexo) : null;
 
-	let datos = {
-		ApellidoyNombre: body.apellidoNombre || body.ApellidoyNombre,
-		NumeroDocumento: dni,
-		Sexo: sexo ? _sexoRenaperToLocal(sexo) || sexo : null,
-		FechaNacimiento: body.fechaNacimiento || body.FechaNacimiento,
-		Domicilio: body.domicilio || body.Domicilio,
-		TelefonoNegocio: body.telefono || body.telefonoWhatsApp,
-		NumeroSSN: body.numeroAfiliado || body.nAfiliado,
-		NumeroCuenta: body.cobertura || body.Cobertura,
-		Mail: body.mail || body.Mail,
-	};
+	let renaperData = null;
+	let sexoDetectado = sexo ? _sexoRenaperToLocal(sexo) : null;
 
 	if (dni && config.reglas.requiereRenaper !== false) {
 		const renaperResult = sexo
 			? await renaperService.search(dni, _validarSexo(sexo))
 			: await renaperService.searchByDni(dni);
 		if (renaperResult.ok && renaperResult.data) {
-			const p = renaperResult.data;
-			datos.ApellidoyNombre = datos.ApellidoyNombre || _nombreDesdeRenaper(p);
-			datos.FechaNacimiento =
-				datos.FechaNacimiento ||
-				(p.fechaNacimiento ? String(p.fechaNacimiento).slice(0, 10) : null);
-			datos.Sexo = datos.Sexo || _sexoRenaperToLocal(p.sexo) || renaperResult.sexoDetectado;
-			datos.Domicilio = datos.Domicilio || _domicilioDesdeRenaper(p);
+			sexoDetectado =
+				_sexoRenaperToLocal(renaperResult.data.sexo) ||
+				renaperResult.sexoDetectado ||
+				sexoDetectado;
+			renaperData = _mapRenaperData(
+				renaperResult.data,
+				dni,
+				sexoDetectado,
+				!!renaperResult.meta?.signed,
+			);
 		}
 	}
 
-	if (!datos.ApellidoyNombre || !datos.Sexo) {
-		const e = new Error('ApellidoyNombre y Sexo son requeridos');
-		e.statusCode = 400;
+	if (!renaperData) {
+		const e = new Error('No se encontraron datos en RENAPER para crear el paciente');
+		e.statusCode = 404;
+		e.code = 'RENAPER_NO_ENCONTRADO';
 		throw e;
 	}
 
-	if (body.telefonoWhatsApp || body.telefono) {
-		datos.TelefonoNegocio = String(body.telefonoWhatsApp || body.telefono)
-			.replace(/\D/g, '')
-			.slice(-15);
-	}
-
-	const nuevo = await patientsService.crearPaciente(datos);
-	const mapped = _mapPacienteRow(nuevo);
-
-	await botLogService.registrarLog({
-		accion: 'CREAR_PACIENTE',
-		idPaciente: mapped?.idPaciente,
-		telefonoWhatsApp: body.telefonoWhatsApp,
+	const mapped = await _crearPacienteDesdeRenaper({
+		renaperData,
+		dni,
+		sexoDetectado,
+		telefonoWhatsApp: body.telefonoWhatsApp || body.telefono,
 		idConversacion: body.idConversacion,
-		payload: { dni },
-		resultado: 'OK',
 	});
 
 	return mapped;
