@@ -220,6 +220,7 @@ async function testMetaAppSecretOnStartup() {
 async function testEmpresa1OnStartup() {
 	try {
 		const { isAuthCentralEnabled, getAuthCentralPool } = require('../config/authCentralDb');
+		if (!isAuthCentralEnabled()) {
 			line('startup', 'Test empresa 1: AUTH_DB deshabilitado, skip');
 			return;
 		}
