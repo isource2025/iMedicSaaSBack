@@ -65,7 +65,21 @@ async function buildSystemPrompt(config, flujo, conv) {
 	].filter(Boolean).join('\n\n');
 }
 
-async function enviarTextoBot({ idEmpresa, idConversacion, telefonoWhatsApp, texto }) {
+async function enviarTextoBot({
+	idEmpresa,
+	idConversacion,
+	telefonoWhatsApp,
+	texto,
+	idMensajePaciente = null,
+	metaMessageIdEntrante = null,
+}) {
+	if (metaMessageIdEntrante && (await botConversacion.yaRespondidoAMetaMessage(idConversacion, metaMessageIdEntrante))) {
+		return { respondido: false, motivo: 'ya-respondido-wamid' };
+	}
+	if (idMensajePaciente && (await botConversacion.yaRespondidoAlMensaje(idConversacion, idMensajePaciente))) {
+		return { respondido: false, motivo: 'ya-respondido' };
+	}
+
 	const waCfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
 	diag.logWhatsappEmpresa('botResponder waCfg', {
 		idEmpresa,
@@ -108,6 +122,8 @@ async function responderMensajeEntrante({
 	telefonoWhatsApp,
 	idConversacion,
 	contenidoUltimo = null,
+	idMensajePaciente = null,
+	metaMessageIdEntrante = null,
 }) {
 	if (!gptHabilitado()) {
 		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
@@ -125,6 +141,25 @@ async function responderMensajeEntrante({
 		return { respondido: false, motivo: 'sin mensaje nuevo del paciente' };
 	}
 
+	const msgId = idMensajePaciente || ultimo.idMensaje;
+
+	if (metaMessageIdEntrante && (await botConversacion.yaRespondidoAMetaMessage(idConversacion, metaMessageIdEntrante))) {
+		diag.line('webhook', 'Ya respondido a este wamid de Meta', {
+			idConversacion,
+			metaMessageIdEntrante,
+		});
+		return { respondido: false, motivo: 'ya-respondido-wamid' };
+	}
+
+	if (msgId && (await botConversacion.yaRespondidoAlMensaje(idConversacion, msgId))) {
+		diag.line('webhook', 'Ya respondido a este mensaje entrante', {
+			idConversacion,
+			idMensajePaciente: msgId,
+			metaMessageIdEntrante,
+		});
+		return { respondido: false, motivo: 'ya-respondido' };
+	}
+
 	const textoEntrada = contenidoUltimo || ultimo.contenido;
 
 	// 1) Wizard determinístico (RENAPER, confirmación, pasos activos)
@@ -140,15 +175,35 @@ async function responderMensajeEntrante({
 				idConversacion,
 				telefonoWhatsApp,
 				texto: wizard.texto,
+				idMensajePaciente: msgId,
+				metaMessageIdEntrante,
 			});
 		}
 	} catch (wizardErr) {
 		diag.warn('webhook', 'Wizard error', { error: wizardErr.message, code: wizardErr.code });
+		if (wizardErr.code === 'RENAPER_NO_ENCONTRADO') {
+			return enviarTextoBot({
+				idEmpresa,
+				idConversacion,
+				telefonoWhatsApp,
+				texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
+				idMensajePaciente: msgId,
+				metaMessageIdEntrante,
+			});
+		}
+	}
+
+	const flujo = await botConfigService.getFlujoPasos();
+	const pasoActual = conv?.pasoBot || botWizard.pasoInicial(flujo);
+	const dniDetectado = botWizard.extraerDni(textoEntrada);
+
+	// DNI o confirmación RENAPER: solo wizard (GPT no debe inventar el paso de confirmación).
+	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && !conv?.idPaciente)) {
+		return { respondido: false, motivo: 'identificacion-solo-wizard' };
 	}
 
 	// 2) GPT para el resto del flujo
 	const config = await botConfigService.getBotConfig();
-	const flujo = await botConfigService.getFlujoPasos();
 	const messages = mensajesParaOpenAi(historial);
 	if (!messages.length) {
 		return { respondido: false, motivo: 'sin historial' };
@@ -162,6 +217,8 @@ async function responderMensajeEntrante({
 		idConversacion,
 		telefonoWhatsApp,
 		texto,
+		idMensajePaciente: msgId,
+		metaMessageIdEntrante,
 	});
 }
 

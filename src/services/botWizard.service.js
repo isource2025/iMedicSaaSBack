@@ -44,14 +44,138 @@ function interpretarConfirmacion(texto) {
 	return null;
 }
 
-function formatearPersonaRenaper(renaper, dni) {
+function formatearPersonaRenaper(renaper, dni, pacienteLocal = null) {
 	const lineas = [];
-	if (renaper?.nombreCompleto) lineas.push(`Nombre: *${renaper.nombreCompleto}*`);
+	const apellido = String(renaper?.apellido || '').trim();
+	const nombres = String(renaper?.nombres || '').trim();
+	let nombre =
+		renaper?.nombreCompleto ||
+		(apellido && nombres ? `${apellido} ${nombres}` : null) ||
+		apellido ||
+		nombres ||
+		pacienteLocal?.nombre ||
+		null;
+
+	if (nombre) {
+		lineas.push(`Nombre: *${nombre}*`);
+	} else if (apellido || nombres) {
+		if (apellido) lineas.push(`Apellido: *${apellido}*`);
+		if (nombres) lineas.push(`Nombres: *${nombres}*`);
+	}
+
 	lineas.push(`DNI: *${dni}*`);
-	if (renaper?.fechaNacimiento) lineas.push(`Fecha de nacimiento: ${renaper.fechaNacimiento}`);
-	if (renaper?.sexo) lineas.push(`Sexo: ${renaper.sexo === 'F' ? 'Femenino' : renaper.sexo === 'M' ? 'Masculino' : renaper.sexo}`);
+
+	if (renaper?.fechaNacimiento) {
+		lineas.push(`Fecha de nacimiento: ${renaper.fechaNacimiento}`);
+	}
+	if (renaper?.sexo) {
+		lineas.push(
+			`Sexo: ${renaper.sexo === 'F' ? 'Femenino' : renaper.sexo === 'M' ? 'Masculino' : renaper.sexo}`,
+		);
+	}
 	if (renaper?.domicilio) lineas.push(`Domicilio: ${renaper.domicilio}`);
+
 	return lineas.join('\n');
+}
+
+function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
+	const detalle = formatearPersonaRenaper(renaper, dni, pacienteLocal);
+	return `Encontramos en *RENAPER*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
+}
+
+async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo) {
+	return botAgenda.identificarPaciente({
+		numeroDocumento: dni,
+		telefonoWhatsApp,
+		crearSiNoExiste: !pasoConfirmarActivo,
+		idConversacion,
+		omitirAvancePaso: pasoConfirmarActivo,
+	});
+}
+
+function debeProcesarDni(conv, pasoActual, pasoIdentificar, dni) {
+	if (!dni || !pasoIdentificar?.activo || conv.idPaciente) return false;
+
+	if (
+		pasoActual === 'IDENTIFICAR' ||
+		pasoActual === 'inicio' ||
+		pasoActual === 'CONFIRMAR_IDENTIDAD' ||
+		!pasoActual
+	) {
+		return true;
+	}
+
+	// GPT u otro paso avanzado sin paciente confirmado: igual consultar RENAPER.
+	return !conv.dniPaciente;
+}
+
+async function procesarIdentificacionDni({
+	idConversacion,
+	telefonoWhatsApp,
+	dni,
+	conv,
+	flujo,
+	pasoConfirmarActivo,
+}) {
+	const data = await consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo);
+
+	if (!data.renaper?.encontrado) {
+		return {
+			handled: true,
+			texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
+		};
+	}
+
+	if (pasoConfirmarActivo) {
+		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			dniPaciente: String(dni),
+			nombreContacto:
+				data.renaper.nombreCompleto ||
+				data.pacienteLocal?.nombre ||
+				conv.nombreContacto,
+			pasoBot: 'CONFIRMAR_IDENTIDAD',
+			idPaciente: null,
+		});
+		return {
+			handled: true,
+			texto: mensajeConfirmacionRenaper({
+				renaper: data.renaper,
+				dni,
+				pacienteLocal: data.pacienteLocal,
+				pasoCfg,
+			}),
+		};
+	}
+
+	const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
+	const pasoCfg = pasoPorId(flujo, siguiente);
+	return {
+		handled: true,
+		texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
+	};
+}
+
+async function reconsultarRenaperParaConfirmacion(conv, telefonoWhatsApp, idConversacion, pasoCfg) {
+	const data = await botAgenda.identificarPaciente({
+		numeroDocumento: conv.dniPaciente,
+		telefonoWhatsApp,
+		crearSiNoExiste: false,
+		idConversacion,
+		omitirAvancePaso: true,
+	});
+
+	if (data.renaper?.encontrado) {
+		return mensajeConfirmacionRenaper({
+			renaper: data.renaper,
+			dni: conv.dniPaciente,
+			pacienteLocal: data.pacienteLocal,
+			pasoCfg,
+		});
+	}
+
+	const detalle = formatearPersonaRenaper(null, conv.dniPaciente, data.pacienteLocal);
+	return `Datos registrados:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
 }
 
 /**
@@ -68,12 +192,37 @@ async function intentarRespuestaWizard({
 	const flujo = await botConfigService.getFlujoPasos();
 	const activos = pasosActivos(flujo);
 	const pasoConfirmarActivo = !!pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD')?.activo;
-	const pasoActual = conv.pasoBot || pasoInicial(flujo);
+	let pasoActual = conv.pasoBot || pasoInicial(flujo);
+
+	// DNI consultado pero sin confirmar: forzar paso de confirmación.
+	if (conv.dniPaciente && !conv.idPaciente && pasoConfirmarActivo && pasoActual !== 'CONFIRMAR_IDENTIDAD') {
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			pasoBot: 'CONFIRMAR_IDENTIDAD',
+		});
+		pasoActual = 'CONFIRMAR_IDENTIDAD';
+	}
+
 	const texto = String(contenido || '').trim();
+	const dniEnMensaje = extraerDni(texto);
+	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
+
+	// --- DNI en mensaje: RENAPER siempre antes que GPT (aunque pasoBot esté desfasado) ---
+	if (debeProcesarDni(conv, pasoActual, pasoIdentificar, dniEnMensaje)) {
+		return procesarIdentificacionDni({
+			idConversacion,
+			telefonoWhatsApp,
+			dni: dniEnMensaje,
+			conv,
+			flujo,
+			pasoConfirmarActivo,
+		});
+	}
 
 	// --- Confirmación de identidad RENAPER ---
 	if (pasoActual === 'CONFIRMAR_IDENTIDAD' && pasoConfirmarActivo) {
 		const conf = interpretarConfirmacion(texto);
+		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+
 		if (conf === true) {
 			const data = await botAgenda.identificarPaciente({
 				numeroDocumento: conv.dniPaciente,
@@ -115,58 +264,15 @@ async function intentarRespuestaWizard({
 					'Entendido. Por favor indicá nuevamente tu DNI (sin puntos).',
 			};
 		}
+
 		return {
 			handled: true,
-			texto: 'Respondé *Sí* o *No* para confirmar si los datos de RENAPER son correctos.',
-		};
-	}
-
-	// --- Identificación por DNI + consulta RENAPER ---
-	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
-	if (
-		pasoIdentificar?.activo &&
-		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual)
-	) {
-		const dni = extraerDni(texto);
-		if (!dni) return { handled: false, motivo: 'sin dni en mensaje' };
-
-		const data = await botAgenda.identificarPaciente({
-			numeroDocumento: dni,
-			telefonoWhatsApp,
-			crearSiNoExiste: !pasoConfirmarActivo,
-			idConversacion,
-			omitirAvancePaso: pasoConfirmarActivo,
-		});
-
-		if (!data.renaper?.encontrado) {
-			return {
-				handled: true,
-				texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
-			};
-		}
-
-		if (pasoConfirmarActivo) {
-			const detalle = formatearPersonaRenaper(data.renaper, dni);
-			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				dniPaciente: String(dni),
-				nombreContacto: data.renaper.nombreCompleto || conv.nombreContacto,
-				pasoBot: 'CONFIRMAR_IDENTIDAD',
-				idPaciente: null,
-			});
-			return {
-				handled: true,
-				texto: `Encontramos en *RENAPER*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`,
-			};
-		}
-
-		const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
-		const pasoCfg = pasoPorId(flujo, siguiente);
-		return {
-			handled: true,
-			texto:
-				pasoCfg?.mensajeUsuario ||
-				'Gracias. ¿Qué especialidad necesitás?',
+			texto: await reconsultarRenaperParaConfirmacion(
+				conv,
+				telefonoWhatsApp,
+				idConversacion,
+				pasoCfg,
+			),
 		};
 	}
 

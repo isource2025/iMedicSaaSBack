@@ -43,10 +43,13 @@ function _sexoRenaperToLocal(sexoRenaper) {
 }
 
 function _nombreDesdeRenaper(persona) {
-	const ap = String(persona?.apellido || '').trim();
-	const nom = String(persona?.nombres || '').trim();
+	const ap = String(persona?.apellido || persona?.Apellido || '').trim();
+	const nom = String(
+		persona?.nombres || persona?.Nombres || persona?.nombre || persona?.Nombre || '',
+	).trim();
 	if (ap && nom) return `${ap} ${nom}`.toUpperCase().slice(0, 40);
 	if (ap) return ap.toUpperCase().slice(0, 40);
+	if (nom) return nom.toUpperCase().slice(0, 40);
 	return null;
 }
 
@@ -132,8 +135,8 @@ async function identificarPaciente({
 			const p = renaperResult.data;
 			renaperData = {
 				numeroDocumento: p.numeroDocumento != null ? Number(p.numeroDocumento) : dni,
-				apellido: p.apellido ? String(p.apellido).trim() : null,
-				nombres: p.nombres ? String(p.nombres).trim() : null,
+				apellido: String(p.apellido || p.Apellido || '').trim() || null,
+				nombres: String(p.nombres || p.Nombres || p.nombre || p.Nombre || '').trim() || null,
 				nombreCompleto: _nombreDesdeRenaper(p),
 				fechaNacimiento: p.fechaNacimiento ? String(p.fechaNacimiento).slice(0, 10) : null,
 				sexo: sexoDetectado,

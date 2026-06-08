@@ -25,6 +25,19 @@ async function webhookMensajeEntrante(req, res) {
 			});
 		}
 
+		const webhookDedup = require('../services/webhookDedup.service');
+		const claim = webhookDedup.tryClaimIncoming(metaMessageId, {
+			telefono,
+			timestamp: body.timestamp,
+			contenido,
+		});
+		if (!claim.ok) {
+			return res.json({
+				success: true,
+				data: { skipped: true, reason: claim.reason, metaMessageId },
+			});
+		}
+
 		const result = await botConversacion.registrarMensajeEntrante({
 			telefonoWhatsApp: telefono,
 			contenido,
@@ -38,16 +51,24 @@ async function webhookMensajeEntrante(req, res) {
 		const estado = await botConversacion.puedeResponderBot(result.conversacion.idConversacion);
 
 		let botReply = null;
-		if (botResponder.gptHabilitado() && estado.puedeResponderBot) {
+		if (result.duplicado) {
+			webhookDedup.markCompleted(claim.key, true);
+		} else if (botResponder.gptHabilitado() && estado.puedeResponderBot) {
 			try {
 				botReply = await botResponder.responderMensajeEntrante({
 					idEmpresa: req.idEmpresa,
 					telefonoWhatsApp: telefono,
 					idConversacion: result.conversacion.idConversacion,
+					contenidoUltimo: contenido,
+					idMensajePaciente: result.mensaje?.idMensaje,
+					metaMessageIdEntrante: metaMessageId,
 				});
 			} catch (gptErr) {
 				botReply = { respondido: false, motivo: gptErr.message };
 			}
+			webhookDedup.markCompleted(claim.key, true);
+		} else {
+			webhookDedup.markCompleted(claim.key, true);
 		}
 
 		res.json({

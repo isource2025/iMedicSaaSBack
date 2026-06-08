@@ -1,6 +1,7 @@
 const botConversacion = require('./botConversacion.service');
 const botResponder = require('./botResponder.service');
 const botReset = require('./botReset.service');
+const webhookDedup = require('./webhookDedup.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const diag = require('../utils/diagLog');
 const { runWithTenant } = require('../context/tenantContext');
@@ -131,6 +132,25 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 	try {
 		await runWithTenant(idEmpresa, async () => {
 			for (const m of mensajes) {
+				const claim = webhookDedup.tryClaimIncoming(m.metaMessageId, {
+					telefono: m.telefono,
+					timestamp: m.timestamp,
+					contenido: m.contenido,
+				});
+				if (!claim.ok) {
+					diag.line('webhook', 'Señal Meta ignorada (solo primera por mensaje)', {
+						metaMessageId: m.metaMessageId,
+						reason: claim.reason,
+						telefono: m.telefono,
+					});
+					resultados.push({
+						skipped: true,
+						metaMessageId: m.metaMessageId,
+						reason: claim.reason,
+					});
+					continue;
+				}
+
 				try {
 					if (botReset.esComandoReset(m.contenido)) {
 						const reset = await botReset.procesarComandoReset({
@@ -139,6 +159,7 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 							contenido: m.contenido,
 						});
 						resultados.push({ reset, botReply: { respondido: false, motivo: 'comando-reset' } });
+						webhookDedup.markCompleted(claim.key, true);
 						continue;
 					}
 
@@ -155,6 +176,7 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 							metaMessageId: m.metaMessageId,
 						});
 						resultados.push({ ...r, botReply: { respondido: false, motivo: 'duplicado' } });
+						webhookDedup.markCompleted(claim.key, true);
 						continue;
 					}
 
@@ -172,6 +194,8 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 								telefonoWhatsApp: m.telefono,
 								idConversacion: r.conversacion.idConversacion,
 								contenidoUltimo: m.contenido,
+								idMensajePaciente: r.mensaje?.idMensaje,
+								metaMessageIdEntrante: m.metaMessageId,
 							});
 							diag.line('webhook', 'GPT respuesta', {
 								respondido: botReply?.respondido,
@@ -191,7 +215,9 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 					}
 
 					resultados.push({ ...r, botReply });
+					webhookDedup.markCompleted(claim.key, true);
 				} catch (err) {
+					webhookDedup.markFailed(claim.key);
 					diag.warn('webhook', 'mensaje no registrado', {
 						idEmpresa,
 						sourceLabel,

@@ -187,6 +187,47 @@ async function existeMensajePorMetaId(metaMessageId) {
 	return rows[0] ? mapMensaje(rows[0]) : null;
 }
 
+/** ¿Ya hay respuesta BOT/AGENTE posterior a este mensaje entrante? */
+async function yaRespondidoAlMensaje(idConversacion, idMensajePaciente) {
+	const idConv = String(idConversacion || '').trim();
+	const idMsg = Number(idMensajePaciente);
+	if (!idConv || !Number.isFinite(idMsg) || idMsg <= 0) return false;
+
+	await checkConversationTables();
+	if (useMemory) {
+		const list = memMensajes.get(idConv) || [];
+		return list.some(
+			(m) =>
+				(m.origen === 'BOT' || m.origen === 'AGENTE') &&
+				Number(m.idMensaje) > idMsg,
+		);
+	}
+
+	const rows = await executeQuery(
+		`SELECT TOP 1 IdMensaje FROM dbo.imBotMensaje
+		 WHERE IdConversacion = @p0
+		   AND Origen IN ('BOT', 'AGENTE')
+		   AND IdMensaje > @p1`,
+		[
+			{ value: idConv, type: 'VarChar' },
+			{ value: idMsg, type: 'Int' },
+		],
+	);
+	return rows.length > 0;
+}
+
+/** ¿Ya respondimos al mensaje entrante identificado por Meta wamid? */
+async function yaRespondidoAMetaMessage(idConversacion, metaMessageId) {
+	const mid = String(metaMessageId || '').trim();
+	if (!mid) return false;
+
+	const inbound = await existeMensajePorMetaId(mid);
+	if (!inbound) return false;
+	if (String(inbound.idConversacion) !== String(idConversacion)) return false;
+
+	return yaRespondidoAlMensaje(idConversacion, inbound.idMensaje);
+}
+
 async function registrarMensajeEntrante({
 	telefonoWhatsApp,
 	contenido,
@@ -662,6 +703,8 @@ module.exports = {
 	obtenerOCrearConversacion,
 	registrarMensajeEntrante,
 	existeMensajePorMetaId,
+	yaRespondidoAlMensaje,
+	yaRespondidoAMetaMessage,
 	registrarMensajeSaliente,
 	listarConversaciones,
 	obtenerConversacion,

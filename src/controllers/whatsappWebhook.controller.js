@@ -20,34 +20,49 @@ function verificar(req, res) {
 /**
  * POST /api/webhook/whatsapp
  * Meta — eventos entrantes (mensajes, etc.).
+ * Responde 200 de inmediato para evitar reintentos de Meta mientras GPT procesa.
  */
 async function recibirEventos(req, res) {
 	diag.logWebhookIncoming(req);
 	try {
 		whatsappMeta.verificarFirmaWebhook(req);
-		const result = await whatsappWebhook.procesarWebhookEntrante(req.body);
-		diag.logWebhookProcess(result, req.body);
-		if (result.procesados > 0) {
-			console.log(
-				`[whatsapp] ${result.procesados} mensaje(s) → empresa(s) ${result.empresas.join(', ')}`,
-			);
-		} else if (result.skipped) {
-			diag.line('webhook', 'Sin mensajes de texto en payload', {
-				reason: result.skipped,
-				entryCount: req.body?.entry?.length ?? 0,
-			});
-		}
-		return res.status(200).json({ success: true });
 	} catch (err) {
 		if (err.statusCode === 401) {
 			console.warn('[whatsapp] Firma inválida:', err.message);
 			return res.status(401).json({ success: false, mensaje: err.message });
 		}
-		diag.warn('webhook', 'Error procesando', { error: err.message, code: err.code });
-		console.error('[whatsapp] Error procesando webhook:', err.message);
-		// Meta reintenta si no es 200; respondemos 200 igual para evitar loops en errores de BD.
+		diag.warn('webhook', 'Error verificando firma', { error: err.message, code: err.code });
+		console.error('[whatsapp] Error verificando webhook:', err.message);
 		return res.status(200).json({ success: false });
 	}
+
+	const body = req.body;
+	res.status(200).json({ success: true });
+
+	setImmediate(() => {
+		whatsappWebhook
+			.procesarWebhookEntrante(body)
+			.then((result) => {
+				diag.logWebhookProcess(result, body);
+				if (result.procesados > 0) {
+					console.log(
+						`[whatsapp] ${result.procesados} mensaje(s) → empresa(s) ${result.empresas.join(', ')}`,
+					);
+				} else if (result.skipped) {
+					diag.line('webhook', 'Sin mensajes de texto en payload', {
+						reason: result.skipped,
+						entryCount: body?.entry?.length ?? 0,
+					});
+				}
+			})
+			.catch((err) => {
+				diag.warn('webhook', 'Error procesando (async)', {
+					error: err.message,
+					code: err.code,
+				});
+				console.error('[whatsapp] Error procesando webhook (async):', err.message);
+			});
+	});
 }
 
 module.exports = { verificar, recibirEventos };
