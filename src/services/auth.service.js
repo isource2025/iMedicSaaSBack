@@ -13,6 +13,81 @@ const esErrorEsquemaRoles = (error) => {
   );
 };
 
+/** Roles que no deben elegir sector en el login (administradores de tenant o plataforma). */
+const eximeSeleccionSectorPorUsuario = (userData) => {
+  if (!userData) return false;
+  const rolIdRaw = userData.RolId != null ? userData.RolId : userData.Rol;
+  const rolId = rolIdRaw != null && rolIdRaw !== '' ? Number(rolIdRaw) : null;
+  const rolNombre = String(userData.RolNombre || '').trim().toUpperCase();
+  if (rolNombre === 'SUPER_ADMIN' || rolId === 5) return true;
+  if (rolNombre === 'ADMIN' || rolId === 1) return true;
+  if (Number(userData.Grupo) === 11) return true;
+  return false;
+};
+
+const SQL_ROL_USUARIO = `
+  SELECT TOP 1
+    LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId,
+    LTRIM(RTRIM(ISNULL(r.Nombre, ''))) AS RolNombre,
+    COALESCE(pw.Grupo, 0) AS Grupo
+  FROM impassword pw
+  LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
+  LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
+  WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+     OR UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
+`;
+
+const obtenerRolUsuarioEnTenant = async (username) => {
+  const rolRows = await executeQuery(SQL_ROL_USUARIO, [{ value: username, type: 'VarChar' }]);
+  return rolRows[0] || null;
+};
+
+const eximeSectorPorUsername = async (username, idEmpresa = null) => {
+  if (await esSuperAdminPorUsername(username)) return true;
+
+  if (authCentralService.isAuthCentralEnabled()) {
+    try {
+      if (await authCentralService.esSuperAdmin(username)) return true;
+    } catch (e) {
+      console.warn('[authCentral] eximeSectorPorUsername:', e.message);
+    }
+  }
+
+  if (isPlatformSqlConfigured()) {
+    try {
+      const rolRows = await executePlatformQuery(SQL_ROL_USUARIO, [
+        { value: username, type: 'VarChar' },
+      ]);
+      if (rolRows.length && eximeSeleccionSectorPorUsuario(rolRows[0])) return true;
+    } catch (e) {
+      console.warn('[auth] eximeSectorPorUsername plataforma:', e.message);
+    }
+  }
+
+  const id = idEmpresa != null && idEmpresa !== '' ? Number(idEmpresa) : null;
+  if (id && Number.isFinite(id)) {
+    try {
+      const rol = await runWithTenant(id, () => obtenerRolUsuarioEnTenant(username));
+      if (eximeSeleccionSectorPorUsuario(rol)) return true;
+    } catch (e) {
+      console.warn(`[auth] eximeSectorPorUsername tenant ${id}:`, e.message);
+    }
+    return false;
+  }
+
+  try {
+    const candidatos = await tenantRegistry.descubrirEmpresasPorUsuario(username);
+    for (const c of candidatos.slice(0, 3)) {
+      const rol = await runWithTenant(c.idEmpresa, () => obtenerRolUsuarioEnTenant(username));
+      if (eximeSeleccionSectorPorUsuario(rol)) return true;
+    }
+  } catch (e) {
+    console.warn('[auth] eximeSectorPorUsername descubrimiento:', e.message);
+  }
+
+  return false;
+};
+
 /** Login multi-tenant: resuelve BD por empresa y valida credenciales. */
 const autenticarUsuario = async (username, contraseña, idEmpresa = null) => {
   const { usuario } = await tenantRegistry.resolverLogin(username, contraseña, idEmpresa);
@@ -82,7 +157,7 @@ const esSuperAdminPorUsername = async (username) => {
  */
 const obtenerSectoresPorUsuario = async (username) => {
   try {
-    if (await esSuperAdminPorUsername(username)) {
+    if (await eximeSectorPorUsername(username)) {
       return [];
     }
 
@@ -237,7 +312,8 @@ const descubrirEmpresasLogin = async (username) => {
       descripcionEmpresa: e.descripcionEmpresa,
     }));
 
-    return { empresas, esSuperAdmin: false, requiereSector: true };
+    const eximeSector = await eximeSectorPorUsername(username);
+    return { empresas, esSuperAdmin: false, requiereSector: !eximeSector };
   } catch (error) {
     console.error('descubrirEmpresasLogin:', error.message);
     return { empresas: [], esSuperAdmin: false, requiereSector: true };
@@ -311,6 +387,10 @@ const obtenerEmpresasPorUsuarioEnTenant = async (username) => {
 };
 
 const obtenerSectoresPorUsuarioConTenant = async (username, idEmpresa) => {
+  if (await eximeSectorPorUsername(username, idEmpresa)) {
+    return [];
+  }
+
   const id = idEmpresa != null ? Number(idEmpresa) : null;
   if (id && Number.isFinite(id) && authCentralService.isAuthCentralEnabled()) {
     try {
@@ -398,4 +478,6 @@ module.exports = {
   obtenerIdSectorPorIdPersonal,
   obtenerDescripcionSector,
   esSuperAdminPorUsername,
+  eximeSeleccionSectorPorUsuario,
+  eximeSectorPorUsername,
 };

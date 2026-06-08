@@ -74,13 +74,14 @@ const inicioSesion = async (req, res) => {
         const rolPreliminar = resolverRol(usuario);
         const esSuperAdmin =
           rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
+        const eximeSector = authService.eximeSeleccionSectorPorUsuario(usuario);
 
         let sectorInfo = null;
-        if (esSuperAdmin) {
+        if (eximeSector) {
           sectorInfo = {
             idPersonal: usuario.ValorPersonal,
             idSector: '',
-            descripcion: 'Plataforma',
+            descripcion: esSuperAdmin ? 'Plataforma' : 'Administración',
           };
         } else if (!sector && !idSector) {
           const sectoresDisponibles = await authService.obtenerSectoresPorUsuarioConTenant(
@@ -274,12 +275,12 @@ const obtenerSectoresPorUsuario = async (req, res) => {
   const idEmpresa = req.query.idEmpresa;
   
   try {
-    const esSuperAdmin = await authService.esSuperAdminPorUsername(username);
+    const eximeSector = await authService.eximeSectorPorUsername(username, idEmpresa);
     const sectores = await authService.obtenerSectoresPorUsuarioConTenant(username, idEmpresa);
     res.json({
       success: true,
       data: sectores,
-      requiereSector: !esSuperAdmin,
+      requiereSector: !eximeSector,
     });
   } catch (error) {
     console.error(`Error al obtener sectores para usuario ${username}:`, error);
