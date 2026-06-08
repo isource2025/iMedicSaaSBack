@@ -72,9 +72,17 @@ const inicioSesion = async (req, res) => {
 
       const completarLogin = async () => {
         const rolPreliminar = resolverRol(usuario);
-        const esSuperAdmin =
+        let esSuperAdmin =
           rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
         const eximeSector = authService.eximeSeleccionSectorPorUsuario(usuario);
+        // Grupo 11 / SUPER_ADMIN en auth central: mismo criterio que descubrirEmpresasLogin
+        if (!esSuperAdmin && idEmpresaSesion == null) {
+          try {
+            esSuperAdmin = await authService.esSuperAdminPorUsername(username);
+          } catch (e) {
+            console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
+          }
+        }
 
         let sectorInfo = null;
         if (eximeSector) {
@@ -159,7 +167,17 @@ const inicioSesion = async (req, res) => {
           }
         } catch (empErr) {
           console.error('[auth.login] Error al resolver empresa:', empErr.message);
-          empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+          try {
+            if (idEmpresaSesion != null) {
+              empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idEmpresaSesion);
+            } else if (!esSuperAdmin) {
+              empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+            }
+          } catch (fallbackErr) {
+            console.warn('[auth.login] Fallback empresa omitido:', fallbackErr.message);
+            empresaSeleccionada = null;
+            modulosEmpresa = null;
+          }
         }
 
         const token = generarToken(usuario, idEmpresaSesion);
@@ -209,9 +227,9 @@ const inicioSesion = async (req, res) => {
       };
 
       if (idEmpresaSesion != null) {
-        return runWithTenant(idEmpresaSesion, completarLogin);
+        return await runWithTenant(idEmpresaSesion, completarLogin);
       }
-      return completarLogin();
+      return await completarLogin();
     } catch (dbError) {
       if (dbError.statusCode === 409 && dbError.message === 'MULTI_EMPRESA') {
         return res.status(409).json({

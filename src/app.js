@@ -4,7 +4,6 @@
  */
 const express = require('express');
 const dotenv = require('dotenv');
-const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { configureCors } = require('./middlewares/cors.middleware'); // ✅ ACTIVADO
@@ -95,9 +94,7 @@ if (isPlatformSqlConfigured() && !isAuthCentralEnabled()) {
 }
 
 // Configurar middlewares
-configureCors(app); // Configuración CORS
-//Permitir solo desde tu Frontend (opcion recomendada)
-app.use(cors());
+configureCors(app); // Configuración CORS (único middleware; evita doble cors con allow-origin *)
 
 app.use(express.json()); // Parseo JSON (webhook ya montado arriba con stream crudo)
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)

@@ -292,10 +292,7 @@ const obtenerTodasEmpresas = async () => {
     return rows || [];
   } catch (error) {
     console.error('Error al obtener todas las empresas:', error.message);
-    if (authCentralService.isAuthCentralEnabled() && !isPlatformSqlConfigured()) {
-      return [];
-    }
-    throw error;
+    return [];
   }
 };
 
