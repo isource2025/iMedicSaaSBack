@@ -59,6 +59,7 @@ function interpretarConfirmacion(texto) {
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '');
 	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|1|soy yo|afirmativo|su)$/.test(t)) return true;
+	if (/^dale\b/.test(t)) return true;
 	if (/^(no|n|nop|incorrecto|otra persona|2|negativo)$/.test(t)) return false;
 	// "no tenés para el miércoles" es pregunta de disponibilidad, no rechazo binario
 	if (/\bno\s+tenes?\b/.test(t) || /\bno\s+hay\b/.test(t)) return null;
@@ -240,11 +241,21 @@ function esInicioNuevoTurno(texto) {
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '');
 	if (/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t)) return true;
-	if (/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno)\b/.test(t)) {
+	if (/^\s*un turno\b/.test(t)) return true;
+	if (/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno|otro turno)\b/.test(t)) {
 		return true;
 	}
 	if (/\b(quiero|necesito|busco|estoy queriendo)\b.*\b(turno|consulta)\b/.test(t)) return true;
 	if (/\b(turno|consulta)\b.*\b(para|de)\b/.test(t)) return true;
+	if (/\b(turno|consulta)\b.*\b(ahora|ya|urgente|hoy)\b/.test(t)) return true;
+	if (
+		/\bmi (tio|tia|sobrino|sobrina|primo|prima|abuelo|abuela|viejo|vieja|cuñad|nuera|yerno|suegr|hij|nene|bebe|familia|marido|esposa|pareja)\b/.test(
+			t,
+		) &&
+		/\b(turno|consulta)\b/.test(t)
+	) {
+		return true;
+	}
 	if (
 		/\b(para mi|para el|para la|otra persona|otro paciente|mi familiar)\b/.test(t) &&
 		/\b(turno|consulta|herman|hij|familiar|mama|mami|papa|nene|bebe)\b/.test(t)
@@ -258,6 +269,50 @@ function esInicioNuevoTurno(texto) {
 		return true;
 	}
 	return false;
+}
+
+function esSeguimientoSolicitudTurno(texto) {
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+	if (!t) return false;
+	if (/^(puede ser|podes|podria|se puede|hay chance|dale|ok|si)\??$/.test(t)) return true;
+	return /\b(puede ser|se puede|hay turno|conseguis turno)\b/.test(t);
+}
+
+function esMensajeGratitud(texto) {
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+	return /^(gracias|muchas gracias|genial|perfecto|listo|buenisimo|de 10|excelente|super|dale super|barbaro|joya|ok gracias|graciass?)$/.test(
+		t,
+	);
+}
+
+async function detectarEspecialidadEnTextoLocal(texto) {
+	if (!texto || extraerDni(texto)) return null;
+	if (botAgenda.esConsultaListaEspecialidades(texto)) return null;
+	const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+	return esp ? { valor: esp.valor, nombre: esp.nombre } : null;
+}
+
+async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, texto, conSaludo = true }) {
+	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
+	const espPend = await detectarEspecialidadEnTextoLocal(texto);
+	await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
+	if (espPend) {
+		await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
+	}
+	const msg =
+		pasoIdentificar?.mensajeUsuario ||
+		'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
+	if (!conSaludo) return msg;
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	return saludo ? `Hola, ${saludo}. ${msg}` : msg;
 }
 
 async function detectarEspecialidadEnTexto(texto) {
@@ -496,18 +551,31 @@ async function intentarRespuestaWizard({
 
 	// --- Hola / nuevo turno: reiniciar flujo (tras turno confirmado u otra sesión) ---
 	if (esInicioNuevoTurno(texto) && pasoIdentificar?.activo !== false) {
-		const espPend = await detectarEspecialidadEnTexto(texto);
-		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
-		if (espPend) {
-			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
-		}
-		const saludo = primerNombre(nombreWhatsApp(conv));
-		const msg =
-			pasoIdentificar?.mensajeUsuario ||
-			'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
 		return {
 			handled: true,
-			texto: saludo ? `Hola, ${saludo}. ${msg}` : msg,
+			texto: await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, texto }),
+		};
+	}
+
+	if (esSeguimientoSolicitudTurno(texto) && pasoIdentificar?.activo !== false) {
+		return {
+			handled: true,
+			texto: await iniciarFlujoNuevoTurno({
+				idConversacion,
+				conv,
+				flujo,
+				texto,
+				conSaludo: false,
+			}),
+		};
+	}
+
+	if (esMensajeGratitud(texto)) {
+		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
+		return {
+			handled: true,
+			texto:
+				'Con gusto. Si necesitás otro turno, indicá el DNI de la persona que va a atenderse (sin puntos).',
 		};
 	}
 
@@ -978,4 +1046,6 @@ module.exports = {
 	extraerDni,
 	interpretarConfirmacion,
 	interpretarRechazoTurno,
+	esInicioNuevoTurno,
+	esSeguimientoSolicitudTurno,
 };
