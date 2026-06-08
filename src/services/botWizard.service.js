@@ -60,6 +60,35 @@ function interpretarConfirmacion(texto) {
 	return null;
 }
 
+/** Rechazo de turno sugerido: "No", "el lunes no puedo", "otro horario", etc. */
+function interpretarRechazoTurno(texto, _sugerencia = null) {
+	const conf = interpretarConfirmacion(texto);
+	if (conf === true) return false;
+	if (conf === false) return true;
+
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+	if (!t) return null;
+
+	if (
+		/\b(no puedo|no me sirve|no me conviene|otro dia|otra fecha|otro horario|prefiero otro|buscar otro|siguiente turno|otra opcion|imposible ese|ese horario no|a esa hora no)\b/.test(
+			t,
+		)
+	) {
+		return true;
+	}
+
+	const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+	for (const dia of dias) {
+		if (t.includes(dia) && /\b(no|ni|imposible|puedo)\b/.test(t)) return true;
+	}
+
+	return null;
+}
+
 function nombreCompletoRenaper(renaper, pacienteLocal = null) {
 	const apellido = String(renaper?.apellido || '').trim();
 	const nombres = String(renaper?.nombres || '').trim();
@@ -392,6 +421,22 @@ async function intentarRespuestaWizard({
 		const conf = interpretarConfirmacion(texto);
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR');
 		const ctx = convAct.contextoBot;
+		const tNorm = String(texto || '')
+			.trim()
+			.toLowerCase()
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '');
+
+		if (/\b(otra especialidad|cambiar especialidad)\b/.test(tNorm)) {
+			await botConversacion.guardarContextoBot(idConversacion, null);
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				pasoBot: 'ELEGIR_ESPECIALIDAD',
+			});
+			return {
+				handled: true,
+				texto: pasoEspecialidad?.mensajeUsuario || '¿Qué especialidad necesitás?',
+			};
+		}
 
 		if (conf === true && ctx.matricula && ctx.fecha && ctx.hora) {
 			try {
@@ -429,17 +474,8 @@ async function intentarRespuestaWizard({
 			}
 		}
 
-		if (conf === false) {
-			await botConversacion.guardarContextoBot(idConversacion, null);
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				pasoBot: 'ELEGIR_ESPECIALIDAD',
-			});
-			return {
-				handled: true,
-				texto:
-					pasoEspecialidad?.mensajeUsuario ||
-					'Entendido. ¿Qué especialidad necesitás?',
-			};
+		if (conf === false || interpretarRechazoTurno(texto, ctx)) {
+			return _buscarSiguienteTurnoSugerido(idConversacion, ctx, texto, pasoCfg);
 		}
 
 		return {
@@ -451,6 +487,39 @@ async function intentarRespuestaWizard({
 	return { handled: false, motivo: 'wizard no aplica' };
 }
 
+async function _buscarSiguienteTurnoSugerido(idConversacion, ctx, textoRechazo, pasoCfg) {
+	const excluir = botAgenda.construirExclusionesRechazo(textoRechazo, ctx);
+	const siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, { excluir });
+
+	if (!siguiente) {
+		await botConversacion.guardarContextoBot(idConversacion, {
+			tipo: 'turno_sugerido',
+			especialidadValor: ctx.especialidadValor,
+			especialidadNombre: ctx.especialidadNombre,
+		});
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			pasoBot: 'ELEGIR_ESPECIALIDAD',
+		});
+		return {
+			handled: true,
+			texto:
+				'No encontré otro turno disponible con esas restricciones en los próximos días. ¿Querés probar otra especialidad o decime qué días sí podés?',
+		};
+	}
+
+	await botConversacion.guardarContextoBot(idConversacion, {
+		tipo: 'turno_sugerido',
+		especialidadValor: ctx.especialidadValor,
+		especialidadNombre: ctx.especialidadNombre,
+		...siguiente,
+	});
+	await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
+	return {
+		handled: true,
+		texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, { alternativa: true }),
+	};
+}
+
 module.exports = {
 	pasosActivos,
 	siguientePasoActivo,
@@ -458,4 +527,5 @@ module.exports = {
 	intentarRespuestaWizard,
 	extraerDni,
 	interpretarConfirmacion,
+	interpretarRechazoTurno,
 };

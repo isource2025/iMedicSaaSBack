@@ -985,23 +985,103 @@ function _fechaIsoOffset(dias) {
 	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function _slotDateTime(fechaIso, hora) {
+	const [y, mo, d] = String(fechaIso).slice(0, 10).split('-').map(Number);
+	const [hh, mm] = String(hora || '00:00').split(':').map(Number);
+	return new Date(y, mo - 1, d, hh || 0, mm || 0);
+}
+
+function _normalizarExclusiones(excluir = {}) {
+	const slots = Array.isArray(excluir.slots) ? excluir.slots : [];
+	const fechas = new Set(
+		[...(excluir.fechas || []), ...(excluir.fechasExcluidas || [])].map((f) =>
+			String(f).slice(0, 10),
+		),
+	);
+	const diasSemana = new Set(
+		[...(excluir.diasSemana || []), ...(excluir.diasSemanaExcluidos || [])].map(Number),
+	);
+	return { slots, fechas, diasSemana };
+}
+
+function _slotEstaExcluido(matricula, fechaIso, hora, excluir) {
+	const fecha = String(fechaIso).slice(0, 10);
+	if (excluir.fechas.has(fecha)) return true;
+	const diaNum = new Date(`${fecha}T12:00:00`).getDay();
+	if (excluir.diasSemana.has(diaNum)) return true;
+	return excluir.slots.some(
+		(s) =>
+			Number(s.matricula) === Number(matricula) &&
+			String(s.fecha).slice(0, 10) === fecha &&
+			String(s.hora || '').slice(0, 5) === String(hora || '').slice(0, 5),
+	);
+}
+
 /**
- * Primer médico alfabético de la especialidad con el turno libre más próximo (desde ahora).
+ * Arma exclusiones a partir del rechazo del paciente (ej. "el lunes no puedo").
+ * Siempre excluye el turno sugerido actual.
  */
-async function sugerirPrimerTurnoDisponible(especialidadValor) {
+function construirExclusionesRechazo(texto, sugerenciaActual = null) {
+	const t = _normalizarTextoBusqueda(texto);
+	const excluir = { slots: [], fechas: [], diasSemana: [] };
+
+	if (sugerenciaActual?.matricula && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
+		excluir.slots.push({
+			matricula: sugerenciaActual.matricula,
+			fecha: String(sugerenciaActual.fecha).slice(0, 10),
+			hora: String(sugerenciaActual.hora).slice(0, 5),
+		});
+	}
+
+	const mapDia = {
+		domingo: 0,
+		lunes: 1,
+		martes: 2,
+		miercoles: 3,
+		jueves: 4,
+		viernes: 5,
+		sabado: 6,
+	};
+
+	for (const [nombre, num] of Object.entries(mapDia)) {
+		if (t.includes(nombre)) excluir.diasSemana.push(num);
+	}
+
+	if (sugerenciaActual?.fecha) {
+		const fechaSug = String(sugerenciaActual.fecha).slice(0, 10);
+		if (/\b(ese dia|esta fecha|ese horario|a esa hora|hoy no|mañana no)\b/.test(t)) {
+			excluir.fechas.push(fechaSug);
+		}
+	}
+
+	return excluir;
+}
+
+/**
+ * Turno libre más cercano en la especialidad (todos los profesionales).
+ * Opcionalmente excluye slots/fechas/días ya rechazados.
+ */
+async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const config = await botConfigService.getBotConfig();
 	const esp = Number(especialidadValor);
 	if (!Number.isFinite(esp) || esp <= 0) return null;
 
+	const excluir = _normalizarExclusiones(opciones.excluir);
 	const { profesionales, especialidad } = await listarProfesionalesBot(esp);
-	const ordenados = [...profesionales].sort((a, b) =>
-		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
-	);
-	const maxDias = config.reglas.diasMaxAntelacion || 60;
+	if (!profesionales.length) return null;
 
-	for (const prof of ordenados) {
-		for (let d = 0; d <= maxDias; d++) {
-			const fechaIso = _fechaIsoOffset(d);
+	const maxDias = config.reglas.diasMaxAntelacion || 60;
+	let mejorGlobal = null;
+
+	for (let d = 0; d <= maxDias; d++) {
+		const fechaIso = _fechaIsoOffset(d);
+		if (excluir.fechas.has(fechaIso)) continue;
+		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
+		if (excluir.diasSemana.has(diaNum)) continue;
+
+		let mejorDelDia = null;
+
+		for (const prof of profesionales) {
 			let disp;
 			try {
 				disp = await disponibilidadBot(fechaIso, {
@@ -1011,41 +1091,63 @@ async function sugerirPrimerTurnoDisponible(especialidadValor) {
 			} catch {
 				continue;
 			}
-			const slot = (disp.slotsLibres || []).find((s) =>
-				_slotCumpleAnticipacion(fechaIso, s.hora, config),
-			);
-			if (slot) {
-				return {
-					matricula: prof.matricula,
-					medico: prof.nombre,
-					especialidad: especialidad?.valor ?? esp,
-					especialidadNombre: especialidad?.nombre || prof.especialidadNombre || null,
-					fecha: fechaIso,
-					fechaLegible: _fechaLegible(fechaIso),
-					diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
-					hora: slot.hora,
-					sector: slot.sector,
-				};
+
+			for (const slot of disp.slotsLibres || []) {
+				if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
+				if (_slotEstaExcluido(prof.matricula, fechaIso, slot.hora, excluir)) continue;
+
+				const dt = _slotDateTime(fechaIso, slot.hora);
+				if (!mejorDelDia || dt < mejorDelDia.dt) {
+					mejorDelDia = {
+						dt,
+						matricula: prof.matricula,
+						medico: prof.nombre,
+						fecha: fechaIso,
+						hora: slot.hora,
+						sector: slot.sector,
+						diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
+					};
+				}
 			}
 		}
+
+		if (mejorDelDia) {
+			mejorGlobal = {
+				matricula: mejorDelDia.matricula,
+				medico: mejorDelDia.medico,
+				especialidad: especialidad?.valor ?? esp,
+				especialidadNombre: especialidad?.nombre || null,
+				fecha: mejorDelDia.fecha,
+				fechaLegible: _fechaLegible(mejorDelDia.fecha),
+				diaSemana: mejorDelDia.diaSemana,
+				hora: mejorDelDia.hora,
+				sector: mejorDelDia.sector,
+			};
+			break;
+		}
 	}
-	return null;
+
+	return mejorGlobal;
 }
 
-function mensajeSugerenciaTurno(sugerencia, pasoCfg) {
+function mensajeSugerenciaTurno(sugerencia, pasoCfg, opts = {}) {
 	if (!sugerencia) {
 		return (
 			pasoCfg?.mensajeUsuario ||
 			'No hay turnos disponibles en los próximos días para esa especialidad. Probá con otra especialidad o contactá al centro.'
 		);
 	}
+	const encabezado = opts.alternativa
+		? `Encontré el *siguiente turno libre* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`
+		: `Te sugiero el *turno libre más cercano* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`;
 	return [
-		`Te sugiero el *turno más próximo* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`,
+		encabezado,
 		'',
 		`👨‍⚕️ *${sugerencia.medico}*`,
 		`📅 *${sugerencia.diaSemana} ${sugerencia.fechaLegible}* a las *${sugerencia.hora}*`,
 		'',
-		pasoCfg?.mensajeUsuario || '¿Confirmás este turno? Respondé Sí o No.',
+		pasoCfg?.mensajeUsuario ||
+			'¿Confirmás este turno? Respondé *Sí* para reservarlo. Si no te sirve, decime qué día u horario no podés y busco el siguiente disponible.',
 	].join('\n');
 }
 
@@ -1073,6 +1175,7 @@ module.exports = {
 	disponibilidadBot,
 	resolverEspecialidadDesdeTexto,
 	sugerirPrimerTurnoDisponible,
+	construirExclusionesRechazo,
 	mensajeSugerenciaTurno,
 	reservarTurno,
 	consultarTurnosPaciente,

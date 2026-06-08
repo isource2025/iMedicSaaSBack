@@ -47,7 +47,7 @@ async function buildSystemPrompt(config, flujo, conv) {
 	const reglasFlujo = [
 		'Si el paciente aún no confirmó identidad en RENAPER, no avances a especialidad.',
 		config.reglas.sugerirPrimerTurnoDisponible
-			? 'Con "sugerir primer turno" activo: al elegir especialidad el wizard propone médico y horario; no pidas elegir profesional manualmente.'
+			? 'Con "sugerir primer turno" activo: al elegir especialidad el wizard propone UN solo turno (el más cercano) con médico y horario; NO listes profesionales ni pidas elegir manualmente. Si el paciente rechaza ("no", "el lunes no puedo"), el wizard busca el siguiente turno libre.'
 			: null,
 		incluirEspecialidad
 			? 'Cuando corresponda, pedí especialidad.'

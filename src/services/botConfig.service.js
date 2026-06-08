@@ -92,7 +92,7 @@ async function getBotConfig() {
 			permiteSobreturno: db.permite_sobreturno ?? envBool('BOT_PERMITE_SOBRETURNO', false),
 			crearPacienteAutomatico: db.crear_paciente_automatico ?? envBool('BOT_CREAR_PACIENTE_AUTO', true),
 			sugerirPrimerTurnoDisponible:
-				db.sugerir_primer_turno_disponible ?? envBool('BOT_SUGERIR_PRIMER_TURNO', false),
+				db.sugerir_primer_turno_disponible ?? envBool('BOT_SUGERIR_PRIMER_TURNO', true),
 		},
 		api: {
 			basePath: '/api/integrations/bot',
