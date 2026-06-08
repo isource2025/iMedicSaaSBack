@@ -1318,7 +1318,9 @@ function interpretarAjusteTurno(texto, sugerenciaActual = null) {
 		} else if (
 			esPregunta ||
 			franja ||
-			/\b(para el|el mismo|preferi|mejor|a la|por la|mismo dia)\b/.test(t)
+			/\b(para el|el mismo|preferi|mejor|a la|por la|mismo dia|puedo|podria|me viene bien|disponible el)\b/.test(
+				t,
+			)
 		) {
 			preferir.diasSemana.push(num);
 		}
@@ -1474,62 +1476,84 @@ function _fechasCandidatasBusqueda(maxDias, excluir, preferir) {
 	return fechas;
 }
 
-/**
- * Primer turno libre del médico (desde ahora), respetando exclusiones.
- */
-async function _turnoMasCercanoPorMedico(
-	matricula,
-	medicoNombre,
-	esp,
-	config,
-	excluir,
-	preferir,
-	maxDias,
-) {
-	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
+function _busquedaTurnoTimeoutMs() {
+	return Number(process.env.BOT_TURNO_BUSQUEDA_TIMEOUT_MS || 12_000);
+}
 
-	for (const fechaIso of fechas) {
-		let disp;
-		try {
-			disp = await disponibilidadBot(fechaIso, {
-				matricula,
-				especialidad: esp,
-			});
-		} catch {
-			continue;
-		}
+function _busquedaTurnoConcurrencia() {
+	return Math.max(1, Math.min(12, Number(process.env.BOT_BUSQUEDA_CONCURRENCIA || 6)));
+}
 
-		const slotsOrdenados = [...(disp.slotsLibres || [])].sort(
-			(a, b) => _slotDateTime(fechaIso, a.hora) - _slotDateTime(fechaIso, b.hora),
-		);
+async function _mapEnLotes(items, tamano, fn) {
+	const out = [];
+	for (let i = 0; i < items.length; i += tamano) {
+		const parte = await Promise.all(items.slice(i, i + tamano).map(fn));
+		out.push(...parte);
+	}
+	return out;
+}
 
-		for (const slot of slotsOrdenados) {
-			if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
-			if (_slotEstaExcluido(matricula, fechaIso, slot.hora, excluir)) continue;
-			if (!_slotCumplePreferencias(fechaIso, slot.hora, preferir)) continue;
+function _empaquetarTurnoSugerido(mejor, especialidadMeta, esp) {
+	if (!mejor) return null;
+	return {
+		matricula: mejor.matricula,
+		medico: mejor.medico,
+		especialidad: especialidadMeta?.valor ?? esp,
+		especialidadNombre: especialidadMeta?.nombre || null,
+		fecha: mejor.fecha,
+		fechaLegible: _fechaLegible(mejor.fecha),
+		diaSemana: mejor.diaSemana,
+		hora: mejor.hora,
+		sector: mejor.sector,
+	};
+}
 
-			return {
-				dt: _slotDateTime(fechaIso, slot.hora),
-				matricula,
-				medico: medicoNombre,
-				fecha: fechaIso,
-				hora: slot.hora,
-				sector: slot.sector,
-				diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
-			};
-		}
+function _elegirMejorTurno(candidatos) {
+	if (!candidatos.length) return null;
+	const ordenados = [...candidatos].sort((a, b) => {
+		const diff = a.dt - b.dt;
+		if (diff !== 0) return diff;
+		return String(a.medico || '').localeCompare(String(b.medico || ''), 'es');
+	});
+	return ordenados[0];
+}
+
+async function _primerSlotEnFecha(matricula, medicoNombre, fechaIso, esp, config, excluir, preferir) {
+	let disp;
+	try {
+		disp = await disponibilidadBot(fechaIso, {
+			matricula,
+			especialidad: esp,
+		});
+	} catch {
+		return null;
+	}
+
+	const slotsOrdenados = [...(disp.slotsLibres || [])].sort(
+		(a, b) => _slotDateTime(fechaIso, a.hora) - _slotDateTime(fechaIso, b.hora),
+	);
+
+	for (const slot of slotsOrdenados) {
+		if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
+		if (_slotEstaExcluido(matricula, fechaIso, slot.hora, excluir)) continue;
+		if (!_slotCumplePreferencias(fechaIso, slot.hora, preferir)) continue;
+
+		return {
+			dt: _slotDateTime(fechaIso, slot.hora),
+			matricula,
+			medico: medicoNombre,
+			fecha: fechaIso,
+			hora: slot.hora,
+			sector: slot.sector,
+			diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
+		};
 	}
 	return null;
 }
 
 /**
- * Por cada médico de la especialidad: su turno libre más cercano a ahora.
- * Entre todos, el más próximo; empate → orden alfabético del profesional.
+ * Turno libre más cercano: recorre fechas en orden y consulta profesionales en paralelo por día.
  */
-function _busquedaTurnoTimeoutMs() {
-	return Number(process.env.BOT_TURNO_BUSQUEDA_TIMEOUT_MS || 22_000);
-}
-
 async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const config = await botConfigService.getBotConfig();
 	const esp = Number(especialidadValor);
@@ -1544,43 +1568,37 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const ordenados = [...profesionales].sort((a, b) =>
 		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
 	);
+	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
 	const deadline = Date.now() + _busquedaTurnoTimeoutMs();
+	const concurrencia = _busquedaTurnoConcurrencia();
 
-	const candidatos = [];
-	for (const prof of ordenados) {
+	for (const fechaIso of fechas) {
 		if (Date.now() > deadline) break;
-		const turno = await _turnoMasCercanoPorMedico(
-			prof.matricula,
-			prof.nombre,
-			esp,
-			config,
-			excluir,
-			preferir,
-			maxDias,
+
+		const turnos = await _mapEnLotes(ordenados, concurrencia, (prof) =>
+			_primerSlotEnFecha(
+				prof.matricula,
+				prof.nombre,
+				fechaIso,
+				esp,
+				config,
+				excluir,
+				preferir,
+			),
 		);
-		if (turno) candidatos.push(turno);
+		const mejor = _elegirMejorTurno(turnos.filter(Boolean));
+		if (mejor) return _empaquetarTurnoSugerido(mejor, especialidad, esp);
 	}
 
-	if (!candidatos.length) return null;
+	return null;
+}
 
-	candidatos.sort((a, b) => {
-		const diff = a.dt - b.dt;
-		if (diff !== 0) return diff;
-		return String(a.medico || '').localeCompare(String(b.medico || ''), 'es');
-	});
-
-	const mejor = candidatos[0];
-	return {
-		matricula: mejor.matricula,
-		medico: mejor.medico,
-		especialidad: especialidad?.valor ?? esp,
-		especialidadNombre: especialidad?.nombre || null,
-		fecha: mejor.fecha,
-		fechaLegible: _fechaLegible(mejor.fecha),
-		diaSemana: mejor.diaSemana,
-		hora: mejor.hora,
-		sector: mejor.sector,
-	};
+function mensajeAvisoBusquedaDisponibilidad(opts = {}) {
+	const partes = [];
+	if (opts.preferencia) partes.push(`*${opts.preferencia}*`);
+	else if (opts.especialidad) partes.push(`*${opts.especialidad}*`);
+	const detalle = partes.length ? ` ${partes.join(' ')}` : '';
+	return `Un momento${detalle}… estoy consultando la *disponibilidad de turnos*.`;
 }
 
 function mensajeSugerenciaTurno(sugerencia, pasoCfg, opts = {}) {
@@ -1637,6 +1655,7 @@ module.exports = {
 	esConsultaListaEspecialidades,
 	mensajeEspecialidadesDisponibles,
 	sugerirPrimerTurnoDisponible,
+	mensajeAvisoBusquedaDisponibilidad,
 	construirExclusionesRechazo,
 	interpretarAjusteTurno,
 	interpretarAjusteTurnoInteligente,

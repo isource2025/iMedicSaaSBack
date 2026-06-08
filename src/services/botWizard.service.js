@@ -107,6 +107,11 @@ function interpretarRechazoTurno(texto, _sugerencia = null) {
 	}
 
 	const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+	const mencionaDia = dias.some((d) => t.includes(d));
+	if (mencionaDia && /\b(puedo|podria|me viene bien|disponible)\b/.test(t)) {
+		return true;
+	}
+
 	for (const dia of dias) {
 		if (
 			t.includes(dia) &&
@@ -464,20 +469,19 @@ async function intentarRespuestaWizard({
 		}
 
 		if (sugerirTurno) {
-			const sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(esp.valor);
 			const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
-			await botConversacion.guardarContextoBot(idConversacion, {
-				tipo: 'turno_sugerido',
-				especialidadValor: esp.valor,
-				especialidadNombre: esp.nombre,
-				...(sugerencia || {}),
-			});
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				pasoBot: sugerencia ? 'CONFIRMAR' : 'ELEGIR_ESPECIALIDAD',
-			});
 			return {
 				handled: true,
-				texto: botAgenda.mensajeSugerenciaTurno(sugerencia, pasoConfirmar),
+				accion: 'BUSCAR_TURNO',
+				aviso: botAgenda.mensajeAvisoBusquedaDisponibilidad({ especialidad: esp.nombre }),
+				buscarTurno: {
+					tipo: 'inicial',
+					idConversacion,
+					telefonoWhatsApp,
+					especialidadValor: esp.valor,
+					especialidadNombre: esp.nombre,
+					pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
+				},
 			};
 		}
 
@@ -559,8 +563,14 @@ async function intentarRespuestaWizard({
 			}
 		}
 
-		if (conf === false || interpretarRechazoTurno(texto, ctx)) {
-			return _buscarSiguienteTurnoSugerido(idConversacion, ctx, texto, pasoCfg);
+		const ajusteRapido = botAgenda.interpretarAjusteTurno(texto, ctx);
+		const tienePreferencia =
+			ajusteRapido.preferir.diasSemana.length ||
+			ajusteRapido.preferir.fechas.length ||
+			ajusteRapido.preferir.franja;
+
+		if (conf === false || interpretarRechazoTurno(texto, ctx) || tienePreferencia) {
+			return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg);
 		}
 
 		return {
@@ -572,51 +582,92 @@ async function intentarRespuestaWizard({
 	return { handled: false, motivo: 'wizard no aplica' };
 }
 
-async function _buscarSiguienteTurnoSugerido(idConversacion, ctx, textoRechazo, pasoCfg) {
+function _planificarBusquedaTurno(idConversacion, ctx, textoRechazo, pasoCfg) {
+	const ajusteRapido = botAgenda.interpretarAjusteTurno(textoRechazo, ctx);
+	return {
+		handled: true,
+		accion: 'BUSCAR_TURNO',
+		aviso: botAgenda.mensajeAvisoBusquedaDisponibilidad({
+			preferencia: ajusteRapido.resumen || ctx.especialidadNombre,
+		}),
+		buscarTurno: {
+			tipo: 'alternativo',
+			idConversacion,
+			textoRechazo,
+			ctx,
+			pasoCfg,
+		},
+	};
+}
+
+async function ejecutarBusquedaTurno(buscarTurno) {
+	const { tipo, idConversacion } = buscarTurno || {};
+	const flujo = await botConfigService.getFlujoPasos();
+
 	try {
-		const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
-		let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
-			excluir: ajuste.excluir,
-			preferir: ajuste.preferir,
-		});
-
-		if (!siguiente && ajuste.preferir?.fechas?.length) {
-			siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
-				excluir: ajuste.excluir,
-				preferir: { ...ajuste.preferir, fechas: [] },
+		if (tipo === 'inicial') {
+			const pasoConfirmar = pasoPorId(flujo, buscarTurno.pasoConfirmarId || 'CONFIRMAR');
+			const sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(buscarTurno.especialidadValor);
+			await botConversacion.guardarContextoBot(idConversacion, {
+				tipo: 'turno_sugerido',
+				especialidadValor: buscarTurno.especialidadValor,
+				especialidadNombre: buscarTurno.especialidadNombre,
+				...(sugerencia || {}),
 			});
-		}
-
-		if (!siguiente) {
-			const pref = ajuste.resumen ? ` con *${ajuste.resumen}*` : '';
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				pasoBot: sugerencia ? 'CONFIRMAR' : 'ELEGIR_ESPECIALIDAD',
+			});
 			return {
-				handled: true,
-				texto: `No encontré turno disponible${pref} en los próximos días. ¿Querés probar otro día u horario, o otra especialidad?`,
+				texto: botAgenda.mensajeSugerenciaTurno(sugerencia, pasoConfirmar),
 			};
 		}
 
-		await botConversacion.guardarContextoBot(idConversacion, {
-			tipo: 'turno_sugerido',
-			especialidadValor: ctx.especialidadValor,
-			especialidadNombre: ctx.especialidadNombre,
-			...siguiente,
-		});
-		await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
-		return {
-			handled: true,
-			texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
-				alternativa: true,
-				preferencia: ajuste.resumen,
-			}),
-		};
+		if (tipo === 'alternativo') {
+			const { ctx, textoRechazo, pasoCfg } = buscarTurno;
+			const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
+			let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+				excluir: ajuste.excluir,
+				preferir: ajuste.preferir,
+			});
+
+			if (!siguiente && ajuste.preferir?.fechas?.length) {
+				siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+					excluir: ajuste.excluir,
+					preferir: { ...ajuste.preferir, fechas: [] },
+				});
+			}
+
+			if (!siguiente) {
+				await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
+				const pref = ajuste.resumen ? ` *${ajuste.resumen}*` : '';
+				return {
+					texto: `No encontré turno disponible${pref} en los próximos días. Decime otro día u horario que te sirva.`,
+				};
+			}
+
+			await botConversacion.guardarContextoBot(idConversacion, {
+				tipo: 'turno_sugerido',
+				especialidadValor: ctx.especialidadValor,
+				especialidadNombre: ctx.especialidadNombre,
+				...siguiente,
+			});
+			await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
+			return {
+				texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
+					alternativa: true,
+					preferencia: ajuste.resumen,
+				}),
+			};
+		}
 	} catch (err) {
-		diag.warn('wizard', 'Error buscando turno alternativo', { error: err.message });
+		diag.warn('wizard', 'Error ejecutando búsqueda de turno', { error: err.message, tipo });
 		return {
-			handled: true,
 			texto:
-				'Estoy teniendo problemas para buscar otro turno en este momento. ¿Podés repetir qué día y horario te vendría bien?',
+				'Hubo un problema al consultar la agenda. ¿Podés repetir qué día y horario te conviene?',
 		};
 	}
+
+	return { texto: 'No pude completar la búsqueda de turnos. Intentá de nuevo.' };
 }
 
 module.exports = {
@@ -624,6 +675,7 @@ module.exports = {
 	siguientePasoActivo,
 	pasoInicial,
 	intentarRespuestaWizard,
+	ejecutarBusquedaTurno,
 	extraerDni,
 	interpretarConfirmacion,
 	interpretarRechazoTurno,

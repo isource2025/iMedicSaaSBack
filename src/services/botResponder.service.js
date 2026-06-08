@@ -210,6 +210,11 @@ async function responderMensajeEntrante({
 			telefonoWhatsApp,
 			contenido: textoEntrada,
 		});
+		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.aviso && wizard.buscarTurno) {
+			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso });
+			const resultado = await botWizard.ejecutarBusquedaTurno(wizard.buscarTurno);
+			return enviarTextoBot({ ...enviarOpts, texto: resultado.texto });
+		}
 		if (wizard.handled && wizard.texto) {
 			return enviarTextoBot({ ...enviarOpts, texto: wizard.texto });
 		}
