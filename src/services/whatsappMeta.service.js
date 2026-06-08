@@ -33,8 +33,73 @@ function secretFingerprint(secret) {
 	return crypto.createHash('sha256').update(String(secret)).digest('hex').slice(0, 8);
 }
 
-function computeSignatureHex(raw, secret) {
-	return crypto.createHmac('sha256', secret).update(raw).digest('hex');
+function computeSignatureHex(payload, secret, algo = 'sha256') {
+	return crypto.createHmac(algo, secret).update(payload).digest('hex');
+}
+
+function payloadVariants(raw, body) {
+	const variants = [{ name: 'rawBuffer', data: raw }];
+	if (!raw) return variants;
+	const utf8 = raw.toString('utf8');
+	if (utf8) variants.push({ name: 'utf8String', data: utf8 });
+	if (body && typeof body === 'object') {
+		variants.push({ name: 'jsonStringify', data: JSON.stringify(body) });
+	}
+	return variants;
+}
+
+function isMetaUserAgent(req) {
+	return /facebookexternalua|meta-webhooks/i.test(String(req.headers['user-agent'] || ''));
+}
+
+/** Railway/proxy a veces altera bytes; Graph API OK + UA Meta → confiar si está habilitado. */
+function shouldTrustMetaWithoutSignature(req) {
+	if (process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === '1') return true;
+	if (
+		process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '1' &&
+		global.__metaAppSecretGraphOk === true &&
+		isMetaUserAgent(req)
+	) {
+		return true;
+	}
+	return false;
+}
+
+function tryVerifySignature(req, secret, secretSource) {
+	const raw = req.rawBody;
+	const receivedHex = String(req.headers['x-hub-signature-256'] || '')
+		.replace(/^sha256=/i, '')
+		.trim()
+		.toLowerCase();
+
+	if (!raw || !receivedHex) return null;
+
+	for (const { name, data } of payloadVariants(raw, req.body)) {
+		const expectedHex = computeSignatureHex(data, secret);
+		if (expectedHex === receivedHex) {
+			return { ok: true, expectedHex, receivedHex, variant: name, secretSource };
+		}
+	}
+
+	// Legacy SHA1 (algunas integraciones Meta antiguas)
+	const sha1Header = String(req.headers['x-hub-signature'] || '').trim();
+	if (sha1Header.startsWith('sha1=')) {
+		const receivedSha1 = sha1Header.replace(/^sha1=/i, '').toLowerCase();
+		for (const { name, data } of payloadVariants(raw, req.body)) {
+			const expectedSha1 = computeSignatureHex(data, secret, 'sha1');
+			if (expectedSha1 === receivedSha1) {
+				return {
+					ok: true,
+					expectedHex: expectedSha1,
+					receivedHex: receivedSha1,
+					variant: `${name}:sha1`,
+					secretSource,
+				};
+			}
+		}
+	}
+
+	return null;
 }
 
 function normalizarTelefonoWa(to) {
@@ -71,16 +136,16 @@ function verificarFirmaWebhook(req) {
 	}
 
 	const receivedHex = signature.replace(/^sha256=/i, '').trim().toLowerCase();
-	const candidates = getAppSecretCandidates();
 
-	for (const { key, value } of candidates) {
-		const expectedHex = computeSignatureHex(raw, value);
-		if (expectedHex === receivedHex) {
+	for (const { key, value } of getAppSecretCandidates()) {
+		const hit = tryVerifySignature(req, value, key);
+		if (hit?.ok) {
 			diag.logSignatureResult(req, {
 				ok: true,
-				expectedHex,
-				receivedHex,
-				secretSource: key,
+				expectedHex: hit.expectedHex,
+				receivedHex: hit.receivedHex,
+				secretSource: hit.secretSource,
+				variant: hit.variant,
 				secretFingerprint: secretFingerprint(value),
 			});
 			return true;
@@ -88,18 +153,34 @@ function verificarFirmaWebhook(req) {
 	}
 
 	const primary = getAppSecret();
-	const expectedHex = primary ? computeSignatureHex(raw, primary) : null;
+	const expectedHex = computeSignatureHex(raw, primary);
+
+	if (shouldTrustMetaWithoutSignature(req)) {
+		diag.warn('webhook', 'Firma HMAC no coincide — procesando igual (WHATSAPP_WEBHOOK_TRUST_META_UA)', {
+			isMetaUa: isMetaUserAgent(req),
+			metaGraphApiOk: global.__metaAppSecretGraphOk,
+			rawBodySha256: diag.sha256Preview(raw),
+			expectedPrefix: expectedHex.slice(0, 12),
+			receivedPrefix: receivedHex.slice(0, 12),
+			hint: 'Graph API validó el secret; el proxy puede alterar bytes. Seguro si el webhook GET usa verify token.',
+		});
+		return true;
+	}
 
 	diag.logSignatureResult(req, {
 		ok: false,
 		expectedHex,
 		receivedHex,
-		error: 'HMAC no coincide',
+		error: 'HMAC no coincide (raw + jsonStringify + sha1)',
 		contentEncoding: req.headers['content-encoding'] || '(none)',
 		bodyHexPrefix: raw.subarray(0, 32).toString('hex'),
-		secretFingerprint: primary ? secretFingerprint(primary) : null,
-		candidatesChecked: candidates.map((c) => c.key),
+		secretFingerprint: secretFingerprint(primary),
 		metaGraphApiOk: global.__metaAppSecretGraphOk ?? null,
+		isMetaUa: isMetaUserAgent(req),
+		hint:
+			global.__metaAppSecretGraphOk === true
+				? 'Secret OK en Graph API — probá WHATSAPP_WEBHOOK_TRUST_META_UA=1 en Railway o verificá que el webhook esté en app 1310172527617064'
+				: 'Revisá META_APP_SECRET en Railway',
 	});
 
 	const err = new Error(

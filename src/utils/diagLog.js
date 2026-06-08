@@ -209,11 +209,46 @@ async function testMetaAppSecretOnStartup() {
 			appName: data.name,
 			secretLen: secret.length,
 		});
+		await testMetaWebhookSubscriptions(appId, token);
 		return true;
 	} catch (e) {
 		global.__metaAppSecretGraphOk = false;
 		warn('startup', 'No se pudo verificar META_APP_SECRET vía Graph API', { error: e.message });
 		return false;
+	}
+}
+
+async function testMetaWebhookSubscriptions(appId, appToken) {
+	try {
+		const url = `https://graph.facebook.com/v21.0/${appId}/subscriptions?access_token=${encodeURIComponent(appToken)}`;
+		const resp = await fetch(url);
+		const data = await resp.json();
+		if (data.error) {
+			warn('startup', 'No se pudieron listar suscripciones webhook del app', {
+				error: data.error.message,
+			});
+			return;
+		}
+		const subs = data.data || [];
+		line('startup', 'Webhook subscriptions en app Meta', {
+			appId,
+			count: subs.length,
+			items: subs.map((s) => ({
+				object: s.object,
+				callback_url: s.callback_url,
+				active: s.active,
+				fields: s.fields,
+			})),
+		});
+		const domain = process.env.RAILWAY_PUBLIC_DOMAIN || 'imedicwsback-production.up.railway.app';
+		const ours = subs.filter((s) => String(s.callback_url || '').includes(domain));
+		if (!ours.length) {
+			warn('startup', `Ninguna suscripción apunta a ${domain} en app ${appId}`, {
+				hint: 'Configurá el webhook en Meta Developers → esta app → WhatsApp → Configuración',
+			});
+		}
+	} catch (e) {
+		warn('startup', 'Error listando subscriptions', { error: e.message });
 	}
 }
 
