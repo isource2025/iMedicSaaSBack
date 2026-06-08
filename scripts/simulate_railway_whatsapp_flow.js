@@ -199,8 +199,9 @@ async function testWebhookFlowHttp() {
 						(m) =>
 							m.contenido &&
 							!/No pudimos consultar RENAPER/i.test(m.contenido) &&
-							(/RENAPER|ficha local|Nombre:/i.test(m.contenido) ||
-								/Confirm|Sí o No|Si o No/i.test(m.contenido)),
+							!/Turno confirmado|Comprobante:/i.test(m.contenido) &&
+							(/RENAPER|ficha local/i.test(m.contenido) ||
+								/Nombre:\s*\*/i.test(m.contenido)),
 					);
 				if (renaperBot?.contenido) botTexto = renaperBot.contenido;
 			});
