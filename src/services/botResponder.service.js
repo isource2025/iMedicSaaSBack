@@ -265,11 +265,20 @@ async function responderMensajeEntrante({
 
 	const enPasoIdentificacion =
 		pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual;
-	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && enPasoIdentificacion)) {
+	if (
+		dniDetectado &&
+		(pasoActual === 'CONFIRMAR_IDENTIDAD' ||
+			enPasoIdentificacion ||
+			convAct?.idPaciente ||
+			['CONFIRMAR', 'ELEGIR_ESPECIALIDAD', 'ELEGIR_PROFESIONAL', 'ELEGIR_FECHA_HORA'].includes(
+				pasoActual,
+			))
+	) {
 		diag.warn('webhook', 'Wizard no respondió a identificación', {
 			dniDetectado,
 			pasoActual,
 			idConversacion,
+			idPaciente: convAct?.idPaciente || null,
 		});
 		return enviarTextoBot({
 			...enviarOpts,

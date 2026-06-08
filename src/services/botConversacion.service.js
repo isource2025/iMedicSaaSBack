@@ -644,40 +644,63 @@ async function puedeResponderBotPorTelefono(telefono) {
 	return puedeResponderBot(idConv);
 }
 
-async function actualizarContextoPaciente(
-	idConversacion,
-	{ idPaciente, dniPaciente, nombreContacto, pasoBot, contextoBot },
-) {
+async function actualizarContextoPaciente(idConversacion, fields = {}) {
 	await checkConversationTables();
+	if ('contextoBot' in fields) {
+		await guardarContextoBot(idConversacion, fields.contextoBot);
+	}
+
 	if (useMemory) {
 		const conv = memConversaciones.get(idConversacion);
 		if (!conv) return null;
-		if (idPaciente != null) conv.idPaciente = idPaciente;
-		if (dniPaciente != null) conv.dniPaciente = dniPaciente;
-		if (nombreContacto != null) conv.nombreContacto = nombreContacto;
-		if (pasoBot != null) conv.pasoBot = pasoBot;
-		if (contextoBot !== undefined) conv.contextoBot = contextoBot;
+		if ('idPaciente' in fields) conv.idPaciente = fields.idPaciente;
+		if ('dniPaciente' in fields) conv.dniPaciente = fields.dniPaciente;
+		if ('nombreContacto' in fields) conv.nombreContacto = fields.nombreContacto;
+		if ('pasoBot' in fields) conv.pasoBot = fields.pasoBot;
 		memConversaciones.set(idConversacion, conv);
 		return mapConversacion(conv);
 	}
-	if (contextoBot !== undefined) {
-		await guardarContextoBot(idConversacion, contextoBot);
+
+	const sets = [];
+	const params = [{ value: idConversacion, type: 'VarChar' }];
+	let idx = 1;
+	if ('idPaciente' in fields) {
+		sets.push(`IdPaciente = @p${idx}`);
+		params.push({ value: fields.idPaciente, type: 'Int' });
+		idx += 1;
 	}
+	if ('dniPaciente' in fields) {
+		sets.push(`DniPaciente = @p${idx}`);
+		params.push({ value: fields.dniPaciente, type: 'VarChar' });
+		idx += 1;
+	}
+	if ('nombreContacto' in fields) {
+		sets.push(`NombreContacto = @p${idx}`);
+		params.push({ value: fields.nombreContacto, type: 'VarChar' });
+		idx += 1;
+	}
+	if ('pasoBot' in fields) {
+		sets.push(`PasoBot = @p${idx}`);
+		params.push({ value: fields.pasoBot, type: 'VarChar' });
+		idx += 1;
+	}
+	if (!sets.length) return obtenerConversacion(idConversacion);
+
 	await executeQuery(
-		`UPDATE dbo.imBotConversacion SET
-		   IdPaciente = COALESCE(@p1, IdPaciente),
-		   DniPaciente = COALESCE(@p2, DniPaciente),
-		   NombreContacto = COALESCE(@p3, NombreContacto),
-		   PasoBot = COALESCE(@p4, PasoBot)
-		 WHERE IdConversacion = @p0`,
-		[
-			{ value: idConversacion, type: 'VarChar' },
-			{ value: idPaciente, type: 'Int' },
-			{ value: dniPaciente, type: 'VarChar' },
-			{ value: nombreContacto, type: 'VarChar' },
-			{ value: pasoBot, type: 'VarChar' },
-		],
+		`UPDATE dbo.imBotConversacion SET ${sets.join(', ')} WHERE IdConversacion = @p0`,
+		params,
 	);
+	return obtenerConversacion(idConversacion);
+}
+
+/** Reinicia wizard para un turno nuevo (otro paciente u otra consulta). */
+async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR') {
+	await limpiarEstadoWizard(idConversacion);
+	await actualizarContextoPaciente(idConversacion, {
+		idPaciente: null,
+		dniPaciente: null,
+		pasoBot,
+	});
 	return obtenerConversacion(idConversacion);
 }
 
@@ -823,6 +846,7 @@ module.exports = {
 	actualizarContextoPaciente,
 	guardarContextoBot,
 	limpiarEstadoWizard,
+	reiniciarFlujoNuevoTurno,
 	resetConversacionPorTelefono,
 	resetTodasLasConversaciones,
 };

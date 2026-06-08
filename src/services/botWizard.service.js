@@ -177,6 +177,10 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo,
 	if (!dni) return false;
 	if (!pasoIdentificar?.activo && !pasoConfirmarActivo) return false;
 
+	if (conv.dniPaciente && String(conv.dniPaciente) !== String(dni)) {
+		return true;
+	}
+
 	if (
 		pasoActual === 'IDENTIFICAR' ||
 		pasoActual === 'inicio' ||
@@ -186,7 +190,29 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo,
 		return true;
 	}
 
+	if (
+		conv.idPaciente &&
+		(pasoActual === 'CONFIRMAR' ||
+			pasoActual === 'ELEGIR_ESPECIALIDAD' ||
+			pasoActual === 'ELEGIR_PROFESIONAL' ||
+			pasoActual === 'ELEGIR_FECHA_HORA')
+	) {
+		return true;
+	}
+
 	return !conv.dniPaciente;
+}
+
+function necesitaReinicioPorNuevoPaciente(conv, pasoActual, dniEnMensaje) {
+	if (!dniEnMensaje) return false;
+	const dniDistinto = conv.dniPaciente && String(conv.dniPaciente) !== String(dniEnMensaje);
+	const pasoTurnoAnterior = [
+		'CONFIRMAR',
+		'ELEGIR_ESPECIALIDAD',
+		'ELEGIR_PROFESIONAL',
+		'ELEGIR_FECHA_HORA',
+	].includes(pasoActual);
+	return dniDistinto || (!!conv.idPaciente && pasoTurnoAnterior);
 }
 
 function esInicioNuevoTurno(texto) {
@@ -200,6 +226,13 @@ function esInicioNuevoTurno(texto) {
 		return true;
 	}
 	if (/\b(quiero|necesito|busco|estoy queriendo)\b.*\b(turno|consulta)\b/.test(t)) return true;
+	if (/\b(turno|consulta)\b.*\b(para|de)\b/.test(t)) return true;
+	if (
+		/\b(para mi|para el|para la|otra persona|otro paciente|mi familiar)\b/.test(t) &&
+		/\b(turno|consulta|herman|hij|familiar|mama|mami|papa|nene|bebe)\b/.test(t)
+	) {
+		return true;
+	}
 	if (
 		/^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)\b/.test(t) &&
 		/\b(turno|consulta|especialidad)\b/.test(t)
@@ -282,6 +315,17 @@ async function procesarIdentificacionDni({
 	flujo,
 	pasoConfirmarActivo,
 }) {
+	if (conv.dniPaciente && String(conv.dniPaciente) !== String(dni)) {
+		const espPendPreservar = conv.contextoBot?.especialidadPendiente || null;
+		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
+		if (espPendPreservar) {
+			await botConversacion.guardarContextoBot(idConversacion, {
+				especialidadPendiente: espPendPreservar,
+			});
+		}
+		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+	}
+
 	try {
 		diag.line('wizard', 'Consultando RENAPER por DNI', { dni, idConversacion });
 		const data = await withTimeout(
@@ -397,28 +441,47 @@ async function intentarRespuestaWizard({
 	const pasoConfirmarActivo = !!pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD')?.activo;
 	let pasoActual = conv.pasoBot || pasoInicial(flujo);
 
+	const texto = String(contenido || '').trim();
+	const dniEnMensaje = extraerDni(texto);
+	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
+
+	if (necesitaReinicioPorNuevoPaciente(conv, pasoActual, dniEnMensaje)) {
+		const espPend = conv.contextoBot?.especialidadPendiente;
+		diag.line('wizard', 'Reinicio por nuevo paciente (DNI distinto o turno anterior)', {
+			idConversacion,
+			pasoActual,
+			dniAnterior: conv.dniPaciente || null,
+			dniNuevo: dniEnMensaje,
+		});
+		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
+		if (espPend) {
+			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
+		}
+		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+		pasoActual = 'IDENTIFICAR';
+	}
+
 	// DNI consultado pero sin confirmar: forzar paso de confirmación.
-	if (conv.dniPaciente && !conv.idPaciente && pasoConfirmarActivo && pasoActual !== 'CONFIRMAR_IDENTIDAD') {
+	if (
+		conv.dniPaciente &&
+		!conv.idPaciente &&
+		pasoConfirmarActivo &&
+		pasoActual !== 'CONFIRMAR_IDENTIDAD' &&
+		(!dniEnMensaje || String(dniEnMensaje) === String(conv.dniPaciente))
+	) {
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
 			pasoBot: 'CONFIRMAR_IDENTIDAD',
 		});
 		pasoActual = 'CONFIRMAR_IDENTIDAD';
 	}
 
-	const texto = String(contenido || '').trim();
-	const dniEnMensaje = extraerDni(texto);
-	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
-
 	// --- Hola / nuevo turno: reiniciar flujo (tras turno confirmado u otra sesión) ---
 	if (esInicioNuevoTurno(texto) && pasoIdentificar?.activo !== false) {
 		const espPend = await detectarEspecialidadEnTexto(texto);
-		await botConversacion.limpiarEstadoWizard(idConversacion);
+		await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, 'IDENTIFICAR');
 		if (espPend) {
 			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
 		}
-		await botConversacion.actualizarContextoPaciente(idConversacion, {
-			pasoBot: 'IDENTIFICAR',
-		});
 		const saludo = primerNombre(nombreWhatsApp(conv));
 		const msg =
 			pasoIdentificar?.mensajeUsuario ||
@@ -673,10 +736,7 @@ async function intentarRespuestaWizard({
 					},
 					Number(process.env.BOT_COD_OPERADOR) || 0,
 				);
-				await botConversacion.limpiarEstadoWizard(idConversacion);
-				await botConversacion.actualizarContextoPaciente(idConversacion, {
-					pasoBot: pasoInicial(flujo),
-				});
+				await botConversacion.reiniciarFlujoNuevoTurno(idConversacion, pasoInicial(flujo));
 				const saludo = primerNombre(nombreWhatsApp(convAct));
 				const ticket = reserva.ticket?.mensajeWhatsApp || reserva.mensajeConfirmacion;
 				return {
