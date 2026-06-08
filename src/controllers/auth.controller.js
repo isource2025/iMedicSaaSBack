@@ -73,18 +73,23 @@ const resolverIdEmpresaEfectiva = ({
     if (Number.isFinite(n) && n > 0) id = n;
   }
 
+  const fallbackEnv = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
+  const fallbackValido = Number.isFinite(fallbackEnv) && fallbackEnv > 0;
+
+  // Admin plataforma: tenant operativo de Railway (evita tomar la primera empresa del catálogo sin SQL)
+  if (id == null && esSuperAdmin && fallbackValido) {
+    id = fallbackEnv;
+  }
+
   if (id == null && empresasUsuario.length === 1) {
     id = Number(empresasUsuario[0].idEmpresa);
   }
 
-  if (id == null) {
-    const fallback = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
-    if (Number.isFinite(fallback) && fallback > 0) {
-      const permitida =
-        empresasUsuario.length === 0 ||
-        empresasUsuario.some((e) => Number(e.idEmpresa) === fallback);
-      if (permitida) id = fallback;
-    }
+  if (id == null && fallbackValido) {
+    const permitida =
+      empresasUsuario.length === 0 ||
+      empresasUsuario.some((e) => Number(e.idEmpresa) === fallbackEnv);
+    if (permitida) id = fallbackEnv;
   }
 
   if (id == null && esSuperAdmin && empresasUsuario.length > 0) {
