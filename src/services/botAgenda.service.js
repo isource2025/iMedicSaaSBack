@@ -1058,8 +1058,50 @@ function construirExclusionesRechazo(texto, sugerenciaActual = null) {
 }
 
 /**
- * Turno libre más cercano en la especialidad (todos los profesionales).
- * Opcionalmente excluye slots/fechas/días ya rechazados.
+ * Primer turno libre del médico (desde ahora), respetando exclusiones.
+ */
+async function _turnoMasCercanoPorMedico(matricula, medicoNombre, esp, config, excluir, maxDias) {
+	for (let d = 0; d <= maxDias; d++) {
+		const fechaIso = _fechaIsoOffset(d);
+		if (excluir.fechas.has(fechaIso)) continue;
+		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
+		if (excluir.diasSemana.has(diaNum)) continue;
+
+		let disp;
+		try {
+			disp = await disponibilidadBot(fechaIso, {
+				matricula,
+				especialidad: esp,
+			});
+		} catch {
+			continue;
+		}
+
+		const slotsOrdenados = [...(disp.slotsLibres || [])].sort(
+			(a, b) => _slotDateTime(fechaIso, a.hora) - _slotDateTime(fechaIso, b.hora),
+		);
+
+		for (const slot of slotsOrdenados) {
+			if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
+			if (_slotEstaExcluido(matricula, fechaIso, slot.hora, excluir)) continue;
+
+			return {
+				dt: _slotDateTime(fechaIso, slot.hora),
+				matricula,
+				medico: medicoNombre,
+				fecha: fechaIso,
+				hora: slot.hora,
+				sector: slot.sector,
+				diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
+			};
+		}
+	}
+	return null;
+}
+
+/**
+ * Por cada médico de la especialidad: su turno libre más cercano a ahora.
+ * Entre todos, el más próximo; empate → orden alfabético del profesional.
  */
 async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const config = await botConfigService.getBotConfig();
@@ -1071,63 +1113,43 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	if (!profesionales.length) return null;
 
 	const maxDias = config.reglas.diasMaxAntelacion || 60;
-	let mejorGlobal = null;
+	const ordenados = [...profesionales].sort((a, b) =>
+		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
+	);
 
-	for (let d = 0; d <= maxDias; d++) {
-		const fechaIso = _fechaIsoOffset(d);
-		if (excluir.fechas.has(fechaIso)) continue;
-		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
-		if (excluir.diasSemana.has(diaNum)) continue;
-
-		let mejorDelDia = null;
-
-		for (const prof of profesionales) {
-			let disp;
-			try {
-				disp = await disponibilidadBot(fechaIso, {
-					matricula: prof.matricula,
-					especialidad: esp,
-				});
-			} catch {
-				continue;
-			}
-
-			for (const slot of disp.slotsLibres || []) {
-				if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
-				if (_slotEstaExcluido(prof.matricula, fechaIso, slot.hora, excluir)) continue;
-
-				const dt = _slotDateTime(fechaIso, slot.hora);
-				if (!mejorDelDia || dt < mejorDelDia.dt) {
-					mejorDelDia = {
-						dt,
-						matricula: prof.matricula,
-						medico: prof.nombre,
-						fecha: fechaIso,
-						hora: slot.hora,
-						sector: slot.sector,
-						diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
-					};
-				}
-			}
-		}
-
-		if (mejorDelDia) {
-			mejorGlobal = {
-				matricula: mejorDelDia.matricula,
-				medico: mejorDelDia.medico,
-				especialidad: especialidad?.valor ?? esp,
-				especialidadNombre: especialidad?.nombre || null,
-				fecha: mejorDelDia.fecha,
-				fechaLegible: _fechaLegible(mejorDelDia.fecha),
-				diaSemana: mejorDelDia.diaSemana,
-				hora: mejorDelDia.hora,
-				sector: mejorDelDia.sector,
-			};
-			break;
-		}
+	const candidatos = [];
+	for (const prof of ordenados) {
+		const turno = await _turnoMasCercanoPorMedico(
+			prof.matricula,
+			prof.nombre,
+			esp,
+			config,
+			excluir,
+			maxDias,
+		);
+		if (turno) candidatos.push(turno);
 	}
 
-	return mejorGlobal;
+	if (!candidatos.length) return null;
+
+	candidatos.sort((a, b) => {
+		const diff = a.dt - b.dt;
+		if (diff !== 0) return diff;
+		return String(a.medico || '').localeCompare(String(b.medico || ''), 'es');
+	});
+
+	const mejor = candidatos[0];
+	return {
+		matricula: mejor.matricula,
+		medico: mejor.medico,
+		especialidad: especialidad?.valor ?? esp,
+		especialidadNombre: especialidad?.nombre || null,
+		fecha: mejor.fecha,
+		fechaLegible: _fechaLegible(mejor.fecha),
+		diaSemana: mejor.diaSemana,
+		hora: mejor.hora,
+		sector: mejor.sector,
+	};
 }
 
 function mensajeSugerenciaTurno(sugerencia, pasoCfg, opts = {}) {

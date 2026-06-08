@@ -142,7 +142,7 @@ async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pas
 }
 
 function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo, dni) {
-	if (!dni || conv.idPaciente) return false;
+	if (!dni) return false;
 	if (!pasoIdentificar?.activo && !pasoConfirmarActivo) return false;
 
 	if (
@@ -155,6 +155,16 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo,
 	}
 
 	return !conv.dniPaciente;
+}
+
+function esInicioNuevoTurno(texto) {
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+	return /^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t) ||
+		/\b(quiero un turno|necesito un turno|sacar un turno|pedir turno|nuevo turno)\b/.test(t);
 }
 
 function mensajeErrorRenaper(err) {
@@ -200,7 +210,11 @@ async function procesarIdentificacionDni({
 
 		if (pasoConfirmarActivo) {
 			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
-			await botConversacion.guardarContextoBot(idConversacion, null);
+			if (conv.idPaciente || conv.contextoBot) {
+				await botConversacion.limpiarEstadoWizard(idConversacion);
+			} else {
+				await botConversacion.guardarContextoBot(idConversacion, null);
+			}
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				dniPaciente: String(dni),
 				pasoBot: 'CONFIRMAR_IDENTIDAD',
@@ -291,6 +305,20 @@ async function intentarRespuestaWizard({
 	const texto = String(contenido || '').trim();
 	const dniEnMensaje = extraerDni(texto);
 	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
+
+	// --- Hola / nuevo turno: reiniciar flujo (tras turno confirmado u otra sesión) ---
+	if (esInicioNuevoTurno(texto) && pasoIdentificar?.activo !== false) {
+		await botConversacion.limpiarEstadoWizard(idConversacion);
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			pasoBot: 'IDENTIFICAR',
+		});
+		const saludo = primerNombre(nombreWhatsApp(conv));
+		const msg = pasoIdentificar?.mensajeUsuario || 'Para comenzar, indicá tu DNI (sin puntos).';
+		return {
+			handled: true,
+			texto: saludo ? `Hola, ${saludo}. ${msg}` : msg,
+		};
+	}
 
 	// --- DNI en mensaje: RENAPER siempre antes que GPT (aunque pasoBot esté desfasado) ---
 	if (debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo, dniEnMensaje)) {
@@ -471,7 +499,7 @@ async function intentarRespuestaWizard({
 					},
 					Number(process.env.BOT_COD_OPERADOR) || 0,
 				);
-				await botConversacion.guardarContextoBot(idConversacion, null);
+				await botConversacion.limpiarEstadoWizard(idConversacion);
 				await botConversacion.actualizarContextoPaciente(idConversacion, {
 					pasoBot: pasoInicial(flujo),
 				});

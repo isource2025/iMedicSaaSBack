@@ -205,7 +205,9 @@ async function responderMensajeEntrante({
 	const pasoActual = convAct?.pasoBot || botWizard.pasoInicial(flujo);
 	const config = await botConfigService.getBotConfig();
 
-	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && !convAct?.idPaciente)) {
+	const enPasoIdentificacion =
+		pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual;
+	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && enPasoIdentificacion)) {
 		diag.warn('webhook', 'Wizard no respondió a identificación', {
 			dniDetectado,
 			pasoActual,
@@ -214,6 +216,15 @@ async function responderMensajeEntrante({
 		return enviarTextoBot({
 			...enviarOpts,
 			texto: 'Recibimos tu DNI. Si no ves los datos de RENAPER, enviá el número de nuevo.',
+		});
+	}
+
+	// Identificación: no dejar que GPT repita "pedí DNI" sin procesar RENAPER.
+	if (enPasoIdentificacion) {
+		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
+		return enviarTextoBot({
+			...enviarOpts,
+			texto: pasoId?.mensajeUsuario || 'Para comenzar, indicá tu DNI (sin puntos).',
 		});
 	}
 
