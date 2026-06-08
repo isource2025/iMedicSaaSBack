@@ -109,12 +109,22 @@ async function enviarTextoBot({
 	texto,
 	idMensajePaciente = null,
 	metaMessageIdEntrante = null,
+	/** Segundo (o más) mensaje del bot por el mismo mensaje entrante (ej. aviso + resultado de búsqueda). */
+	seguimiento = false,
 }) {
-	if (metaMessageIdEntrante && (await botConversacion.yaRespondidoAMetaMessage(idConversacion, metaMessageIdEntrante))) {
-		return { respondido: false, motivo: 'ya-respondido-wamid' };
-	}
-	if (idMensajePaciente && (await botConversacion.yaRespondidoAlMensaje(idConversacion, idMensajePaciente))) {
-		return { respondido: false, motivo: 'ya-respondido' };
+	if (!seguimiento) {
+		if (
+			metaMessageIdEntrante &&
+			(await botConversacion.yaRespondidoAMetaMessage(idConversacion, metaMessageIdEntrante))
+		) {
+			return { respondido: false, motivo: 'ya-respondido-wamid' };
+		}
+		if (
+			idMensajePaciente &&
+			(await botConversacion.yaRespondidoAlMensaje(idConversacion, idMensajePaciente))
+		) {
+			return { respondido: false, motivo: 'ya-respondido' };
+		}
 	}
 
 	const waCfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
@@ -223,7 +233,7 @@ async function responderMensajeEntrante({
 					idConversacion,
 				});
 			}
-			return enviarTextoBot({ ...enviarOpts, texto: textoResultado });
+			return enviarTextoBot({ ...enviarOpts, texto: textoResultado, seguimiento: true });
 		}
 		if (wizard.handled && wizard.texto) {
 			return enviarTextoBot({ ...enviarOpts, texto: wizard.texto });
