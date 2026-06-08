@@ -32,7 +32,11 @@ async function buildSystemPrompt(config, flujo, conv) {
 		.join('\n');
 
 	const ctx = [];
-	if (conv?.nombreContacto) ctx.push(`Nombre contacto: ${conv.nombreContacto}`);
+	if (conv?.nombreContacto) {
+		ctx.push(
+			`Nombre del contacto WhatsApp (siempre tratá al paciente con este nombre): ${conv.nombreContacto}`,
+		);
+	}
 	if (conv?.dniPaciente) ctx.push(`DNI confirmado: ${conv.dniPaciente}`);
 	if (conv?.pasoBot) ctx.push(`Paso actual del flujo: ${conv.pasoBot}`);
 
@@ -58,6 +62,9 @@ async function buildSystemPrompt(config, flujo, conv) {
 		...reglasFlujo,
 		'No inventes horarios ni médicos; si no tenés datos, pedí el siguiente dato del flujo.',
 		'Respuestas cortas (máx. 2-3 párrafos). Sin markdown complejo.',
+		conv?.nombreContacto
+			? `Siempre dirigite al paciente como *${String(conv.nombreContacto).trim().split(/\s+/)[0]}* (nombre del contacto WhatsApp), no uses el nombre legal de RENAPER.`
+			: '',
 		ctx.length ? `Contexto:\n${ctx.join('\n')}` : '',
 		pasosActivos ? `Pasos activos del wizard:\n${pasosActivos}` : '',
 		pasoActual ? `Estás en el paso: ${pasoActual}` : '',

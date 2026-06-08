@@ -60,38 +60,40 @@ function interpretarConfirmacion(texto) {
 	return null;
 }
 
-function formatearPersonaRenaper(renaper, dni, pacienteLocal = null) {
-	const lineas = [];
+function nombreCompletoRenaper(renaper, pacienteLocal = null) {
 	const apellido = String(renaper?.apellido || '').trim();
 	const nombres = String(renaper?.nombres || '').trim();
-	let nombre =
+	return (
 		renaper?.nombreCompleto ||
 		(apellido && nombres ? `${apellido} ${nombres}` : null) ||
 		apellido ||
 		nombres ||
 		pacienteLocal?.nombre ||
-		null;
+		null
+	);
+}
 
-	if (nombre) {
-		lineas.push(`Nombre: *${nombre}*`);
-	} else if (apellido || nombres) {
-		if (apellido) lineas.push(`Apellido: *${apellido}*`);
-		if (nombres) lineas.push(`Nombres: *${nombres}*`);
-	}
-
-	lineas.push(`DNI: *${dni}*`);
-
+/** Confirmación RENAPER: solo nombre completo y fecha de nacimiento. */
+function formatearPersonaRenaper(renaper, _dni, pacienteLocal = null) {
+	const lineas = [];
+	const nombre = nombreCompletoRenaper(renaper, pacienteLocal);
+	if (nombre) lineas.push(`Nombre: *${nombre}*`);
 	if (renaper?.fechaNacimiento) {
 		lineas.push(`Fecha de nacimiento: ${renaper.fechaNacimiento}`);
+	} else if (pacienteLocal?.fechaNacimiento) {
+		lineas.push(`Fecha de nacimiento: ${pacienteLocal.fechaNacimiento}`);
 	}
-	if (renaper?.sexo) {
-		lineas.push(
-			`Sexo: ${renaper.sexo === 'F' ? 'Femenino' : renaper.sexo === 'M' ? 'Masculino' : renaper.sexo}`,
-		);
-	}
-	if (renaper?.domicilio) lineas.push(`Domicilio: ${renaper.domicilio}`);
-
 	return lineas.join('\n');
+}
+
+function primerNombre(nombre) {
+	const n = String(nombre || '').trim();
+	if (!n) return null;
+	return n.split(/\s+/)[0];
+}
+
+function nombreWhatsApp(conv) {
+	return conv?.nombreContacto ? String(conv.nombreContacto).trim() : null;
 }
 
 function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
@@ -171,10 +173,6 @@ async function procesarIdentificacionDni({
 			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				dniPaciente: String(dni),
-				nombreContacto:
-					data.renaper.nombreCompleto ||
-					data.pacienteLocal?.nombre ||
-					conv.nombreContacto,
 				pasoBot: 'CONFIRMAR_IDENTIDAD',
 				idPaciente: null,
 			});
@@ -294,24 +292,20 @@ async function intentarRespuestaWizard({
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				idPaciente: data.idPaciente,
 				dniPaciente: String(conv.dniPaciente),
-				nombreContacto:
-					data.pacienteLocal?.nombre || data.renaper?.nombreCompleto || conv.nombreContacto,
 				pasoBot: siguiente,
 			});
-			const nombre =
-				data.pacienteLocal?.nombre || data.renaper?.nombreCompleto || conv.nombreContacto;
+			const saludo = primerNombre(nombreWhatsApp(conv));
 			return {
 				handled: true,
 				texto: pasoCfg?.mensajeUsuario
-					? `Perfecto${nombre ? `, ${nombre.split(' ')[0]}` : ''}. ${pasoCfg.mensajeUsuario}`
-					: `Gracias${nombre ? `, ${nombre.split(' ')[0]}` : ''}. Continuemos con tu turno.`,
+					? `Perfecto${saludo ? `, ${saludo}` : ''}. ${pasoCfg.mensajeUsuario}`
+					: `Gracias${saludo ? `, ${saludo}` : ''}. Continuemos con tu turno.`,
 			};
 		}
 		if (conf === false) {
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				idPaciente: null,
 				dniPaciente: null,
-				nombreContacto: null,
 				pasoBot: pasoInicial(flujo),
 			});
 			const pasoId = pasoPorId(flujo, 'IDENTIFICAR');

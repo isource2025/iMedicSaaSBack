@@ -263,7 +263,6 @@ async function identificarPaciente({
 				await botConversacion.actualizarContextoPaciente(idConv, {
 					idPaciente: confirmarActivo ? null : idPaciente,
 					dniPaciente: String(dni),
-					nombreContacto: pacienteLocal?.nombre || renaperData?.nombreCompleto || null,
 					pasoBot: siguiente,
 				});
 			}
@@ -279,7 +278,6 @@ async function identificarPaciente({
 			if (idConv) {
 				await botConversacion.actualizarContextoPaciente(idConv, {
 					dniPaciente: String(dni),
-					nombreContacto: pacienteLocal?.nombre || renaperData?.nombreCompleto || null,
 				});
 			}
 		} catch (e) {
