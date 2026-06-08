@@ -78,7 +78,7 @@ async function procesarComandoReset({ idEmpresa, telefonoWhatsApp, contenido }) 
 			...stats,
 		});
 		const msg =
-			'🧹 *Historial borrado*\n\nTu conversación con el bot fue reiniciada. Podés empezar de cero enviando *Hola*.';
+			'🧹 *Historial borrado*\n\nTu conversación con el bot fue reiniciada (incluye especialidad y turnos en curso). Podés empezar de cero enviando *Hola*.';
 		await enviarWhatsApp(idEmpresa, telefonoWhatsApp, msg);
 		return { handled: true, ok: true, mensaje: msg, stats };
 	}

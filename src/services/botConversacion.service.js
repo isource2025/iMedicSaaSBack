@@ -682,6 +682,40 @@ async function actualizarContextoPaciente(
 }
 
 /**
+ * Limpia paso del wizard, paciente y contexto (especialidad/turno sugerido).
+ * Usar en #IMEDIC-ZERO y al reiniciar identificación.
+ */
+async function limpiarEstadoWizard(idConversacion) {
+	await checkConversationTables();
+	if (useMemory) {
+		const conv = memConversaciones.get(idConversacion);
+		if (!conv) return false;
+		conv.pasoBot = 'inicio';
+		conv.idPaciente = null;
+		conv.dniPaciente = null;
+		conv.contextoBot = null;
+		conv.noLeidos = 0;
+		conv.ultimoMensaje = null;
+		memConversaciones.set(idConversacion, conv);
+		return true;
+	}
+
+	const hasCol = await ensureContextoBotColumn();
+	const ctxSql = hasCol ? ', ContextoBotJson = NULL' : '';
+	await executeQuery(
+		`UPDATE dbo.imBotConversacion SET
+		   PasoBot = 'inicio',
+		   IdPaciente = NULL,
+		   DniPaciente = NULL,
+		   NoLeidos = 0,
+		   UltimoMensaje = NULL${ctxSql}
+		 WHERE IdConversacion = @p0`,
+		[{ value: idConversacion, type: 'VarChar' }],
+	);
+	return true;
+}
+
+/**
  * Borra conversación + mensajes de un teléfono (testing desde WhatsApp).
  */
 async function resetConversacionPorTelefono(telefonoWhatsApp) {
@@ -707,10 +741,23 @@ async function resetConversacionPorTelefono(telefonoWhatsApp) {
 	);
 	const mensajesEliminados = Number(countRows?.[0]?.n || 0);
 
+	try {
+		await executeQuery(
+			`DELETE FROM dbo.imBotTurnosLog WHERE IdConversacion = @p0`,
+			[{ value: idConv, type: 'VarChar' }],
+		);
+	} catch {
+		/* tabla opcional */
+	}
+
 	await executeQuery(
 		`DELETE FROM dbo.imBotMensaje WHERE IdConversacion = @p0`,
 		[{ value: idConv, type: 'VarChar' }],
 	);
+
+	// Siempre limpiar estado wizard (especialidad/turno) aunque falle el DELETE de la fila.
+	await limpiarEstadoWizard(idConv);
+
 	await executeQuery(
 		`DELETE FROM dbo.imBotConversacion WHERE IdConversacion = @p0`,
 		[{ value: idConv, type: 'VarChar' }],
@@ -775,6 +822,7 @@ module.exports = {
 	puedeResponderBotPorTelefono,
 	actualizarContextoPaciente,
 	guardarContextoBot,
+	limpiarEstadoWizard,
 	resetConversacionPorTelefono,
 	resetTodasLasConversaciones,
 };

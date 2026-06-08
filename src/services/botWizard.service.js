@@ -200,6 +200,7 @@ async function procesarIdentificacionDni({
 
 		if (pasoConfirmarActivo) {
 			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+			await botConversacion.guardarContextoBot(idConversacion, null);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				dniPaciente: String(dni),
 				pasoBot: 'CONFIRMAR_IDENTIDAD',
@@ -325,6 +326,7 @@ async function intentarRespuestaWizard({
 				siguiente = 'ELEGIR_ESPECIALIDAD';
 			}
 			const pasoCfg = pasoPorId(flujo, siguiente);
+			await botConversacion.guardarContextoBot(idConversacion, null);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				idPaciente: data.idPaciente,
 				dniPaciente: String(conv.dniPaciente),
@@ -339,9 +341,8 @@ async function intentarRespuestaWizard({
 			};
 		}
 		if (conf === false) {
+			await botConversacion.limpiarEstadoWizard(idConversacion);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				idPaciente: null,
-				dniPaciente: null,
 				pasoBot: pasoInicial(flujo),
 			});
 			const pasoId = pasoPorId(flujo, 'IDENTIFICAR');
