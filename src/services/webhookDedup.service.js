@@ -3,15 +3,19 @@
  * Evita duplicados por reintentos de Meta, carreras entre requests o GPT lento.
  */
 const TTL_MS = Number(process.env.WHATSAPP_DEDUP_TTL_MS || 86_400_000); // 24h
-/** @type {Map<string, number>} metaMessageId → processedAt */
+const PROCESSING_TTL_MS = Number(process.env.WHATSAPP_DEDUP_PROCESSING_TTL_MS || 90_000);
+/** @type {Map<string, number>} key → processedAt */
 const completed = new Map();
-/** @type {Set<string>} en procesamiento ahora */
-const processing = new Set();
+/** @type {Map<string, number>} key → claimedAt (libera claim colgado tras PROCESSING_TTL_MS) */
+const processing = new Map();
 
 function cleanupExpired() {
 	const now = Date.now();
 	for (const [k, ts] of completed) {
 		if (now - ts > TTL_MS) completed.delete(k);
+	}
+	for (const [k, ts] of processing) {
+		if (now - ts > PROCESSING_TTL_MS) processing.delete(k);
 	}
 }
 
@@ -40,7 +44,7 @@ function tryClaimIncoming(metaMessageId, fallback = null) {
 	if (processing.has(key)) {
 		return { ok: false, key, reason: 'in-flight' };
 	}
-	processing.add(key);
+	processing.set(key, Date.now());
 	return { ok: true, key };
 }
 

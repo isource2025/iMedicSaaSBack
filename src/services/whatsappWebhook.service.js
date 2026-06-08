@@ -187,7 +187,8 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 					});
 
 					let botReply = null;
-					if (botResponder.gptHabilitado()) {
+					const estadoBot = await botConversacion.puedeResponderBot(r.conversacion.idConversacion);
+					if (estadoBot.puedeResponderBot) {
 						try {
 							botReply = await botResponder.responderMensajeEntrante({
 								idEmpresa,
@@ -197,20 +198,19 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 								idMensajePaciente: r.mensaje?.idMensaje,
 								metaMessageIdEntrante: m.metaMessageId,
 							});
-							diag.line('webhook', 'GPT respuesta', {
+							diag.line('webhook', 'Bot respuesta', {
 								respondido: botReply?.respondido,
 								motivo: botReply?.motivo,
 								textoLen: botReply?.texto?.length,
 							});
-						} catch (gptErr) {
-							diag.warn('webhook', 'GPT error', { error: gptErr.message, code: gptErr.code });
-							console.warn('[whatsappWebhook] GPT:', gptErr.message);
-							botReply = { respondido: false, motivo: gptErr.message };
+						} catch (botErr) {
+							diag.warn('webhook', 'Bot error', { error: botErr.message, code: botErr.code });
+							console.warn('[whatsappWebhook] Bot:', botErr.message);
+							botReply = { respondido: false, motivo: botErr.message };
 						}
 					} else {
-						diag.line('webhook', 'GPT deshabilitado', {
-							BOT_GPT_ENABLED: process.env.BOT_GPT_ENABLED,
-							openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+						diag.line('webhook', 'Bot no responde (modo agente)', {
+							modoControl: estadoBot.modoControl,
 						});
 					}
 

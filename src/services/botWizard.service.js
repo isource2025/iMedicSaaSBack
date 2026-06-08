@@ -5,6 +5,22 @@
 const botAgenda = require('./botAgenda.service');
 const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
+const diag = require('../utils/diagLog');
+
+const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 25_000);
+
+function withTimeout(promise, ms, label = 'operación') {
+	return Promise.race([
+		promise,
+		new Promise((_, reject) => {
+			setTimeout(() => {
+				const err = new Error(`${label} timeout (${ms}ms)`);
+				err.code = 'RENAPER_TIMEOUT';
+				reject(err);
+			}, ms);
+		}),
+	]);
+}
 
 function pasosActivos(flujo) {
 	return (flujo || []).filter((p) => p.activo !== false);
@@ -93,8 +109,9 @@ async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pas
 	});
 }
 
-function debeProcesarDni(conv, pasoActual, pasoIdentificar, dni) {
-	if (!dni || !pasoIdentificar?.activo || conv.idPaciente) return false;
+function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo, dni) {
+	if (!dni || conv.idPaciente) return false;
+	if (!pasoIdentificar?.activo && !pasoConfirmarActivo) return false;
 
 	if (
 		pasoActual === 'IDENTIFICAR' ||
@@ -105,8 +122,17 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, dni) {
 		return true;
 	}
 
-	// GPT u otro paso avanzado sin paciente confirmado: igual consultar RENAPER.
 	return !conv.dniPaciente;
+}
+
+function mensajeErrorRenaper(err) {
+	if (err?.code === 'RENAPER_NO_ENCONTRADO' || err?.code === 'RENAPER_TIMEOUT') {
+		if (err.code === 'RENAPER_TIMEOUT') {
+			return 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo en unos segundos.';
+		}
+		return 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.';
+	}
+	return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 }
 
 async function procesarIdentificacionDni({
@@ -117,65 +143,93 @@ async function procesarIdentificacionDni({
 	flujo,
 	pasoConfirmarActivo,
 }) {
-	const data = await consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo);
-
-	if (!data.renaper?.encontrado) {
-		return {
-			handled: true,
-			texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
-		};
-	}
-
-	if (pasoConfirmarActivo) {
-		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
-		await botConversacion.actualizarContextoPaciente(idConversacion, {
-			dniPaciente: String(dni),
-			nombreContacto:
-				data.renaper.nombreCompleto ||
-				data.pacienteLocal?.nombre ||
-				conv.nombreContacto,
-			pasoBot: 'CONFIRMAR_IDENTIDAD',
-			idPaciente: null,
+	try {
+		diag.line('wizard', 'Consultando RENAPER por DNI', { dni, idConversacion });
+		const data = await withTimeout(
+			consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo),
+			RENAPER_TIMEOUT_MS,
+			'RENAPER',
+		);
+		diag.line('wizard', 'RENAPER respondió', {
+			dni,
+			encontrado: !!data.renaper?.encontrado,
+			nombre: data.renaper?.nombreCompleto || null,
 		});
+
+		if (!data.renaper?.encontrado) {
+			return {
+				handled: true,
+				texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
+			};
+		}
+
+		if (pasoConfirmarActivo) {
+			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				dniPaciente: String(dni),
+				nombreContacto:
+					data.renaper.nombreCompleto ||
+					data.pacienteLocal?.nombre ||
+					conv.nombreContacto,
+				pasoBot: 'CONFIRMAR_IDENTIDAD',
+				idPaciente: null,
+			});
+			return {
+				handled: true,
+				texto: mensajeConfirmacionRenaper({
+					renaper: data.renaper,
+					dni,
+					pacienteLocal: data.pacienteLocal,
+					pasoCfg,
+				}),
+			};
+		}
+
+		const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
+		const pasoCfg = pasoPorId(flujo, siguiente);
 		return {
 			handled: true,
-			texto: mensajeConfirmacionRenaper({
-				renaper: data.renaper,
-				dni,
-				pacienteLocal: data.pacienteLocal,
-				pasoCfg,
-			}),
+			texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
 		};
+	} catch (err) {
+		diag.warn('wizard', 'Error consultando RENAPER', {
+			dni,
+			error: err.message,
+			code: err.code,
+		});
+		return { handled: true, texto: mensajeErrorRenaper(err) };
 	}
-
-	const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
-	const pasoCfg = pasoPorId(flujo, siguiente);
-	return {
-		handled: true,
-		texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
-	};
 }
 
 async function reconsultarRenaperParaConfirmacion(conv, telefonoWhatsApp, idConversacion, pasoCfg) {
-	const data = await botAgenda.identificarPaciente({
-		numeroDocumento: conv.dniPaciente,
-		telefonoWhatsApp,
-		crearSiNoExiste: false,
-		idConversacion,
-		omitirAvancePaso: true,
-	});
+	try {
+		const data = await withTimeout(
+			botAgenda.identificarPaciente({
+				numeroDocumento: conv.dniPaciente,
+				telefonoWhatsApp,
+				crearSiNoExiste: false,
+				idConversacion,
+				omitirAvancePaso: true,
+			}),
+			RENAPER_TIMEOUT_MS,
+			'RENAPER',
+		);
 
-	if (data.renaper?.encontrado) {
-		return mensajeConfirmacionRenaper({
-			renaper: data.renaper,
-			dni: conv.dniPaciente,
-			pacienteLocal: data.pacienteLocal,
-			pasoCfg,
-		});
+		if (data.renaper?.encontrado) {
+			return mensajeConfirmacionRenaper({
+				renaper: data.renaper,
+				dni: conv.dniPaciente,
+				pacienteLocal: data.pacienteLocal,
+				pasoCfg,
+			});
+		}
+
+		const detalle = formatearPersonaRenaper(null, conv.dniPaciente, data.pacienteLocal);
+		return `Datos registrados:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
+	} catch (err) {
+		diag.warn('wizard', 'Error reconsultando RENAPER', { error: err.message, code: err.code });
+		return mensajeErrorRenaper(err);
 	}
-
-	const detalle = formatearPersonaRenaper(null, conv.dniPaciente, data.pacienteLocal);
-	return `Datos registrados:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
 }
 
 /**
@@ -207,7 +261,7 @@ async function intentarRespuestaWizard({
 	const pasoIdentificar = pasoPorId(flujo, 'IDENTIFICAR');
 
 	// --- DNI en mensaje: RENAPER siempre antes que GPT (aunque pasoBot esté desfasado) ---
-	if (debeProcesarDni(conv, pasoActual, pasoIdentificar, dniEnMensaje)) {
+	if (debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo, dniEnMensaje)) {
 		return procesarIdentificacionDni({
 			idConversacion,
 			telefonoWhatsApp,

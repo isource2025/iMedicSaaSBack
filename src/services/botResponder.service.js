@@ -125,10 +125,6 @@ async function responderMensajeEntrante({
 	idMensajePaciente = null,
 	metaMessageIdEntrante = null,
 }) {
-	if (!gptHabilitado()) {
-		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
-	}
-
 	const estado = await botConversacion.puedeResponderBot(idConversacion);
 	if (!estado.puedeResponderBot) {
 		return { respondido: false, motivo: `modo ${estado.modoControl}` };
@@ -161,8 +157,16 @@ async function responderMensajeEntrante({
 	}
 
 	const textoEntrada = contenidoUltimo || ultimo.contenido;
+	const dniDetectado = botWizard.extraerDni(textoEntrada);
+	const enviarOpts = {
+		idEmpresa,
+		idConversacion,
+		telefonoWhatsApp,
+		idMensajePaciente: msgId,
+		metaMessageIdEntrante,
+	};
 
-	// 1) Wizard determinístico (RENAPER, confirmación, pasos activos)
+	// 1) Wizard determinístico (RENAPER, confirmación) — siempre, con o sin GPT
 	try {
 		const wizard = await botWizard.intentarRespuestaWizard({
 			idConversacion,
@@ -170,36 +174,36 @@ async function responderMensajeEntrante({
 			contenido: textoEntrada,
 		});
 		if (wizard.handled && wizard.texto) {
-			return enviarTextoBot({
-				idEmpresa,
-				idConversacion,
-				telefonoWhatsApp,
-				texto: wizard.texto,
-				idMensajePaciente: msgId,
-				metaMessageIdEntrante,
-			});
+			return enviarTextoBot({ ...enviarOpts, texto: wizard.texto });
 		}
 	} catch (wizardErr) {
 		diag.warn('webhook', 'Wizard error', { error: wizardErr.message, code: wizardErr.code });
-		if (wizardErr.code === 'RENAPER_NO_ENCONTRADO') {
-			return enviarTextoBot({
-				idEmpresa,
-				idConversacion,
-				telefonoWhatsApp,
-				texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
-				idMensajePaciente: msgId,
-				metaMessageIdEntrante,
-			});
+		if (dniDetectado || conv?.pasoBot === 'CONFIRMAR_IDENTIDAD') {
+			const texto =
+				wizardErr.code === 'RENAPER_NO_ENCONTRADO'
+					? 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.'
+					: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
+			return enviarTextoBot({ ...enviarOpts, texto });
 		}
 	}
 
 	const flujo = await botConfigService.getFlujoPasos();
 	const pasoActual = conv?.pasoBot || botWizard.pasoInicial(flujo);
-	const dniDetectado = botWizard.extraerDni(textoEntrada);
 
-	// DNI o confirmación RENAPER: solo wizard (GPT no debe inventar el paso de confirmación).
 	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && !conv?.idPaciente)) {
-		return { respondido: false, motivo: 'identificacion-solo-wizard' };
+		diag.warn('webhook', 'Wizard no respondió a identificación', {
+			dniDetectado,
+			pasoActual,
+			idConversacion,
+		});
+		return enviarTextoBot({
+			...enviarOpts,
+			texto: 'Recibimos tu DNI. Si no ves los datos de RENAPER, enviá el número de nuevo.',
+		});
+	}
+
+	if (!gptHabilitado()) {
+		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
 	}
 
 	// 2) GPT para el resto del flujo
