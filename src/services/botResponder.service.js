@@ -88,7 +88,7 @@ async function buildSystemPrompt(config, flujo, conv) {
 		config.promptSistema ||
 			'Sos un asistente amable de turnos médicos por WhatsApp. Sé breve, claro y en español rioplatense.',
 		`Institución: ${config.nombreInstitucion || 'iMedic'}.`,
-		'Objetivo: ayudar a reservar turnos médicos siguiendo SOLO los pasos activos del wizard.',
+		'Objetivo: conversar de forma natural; las acciones de agenda (buscar turno, especialidad, confirmar) las ejecuta el sistema según la intención detectada.',
 		...reglasFlujo,
 		'No inventes horarios ni médicos; si no tenés datos, pedí el siguiente dato del flujo.',
 		'Respuestas cortas (máx. 2-3 párrafos). Sin markdown complejo.',

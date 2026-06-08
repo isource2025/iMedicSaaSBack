@@ -5,14 +5,11 @@
 const botAgenda = require('./botAgenda.service');
 const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
-const botOpenai = require('./botOpenai.service');
+const botIntencion = require('./botIntencion.service');
 const diag = require('../utils/diagLog');
 
 function gptHabilitado() {
-	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
-		return false;
-	}
-	return botOpenai.isConfigured();
+	return botIntencion.gptHabilitado();
 }
 
 const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 40_000);
@@ -369,8 +366,19 @@ async function intentarRespuestaWizard({
 
 	// --- Confirmación de identidad RENAPER ---
 	if (pasoActual === 'CONFIRMAR_IDENTIDAD' && pasoConfirmarActivo) {
-		const conf = interpretarConfirmacion(texto);
+		let conf = interpretarConfirmacion(texto);
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+
+		if (conf == null && gptHabilitado()) {
+			const intent = await botIntencion.interpretarIntencion({
+				texto,
+				conv,
+				idConversacion,
+				pasoBot: pasoActual,
+			});
+			if (intent?.intencion === 'confirmar_identidad') conf = true;
+			if (intent?.intencion === 'rechazar_identidad') conf = false;
+		}
 
 		if (conf === true) {
 			const config = await botConfigService.getBotConfig();
@@ -440,7 +448,28 @@ async function intentarRespuestaWizard({
 		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA');
 
 	if ((esPasoEspecialidad || esPasoProfConSugerir) && conv.idPaciente) {
-		const resolucion = await botAgenda.resolverEspecialidadInteligente(texto);
+		let resolucion = { tipo: 'no_encontrada' };
+		if (gptHabilitado()) {
+			const intent = await botIntencion.interpretarIntencion({
+				texto,
+				conv,
+				idConversacion,
+				pasoBot: pasoActual,
+			});
+			if (intent) {
+				resolucion = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
+				if (resolucion.tipo === 'conversacion') {
+					return { handled: false, motivo: 'gpt-conversacion' };
+				}
+			}
+		}
+		if (resolucion.tipo === 'no_encontrada') {
+			const espLocal = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+			if (espLocal) resolucion = { tipo: 'especialidad', especialidad: espLocal };
+			else if (botAgenda.esConsultaListaEspecialidades(texto)) {
+				resolucion = { tipo: 'listar', lista: await botAgenda.listarEspecialidadesBot() };
+			}
+		}
 
 		if (resolucion.tipo === 'listar') {
 			return {
@@ -507,16 +536,23 @@ async function intentarRespuestaWizard({
 	// --- Confirmación de turno sugerido ---
 	const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 	if (pasoActual === 'CONFIRMAR' && convAct.contextoBot?.tipo === 'turno_sugerido') {
-		const conf = interpretarConfirmacion(texto);
+		let conf = interpretarConfirmacion(texto);
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR');
 		const ctx = convAct.contextoBot;
-		const tNorm = String(texto || '')
-			.trim()
-			.toLowerCase()
-			.normalize('NFD')
-			.replace(/[\u0300-\u036f]/g, '');
+		let intentGpt = null;
 
-		if (/\b(otra especialidad|cambiar especialidad)\b/.test(tNorm)) {
+		if (gptHabilitado()) {
+			intentGpt = await botIntencion.interpretarIntencion({
+				texto,
+				conv: convAct,
+				idConversacion,
+				pasoBot: pasoActual,
+			});
+			if (conf == null && intentGpt?.intencion === 'confirmar_turno') conf = true;
+			if (conf == null && intentGpt?.intencion === 'rechazar_turno') conf = false;
+		}
+
+		if (intentGpt?.intencion === 'cambiar_especialidad') {
 			await botConversacion.guardarContextoBot(idConversacion, null);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				pasoBot: 'ELEGIR_ESPECIALIDAD',
@@ -563,14 +599,31 @@ async function intentarRespuestaWizard({
 			}
 		}
 
-		const ajusteRapido = botAgenda.interpretarAjusteTurno(texto, ctx);
-		const tienePreferencia =
-			ajusteRapido.preferir.diasSemana.length ||
-			ajusteRapido.preferir.fechas.length ||
-			ajusteRapido.preferir.franja;
+		const buscarPorGpt =
+			intentGpt &&
+			(intentGpt.intencion === 'buscar_turno' || intentGpt.intencion === 'rechazar_turno');
 
-		if (conf === false || interpretarRechazoTurno(texto, ctx) || tienePreferencia) {
-			return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg);
+		if (conf === false || buscarPorGpt) {
+			const ajuste =
+				buscarPorGpt && intentGpt
+					? botIntencion.intencionAAjusteTurno(intentGpt.intencion, intentGpt.parametros, ctx)
+					: botAgenda.interpretarAjusteTurno(texto, ctx);
+			return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajuste);
+		}
+
+		if (!gptHabilitado()) {
+			const ajusteLocal = botAgenda.interpretarAjusteTurno(texto, ctx);
+			const tienePref =
+				ajusteLocal.preferir.diasSemana.length ||
+				ajusteLocal.preferir.fechas.length ||
+				ajusteLocal.preferir.franja;
+			if (interpretarRechazoTurno(texto, ctx) || tienePref) {
+				return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajusteLocal);
+			}
+		}
+
+		if (intentGpt?.intencion === 'conversacion') {
+			return { handled: false, motivo: 'gpt-conversacion' };
 		}
 
 		return {
@@ -582,20 +635,20 @@ async function intentarRespuestaWizard({
 	return { handled: false, motivo: 'wizard no aplica' };
 }
 
-function _planificarBusquedaTurno(idConversacion, ctx, textoRechazo, pasoCfg) {
-	const ajusteRapido = botAgenda.interpretarAjusteTurno(textoRechazo, ctx);
+function _planificarBusquedaTurno(idConversacion, ctx, textoRechazo, pasoCfg, ajustePrecalculado = null) {
+	const ajuste = ajustePrecalculado || botAgenda.interpretarAjusteTurno(textoRechazo, ctx);
 	return {
 		handled: true,
 		accion: 'BUSCAR_TURNO',
 		aviso: botAgenda.mensajeAvisoBusquedaDisponibilidad({
-			preferencia: ajusteRapido.resumen || ctx.especialidadNombre,
+			preferencia: ajuste.resumen || ctx.especialidadNombre,
 		}),
 		buscarTurno: {
 			tipo: 'alternativo',
 			idConversacion,
-			textoRechazo,
 			ctx,
 			pasoCfg,
+			ajuste,
 		},
 	};
 }
@@ -623,8 +676,9 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 		}
 
 		if (tipo === 'alternativo') {
-			const { ctx, textoRechazo, pasoCfg } = buscarTurno;
-			const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
+			const { ctx, pasoCfg, ajuste: ajusteGuardado } = buscarTurno;
+			const ajuste =
+				ajusteGuardado || botAgenda.interpretarAjusteTurno(buscarTurno.textoRechazo || '', ctx);
 			let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
 				excluir: ajuste.excluir,
 				preferir: ajuste.preferir,
