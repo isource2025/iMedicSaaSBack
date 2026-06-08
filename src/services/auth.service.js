@@ -3,6 +3,7 @@ const { isPlatformSqlConfigured } = require('../config/database');
 const { runWithTenant, getTenantId } = require('../context/tenantContext');
 const tenantRegistry = require('./tenantRegistry.service');
 const authCentralService = require('./authCentral.service');
+const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
 
 const esErrorEsquemaRoles = (error) => {
   const msg = String(error?.message || '').toLowerCase();
@@ -86,6 +87,61 @@ const eximeSectorPorUsername = async (username, idEmpresa = null) => {
   }
 
   return false;
+};
+
+/** Primera empresa del catálogo con conexión SQL usable (login admin plataforma). */
+const resolverEmpresaTenantOperativa = async (empresasUsuario = []) => {
+  const candidatos = [];
+  const push = (raw) => {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0 && !candidatos.includes(n)) candidatos.push(n);
+  };
+
+  const fallback = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
+  if (Number.isFinite(fallback) && fallback > 0) push(fallback);
+  for (const e of empresasUsuario) push(e.idEmpresa);
+
+  if (!authCentralService.isAuthCentralEnabled()) {
+    return candidatos[0] || null;
+  }
+
+  for (const id of candidatos) {
+    try {
+      const row = await authCentralService.obtenerEmpresaPorId(id);
+      if (empresaRowHasSqlConnection(row)) return id;
+    } catch (err) {
+      console.warn(`[auth] empresa ${id} sin SQL operativa:`, err.message);
+    }
+  }
+
+  return candidatos[0] || null;
+};
+
+/** idEmpresa para JWT tras login (tenant clínico). */
+const resolverIdEmpresaLogin = async ({
+  idEmpresaSesion,
+  idEmpresaBody,
+  empresasUsuario,
+}) => {
+  let id =
+    idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0
+      ? Number(idEmpresaSesion)
+      : null;
+
+  if (id == null && idEmpresaBody != null && idEmpresaBody !== '') {
+    const n = Number(idEmpresaBody);
+    if (Number.isFinite(n) && n > 0) id = n;
+  }
+
+  if (id == null && empresasUsuario.length === 1) {
+    id = Number(empresasUsuario[0].idEmpresa);
+  }
+
+  if (id == null) {
+    id = await resolverEmpresaTenantOperativa(empresasUsuario);
+  }
+
+  return id;
 };
 
 /** Login multi-tenant: resuelve BD por empresa y valida credenciales. */
@@ -477,4 +533,6 @@ module.exports = {
   esSuperAdminPorUsername,
   eximeSeleccionSectorPorUsuario,
   eximeSectorPorUsername,
+  resolverEmpresaTenantOperativa,
+  resolverIdEmpresaLogin,
 };

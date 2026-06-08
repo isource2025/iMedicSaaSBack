@@ -56,49 +56,6 @@ const generarToken = (userData, idEmpresa = null) => {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION });
 };
 
-/** idEmpresa que viaja en el JWT (tenant para camas, indicadores, etc.). */
-const resolverIdEmpresaEfectiva = ({
-  idEmpresaSesion,
-  idEmpresaBody,
-  empresasUsuario,
-  esSuperAdmin,
-}) => {
-  let id =
-    idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0
-      ? Number(idEmpresaSesion)
-      : null;
-
-  if (id == null && idEmpresaBody != null && idEmpresaBody !== '') {
-    const n = Number(idEmpresaBody);
-    if (Number.isFinite(n) && n > 0) id = n;
-  }
-
-  const fallbackEnv = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
-  const fallbackValido = Number.isFinite(fallbackEnv) && fallbackEnv > 0;
-
-  // Admin plataforma: tenant operativo de Railway (evita tomar la primera empresa del catálogo sin SQL)
-  if (id == null && esSuperAdmin && fallbackValido) {
-    id = fallbackEnv;
-  }
-
-  if (id == null && empresasUsuario.length === 1) {
-    id = Number(empresasUsuario[0].idEmpresa);
-  }
-
-  if (id == null && fallbackValido) {
-    const permitida =
-      empresasUsuario.length === 0 ||
-      empresasUsuario.some((e) => Number(e.idEmpresa) === fallbackEnv);
-    if (permitida) id = fallbackEnv;
-  }
-
-  if (id == null && esSuperAdmin && empresasUsuario.length > 0) {
-    id = Number(empresasUsuario[0].idEmpresa);
-  }
-
-  return id;
-};
-
 const inicioSesion = async (req, res) => {
   const { username, password, sector, idSector, idEmpresa } = req.body;
   
@@ -172,16 +129,16 @@ const inicioSesion = async (req, res) => {
         let empresaSeleccionada = null;
         let modulosEmpresa = null;
         let idEmpresaEfectiva = idEmpresaSesion;
+        let empresasUsuario = [];
         try {
-          const empresasUsuario = esSuperAdmin
+          empresasUsuario = esSuperAdmin
             ? await authService.obtenerTodasEmpresas()
             : await authService.obtenerEmpresasPorUsuario(username, idEmpresaSesion);
 
-          idEmpresaEfectiva = resolverIdEmpresaEfectiva({
+          idEmpresaEfectiva = await authService.resolverIdEmpresaLogin({
             idEmpresaSesion,
             idEmpresaBody: idEmpresa,
             empresasUsuario,
-            esSuperAdmin,
           });
 
           if (
@@ -223,12 +180,11 @@ const inicioSesion = async (req, res) => {
           try {
             const idFallback =
               idEmpresaSesion ??
-              resolverIdEmpresaEfectiva({
+              (await authService.resolverIdEmpresaLogin({
                 idEmpresaSesion,
                 idEmpresaBody: idEmpresa,
-                empresasUsuario: [],
-                esSuperAdmin,
-              });
+                empresasUsuario,
+              }));
             if (idFallback != null) {
               idEmpresaEfectiva = idFallback;
               await runWithTenant(idFallback, async () => {
@@ -245,11 +201,10 @@ const inicioSesion = async (req, res) => {
         }
 
         if (idEmpresaEfectiva == null) {
-          idEmpresaEfectiva = resolverIdEmpresaEfectiva({
+          idEmpresaEfectiva = await authService.resolverIdEmpresaLogin({
             idEmpresaSesion,
             idEmpresaBody: idEmpresa,
-            empresasUsuario: [],
-            esSuperAdmin,
+            empresasUsuario,
           });
         }
 
