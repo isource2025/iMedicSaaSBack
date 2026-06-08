@@ -53,7 +53,7 @@ function interpretarConfirmacion(texto) {
 		.toLowerCase()
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '');
-	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|1|soy yo|afirmativo)$/.test(t)) return true;
+	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|1|soy yo|afirmativo|su)$/.test(t)) return true;
 	if (/^(no|n|nop|incorrecto|otra persona|2|negativo)$/.test(t)) return false;
 	if (/\b(si|confirmo|correcto)\b/.test(t)) return true;
 	if (/\b(no|incorrecto|otra)\b/.test(t)) return false;
@@ -325,6 +325,126 @@ async function intentarRespuestaWizard({
 				idConversacion,
 				pasoCfg,
 			),
+		};
+	}
+
+	// --- Especialidad → sugerir primer turno (si está activo en config) ---
+	const pasoEspecialidad = pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD');
+	if (
+		pasoActual === 'ELEGIR_ESPECIALIDAD' &&
+		pasoEspecialidad?.activo &&
+		conv.idPaciente
+	) {
+		const config = await botConfigService.getBotConfig();
+		const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+		if (!esp) {
+			const lista = await botAgenda.listarEspecialidadesBot();
+			const opciones = lista
+				.slice(0, 12)
+				.map((e) => `• ${e.nombre}`)
+				.join('\n');
+			return {
+				handled: true,
+				texto: `No encontré esa especialidad. Estas son las disponibles:\n\n${opciones}\n\nIndicá cuál necesitás.`,
+			};
+		}
+
+		if (config.reglas.sugerirPrimerTurnoDisponible) {
+			const sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(esp.valor);
+			const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
+			await botConversacion.guardarContextoBot(idConversacion, {
+				tipo: 'turno_sugerido',
+				especialidadValor: esp.valor,
+				especialidadNombre: esp.nombre,
+				...(sugerencia || {}),
+			});
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				pasoBot: sugerencia ? 'CONFIRMAR' : 'ELEGIR_ESPECIALIDAD',
+			});
+			return {
+				handled: true,
+				texto: botAgenda.mensajeSugerenciaTurno(sugerencia, pasoConfirmar),
+			};
+		}
+
+		const pasoProf = pasoPorId(flujo, 'ELEGIR_PROFESIONAL');
+		const profs = await botAgenda.listarProfesionalesBot(esp.valor);
+		const listaProf = profs.profesionales
+			.slice(0, 10)
+			.map((p) => `• ${p.nombre}`)
+			.join('\n');
+		await botConversacion.guardarContextoBot(idConversacion, {
+			especialidadValor: esp.valor,
+			especialidadNombre: esp.nombre,
+		});
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			pasoBot: pasoProf?.activo ? 'ELEGIR_PROFESIONAL' : pasoActual,
+		});
+		return {
+			handled: true,
+			texto: `Especialidad *${esp.nombre}*. Profesionales disponibles:\n\n${listaProf}\n\n${pasoProf?.mensajeUsuario || 'Indicá el profesional.'}`,
+		};
+	}
+
+	// --- Confirmación de turno sugerido ---
+	const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+	if (pasoActual === 'CONFIRMAR' && convAct.contextoBot?.tipo === 'turno_sugerido') {
+		const conf = interpretarConfirmacion(texto);
+		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR');
+		const ctx = convAct.contextoBot;
+
+		if (conf === true && ctx.matricula && ctx.fecha && ctx.hora) {
+			try {
+				const reserva = await botAgenda.reservarTurno(
+					{
+						matricula: ctx.matricula,
+						idPaciente: convAct.idPaciente,
+						fecha: ctx.fecha,
+						hora: ctx.hora,
+						sector: ctx.sector,
+						telefonoWhatsApp,
+						idConversacion,
+					},
+					Number(process.env.BOT_COD_OPERADOR) || 0,
+				);
+				await botConversacion.guardarContextoBot(idConversacion, null);
+				await botConversacion.actualizarContextoPaciente(idConversacion, {
+					pasoBot: pasoInicial(flujo),
+				});
+				const saludo = primerNombre(nombreWhatsApp(convAct));
+				const ticket = reserva.ticket?.mensajeWhatsApp || reserva.mensajeConfirmacion;
+				return {
+					handled: true,
+					texto: saludo ? `Perfecto, ${saludo}.\n\n${ticket}` : ticket,
+				};
+			} catch (err) {
+				diag.warn('wizard', 'Error reservando turno sugerido', { error: err.message });
+				return {
+					handled: true,
+					texto:
+						err.code === 'ANTICIPACION_INSUFICIENTE' || err.code === 'MAX_TURNOS_DIA'
+							? err.message
+							: 'No pudimos confirmar ese turno. Probá escribir otra especialidad o contactá al centro.',
+				};
+			}
+		}
+
+		if (conf === false) {
+			await botConversacion.guardarContextoBot(idConversacion, null);
+			await botConversacion.actualizarContextoPaciente(idConversacion, {
+				pasoBot: 'ELEGIR_ESPECIALIDAD',
+			});
+			return {
+				handled: true,
+				texto:
+					pasoEspecialidad?.mensajeUsuario ||
+					'Entendido. ¿Qué especialidad necesitás?',
+			};
+		}
+
+		return {
+			handled: true,
+			texto: botAgenda.mensajeSugerenciaTurno(ctx, pasoCfg),
 		};
 	}
 

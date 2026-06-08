@@ -46,13 +46,16 @@ async function buildSystemPrompt(config, flujo, conv) {
 
 	const reglasFlujo = [
 		'Si el paciente aún no confirmó identidad en RENAPER, no avances a especialidad.',
+		config.reglas.sugerirPrimerTurnoDisponible
+			? 'Con "sugerir primer turno" activo: al elegir especialidad el wizard propone médico y horario; no pidas elegir profesional manualmente.'
+			: null,
 		incluirEspecialidad
 			? 'Cuando corresponda, pedí especialidad.'
 			: 'NO pidas especialidad (paso desactivado en el wizard).',
 		incluirProfesional
 			? 'Después de especialidad, pedí profesional si aplica.'
 			: 'NO pidas profesional (paso desactivado en el wizard).',
-	];
+	].filter(Boolean);
 
 	return [
 		config.promptSistema ||

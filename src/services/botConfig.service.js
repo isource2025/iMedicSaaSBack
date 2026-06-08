@@ -91,6 +91,8 @@ async function getBotConfig() {
 			requiereRenaper: db.requiere_renaper ?? envBool('BOT_REQUIERE_RENAPER', true),
 			permiteSobreturno: db.permite_sobreturno ?? envBool('BOT_PERMITE_SOBRETURNO', false),
 			crearPacienteAutomatico: db.crear_paciente_automatico ?? envBool('BOT_CREAR_PACIENTE_AUTO', true),
+			sugerirPrimerTurnoDisponible:
+				db.sugerir_primer_turno_disponible ?? envBool('BOT_SUGERIR_PRIMER_TURNO', false),
 		},
 		api: {
 			basePath: '/api/integrations/bot',
@@ -254,6 +256,13 @@ async function saveBotConfig(payload = {}) {
 		await upsertConfigClave(
 			'permite_sobreturno',
 			reglas.permiteSobreturno ? 'true' : 'false',
+			'bool',
+		);
+	}
+	if (reglas.sugerirPrimerTurnoDisponible != null) {
+		await upsertConfigClave(
+			'sugerir_primer_turno_disponible',
+			reglas.sugerirPrimerTurnoDisponible ? 'true' : 'false',
 			'bool',
 		);
 	}

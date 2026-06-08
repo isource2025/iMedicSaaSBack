@@ -6,6 +6,7 @@ const { executeQuery } = require('../models/db');
 
 let tablesChecked = null;
 let useMemory = false;
+let contextoBotColumnReady = null;
 
 /** @type {Map<string, object>} */
 const memConversaciones = new Map();
@@ -17,6 +18,56 @@ function normalizarTelefono(tel) {
 	return String(tel || '')
 		.replace(/\D/g, '')
 		.slice(-15);
+}
+
+function _parseContextoBot(raw) {
+	if (raw == null || raw === '') return null;
+	if (typeof raw === 'object') return raw;
+	try {
+		return JSON.parse(String(raw));
+	} catch {
+		return null;
+	}
+}
+
+async function ensureContextoBotColumn() {
+	if (contextoBotColumnReady !== null) return contextoBotColumnReady;
+	if (useMemory) {
+		contextoBotColumnReady = false;
+		return false;
+	}
+	try {
+		await executeQuery(
+			`IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'imBotConversacion' AND COLUMN_NAME = 'ContextoBotJson')
+			 ALTER TABLE dbo.imBotConversacion ADD ContextoBotJson NVARCHAR(MAX) NULL`,
+		);
+		contextoBotColumnReady = true;
+	} catch {
+		contextoBotColumnReady = false;
+	}
+	return contextoBotColumnReady;
+}
+
+async function guardarContextoBot(idConversacion, contextoBot) {
+	await checkConversationTables();
+	if (useMemory) {
+		const conv = memConversaciones.get(idConversacion);
+		if (!conv) return null;
+		conv.contextoBot = contextoBot || null;
+		memConversaciones.set(idConversacion, conv);
+		return mapConversacion(conv);
+	}
+	const hasCol = await ensureContextoBotColumn();
+	if (!hasCol) return obtenerConversacion(idConversacion);
+	const json = contextoBot != null ? JSON.stringify(contextoBot).slice(0, 8000) : null;
+	await executeQuery(
+		`UPDATE dbo.imBotConversacion SET ContextoBotJson = @p1 WHERE IdConversacion = @p0`,
+		[
+			{ value: idConversacion, type: 'VarChar' },
+			{ value: json, type: 'NVarChar' },
+		],
+	);
+	return obtenerConversacion(idConversacion);
 }
 
 function idDesdeTelefono(telefono) {
@@ -33,6 +84,7 @@ function mapConversacion(row) {
 		dniPaciente: row.DniPaciente ?? row.dniPaciente ?? null,
 		modoControl: row.ModoControl ?? row.modoControl ?? 'BOT',
 		pasoBot: row.PasoBot ?? row.pasoBot ?? null,
+		contextoBot: _parseContextoBot(row.ContextoBotJson ?? row.contextoBotJson),
 		idAgente: row.IdAgente ?? row.idAgente ?? null,
 		nombreAgente: row.NombreAgente ?? row.nombreAgente ?? null,
 		noLeidos: row.NoLeidos ?? row.noLeidos ?? 0,
@@ -138,6 +190,7 @@ async function obtenerOCrearConversacion({
 			dniPaciente,
 			modoControl: 'BOT',
 			pasoBot: 'inicio',
+			contextoBot: null,
 			noLeidos: 0,
 			fechaCreacion: new Date(),
 		});
@@ -591,7 +644,10 @@ async function puedeResponderBotPorTelefono(telefono) {
 	return puedeResponderBot(idConv);
 }
 
-async function actualizarContextoPaciente(idConversacion, { idPaciente, dniPaciente, nombreContacto, pasoBot }) {
+async function actualizarContextoPaciente(
+	idConversacion,
+	{ idPaciente, dniPaciente, nombreContacto, pasoBot, contextoBot },
+) {
 	await checkConversationTables();
 	if (useMemory) {
 		const conv = memConversaciones.get(idConversacion);
@@ -600,8 +656,12 @@ async function actualizarContextoPaciente(idConversacion, { idPaciente, dniPacie
 		if (dniPaciente != null) conv.dniPaciente = dniPaciente;
 		if (nombreContacto != null) conv.nombreContacto = nombreContacto;
 		if (pasoBot != null) conv.pasoBot = pasoBot;
+		if (contextoBot !== undefined) conv.contextoBot = contextoBot;
 		memConversaciones.set(idConversacion, conv);
 		return mapConversacion(conv);
+	}
+	if (contextoBot !== undefined) {
+		await guardarContextoBot(idConversacion, contextoBot);
 	}
 	await executeQuery(
 		`UPDATE dbo.imBotConversacion SET
@@ -714,6 +774,7 @@ module.exports = {
 	puedeResponderBot,
 	puedeResponderBotPorTelefono,
 	actualizarContextoPaciente,
+	guardarContextoBot,
 	resetConversacionPorTelefono,
 	resetTodasLasConversaciones,
 };

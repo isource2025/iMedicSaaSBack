@@ -940,6 +940,115 @@ async function obtenerTicketTurno(idTurno) {
 	});
 }
 
+function _normalizarTextoBusqueda(texto) {
+	return String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+}
+
+async function resolverEspecialidadDesdeTexto(texto) {
+	const lista = await listarEspecialidadesBot();
+	const t = _normalizarTextoBusqueda(texto);
+	if (!t) return null;
+
+	let match = lista.find((e) => _normalizarTextoBusqueda(e.nombre) === t);
+	if (match) return match;
+
+	match = lista.find(
+		(e) =>
+			_normalizarTextoBusqueda(e.nombre).includes(t) ||
+			t.includes(_normalizarTextoBusqueda(e.nombre)),
+	);
+	if (match) return match;
+
+	if (t.length >= 4) {
+		match = lista.find((e) => _normalizarTextoBusqueda(e.nombre).startsWith(t.slice(0, 5)));
+	}
+	return match || null;
+}
+
+function _slotCumpleAnticipacion(fechaIso, hora, config) {
+	const now = new Date();
+	const [y, mo, d] = String(fechaIso).slice(0, 10).split('-').map(Number);
+	const [hh, mm] = String(hora || '00:00').split(':').map(Number);
+	const turnoDate = new Date(y, mo - 1, d, hh || 0, mm || 0);
+	const minMs = (config.reglas.anticipacionMinHoras || 0) * 3600000;
+	return turnoDate.getTime() - now.getTime() >= minMs;
+}
+
+function _fechaIsoOffset(dias) {
+	const d = new Date();
+	d.setHours(12, 0, 0, 0);
+	d.setDate(d.getDate() + dias);
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Primer médico alfabético de la especialidad con el turno libre más próximo (desde ahora).
+ */
+async function sugerirPrimerTurnoDisponible(especialidadValor) {
+	const config = await botConfigService.getBotConfig();
+	const esp = Number(especialidadValor);
+	if (!Number.isFinite(esp) || esp <= 0) return null;
+
+	const { profesionales, especialidad } = await listarProfesionalesBot(esp);
+	const ordenados = [...profesionales].sort((a, b) =>
+		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
+	);
+	const maxDias = config.reglas.diasMaxAntelacion || 60;
+
+	for (const prof of ordenados) {
+		for (let d = 0; d <= maxDias; d++) {
+			const fechaIso = _fechaIsoOffset(d);
+			let disp;
+			try {
+				disp = await disponibilidadBot(fechaIso, {
+					matricula: prof.matricula,
+					especialidad: esp,
+				});
+			} catch {
+				continue;
+			}
+			const slot = (disp.slotsLibres || []).find((s) =>
+				_slotCumpleAnticipacion(fechaIso, s.hora, config),
+			);
+			if (slot) {
+				return {
+					matricula: prof.matricula,
+					medico: prof.nombre,
+					especialidad: especialidad?.valor ?? esp,
+					especialidadNombre: especialidad?.nombre || prof.especialidadNombre || null,
+					fecha: fechaIso,
+					fechaLegible: _fechaLegible(fechaIso),
+					diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
+					hora: slot.hora,
+					sector: slot.sector,
+				};
+			}
+		}
+	}
+	return null;
+}
+
+function mensajeSugerenciaTurno(sugerencia, pasoCfg) {
+	if (!sugerencia) {
+		return (
+			pasoCfg?.mensajeUsuario ||
+			'No hay turnos disponibles en los próximos días para esa especialidad. Probá con otra especialidad o contactá al centro.'
+		);
+	}
+	return [
+		`Te sugiero el *turno más próximo* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`,
+		'',
+		`👨‍⚕️ *${sugerencia.medico}*`,
+		`📅 *${sugerencia.diaSemana} ${sugerencia.fechaLegible}* a las *${sugerencia.hora}*`,
+		'',
+		pasoCfg?.mensajeUsuario || '¿Confirmás este turno? Respondé Sí o No.',
+	].join('\n');
+}
+
 async function obtenerConfigCompleta() {
 	const config = await botConfigService.getBotConfig();
 	const servicios = await botConfigService.getServiciosCatalogo();
@@ -962,6 +1071,9 @@ module.exports = {
 	listarEspecialidadesBot,
 	listarProfesionalesBot,
 	disponibilidadBot,
+	resolverEspecialidadDesdeTexto,
+	sugerirPrimerTurnoDisponible,
+	mensajeSugerenciaTurno,
 	reservarTurno,
 	consultarTurnosPaciente,
 	cancelarTurnoBot,
