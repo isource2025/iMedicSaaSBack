@@ -319,6 +319,7 @@ const renaperService = {
 async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 	const base = String(process.env.RENAPER_PROXY_BASE_URL || '').replace(/\/$/, '');
 	const key = String(process.env.RENAPER_PROXY_API_KEY || process.env.BOT_API_KEY || '').trim();
+	const idEmpresa = String(process.env.BOT_EMPRESA_ID || process.env.WHATSAPP_EMPRESA_ID || '1').trim();
 	const timeoutMs = Number(opts.timeoutMs) || 25000;
 	const url = `${base}/renaper/${encodeURIComponent(String(NumeroDocumento).trim())}`;
 
@@ -330,6 +331,7 @@ async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 			headers: {
 				Accept: 'application/json',
 				...(key ? { 'X-API-Key': key } : {}),
+				...(idEmpresa ? { 'X-Empresa-Id': idEmpresa } : {}),
 			},
 		});
 		const body = await resp.json();
@@ -362,12 +364,17 @@ async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
  */
 async function searchByDni(NumeroDocumento, opts = { debug: false, allowSigned: true }) {
 	const proxyBase = String(process.env.RENAPER_PROXY_BASE_URL || '').trim();
-	if (proxyBase && !opts.skipProxy) {
-		return searchByDniViaProxy(NumeroDocumento, opts);
-	}
-
 	const timeoutMs = Number(opts.timeoutMs) || 15000;
 	const searchOpts = { ...opts, timeoutMs, skipProxy: true };
+
+	if (proxyBase && !opts.skipProxy) {
+		try {
+			const proxied = await searchByDniViaProxy(NumeroDocumento, opts);
+			if (proxied.ok && proxied.data) return proxied;
+		} catch (err) {
+			console.warn('[RENAPER] Proxy no disponible, consultando MSAL directo:', err.message);
+		}
+	}
 
 	for (const sexo of ['M', 'F']) {
 		const result = await renaperService.search(NumeroDocumento, sexo, searchOpts);

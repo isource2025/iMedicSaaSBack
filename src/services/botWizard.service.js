@@ -133,8 +133,8 @@ function mensajeErrorRenaper(err) {
 	if (err?.code === 'RENAPER_NO_ENCONTRADO') {
 		return 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.';
 	}
-	if (err?.code === 'RENAPER_UNAVAILABLE') {
-		return 'RENAPER no responde desde el servidor en la nube. Intentá de nuevo en unos segundos o contactá al centro.';
+	if (err?.code === 'RENAPER_UNAVAILABLE' || err?.code === 'RENAPER_HTTP') {
+		return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 	}
 	return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 }

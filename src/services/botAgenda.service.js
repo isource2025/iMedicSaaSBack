@@ -81,9 +81,14 @@ function _mapPacienteRow(row) {
 }
 
 async function _buscarPacienteLocalPorDni(dni) {
-	const rows = await patientsService.buscarPacientes(String(dni));
-	const exact = rows.filter((r) => Number(r.NumeroDocumento) === dni);
-	return exact[0] || rows[0] || null;
+	try {
+		const rows = await patientsService.buscarPacientes(String(dni));
+		const exact = rows.filter((r) => Number(r.NumeroDocumento) === dni);
+		return exact[0] || rows[0] || null;
+	} catch (err) {
+		console.warn('[botAgenda] Búsqueda paciente local falló:', err.message);
+		return null;
+	}
 }
 
 async function _actualizarTelefonoPaciente(idPaciente, telefono) {
@@ -154,7 +159,10 @@ async function identificarPaciente({
 	let pacienteLocal = localRow ? _mapPacienteRow(localRow) : null;
 
 	if (config.reglas.requiereRenaper !== false) {
-		const renaperOpts = { debug: false, timeoutMs: 15000 };
+		const renaperOpts = {
+			debug: false,
+			timeoutMs: Number(process.env.BOT_RENAPER_TIMEOUT_MS || 35_000),
+		};
 		try {
 			const renaperResult = sexoHint
 				? await renaperService.search(dni, sexoHint, renaperOpts)
@@ -204,12 +212,18 @@ async function identificarPaciente({
 	if (pacienteLocal) {
 		accionSugerida = 'USAR_PACIENTE_EXISTENTE';
 		if (telefonoWhatsApp) await _actualizarTelefonoPaciente(idPaciente, telefonoWhatsApp);
-	} else if (renaperOk && (crearSiNoExiste || config.reglas.crearPacienteAutomatico)) {
+	} else if (
+		renaperOk &&
+		!omitirAvancePaso &&
+		(crearSiNoExiste || config.reglas.crearPacienteAutomatico)
+	) {
 		const nuevo = await patientsService.crearPaciente({
 			ApellidoyNombre: renaperData.nombreCompleto || `PACIENTE ${dni}`,
 			NumeroDocumento: dni,
 			Sexo: renaperData.sexo || sexoDetectado,
-			FechaNacimiento: renaperData.fechaNacimiento,
+			FechaNacimiento: renaperData.fechaNacimiento
+				? convertirFechaAClarion(renaperData.fechaNacimiento)
+				: null,
 			Domicilio: renaperData.domicilio,
 			TelefonoNegocio: telefonoWhatsApp ? String(telefonoWhatsApp).replace(/\D/g, '').slice(-15) : null,
 		});

@@ -231,8 +231,9 @@ const obtenerPacientes = async (page = 1, limit = 30, searchTerm = '') => {
 			const isNumeric = /^\d+$/.test(term);
 			
 			if (isNumeric) {
-				whereClause = `WHERE (p.IDPaciente = @p0 OR p.NumeroDocumento = @p0 OR p.NumeroHC = @p0 OR p.ApellidoyNombre LIKE @p1)`;
-				params = [{ value: Number(term) }, { value: `%${term}%` }];
+				// Comparar documento/HC como texto — evita error SQL con valores no numéricos en columnas
+				whereClause = `WHERE (p.IDPaciente = @p0 OR LTRIM(RTRIM(CAST(p.NumeroDocumento AS VARCHAR(20)))) = @p1 OR LTRIM(RTRIM(CAST(p.NumeroHC AS VARCHAR(20)))) = @p1 OR p.ApellidoyNombre LIKE @p2)`;
+				params = [{ value: Number(term) }, { value: term }, { value: `%${term}%` }];
 			} else {
 				whereClause = `WHERE p.ApellidoyNombre LIKE @p0`;
 				params = [{ value: `%${term}%` }];
@@ -474,7 +475,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
           			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          			ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+          			ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
         		END AS FechaNacimiento,
 				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
@@ -485,9 +486,12 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.Ocupacion, p.SituacionLaboral, p.NivelDeEstudios, p.NivelDeEstudios AS NivelEstudios
 			FROM impacientes p
 			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
-			WHERE p.IDPaciente = @p0 OR p.NumeroDocumento = @p0 OR p.NumeroHC = @p0 OR p.ApellidoyNombre LIKE @p1
+			WHERE p.IDPaciente = @p0
+			   OR LTRIM(RTRIM(CAST(p.NumeroDocumento AS VARCHAR(20)))) = @p1
+			   OR LTRIM(RTRIM(CAST(p.NumeroHC AS VARCHAR(20)))) = @p1
+			   OR p.ApellidoyNombre LIKE @p2
 			ORDER BY p.IDPaciente DESC`;
-			params = [{ value: Number(term) }, { value: `%${term}%` }];
+			params = [{ value: Number(term) }, { value: term }, { value: `%${term}%` }];
 		} else {
 			// Texto: solo sobre nombre + LIKE en documento/historia si empieza por dígitos (sin CAST)
 			const digitsPrefix = term.match(/^(\d{3,})/); // prefijo numérico útil
@@ -495,7 +499,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
           			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          			ELSE TRY_CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+          			ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
         		END AS FechaNacimiento,
 				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
