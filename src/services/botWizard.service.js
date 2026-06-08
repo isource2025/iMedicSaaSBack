@@ -5,7 +5,15 @@
 const botAgenda = require('./botAgenda.service');
 const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
+const botOpenai = require('./botOpenai.service');
 const diag = require('../utils/diagLog');
+
+function gptHabilitado() {
+	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
+		return false;
+	}
+	return botOpenai.isConfigured();
+}
 
 const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 40_000);
 
@@ -55,8 +63,12 @@ function interpretarConfirmacion(texto) {
 		.replace(/[\u0300-\u036f]/g, '');
 	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|1|soy yo|afirmativo|su)$/.test(t)) return true;
 	if (/^(no|n|nop|incorrecto|otra persona|2|negativo)$/.test(t)) return false;
+	// "no tenés para el miércoles" es pregunta de disponibilidad, no rechazo binario
+	if (/\bno\s+tenes?\b/.test(t) || /\bno\s+hay\b/.test(t)) return null;
 	if (/\b(si|confirmo|correcto)\b/.test(t)) return true;
-	if (/\b(no|incorrecto|otra)\b/.test(t)) return false;
+	if (/\b(incorrecto|otra persona)\b/.test(t)) return false;
+	if (/\b(no confirmo|no quiero|no gracias|no me sirve)\b/.test(t)) return false;
+	if (/^no\b/.test(t) && t.length <= 12) return false;
 	return null;
 }
 
@@ -81,9 +93,27 @@ function interpretarRechazoTurno(texto, _sugerencia = null) {
 		return true;
 	}
 
+	if (
+		/\b(tenes|tenes|hay|podes|podes|disponible|alguno|alguna)\b/.test(t) &&
+		/\b(para|tarde|manana|noche|miercoles|lunes|martes|jueves|viernes|sabado|domingo|horario|turno)\b/.test(
+			t,
+		)
+	) {
+		return true;
+	}
+
+	if (/\b(a la tarde|por la tarde|por la manana|a la manana|mismo dia|otra hora)\b/.test(t)) {
+		return true;
+	}
+
 	const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
 	for (const dia of dias) {
-		if (t.includes(dia) && /\b(no|ni|imposible|puedo)\b/.test(t)) return true;
+		if (
+			t.includes(dia) &&
+			/\b(no puedo|no podria|no voy|imposible|ese dia no|no me sirve)\b/.test(t)
+		) {
+			return true;
+		}
 	}
 
 	return null;
@@ -405,7 +435,16 @@ async function intentarRespuestaWizard({
 		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA');
 
 	if ((esPasoEspecialidad || esPasoProfConSugerir) && conv.idPaciente) {
-		const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
+		const resolucion = await botAgenda.resolverEspecialidadInteligente(texto);
+
+		if (resolucion.tipo === 'listar') {
+			return {
+				handled: true,
+				texto: botAgenda.mensajeEspecialidadesDisponibles(resolucion.lista),
+			};
+		}
+
+		const esp = resolucion.tipo === 'especialidad' ? resolucion.especialidad : null;
 		if (!esp) {
 			if (esPasoProfConSugerir) {
 				return {
@@ -414,14 +453,13 @@ async function intentarRespuestaWizard({
 						'Indicá la especialidad que necesitás (por ejemplo: *Traumatología*) y te propongo el turno libre más cercano.',
 				};
 			}
+			if (esPasoEspecialidad && gptHabilitado()) {
+				return { handled: false };
+			}
 			const lista = await botAgenda.listarEspecialidadesBot();
-			const opciones = lista
-				.slice(0, 12)
-				.map((e) => `• ${e.nombre}`)
-				.join('\n');
 			return {
 				handled: true,
-				texto: `No encontré esa especialidad. Estas son las disponibles:\n\n${opciones}\n\nIndicá cuál necesitás.`,
+				texto: botAgenda.mensajeEspecialidadesDisponibles(lista),
 			};
 		}
 
@@ -535,8 +573,18 @@ async function intentarRespuestaWizard({
 }
 
 async function _buscarSiguienteTurnoSugerido(idConversacion, ctx, textoRechazo, pasoCfg) {
-	const excluir = botAgenda.construirExclusionesRechazo(textoRechazo, ctx);
-	const siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, { excluir });
+	const ajuste = await botAgenda.interpretarAjusteTurnoInteligente(textoRechazo, ctx);
+	let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+		excluir: ajuste.excluir,
+		preferir: ajuste.preferir,
+	});
+
+	if (!siguiente && ajuste.preferir?.fechas?.length) {
+		siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+			excluir: ajuste.excluir,
+			preferir: { ...ajuste.preferir, fechas: [] },
+		});
+	}
 
 	if (!siguiente) {
 		await botConversacion.guardarContextoBot(idConversacion, {
@@ -563,7 +611,10 @@ async function _buscarSiguienteTurnoSugerido(idConversacion, ctx, textoRechazo, 
 	await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
 	return {
 		handled: true,
-		texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, { alternativa: true }),
+		texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
+			alternativa: true,
+			preferencia: ajuste.resumen,
+		}),
 	};
 }
 

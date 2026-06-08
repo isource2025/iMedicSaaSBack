@@ -6,6 +6,7 @@ const patientsService = require('./patients.service');
 const agendaService = require('./agenda.service');
 const botConfigService = require('./botConfig.service');
 const botLogService = require('./botLog.service');
+const botOpenai = require('./botOpenai.service');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
@@ -948,6 +949,103 @@ function _normalizarTextoBusqueda(texto) {
 		.replace(/[\u0300-\u036f]/g, '');
 }
 
+const _STOPWORDS_ESPECIALIDAD = new Set([
+	'quiero',
+	'quiera',
+	'un',
+	'una',
+	'turno',
+	'para',
+	'necesito',
+	'hay',
+	'que',
+	'cual',
+	'cuales',
+	'especialidad',
+	'especialidades',
+	'medico',
+	'doctor',
+	'dame',
+	'dar',
+	'sacar',
+	'pedir',
+	'pedi',
+	'el',
+	'la',
+	'los',
+	'las',
+	'me',
+	'mi',
+	'con',
+	'por',
+	'favor',
+	'bueno',
+	'hola',
+	'ver',
+	'disponible',
+	'disponibles',
+	'lista',
+	'mostrar',
+	'mostrame',
+	'decime',
+	'decir',
+	'areas',
+	'servicios',
+	'consulta',
+	'consultar',
+	'ir',
+	'tiene',
+	'tienen',
+	'alguna',
+	'algun',
+	'tambien',
+	'otra',
+	'otro',
+]);
+
+function _tokensDesdeTexto(texto) {
+	const t = _normalizarTextoBusqueda(texto);
+	return t.split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !_STOPWORDS_ESPECIALIDAD.has(w));
+}
+
+function esConsultaListaEspecialidades(texto) {
+	const t = _normalizarTextoBusqueda(texto);
+	if (!t) return false;
+	if (t === 'especialidades' || t === 'especialidad') return true;
+	const pregunta = /\b(que|cuales|cual|lista|hay|mostrar|mostrame|decime|ver|conocer)\b/.test(t);
+	const tema = /\b(especialidad|especialidades|areas|servicios|opciones)\b/.test(t);
+	return pregunta && tema;
+}
+
+function mensajeEspecialidadesDisponibles(lista) {
+	const opciones = (lista || []).map((e) => `• ${e.nombre}`).join('\n');
+	return `Estas son las especialidades con turno disponible:\n\n${opciones}\n\nDecime cuál necesitás (podés escribirla con tus palabras, por ejemplo *gineco* o *clínica*).`;
+}
+
+function _mejorMatchPorTokens(texto, lista) {
+	const tokens = _tokensDesdeTexto(texto);
+	if (!tokens.length) return null;
+
+	let best = null;
+	let bestScore = 0;
+	for (const e of lista) {
+		const n = _normalizarTextoBusqueda(e.nombre);
+		for (const token of tokens) {
+			if (token.length < 4) continue;
+			let score = 0;
+			if (n === token) score = 100;
+			else if (n.startsWith(token)) score = 80 + token.length;
+			else if (n.includes(token)) score = 60 + token.length;
+			else if (token.length >= 5 && n.startsWith(token.slice(0, 5))) score = 55;
+			if (score > bestScore) {
+				bestScore = score;
+				best = e;
+			}
+		}
+	}
+	return bestScore >= 55 ? best : null;
+}
+
 async function resolverEspecialidadDesdeTexto(texto) {
 	const lista = await listarEspecialidadesBot();
 	const t = _normalizarTextoBusqueda(texto);
@@ -963,10 +1061,85 @@ async function resolverEspecialidadDesdeTexto(texto) {
 	);
 	if (match) return match;
 
+	match = _mejorMatchPorTokens(texto, lista);
+	if (match) return match;
+
 	if (t.length >= 4) {
 		match = lista.find((e) => _normalizarTextoBusqueda(e.nombre).startsWith(t.slice(0, 5)));
 	}
 	return match || null;
+}
+
+function _parsearJsonGpt(raw) {
+	const s = String(raw || '')
+		.trim()
+		.replace(/^```(?:json)?\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.trim();
+	try {
+		return JSON.parse(s);
+	} catch {
+		return null;
+	}
+}
+
+async function resolverEspecialidadConGpt(texto) {
+	if (!botOpenai.isConfigured()) return null;
+	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
+		return null;
+	}
+
+	const lista = await listarEspecialidadesBot();
+	const nombres = lista.map((e) => `- ${e.nombre}`).join('\n');
+	let raw;
+	try {
+		raw = await botOpenai.chat({
+			system: `Extraé la especialidad médica que pide el paciente o si pregunta qué hay disponible.
+Especialidades válidas (usá el nombre EXACTO):
+${nombres}
+
+Respondé ÚNICAMENTE JSON en una línea, sin markdown:
+{"accion":"especialidad","nombre":"NOMBRE EXACTO"} si eligió o mencionó un área (ej. "gineco" → GINECOLOGÍA)
+{"accion":"listar"} si pregunta qué especialidades hay
+{"accion":"ninguna"} si no se puede determinar`,
+			messages: [{ role: 'user', content: String(texto || '').trim() }],
+		});
+	} catch (err) {
+		console.warn('[botAgenda] GPT especialidad:', err.message);
+		return null;
+	}
+
+	const j = _parsearJsonGpt(raw);
+	if (!j || j.accion === 'ninguna') return null;
+	if (j.accion === 'listar') return { listar: true };
+
+	if (j.accion === 'especialidad' && j.nombre) {
+		const buscado = _normalizarTextoBusqueda(j.nombre);
+		let match = lista.find((e) => _normalizarTextoBusqueda(e.nombre) === buscado);
+		if (match) return match;
+		match = lista.find((e) => _normalizarTextoBusqueda(e.nombre).includes(buscado));
+		if (match) return match;
+		match = lista.find((e) => buscado.includes(_normalizarTextoBusqueda(e.nombre)));
+		if (match) return match;
+	}
+	return null;
+}
+
+async function resolverEspecialidadInteligente(texto) {
+	if (esConsultaListaEspecialidades(texto)) {
+		return { tipo: 'listar', lista: await listarEspecialidadesBot() };
+	}
+
+	let esp = await resolverEspecialidadDesdeTexto(texto);
+	if (esp) return { tipo: 'especialidad', especialidad: esp };
+
+	const gpt = await resolverEspecialidadConGpt(texto);
+	if (gpt?.listar) {
+		return { tipo: 'listar', lista: await listarEspecialidadesBot() };
+	}
+	if (gpt) return { tipo: 'especialidad', especialidad: gpt };
+
+	return { tipo: 'no_encontrada' };
 }
 
 function _slotCumpleAnticipacion(fechaIso, hora, config) {
@@ -991,6 +1164,16 @@ function _slotDateTime(fechaIso, hora) {
 	return new Date(y, mo - 1, d, hh || 0, mm || 0);
 }
 
+const _MAP_DIA_SEMANA = {
+	domingo: 0,
+	lunes: 1,
+	martes: 2,
+	miercoles: 3,
+	jueves: 4,
+	viernes: 5,
+	sabado: 6,
+};
+
 function _normalizarExclusiones(excluir = {}) {
 	const slots = Array.isArray(excluir.slots) ? excluir.slots : [];
 	const fechas = new Set(
@@ -1002,6 +1185,91 @@ function _normalizarExclusiones(excluir = {}) {
 		[...(excluir.diasSemana || []), ...(excluir.diasSemanaExcluidos || [])].map(Number),
 	);
 	return { slots, fechas, diasSemana };
+}
+
+function _normalizarPreferencias(preferir = {}) {
+	return {
+		fechas: new Set((preferir.fechas || []).map((f) => String(f).slice(0, 10))),
+		diasSemana: new Set((preferir.diasSemana || []).map(Number)),
+		franja: preferir.franja || null,
+		horaDesde: preferir.horaDesde || null,
+		horaHasta: preferir.horaHasta || null,
+	};
+}
+
+function _detectarFranjaHoraria(t) {
+	if (/\b(por la tarde|a la tarde|en la tarde|de tarde)\b/.test(t)) return 'tarde';
+	if (/\b(por la noche|a la noche|en la noche|de noche)\b/.test(t)) return 'noche';
+	if (
+		/\b(por la manana|a la manana|en la manana|de manana|temprano)\b/.test(t) &&
+		!/\b(el\s+)?manana\b/.test(t)
+	) {
+		return 'manana';
+	}
+	if (/\btarde\b/.test(t) && !/\b(por la manana|a la manana)\b/.test(t)) return 'tarde';
+	return null;
+}
+
+function _slotCumpleFranja(hora, franja) {
+	const hh = Number(String(hora || '00:00').split(':')[0]);
+	if (!Number.isFinite(hh)) return true;
+	if (franja === 'manana') return hh < 12;
+	if (franja === 'tarde') return hh >= 12 && hh < 19;
+	if (franja === 'noche') return hh >= 19;
+	return true;
+}
+
+function _esPreguntaDisponibilidad(t) {
+	return /\b(no\s+tenes?|tenes?|hay|habra|habrá|tienen|alguno|alguna|podes?|disponible)\b/.test(
+		t,
+	);
+}
+
+function _esNegacionDia(t, nombreDia) {
+	return (
+		new RegExp(`\\b${nombreDia}\\s+no\\b`).test(t) ||
+		new RegExp(`\\bel\\s+${nombreDia}\\s+no\\b`).test(t) ||
+		new RegExp(`\\bno\\s+(puedo|podria|voy|me sirve)\\b.*\\b${nombreDia}\\b`).test(t) ||
+		new RegExp(`\\b${nombreDia}\\b.*\\bno\\s+(puedo|podria|voy|me sirve)\\b`).test(t)
+	);
+}
+
+function _resumenPreferencia(preferir) {
+	const partes = [];
+	if (preferir.fechas?.length === 1) {
+		partes.push(_fechaLegible(preferir.fechas[0]));
+	} else if (preferir.diasSemana?.length) {
+		const nombres = Object.entries(_MAP_DIA_SEMANA)
+			.filter(([, n]) => preferir.diasSemana.includes(n))
+			.map(([k]) => k);
+		if (nombres.length) partes.push(nombres.join(', '));
+	}
+	if (preferir.franja === 'tarde') partes.push('por la tarde');
+	else if (preferir.franja === 'manana') partes.push('por la mañana');
+	else if (preferir.franja === 'noche') partes.push('por la noche');
+	return partes.length ? partes.join(' ') : null;
+}
+
+function _diaCumplePreferencias(fechaIso, preferir) {
+	if (!preferir.fechas.size && !preferir.diasSemana.size) return true;
+	const fecha = String(fechaIso).slice(0, 10);
+	if (preferir.fechas.size) return preferir.fechas.has(fecha);
+	const diaNum = new Date(`${fecha}T12:00:00`).getDay();
+	return preferir.diasSemana.has(diaNum);
+}
+
+function _slotCumplePreferencias(fechaIso, hora, preferir) {
+	if (!_diaCumplePreferencias(fechaIso, preferir)) return false;
+	if (preferir.franja && !_slotCumpleFranja(hora, preferir.franja)) return false;
+	if (preferir.horaDesde) {
+		const slot = String(hora || '').slice(0, 5);
+		if (slot < String(preferir.horaDesde).slice(0, 5)) return false;
+	}
+	if (preferir.horaHasta) {
+		const slot = String(hora || '').slice(0, 5);
+		if (slot > String(preferir.horaHasta).slice(0, 5)) return false;
+	}
+	return true;
 }
 
 function _slotEstaExcluido(matricula, fechaIso, hora, excluir) {
@@ -1018,12 +1286,13 @@ function _slotEstaExcluido(matricula, fechaIso, hora, excluir) {
 }
 
 /**
- * Arma exclusiones a partir del rechazo del paciente (ej. "el lunes no puedo").
+ * Interpreta rechazo o preferencia del paciente (ej. "el lunes no puedo" vs "¿tenés el miércoles a la tarde?").
  * Siempre excluye el turno sugerido actual.
  */
-function construirExclusionesRechazo(texto, sugerenciaActual = null) {
+function interpretarAjusteTurno(texto, sugerenciaActual = null) {
 	const t = _normalizarTextoBusqueda(texto);
 	const excluir = { slots: [], fechas: [], diasSemana: [] };
+	const preferir = { fechas: [], diasSemana: [], franja: null, horaDesde: null, horaHasta: null };
 
 	if (sugerenciaActual?.matricula && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
 		excluir.slots.push({
@@ -1033,18 +1302,43 @@ function construirExclusionesRechazo(texto, sugerenciaActual = null) {
 		});
 	}
 
-	const mapDia = {
-		domingo: 0,
-		lunes: 1,
-		martes: 2,
-		miercoles: 3,
-		jueves: 4,
-		viernes: 5,
-		sabado: 6,
-	};
+	const franja = _detectarFranjaHoraria(t);
+	if (franja) preferir.franja = franja;
 
-	for (const [nombre, num] of Object.entries(mapDia)) {
-		if (t.includes(nombre)) excluir.diasSemana.push(num);
+	const esPregunta = _esPreguntaDisponibilidad(t);
+	const diasMencionados = [];
+
+	for (const [nombre, num] of Object.entries(_MAP_DIA_SEMANA)) {
+		if (!t.includes(nombre)) continue;
+		diasMencionados.push({ nombre, num });
+		if (_esNegacionDia(t, nombre)) {
+			excluir.diasSemana.push(num);
+		} else if (
+			esPregunta ||
+			franja ||
+			/\b(para el|el mismo|preferi|mejor|a la|por la|mismo dia)\b/.test(t)
+		) {
+			preferir.diasSemana.push(num);
+		}
+	}
+
+	if (sugerenciaActual?.fecha && diasMencionados.length) {
+		const fechaSug = String(sugerenciaActual.fecha).slice(0, 10);
+		const diaSug = new Date(`${fechaSug}T12:00:00`).getDay();
+		const pideMismoDia =
+			preferir.diasSemana.includes(diaSug) ||
+			diasMencionados.some((d) => d.num === diaSug) ||
+			(franja && diaSug === new Date(`${fechaSug}T12:00:00`).getDay());
+		if (pideMismoDia) {
+			preferir.fechas.push(fechaSug);
+		}
+	}
+
+	if (franja === 'tarde' && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
+		const hh = Number(String(sugerenciaActual.hora).split(':')[0]);
+		if (hh < 12) {
+			preferir.fechas.push(String(sugerenciaActual.fecha).slice(0, 10));
+		}
 	}
 
 	if (sugerenciaActual?.fecha) {
@@ -1054,18 +1348,115 @@ function construirExclusionesRechazo(texto, sugerenciaActual = null) {
 		}
 	}
 
-	return excluir;
+	preferir.fechas = [...new Set(preferir.fechas)];
+	preferir.diasSemana = [...new Set(preferir.diasSemana)];
+	excluir.diasSemana = [...new Set(excluir.diasSemana)];
+	excluir.fechas = [...new Set(excluir.fechas)];
+
+	const resumen = _resumenPreferencia(preferir);
+	return { excluir, preferir, resumen };
+}
+
+/** @deprecated usar interpretarAjusteTurno */
+function construirExclusionesRechazo(texto, sugerenciaActual = null) {
+	return interpretarAjusteTurno(texto, sugerenciaActual).excluir;
+}
+
+async function interpretarAjusteTurnoConGpt(texto, sugerenciaActual = null) {
+	if (!botOpenai.isConfigured()) return null;
+	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
+		return null;
+	}
+
+	const ctxTurno = sugerenciaActual
+		? `Turno sugerido actual: ${sugerenciaActual.diaSemana || ''} ${sugerenciaActual.fecha || ''} ${sugerenciaActual.hora || ''} con ${sugerenciaActual.medico || ''}.`
+		: '';
+
+	let raw;
+	try {
+		raw = await botOpenai.chat({
+			system: `Interpretá qué turno alternativo pide el paciente en Argentina (español rioplatense).
+${ctxTurno}
+
+Respondé ÚNICAMENTE JSON en una línea:
+{"excluirDiasSemana":["lunes"],"preferirDiasSemana":["miercoles"],"preferirFranja":"tarde"|"manana"|"noche"|null,"preferirFecha":"YYYY-MM-DD"|null,"excluirFechaActual":true|false}
+
+Reglas:
+- "no tenés para el miércoles a la tarde" → preferir miércoles + tarde (NO excluir miércoles)
+- "el lunes no puedo" → excluir lunes
+- Si pide tarde y el turno actual es a la mañana del mismo día → preferirFecha = fecha del turno actual
+- Si no hay preferencia clara → preferirDiasSemana [] y preferirFranja null`,
+			messages: [{ role: 'user', content: String(texto || '').trim() }],
+		});
+	} catch (err) {
+		console.warn('[botAgenda] GPT ajuste turno:', err.message);
+		return null;
+	}
+
+	const j = _parsearJsonGpt(raw);
+	if (!j) return null;
+
+	const excluir = { slots: [], fechas: [], diasSemana: [] };
+	const preferir = { fechas: [], diasSemana: [], franja: null, horaDesde: null, horaHasta: null };
+
+	if (sugerenciaActual?.matricula && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
+		excluir.slots.push({
+			matricula: sugerenciaActual.matricula,
+			fecha: String(sugerenciaActual.fecha).slice(0, 10),
+			hora: String(sugerenciaActual.hora).slice(0, 5),
+		});
+	}
+
+	for (const d of j.excluirDiasSemana || []) {
+		if (_MAP_DIA_SEMANA[d] != null) excluir.diasSemana.push(_MAP_DIA_SEMANA[d]);
+	}
+	for (const d of j.preferirDiasSemana || []) {
+		if (_MAP_DIA_SEMANA[d] != null) preferir.diasSemana.push(_MAP_DIA_SEMANA[d]);
+	}
+	if (j.preferirFranja) preferir.franja = j.preferirFranja;
+	if (j.preferirFecha) preferir.fechas.push(String(j.preferirFecha).slice(0, 10));
+	if (j.excluirFechaActual && sugerenciaActual?.fecha) {
+		excluir.fechas.push(String(sugerenciaActual.fecha).slice(0, 10));
+	}
+
+	return { excluir, preferir, resumen: _resumenPreferencia(preferir) };
+}
+
+async function interpretarAjusteTurnoInteligente(texto, sugerenciaActual = null) {
+	const local = interpretarAjusteTurno(texto, sugerenciaActual);
+	const tienePreferencia =
+		local.preferir.fechas.length ||
+		local.preferir.diasSemana.length ||
+		local.preferir.franja;
+
+	if (tienePreferencia) return local;
+
+	const gpt = await interpretarAjusteTurnoConGpt(texto, sugerenciaActual);
+	if (gpt && (gpt.preferir.fechas.length || gpt.preferir.diasSemana.length || gpt.preferir.franja)) {
+		return gpt;
+	}
+
+	return local;
 }
 
 /**
  * Primer turno libre del médico (desde ahora), respetando exclusiones.
  */
-async function _turnoMasCercanoPorMedico(matricula, medicoNombre, esp, config, excluir, maxDias) {
+async function _turnoMasCercanoPorMedico(
+	matricula,
+	medicoNombre,
+	esp,
+	config,
+	excluir,
+	preferir,
+	maxDias,
+) {
 	for (let d = 0; d <= maxDias; d++) {
 		const fechaIso = _fechaIsoOffset(d);
 		if (excluir.fechas.has(fechaIso)) continue;
 		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
 		if (excluir.diasSemana.has(diaNum)) continue;
+		if (!_diaCumplePreferencias(fechaIso, preferir)) continue;
 
 		let disp;
 		try {
@@ -1084,6 +1475,7 @@ async function _turnoMasCercanoPorMedico(matricula, medicoNombre, esp, config, e
 		for (const slot of slotsOrdenados) {
 			if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
 			if (_slotEstaExcluido(matricula, fechaIso, slot.hora, excluir)) continue;
+			if (!_slotCumplePreferencias(fechaIso, slot.hora, preferir)) continue;
 
 			return {
 				dt: _slotDateTime(fechaIso, slot.hora),
@@ -1109,6 +1501,7 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	if (!Number.isFinite(esp) || esp <= 0) return null;
 
 	const excluir = _normalizarExclusiones(opciones.excluir);
+	const preferir = _normalizarPreferencias(opciones.preferir);
 	const { profesionales, especialidad } = await listarProfesionalesBot(esp);
 	if (!profesionales.length) return null;
 
@@ -1125,6 +1518,7 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 			esp,
 			config,
 			excluir,
+			preferir,
 			maxDias,
 		);
 		if (turno) candidatos.push(turno);
@@ -1159,9 +1553,14 @@ function mensajeSugerenciaTurno(sugerencia, pasoCfg, opts = {}) {
 			'No hay turnos disponibles en los próximos días para esa especialidad. Probá con otra especialidad o contactá al centro.'
 		);
 	}
-	const encabezado = opts.alternativa
-		? `Encontré el *siguiente turno libre* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`
-		: `Te sugiero el *turno libre más cercano* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`;
+	let encabezado;
+	if (opts.preferencia) {
+		encabezado = `Para *${opts.preferencia}* encontré este turno en *${sugerencia.especialidadNombre || 'la especialidad'}*:`;
+	} else if (opts.alternativa) {
+		encabezado = `Encontré el *siguiente turno libre* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`;
+	} else {
+		encabezado = `Te sugiero el *turno libre más cercano* en *${sugerencia.especialidadNombre || 'la especialidad'}*:`;
+	}
 	return [
 		encabezado,
 		'',
@@ -1196,8 +1595,14 @@ module.exports = {
 	listarProfesionalesBot,
 	disponibilidadBot,
 	resolverEspecialidadDesdeTexto,
+	resolverEspecialidadConGpt,
+	resolverEspecialidadInteligente,
+	esConsultaListaEspecialidades,
+	mensajeEspecialidadesDisponibles,
 	sugerirPrimerTurnoDisponible,
 	construirExclusionesRechazo,
+	interpretarAjusteTurno,
+	interpretarAjusteTurnoInteligente,
 	mensajeSugerenciaTurno,
 	reservarTurno,
 	consultarTurnosPaciente,

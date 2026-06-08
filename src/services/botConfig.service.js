@@ -96,6 +96,7 @@ async function getBotConfig() {
 			process.env.BOT_PROMPT_SISTEMA ||
 			'Sos un asistente amable de turnos médicos. Guiá al paciente paso a paso para reservar un turno. Sé breve y claro.',
 		reglas: {
+			/** Margen mínimo (horas) para sugerir/reservar turnos; editable en Panel Bot → Reglas. */
 			anticipacionMinHoras: db.anticipacion_min_horas ?? envInt('BOT_ANTICIPACION_MIN_HORAS', 2),
 			diasMaxAntelacion: db.dias_max_antelacion ?? envInt('BOT_DIAS_MAX_ANTELACION', 60),
 			maxTurnosPorPacienteDia: db.max_turnos_por_paciente_dia ?? envInt('BOT_MAX_TURNOS_POR_PACIENTE_DIA', 1),
@@ -245,7 +246,8 @@ async function saveBotConfig(payload = {}) {
 		await upsertConfigClave('mensaje_confirmacion', mensajes.confirmacion, 'string');
 	}
 	if (reglas.anticipacionMinHoras != null) {
-		await upsertConfigClave('anticipacion_min_horas', reglas.anticipacionMinHoras, 'int');
+		const horas = Math.max(0, Math.round(Number(reglas.anticipacionMinHoras) || 0));
+		await upsertConfigClave('anticipacion_min_horas', horas, 'int');
 	}
 	if (reglas.diasMaxAntelacion != null) {
 		await upsertConfigClave('dias_max_antelacion', reglas.diasMaxAntelacion, 'int');

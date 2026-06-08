@@ -51,12 +51,38 @@ async function buildSystemPrompt(config, flujo, conv) {
 			? 'Con "sugerir primer turno" activo: al elegir especialidad el wizard propone UN solo turno (el más cercano) con médico y horario; NO listes profesionales ni pidas elegir manualmente. Si el paciente rechaza ("no", "el lunes no puedo"), el wizard busca el siguiente turno libre.'
 			: null,
 		incluirEspecialidad
-			? 'Cuando corresponda, pedí especialidad.'
+			? 'Cuando corresponda, pedí especialidad. Interpretá lenguaje natural (ej. "gineco", "para gineco un turno" = GINECOLOGÍA). Si preguntan qué hay, listá las especialidades de forma amigable.'
 			: 'NO pidas especialidad (paso desactivado en el wizard).',
 		incluirProfesional
 			? 'Después de especialidad, pedí profesional si aplica.'
 			: 'NO pidas profesional (paso desactivado en el wizard).',
 	].filter(Boolean);
+
+	if (pasoActual === 'ELEGIR_ESPECIALIDAD') {
+		try {
+			const lista = await botAgenda.listarEspecialidadesBot();
+			if (lista.length) {
+				reglasFlujo.push(
+					`Especialidades con turno: ${lista.map((e) => e.nombre).join(', ')}.`,
+				);
+				reglasFlujo.push(
+					'Conversá de forma natural. Si el paciente elige o menciona una especialidad (aunque sea informal), pedile que confirme el nombre exacto para buscarle el turno más cercano.',
+				);
+			}
+		} catch {
+			/* sin catálogo */
+		}
+	}
+
+	if (pasoActual === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
+		const t = conv.contextoBot;
+		reglasFlujo.push(
+			`Turno en oferta: ${t.medico || ''} el ${t.diaSemana || ''} ${t.fechaLegible || t.fecha || ''} a las ${t.hora || ''}.`,
+		);
+		reglasFlujo.push(
+			'Si el paciente pide otro día u horario (ej. "¿tenés el miércoles a la tarde?"), el sistema busca automáticamente; podés confirmar que estás buscando esa opción. No inventes horarios.',
+		);
+	}
 
 	return [
 		config.promptSistema ||
@@ -228,23 +254,17 @@ async function responderMensajeEntrante({
 		});
 	}
 
-	// No dejar que GPT liste profesionales: esos pasos los resuelve el wizard.
-	const pasosSoloWizard = ['ELEGIR_ESPECIALIDAD', 'ELEGIR_PROFESIONAL', 'ELEGIR_FECHA_HORA'];
-	if (config.reglas.sugerirPrimerTurnoDisponible && pasosSoloWizard.includes(pasoActual)) {
+	// Profesional/fecha: el wizard resuelve turnos; GPT no debe listar médicos.
+	if (
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA')
+	) {
 		const pasoEsp = (flujo || []).find((p) => p.id === 'ELEGIR_ESPECIALIDAD');
 		return enviarTextoBot({
 			...enviarOpts,
 			texto:
 				pasoEsp?.mensajeUsuario ||
 				'¿Qué especialidad necesitás? Te propongo el turno libre más cercano.',
-		});
-	}
-
-	if (pasoActual === 'CONFIRMAR' && convAct?.contextoBot?.tipo === 'turno_sugerido') {
-		const pasoConfirmar = (flujo || []).find((p) => p.id === 'CONFIRMAR');
-		return enviarTextoBot({
-			...enviarOpts,
-			texto: botAgenda.mensajeSugerenciaTurno(convAct.contextoBot, pasoConfirmar),
 		});
 	}
 
