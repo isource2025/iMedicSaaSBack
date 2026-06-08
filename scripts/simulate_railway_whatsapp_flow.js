@@ -193,10 +193,16 @@ async function testWebhookFlowHttp() {
 			await runWithTenant(Number(EMPRESA), async () => {
 				const msgs = await botConversacion.listarMensajes(idConv, { limit: 30 });
 				const bots = msgs.filter((m) => m.origen === 'BOT');
-				const last = bots[bots.length - 1];
-				if (last?.contenido && !/No pudimos consultar RENAPER/i.test(last.contenido)) {
-					botTexto = last.contenido;
-				}
+				const renaperBot = [...bots]
+					.reverse()
+					.find(
+						(m) =>
+							m.contenido &&
+							!/No pudimos consultar RENAPER/i.test(m.contenido) &&
+							(/RENAPER|ficha local|Nombre:/i.test(m.contenido) ||
+								/Confirm|Sí o No|Si o No/i.test(m.contenido)),
+					);
+				if (renaperBot?.contenido) botTexto = renaperBot.contenido;
 			});
 		}
 	}
