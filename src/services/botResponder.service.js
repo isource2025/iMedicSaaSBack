@@ -212,8 +212,18 @@ async function responderMensajeEntrante({
 		});
 		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.aviso && wizard.buscarTurno) {
 			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso });
-			const resultado = await botWizard.ejecutarBusquedaTurno(wizard.buscarTurno);
-			return enviarTextoBot({ ...enviarOpts, texto: resultado.texto });
+			let textoResultado =
+				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
+			try {
+				const resultado = await botWizard.ejecutarBusquedaTurno(wizard.buscarTurno);
+				if (resultado?.texto) textoResultado = resultado.texto;
+			} catch (buscarErr) {
+				diag.warn('webhook', 'Búsqueda turno falló', {
+					error: buscarErr.message,
+					idConversacion,
+				});
+			}
+			return enviarTextoBot({ ...enviarOpts, texto: textoResultado });
 		}
 		if (wizard.handled && wizard.texto) {
 			return enviarTextoBot({ ...enviarOpts, texto: wizard.texto });

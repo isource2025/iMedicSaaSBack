@@ -1481,7 +1481,31 @@ function _busquedaTurnoTimeoutMs() {
 }
 
 function _busquedaTurnoConcurrencia() {
-	return Math.max(1, Math.min(12, Number(process.env.BOT_BUSQUEDA_CONCURRENCIA || 6)));
+	return Math.max(1, Math.min(8, Number(process.env.BOT_BUSQUEDA_CONCURRENCIA || 4)));
+}
+
+function _maxDiasBusquedaBot(config, preferir) {
+	const cfg = config.reglas.diasMaxAntelacion || 60;
+	const cap = Number(process.env.BOT_BUSQUEDA_MAX_DIAS || 21);
+	if (preferir.fechas.size || preferir.diasSemana.size) return cfg;
+	return Math.min(cfg, cap);
+}
+
+function _maxProfesionalesBusqueda() {
+	return Math.max(1, Math.min(30, Number(process.env.BOT_MAX_PROF_BUSQUEDA || 12)));
+}
+
+async function _profesionalesConLibresEnDia(fechaIso, esp, ordenados) {
+	try {
+		const resumen = await agendaService.disponibilidadDia(String(fechaIso), { especialidad: esp });
+		const mats = new Set(
+			resumen.filter((r) => Number(r.libres) > 0).map((r) => Number(r.matricula)),
+		);
+		if (!mats.size) return [];
+		return ordenados.filter((p) => mats.has(Number(p.matricula)));
+	} catch {
+		return ordenados;
+	}
 }
 
 async function _mapEnLotes(items, tamano, fn) {
@@ -1518,34 +1542,36 @@ function _elegirMejorTurno(candidatos) {
 	return ordenados[0];
 }
 
+/** Solo generarSlots — sin disponibilidadDia ni validación SQL extra por médico. */
 async function _primerSlotEnFecha(matricula, medicoNombre, fechaIso, esp, config, excluir, preferir) {
-	let disp;
+	let grilla;
 	try {
-		disp = await disponibilidadBot(fechaIso, {
-			matricula,
-			especialidad: esp,
-		});
+		grilla = await agendaService.generarSlots(matricula, String(fechaIso), String(fechaIso));
 	} catch {
 		return null;
 	}
 
-	const slotsOrdenados = [...(disp.slotsLibres || [])].sort(
-		(a, b) => _slotDateTime(fechaIso, a.hora) - _slotDateTime(fechaIso, b.hora),
-	);
+	const dia = grilla?.dias?.[0];
+	if (dia?.bloqueado) return null;
+
+	const slotsOrdenados = [...(dia?.slots || [])]
+		.filter((s) => !s.esSobreturno && s.estado === 'LIBRE')
+		.sort((a, b) => _slotDateTime(fechaIso, a.hora) - _slotDateTime(fechaIso, b.hora));
 
 	for (const slot of slotsOrdenados) {
-		if (!_slotCumpleAnticipacion(fechaIso, slot.hora, config)) continue;
-		if (_slotEstaExcluido(matricula, fechaIso, slot.hora, excluir)) continue;
-		if (!_slotCumplePreferencias(fechaIso, slot.hora, preferir)) continue;
+		const hora = String(slot.hora || '').slice(0, 5);
+		if (!_slotCumpleAnticipacion(fechaIso, hora, config)) continue;
+		if (_slotEstaExcluido(matricula, fechaIso, hora, excluir)) continue;
+		if (!_slotCumplePreferencias(fechaIso, hora, preferir)) continue;
 
 		return {
-			dt: _slotDateTime(fechaIso, slot.hora),
+			dt: _slotDateTime(fechaIso, hora),
 			matricula,
 			medico: medicoNombre,
 			fecha: fechaIso,
-			hora: slot.hora,
-			sector: slot.sector,
-			diaSemana: disp.diaSemana || _diaSemanaLegible(fechaIso),
+			hora,
+			sector: slot.sector ? String(slot.sector).trim() : null,
+			diaSemana: dia?.dia || _diaSemanaLegible(fechaIso),
 		};
 	}
 	return null;
@@ -1564,10 +1590,10 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const { profesionales, especialidad } = await listarProfesionalesBot(esp);
 	if (!profesionales.length) return null;
 
-	const maxDias = config.reglas.diasMaxAntelacion || 60;
-	const ordenados = [...profesionales].sort((a, b) =>
-		String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'),
-	);
+	const maxDias = _maxDiasBusquedaBot(config, preferir);
+	const ordenados = [...profesionales]
+		.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
+		.slice(0, _maxProfesionalesBusqueda());
 	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
 	const deadline = Date.now() + _busquedaTurnoTimeoutMs();
 	const concurrencia = _busquedaTurnoConcurrencia();
@@ -1575,7 +1601,10 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	for (const fechaIso of fechas) {
 		if (Date.now() > deadline) break;
 
-		const turnos = await _mapEnLotes(ordenados, concurrencia, (prof) =>
+		const profsDia = await _profesionalesConLibresEnDia(fechaIso, esp, ordenados);
+		if (!profsDia.length) continue;
+
+		const turnos = await _mapEnLotes(profsDia, concurrencia, (prof) =>
 			_primerSlotEnFecha(
 				prof.matricula,
 				prof.nombre,
