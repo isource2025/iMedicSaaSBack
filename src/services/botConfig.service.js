@@ -57,6 +57,18 @@ function envBool(name, fallback) {
 	return raw === '1' || String(raw).toLowerCase() === 'true';
 }
 
+/** Env explícito gana sobre DB; default true (un turno sugerido, no lista de profesionales). */
+function resolveSugerirPrimerTurno(db) {
+	const raw = process.env.BOT_SUGERIR_PRIMER_TURNO;
+	if (raw != null && raw !== '') {
+		return envBool('BOT_SUGERIR_PRIMER_TURNO', true);
+	}
+	if (db.sugerir_primer_turno_disponible != null) {
+		return !!db.sugerir_primer_turno_disponible;
+	}
+	return true;
+}
+
 /**
  * Configuración efectiva del bot (env + overrides en imBotConfig si existe).
  */
@@ -91,8 +103,7 @@ async function getBotConfig() {
 			requiereRenaper: db.requiere_renaper ?? envBool('BOT_REQUIERE_RENAPER', true),
 			permiteSobreturno: db.permite_sobreturno ?? envBool('BOT_PERMITE_SOBRETURNO', false),
 			crearPacienteAutomatico: db.crear_paciente_automatico ?? envBool('BOT_CREAR_PACIENTE_AUTO', true),
-			sugerirPrimerTurnoDisponible:
-				db.sugerir_primer_turno_disponible ?? envBool('BOT_SUGERIR_PRIMER_TURNO', true),
+			sugerirPrimerTurnoDisponible: resolveSugerirPrimerTurno(db),
 		},
 		api: {
 			basePath: '/api/integrations/bot',

@@ -309,6 +309,7 @@ async function intentarRespuestaWizard({
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
 
 		if (conf === true) {
+			const config = await botConfigService.getBotConfig();
 			const data = await botAgenda.identificarPaciente({
 				numeroDocumento: conv.dniPaciente,
 				telefonoWhatsApp,
@@ -316,7 +317,13 @@ async function intentarRespuestaWizard({
 				idConversacion,
 				omitirAvancePaso: true,
 			});
-			const siguiente = siguientePasoActivo(flujo, 'CONFIRMAR_IDENTIDAD');
+			let siguiente = siguientePasoActivo(flujo, 'CONFIRMAR_IDENTIDAD');
+			if (
+				config.reglas.sugerirPrimerTurnoDisponible &&
+				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+			) {
+				siguiente = 'ELEGIR_ESPECIALIDAD';
+			}
 			const pasoCfg = pasoPorId(flujo, siguiente);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				idPaciente: data.idPaciente,
@@ -359,14 +366,25 @@ async function intentarRespuestaWizard({
 
 	// --- Especialidad → sugerir primer turno (si está activo en config) ---
 	const pasoEspecialidad = pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD');
-	if (
-		pasoActual === 'ELEGIR_ESPECIALIDAD' &&
-		pasoEspecialidad?.activo &&
-		conv.idPaciente
-	) {
-		const config = await botConfigService.getBotConfig();
+	const configEsp = await botConfigService.getBotConfig();
+	const sugerirTurno = configEsp.reglas.sugerirPrimerTurnoDisponible;
+	const esPasoEspecialidad =
+		pasoActual === 'ELEGIR_ESPECIALIDAD' && pasoEspecialidad?.activo !== false;
+	const esPasoProfConSugerir =
+		sugerirTurno &&
+		conv.idPaciente &&
+		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA');
+
+	if ((esPasoEspecialidad || esPasoProfConSugerir) && conv.idPaciente) {
 		const esp = await botAgenda.resolverEspecialidadDesdeTexto(texto);
 		if (!esp) {
+			if (esPasoProfConSugerir) {
+				return {
+					handled: true,
+					texto:
+						'Indicá la especialidad que necesitás (por ejemplo: *Traumatología*) y te propongo el turno libre más cercano.',
+				};
+			}
 			const lista = await botAgenda.listarEspecialidadesBot();
 			const opciones = lista
 				.slice(0, 12)
@@ -378,7 +396,7 @@ async function intentarRespuestaWizard({
 			};
 		}
 
-		if (config.reglas.sugerirPrimerTurnoDisponible) {
+		if (sugerirTurno) {
 			const sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(esp.valor);
 			const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
 			await botConversacion.guardarContextoBot(idConversacion, {

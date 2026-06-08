@@ -5,6 +5,7 @@ const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
 const botOpenai = require('./botOpenai.service');
 const botWizard = require('./botWizard.service');
+const botAgenda = require('./botAgenda.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
 const diag = require('../utils/diagLog');
@@ -200,9 +201,11 @@ async function responderMensajeEntrante({
 	}
 
 	const flujo = await botConfigService.getFlujoPasos();
-	const pasoActual = conv?.pasoBot || botWizard.pasoInicial(flujo);
+	const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+	const pasoActual = convAct?.pasoBot || botWizard.pasoInicial(flujo);
+	const config = await botConfigService.getBotConfig();
 
-	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && !conv?.idPaciente)) {
+	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || (dniDetectado && !convAct?.idPaciente)) {
 		diag.warn('webhook', 'Wizard no respondió a identificación', {
 			dniDetectado,
 			pasoActual,
@@ -214,18 +217,37 @@ async function responderMensajeEntrante({
 		});
 	}
 
+	// No dejar que GPT liste profesionales: esos pasos los resuelve el wizard.
+	const pasosSoloWizard = ['ELEGIR_ESPECIALIDAD', 'ELEGIR_PROFESIONAL', 'ELEGIR_FECHA_HORA'];
+	if (config.reglas.sugerirPrimerTurnoDisponible && pasosSoloWizard.includes(pasoActual)) {
+		const pasoEsp = (flujo || []).find((p) => p.id === 'ELEGIR_ESPECIALIDAD');
+		return enviarTextoBot({
+			...enviarOpts,
+			texto:
+				pasoEsp?.mensajeUsuario ||
+				'¿Qué especialidad necesitás? Te propongo el turno libre más cercano.',
+		});
+	}
+
+	if (pasoActual === 'CONFIRMAR' && convAct?.contextoBot?.tipo === 'turno_sugerido') {
+		const pasoConfirmar = (flujo || []).find((p) => p.id === 'CONFIRMAR');
+		return enviarTextoBot({
+			...enviarOpts,
+			texto: botAgenda.mensajeSugerenciaTurno(convAct.contextoBot, pasoConfirmar),
+		});
+	}
+
 	if (!gptHabilitado()) {
 		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
 	}
 
 	// 2) GPT para el resto del flujo
-	const config = await botConfigService.getBotConfig();
 	const messages = mensajesParaOpenAi(historial);
 	if (!messages.length) {
 		return { respondido: false, motivo: 'sin historial' };
 	}
 
-	const system = await buildSystemPrompt(config, flujo, conv);
+	const system = await buildSystemPrompt(config, flujo, convAct);
 	const texto = await botOpenai.chat({ system, messages });
 
 	return enviarTextoBot({
