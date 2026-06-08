@@ -18,6 +18,7 @@ router.post('/gpt/responder', ctrl.responderGpt);
 
 /** Puerta de entrada: solo DNI → RENAPER (sexo automático) + ficha local */
 router.post('/identificar', ctrl.identificar);
+router.get('/renaper/:dni', ctrl.renaperLookup);
 router.get('/identificar', (req, res, next) => {
 	req.body = {
 		numeroDocumento: req.query.dni ?? req.query.numeroDocumento,

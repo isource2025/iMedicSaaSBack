@@ -7,7 +7,7 @@ const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
 const diag = require('../utils/diagLog');
 
-const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 25_000);
+const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 40_000);
 
 function withTimeout(promise, ms, label = 'operación') {
 	return Promise.race([
@@ -95,8 +95,9 @@ function formatearPersonaRenaper(renaper, dni, pacienteLocal = null) {
 }
 
 function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
+	const fuente = renaper?.fuente === 'local' ? 'ficha local' : 'RENAPER';
 	const detalle = formatearPersonaRenaper(renaper, dni, pacienteLocal);
-	return `Encontramos en *RENAPER*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
+	return `Encontramos en *${fuente}*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
 }
 
 async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo) {
@@ -126,11 +127,14 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo,
 }
 
 function mensajeErrorRenaper(err) {
-	if (err?.code === 'RENAPER_NO_ENCONTRADO' || err?.code === 'RENAPER_TIMEOUT') {
-		if (err.code === 'RENAPER_TIMEOUT') {
-			return 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo en unos segundos.';
-		}
+	if (err?.code === 'RENAPER_TIMEOUT') {
+		return 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo en unos segundos.';
+	}
+	if (err?.code === 'RENAPER_NO_ENCONTRADO') {
 		return 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.';
+	}
+	if (err?.code === 'RENAPER_UNAVAILABLE') {
+		return 'RENAPER no responde desde el servidor en la nube. Intentá de nuevo en unos segundos o contactá al centro.';
 	}
 	return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 }

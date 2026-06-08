@@ -182,7 +182,9 @@ async function responderMensajeEntrante({
 			const texto =
 				wizardErr.code === 'RENAPER_NO_ENCONTRADO'
 					? 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.'
-					: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
+					: wizardErr.code === 'RENAPER_TIMEOUT'
+						? 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo.'
+						: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
 			return enviarTextoBot({ ...enviarOpts, texto });
 		}
 	}

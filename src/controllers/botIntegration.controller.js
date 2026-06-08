@@ -42,6 +42,29 @@ async function identificar(req, res) {
 	}
 }
 
+/** Solo RENAPER (para proxy desde Railway u otro entorno sin acceso directo a MSAL). */
+async function renaperLookup(req, res) {
+	try {
+		const dni = Number(String(req.params.dni || '').trim());
+		if (!Number.isFinite(dni) || dni <= 0) {
+			return res.status(400).json({ success: false, mensaje: 'DNI inválido' });
+		}
+		const renaperService = require('../services/renaper.service');
+		const result = await renaperService.searchByDni(dni, { debug: false, skipProxy: true, timeoutMs: 20000 });
+		if (!result.ok || !result.data) {
+			return res.status(404).json({ success: false, reason: result.reason || 'not_found' });
+		}
+		return res.json({
+			success: true,
+			persona: result.data,
+			sexoDetectado: result.sexoDetectado,
+			meta: result.meta || null,
+		});
+	} catch (err) {
+		_err(res, err, 'RENAPER_UNAVAILABLE');
+	}
+}
+
 async function buscarPacientes(req, res) {
 	try {
 		const data = await botAgenda.buscarPaciente({
@@ -195,6 +218,7 @@ module.exports = {
 	estadoGpt,
 	responderGpt,
 	identificar,
+	renaperLookup,
 	buscarPacientes,
 	crearPaciente,
 	especialidades,

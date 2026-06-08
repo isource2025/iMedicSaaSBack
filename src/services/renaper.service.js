@@ -30,30 +30,65 @@ function withTimeout(fetcher, ms = DEFAULT_TIMEOUT_MS) {
 }
 
 async function fetchJSON(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-	const { run } = withTimeout(async (ctrl) => {
-		const resp = await fetch(url, {
-			agent,
-			signal: ctrl.signal,
-			...options,
-			headers: { Accept: 'application/json', ...(options.headers || {}) },
+	const urlObj = new URL(url);
+	const method = options.method || 'GET';
+	const headers = { Accept: 'application/json', ...(options.headers || {}) };
+	const body = options.body;
+
+	return new Promise((resolve, reject) => {
+		const req = https.request(
+			{
+				hostname: urlObj.hostname,
+				port: urlObj.port || 443,
+				path: `${urlObj.pathname}${urlObj.search}`,
+				method,
+				agent,
+				headers,
+				timeout: timeoutMs,
+			},
+			(res) => {
+				let text = '';
+				res.on('data', (chunk) => {
+					text += chunk;
+				});
+				res.on('end', () => {
+					if (res.statusCode < 200 || res.statusCode >= 300) {
+						let payload = text;
+						try {
+							payload = JSON.parse(text);
+						} catch {
+							/* raw text */
+						}
+						const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+						const err = new Error(`HTTP ${res.statusCode} ${res.statusMessage || ''} - ${msg}`);
+						err.code = 'RENAPER_HTTP';
+						return reject(err);
+					}
+					if (!text) return resolve(null);
+					try {
+						resolve(JSON.parse(text));
+					} catch {
+						resolve(text);
+					}
+				});
+			},
+		);
+
+		req.on('timeout', () => {
+			req.destroy();
+			const err = new Error(`RENAPER timeout (${timeoutMs}ms)`);
+			err.code = 'RENAPER_TIMEOUT';
+			reject(err);
 		});
-		const text = await resp.text();
-		if (!resp.ok) {
-			let payload = text;
-			try {
-				payload = JSON.parse(text);
-			} catch {}
-			const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
-			throw new Error(`HTTP ${resp.status} ${resp.statusText} - ${msg}`);
-		}
-		if (!text) return null;
-		try {
-			return JSON.parse(text);
-		} catch {
-			return text;
-		}
-	}, timeoutMs);
-	return run;
+
+		req.on('error', (err) => {
+			if (!err.code) err.code = 'RENAPER_UNAVAILABLE';
+			reject(err);
+		});
+
+		if (body) req.write(body);
+		req.end();
+	});
 }
 
 function normalizePayload(payload) {
@@ -135,7 +170,7 @@ function isValidResult(res, allowSigned = true) {
 	return !!(res.numeroDocumento || res.apellido || res.nombres);
 }
 
-async function searchOnce(nroDocumento, idSexo, headers, debug = false) {
+async function searchOnce(nroDocumento, idSexo, headers, debug = false, timeoutMs = DEFAULT_TIMEOUT_MS) {
 	const url = new URL(PERSONA_URL);
 	url.searchParams.set('nroDocumento', String(nroDocumento).trim());
 	url.searchParams.set('idSexo', String(idSexo));
@@ -148,14 +183,14 @@ async function searchOnce(nroDocumento, idSexo, headers, debug = false) {
 		console.log('[RENAPER][attempt]', { url: url.toString(), headers: hlog });
 	}
 
-	const data = await fetchJSON(url.toString(), { method: 'GET', headers });
+	const data = await fetchJSON(url.toString(), { method: 'GET', headers }, timeoutMs);
 	const normalized = normalizePayload(normalizePayload(data));
 	if (debug) console.log('[RENAPER][attempt:ok]', normalized);
 	return normalized;
 }
 
 // Intenta con header `token` y sexo reportado + flip 1↔2
-async function tryAttemptsWithToken(nroDocumento, sexoNum, token, debug, allowSigned = true) {
+async function tryAttemptsWithToken(nroDocumento, sexoNum, token, debug, allowSigned = true, timeoutMs = DEFAULT_TIMEOUT_MS) {
 	const results = [];
 
 	// 1) sexoNum tal cual
@@ -165,6 +200,7 @@ async function tryAttemptsWithToken(nroDocumento, sexoNum, token, debug, allowSi
 			sexoNum,
 			{ token, codDominio: COD_DOMINIO },
 			debug,
+			timeoutMs,
 		);
 		if (isValidResult(res, allowSigned)) {
 			return { ok: true, data: res, meta: { signed: res?.codigoError === 99 } };
@@ -186,6 +222,7 @@ async function tryAttemptsWithToken(nroDocumento, sexoNum, token, debug, allowSi
 				flipped,
 				{ token, codDominio: COD_DOMINIO },
 				debug,
+				timeoutMs,
 			);
 			if (isValidResult(res2, allowSigned)) {
 				return { ok: true, data: res2, meta: { signed: res2?.codigoError === 99 } };
@@ -226,7 +263,8 @@ const renaperService = {
 	 */
 	async search(NumeroDocumento, Sexo, opts = { debug: false, allowSigned: true }) {
 		const debug = !!opts.debug;
-		const allowSigned = opts.allowSigned !== false; // por defecto true
+		const allowSigned = opts.allowSigned !== false;
+		const timeoutMs = Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS;
 		await ensureTokenFresh(PROACTIVE_TTL_MS);
 		let token = cachedToken;
 
@@ -240,6 +278,7 @@ const renaperService = {
 				token,
 				debug,
 				allowSigned,
+				timeoutMs,
 			);
 			if (first.ok) return first;
 			return { ok: false, reason: 'not_found' };
@@ -249,7 +288,6 @@ const renaperService = {
 			if (debug) console.warn('[RENAPER] 401; refrescando token y reintentando…');
 		}
 
-		// Sólo si hubo 401: refresh y reintento único
 		token = await getFreshToken();
 		try {
 			const second = await tryAttemptsWithToken(
@@ -258,6 +296,7 @@ const renaperService = {
 				token,
 				debug,
 				allowSigned,
+				timeoutMs,
 			);
 			if (second.ok) return second;
 			return { ok: false, reason: 'not_found' };
@@ -274,12 +313,64 @@ const renaperService = {
 };
 
 /**
+ * Consulta RENAPER vía servidor intermedio (ej. on-prem con acceso a MSAL).
+ * RENAPER_PROXY_BASE_URL=https://tu-servidor/api/integrations/bot
+ */
+async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
+	const base = String(process.env.RENAPER_PROXY_BASE_URL || '').replace(/\/$/, '');
+	const key = String(process.env.RENAPER_PROXY_API_KEY || process.env.BOT_API_KEY || '').trim();
+	const timeoutMs = Number(opts.timeoutMs) || 25000;
+	const url = `${base}/renaper/${encodeURIComponent(String(NumeroDocumento).trim())}`;
+
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+	try {
+		const resp = await fetch(url, {
+			signal: ctrl.signal,
+			headers: {
+				Accept: 'application/json',
+				...(key ? { 'X-API-Key': key } : {}),
+			},
+		});
+		const body = await resp.json();
+		if (!resp.ok || !body?.success || !body?.persona) {
+			return { ok: false, reason: body?.reason || 'not_found' };
+		}
+		const p = body.persona;
+		const sexoDetectado =
+			body.sexoDetectado ||
+			(p.sexo === 'F' || p.sexo === 'M' ? p.sexo : null) ||
+			'M';
+		return {
+			ok: true,
+			data: p,
+			sexoDetectado,
+			meta: { ...(body.meta || {}), proxy: true },
+		};
+	} catch (err) {
+		const e = new Error(err?.message || 'Proxy RENAPER falló');
+		e.code = err?.name === 'AbortError' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+		throw e;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
  * Busca persona solo por DNI: prueba ambos sexos en RENAPER (F y M).
  * @returns {Promise<{ok:true, data:any, sexoDetectado?:string, meta?:object} | {ok:false, reason:string}>}
  */
 async function searchByDni(NumeroDocumento, opts = { debug: false, allowSigned: true }) {
+	const proxyBase = String(process.env.RENAPER_PROXY_BASE_URL || '').trim();
+	if (proxyBase && !opts.skipProxy) {
+		return searchByDniViaProxy(NumeroDocumento, opts);
+	}
+
+	const timeoutMs = Number(opts.timeoutMs) || 15000;
+	const searchOpts = { ...opts, timeoutMs, skipProxy: true };
+
 	for (const sexo of ['M', 'F']) {
-		const result = await renaperService.search(NumeroDocumento, sexo, opts);
+		const result = await renaperService.search(NumeroDocumento, sexo, searchOpts);
 		if (result.ok && result.data) {
 			const rawSexo = result.data.sexo;
 			const sexoDetectado =

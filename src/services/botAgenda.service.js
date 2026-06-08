@@ -103,6 +103,35 @@ async function _actualizarTelefonoPaciente(idPaciente, telefono) {
 	}
 }
 
+function _renaperDataDesdePacienteLocal(pacienteLocal, dni) {
+	return {
+		numeroDocumento: dni,
+		apellido: null,
+		nombres: null,
+		nombreCompleto: pacienteLocal?.nombre || null,
+		fechaNacimiento: pacienteLocal?.fechaNacimiento || null,
+		sexo: pacienteLocal?.sexo || null,
+		domicilio: null,
+		fuente: 'local',
+	};
+}
+
+function _mapRenaperData(p, dni, sexoDetectado, renaperSigned) {
+	return {
+		numeroDocumento: p.numeroDocumento != null ? Number(p.numeroDocumento) : dni,
+		apellido: String(p.apellido || p.Apellido || '').trim() || null,
+		nombres: String(p.nombres || p.Nombres || p.nombre || p.Nombre || '').trim() || null,
+		nombreCompleto: _nombreDesdeRenaper(p),
+		fechaNacimiento: p.fechaNacimiento ? String(p.fechaNacimiento).slice(0, 10) : null,
+		sexo: sexoDetectado,
+		domicilio: _domicilioDesdeRenaper(p),
+		ciudad: p.ciudad ? String(p.ciudad).trim() : null,
+		provincia: p.provincia ? String(p.provincia).trim() : null,
+		documentoFirmado: renaperSigned,
+		fuente: 'renaper',
+	};
+}
+
 async function identificarPaciente({
 	numeroDocumento,
 	sexo,
@@ -119,42 +148,55 @@ async function identificarPaciente({
 	let renaperOk = false;
 	let renaperSigned = false;
 	let sexoDetectado = null;
-
-	if (config.reglas.requiereRenaper !== false) {
-		const renaperResult = sexoHint
-			? await renaperService.search(dni, sexoHint, { debug: false })
-			: await renaperService.searchByDni(dni, { debug: false });
-
-		if (renaperResult.ok && renaperResult.data) {
-			renaperOk = true;
-			renaperSigned = !!renaperResult.meta?.signed;
-			sexoDetectado =
-				renaperResult.sexoDetectado ||
-				_sexoRenaperToLocal(renaperResult.data.sexo) ||
-				(sexoHint ? _sexoRenaperToLocal(sexoHint) : null);
-			const p = renaperResult.data;
-			renaperData = {
-				numeroDocumento: p.numeroDocumento != null ? Number(p.numeroDocumento) : dni,
-				apellido: String(p.apellido || p.Apellido || '').trim() || null,
-				nombres: String(p.nombres || p.Nombres || p.nombre || p.Nombre || '').trim() || null,
-				nombreCompleto: _nombreDesdeRenaper(p),
-				fechaNacimiento: p.fechaNacimiento ? String(p.fechaNacimiento).slice(0, 10) : null,
-				sexo: sexoDetectado,
-				domicilio: _domicilioDesdeRenaper(p),
-				ciudad: p.ciudad ? String(p.ciudad).trim() : null,
-				provincia: p.provincia ? String(p.provincia).trim() : null,
-				documentoFirmado: renaperSigned,
-			};
-		} else if (config.reglas.requiereRenaper === true) {
-			const e = new Error('No se encontraron datos en RENAPER');
-			e.statusCode = 404;
-			e.code = 'RENAPER_NO_ENCONTRADO';
-			throw e;
-		}
-	}
+	let renaperError = null;
 
 	const localRow = await _buscarPacienteLocalPorDni(dni);
 	let pacienteLocal = localRow ? _mapPacienteRow(localRow) : null;
+
+	if (config.reglas.requiereRenaper !== false) {
+		const renaperOpts = { debug: false, timeoutMs: 15000 };
+		try {
+			const renaperResult = sexoHint
+				? await renaperService.search(dni, sexoHint, renaperOpts)
+				: await renaperService.searchByDni(dni, renaperOpts);
+
+			if (renaperResult.ok && renaperResult.data) {
+				renaperOk = true;
+				renaperSigned = !!renaperResult.meta?.signed;
+				sexoDetectado =
+					renaperResult.sexoDetectado ||
+					_sexoRenaperToLocal(renaperResult.data.sexo) ||
+					(sexoHint ? _sexoRenaperToLocal(sexoHint) : null);
+				renaperData = _mapRenaperData(
+					renaperResult.data,
+					dni,
+					sexoDetectado,
+					renaperSigned,
+				);
+			}
+		} catch (err) {
+			renaperError = err;
+			console.warn('[botAgenda] RENAPER error:', err.message, err.code || '');
+		}
+	}
+
+	if (!renaperOk && pacienteLocal) {
+		renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
+		renaperOk = true;
+		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
+	} else if (!renaperOk && config.reglas.requiereRenaper === true) {
+		if (renaperError) {
+			const e = new Error('Servicio RENAPER no disponible desde el servidor');
+			e.statusCode = 503;
+			e.code = renaperError.code === 'RENAPER_TIMEOUT' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+			throw e;
+		}
+		const e = new Error('No se encontraron datos en RENAPER');
+		e.statusCode = 404;
+		e.code = 'RENAPER_NO_ENCONTRADO';
+		throw e;
+	}
+
 	let idPaciente = pacienteLocal?.idPaciente ?? null;
 	let accionSugerida = 'CONFIRMAR_DATOS';
 	let pacienteCreado = false;
@@ -232,7 +274,9 @@ async function identificarPaciente({
 	}
 
 	return {
-		renaper: renaperOk ? { encontrado: true, ...renaperData } : { encontrado: false },
+		renaper: renaperOk
+			? { encontrado: true, fuente: renaperData?.fuente || 'renaper', ...renaperData }
+			: { encontrado: false },
 		pacienteLocal: pacienteLocal ? { existe: true, ...pacienteLocal } : { existe: false },
 		idPaciente,
 		pacienteCreado,
