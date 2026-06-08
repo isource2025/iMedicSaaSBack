@@ -105,6 +105,14 @@ async function getBotConfig() {
 			permiteSobreturno: db.permite_sobreturno ?? envBool('BOT_PERMITE_SOBRETURNO', false),
 			crearPacienteAutomatico: db.crear_paciente_automatico ?? envBool('BOT_CREAR_PACIENTE_AUTO', true),
 			sugerirPrimerTurnoDisponible: resolveSugerirPrimerTurno(db),
+			/** Panel Bot → Reglas → Búsqueda de disponibilidad */
+			busquedaMaxDias: db.busqueda_max_dias ?? envInt('BOT_BUSQUEDA_MAX_DIAS', 21),
+			busquedaMaxProfesionales:
+				db.busqueda_max_profesionales ?? envInt('BOT_MAX_PROF_BUSQUEDA', 12),
+			busquedaConcurrencia:
+				db.busqueda_concurrencia ?? envInt('BOT_BUSQUEDA_CONCURRENCIA', 4),
+			busquedaTimeoutMs:
+				db.busqueda_timeout_ms ?? envInt('BOT_TURNO_BUSQUEDA_TIMEOUT_MS', 12_000),
 		},
 		api: {
 			basePath: '/api/integrations/bot',
@@ -278,6 +286,22 @@ async function saveBotConfig(payload = {}) {
 			reglas.sugerirPrimerTurnoDisponible ? 'true' : 'false',
 			'bool',
 		);
+	}
+	if (reglas.busquedaMaxDias != null) {
+		const dias = Math.max(1, Math.min(120, Math.round(Number(reglas.busquedaMaxDias) || 21)));
+		await upsertConfigClave('busqueda_max_dias', dias, 'int');
+	}
+	if (reglas.busquedaMaxProfesionales != null) {
+		const n = Math.max(1, Math.min(30, Math.round(Number(reglas.busquedaMaxProfesionales) || 12)));
+		await upsertConfigClave('busqueda_max_profesionales', n, 'int');
+	}
+	if (reglas.busquedaConcurrencia != null) {
+		const n = Math.max(1, Math.min(8, Math.round(Number(reglas.busquedaConcurrencia) || 4)));
+		await upsertConfigClave('busqueda_concurrencia', n, 'int');
+	}
+	if (reglas.busquedaTimeoutMs != null) {
+		const ms = Math.max(3000, Math.min(60_000, Math.round(Number(reglas.busquedaTimeoutMs) || 12_000)));
+		await upsertConfigClave('busqueda_timeout_ms', ms, 'int');
 	}
 	if (Array.isArray(flujo) && flujo.length) {
 		await upsertConfigClave('flujo_pasos', flujo, 'json');

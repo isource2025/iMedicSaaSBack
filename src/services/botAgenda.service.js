@@ -1476,23 +1476,26 @@ function _fechasCandidatasBusqueda(maxDias, excluir, preferir) {
 	return fechas;
 }
 
-function _busquedaTurnoTimeoutMs() {
-	return Number(process.env.BOT_TURNO_BUSQUEDA_TIMEOUT_MS || 12_000);
+function _busquedaTurnoTimeoutMs(reglas) {
+	return Math.max(
+		3000,
+		Math.min(60_000, Number(reglas?.busquedaTimeoutMs ?? 12_000)),
+	);
 }
 
-function _busquedaTurnoConcurrencia() {
-	return Math.max(1, Math.min(8, Number(process.env.BOT_BUSQUEDA_CONCURRENCIA || 4)));
+function _busquedaTurnoConcurrencia(reglas) {
+	return Math.max(1, Math.min(8, Number(reglas?.busquedaConcurrencia ?? 4)));
 }
 
 function _maxDiasBusquedaBot(config, preferir) {
 	const cfg = config.reglas.diasMaxAntelacion || 60;
-	const cap = Number(process.env.BOT_BUSQUEDA_MAX_DIAS || 21);
+	const cap = Number(config.reglas.busquedaMaxDias ?? 21);
 	if (preferir.fechas.size || preferir.diasSemana.size) return cfg;
 	return Math.min(cfg, cap);
 }
 
-function _maxProfesionalesBusqueda() {
-	return Math.max(1, Math.min(30, Number(process.env.BOT_MAX_PROF_BUSQUEDA || 12)));
+function _maxProfesionalesBusqueda(reglas) {
+	return Math.max(1, Math.min(30, Number(reglas?.busquedaMaxProfesionales ?? 12)));
 }
 
 async function _profesionalesConLibresEnDia(fechaIso, esp, ordenados) {
@@ -1593,10 +1596,10 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const maxDias = _maxDiasBusquedaBot(config, preferir);
 	const ordenados = [...profesionales]
 		.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
-		.slice(0, _maxProfesionalesBusqueda());
+		.slice(0, _maxProfesionalesBusqueda(config.reglas));
 	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
-	const deadline = Date.now() + _busquedaTurnoTimeoutMs();
-	const concurrencia = _busquedaTurnoConcurrencia();
+	const deadline = Date.now() + _busquedaTurnoTimeoutMs(config.reglas);
+	const concurrencia = _busquedaTurnoConcurrencia(config.reglas);
 
 	for (const fechaIso of fechas) {
 		if (Date.now() > deadline) break;
