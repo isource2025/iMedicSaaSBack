@@ -580,6 +580,81 @@ async function actualizarContextoPaciente(idConversacion, { idPaciente, dniPacie
 	return obtenerConversacion(idConversacion);
 }
 
+/**
+ * Borra conversación + mensajes de un teléfono (testing desde WhatsApp).
+ */
+async function resetConversacionPorTelefono(telefonoWhatsApp) {
+	await checkConversationTables();
+	const tel = normalizarTelefono(telefonoWhatsApp);
+	const idConv = idDesdeTelefono(tel);
+
+	if (useMemory) {
+		const nMsg = (memMensajes.get(idConv) || []).length;
+		memMensajes.delete(idConv);
+		memConversaciones.delete(idConv);
+		return {
+			idConversacion: idConv,
+			telefono: tel,
+			mensajesEliminados: nMsg,
+			conversacionesEliminadas: 1,
+		};
+	}
+
+	const countRows = await executeQuery(
+		`SELECT COUNT(*) AS n FROM dbo.imBotMensaje WHERE IdConversacion = @p0`,
+		[{ value: idConv, type: 'VarChar' }],
+	);
+	const mensajesEliminados = Number(countRows?.[0]?.n || 0);
+
+	await executeQuery(
+		`DELETE FROM dbo.imBotMensaje WHERE IdConversacion = @p0`,
+		[{ value: idConv, type: 'VarChar' }],
+	);
+	await executeQuery(
+		`DELETE FROM dbo.imBotConversacion WHERE IdConversacion = @p0`,
+		[{ value: idConv, type: 'VarChar' }],
+	);
+
+	return {
+		idConversacion: idConv,
+		telefono: tel,
+		mensajesEliminados,
+		conversacionesEliminadas: 1,
+	};
+}
+
+/**
+ * Borra todas las conversaciones y mensajes del tenant (solo testing con PIN).
+ */
+async function resetTodasLasConversaciones() {
+	await checkConversationTables();
+
+	if (useMemory) {
+		let mensajesEliminados = 0;
+		for (const list of memMensajes.values()) mensajesEliminados += list.length;
+		const conversacionesEliminadas = memConversaciones.size;
+		memMensajes.clear();
+		memConversaciones.clear();
+		return { mensajesEliminados, conversacionesEliminadas };
+	}
+
+	const msgCount = await executeQuery(`SELECT COUNT(*) AS n FROM dbo.imBotMensaje`);
+	const convCount = await executeQuery(`SELECT COUNT(*) AS n FROM dbo.imBotConversacion`);
+	const mensajesEliminados = Number(msgCount?.[0]?.n || 0);
+	const conversacionesEliminadas = Number(convCount?.[0]?.n || 0);
+
+	await executeQuery(`DELETE FROM dbo.imBotMensaje`);
+	await executeQuery(`DELETE FROM dbo.imBotConversacion`);
+
+	try {
+		await executeQuery(`DELETE FROM dbo.imBotTurnosLog`);
+	} catch {
+		/* tabla opcional */
+	}
+
+	return { mensajesEliminados, conversacionesEliminadas };
+}
+
 module.exports = {
 	checkConversationTables,
 	normalizarTelefono,
@@ -596,4 +671,6 @@ module.exports = {
 	puedeResponderBot,
 	puedeResponderBotPorTelefono,
 	actualizarContextoPaciente,
+	resetConversacionPorTelefono,
+	resetTodasLasConversaciones,
 };

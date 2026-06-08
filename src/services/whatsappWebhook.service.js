@@ -1,5 +1,6 @@
 const botConversacion = require('./botConversacion.service');
 const botResponder = require('./botResponder.service');
+const botReset = require('./botReset.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const diag = require('../utils/diagLog');
 const { runWithTenant } = require('../context/tenantContext');
@@ -131,6 +132,16 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 		await runWithTenant(idEmpresa, async () => {
 			for (const m of mensajes) {
 				try {
+					if (botReset.esComandoReset(m.contenido)) {
+						const reset = await botReset.procesarComandoReset({
+							idEmpresa,
+							telefonoWhatsApp: m.telefono,
+							contenido: m.contenido,
+						});
+						resultados.push({ reset, botReply: { respondido: false, motivo: 'comando-reset' } });
+						continue;
+					}
+
 					const r = await botConversacion.registrarMensajeEntrante({
 						telefonoWhatsApp: m.telefono,
 						contenido: m.contenido,
