@@ -8,11 +8,13 @@ router.get("/visita/:numeroVisita", hcIngresoController.obtenerHCIngresoPorVisit
 // Obtener HC de Ingreso por ID
 router.get("/:id", hcIngresoController.obtenerHCIngresoPorId);
 
+const { requireAuth } = require('../middlewares/authJwt.middleware');
+
 // Crear nueva HC de Ingreso
-router.post("/", hcIngresoController.crearHCIngreso);
+router.post("/", requireAuth, hcIngresoController.crearHCIngreso);
 
 // Actualizar HC de Ingreso
-router.put("/:id", hcIngresoController.actualizarHCIngreso);
+router.put("/:id", requireAuth, hcIngresoController.actualizarHCIngreso);
 
 // Eliminar HC de Ingreso
 router.delete("/:id", hcIngresoController.eliminarHCIngreso);

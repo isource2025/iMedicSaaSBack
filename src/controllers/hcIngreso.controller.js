@@ -81,7 +81,7 @@ const crearHCIngreso = async (req, res) => {
             });
         }
 
-        const resultado = await hcIngresoService.crearHCIngreso(data);
+        const resultado = await hcIngresoService.crearHCIngreso(data, req.auth);
 
         res.status(201).json({
             success: true,
@@ -113,7 +113,7 @@ const actualizarHCIngreso = async (req, res) => {
             });
         }
 
-        const resultado = await hcIngresoService.actualizarHCIngreso(id, data);
+        const resultado = await hcIngresoService.actualizarHCIngreso(id, data, req.auth);
 
         res.json({
             success: true,

@@ -63,6 +63,49 @@ function normalizarIdSector(value) {
     return String(candidate || "").trim().slice(0, 4);
 }
 
+function resolverCodOperadorDesdeAuth(auth) {
+    if (!auth) return null;
+    const u = auth.usuario || {};
+    const candidates = [u.codOperador, u.idCodOperador, u.CodOperador];
+    for (const c of candidates) {
+        const n = c != null && c !== '' ? Number(c) : NaN;
+        if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+}
+
+async function resolverCodOperadorSesion(auth) {
+    const fromJwt = resolverCodOperadorDesdeAuth(auth);
+    if (fromJwt) return fromJwt;
+
+    const vp = auth?.usuario?.id ?? auth?.usuario?.idValorpersonal ?? auth?.usuario?.valorPersonal;
+    const vpNum = vp != null && vp !== '' ? Number(vp) : NaN;
+    if (!Number.isFinite(vpNum) || vpNum <= 0) return null;
+
+    try {
+        const rows = await executeQuery(
+            'SELECT TOP 1 CodOperador FROM dbo.imPassword WHERE ValorPersonal = @p0',
+            [{ value: vpNum }],
+        );
+        const cod = rows[0]?.CodOperador;
+        const n = cod != null && cod !== '' ? Number(cod) : NaN;
+        if (Number.isFinite(n) && n > 0) return n;
+    } catch (err) {
+        console.warn('[hcIngreso] resolverCodOperadorSesion:', err.message);
+    }
+    return null;
+}
+
+async function aplicarAutorSesion(data, auth) {
+    const next = { ...data };
+    const actual = normalizarNumero(next.IdProfecional);
+    if (actual <= 0 && auth) {
+        const cod = await resolverCodOperadorSesion(auth);
+        if (cod) next.IdProfecional = cod;
+    }
+    return next;
+}
+
 /**
  * Guardar signos vitales en tabla de controles frecuentes
  * Esta función se ejecuta automáticamente al crear/editar HC
@@ -133,7 +176,8 @@ const guardarSignosVitalesEnControles = async (data) => {
             );
         `;
         
-        const operador = normalizarNumero(data.IdProfecional);
+        const operadorRaw = normalizarNumero(data.IdProfecional);
+        const operador = operadorRaw > 0 ? operadorRaw : 0;
         const params = [
             { value: data.NumeroVisita },
             { value: fechaClarion },     // FechaCarga
@@ -361,9 +405,10 @@ const buildDynamicFields = (data) => {
     return { columns, values, params };
 };
 
-const crearHCIngreso = async (data) => {
+const crearHCIngreso = async (data, auth = null) => {
     try {
-        const { columns, values, params } = buildDynamicFields(data);
+        const payload = await aplicarAutorSesion(data, auth);
+        const { columns, values, params } = buildDynamicFields(payload);
         
         const sql = `
             INSERT INTO dbo.imHCI (${columns.join(', ')})
@@ -378,7 +423,7 @@ const crearHCIngreso = async (data) => {
         
         // Guardar datos medibles en controles frecuentes con IdHci
         const resultadoControles = await guardarSignosVitalesEnControles({
-            ...data,
+            ...payload,
             IdHCIngreso: idHCIngreso
         });
         
@@ -397,48 +442,49 @@ const crearHCIngreso = async (data) => {
 /**
  * Actualizar HC de Ingreso
  */
-const actualizarHCIngreso = async (idHCIngreso, data) => {
+const actualizarHCIngreso = async (idHCIngreso, data, auth = null) => {
     try {
-        const sincronizarSignosVitales = data.sincronizarSignosVitales === true;
+        const dataConAutor = await aplicarAutorSesion(data, auth);
+        const sincronizarSignosVitales = dataConAutor.sincronizarSignosVitales === true;
 
         const setClauses = [];
         const params = [{ value: idHCIngreso }]; // @param0 = WHERE
         let paramIndex = 1;
 
-        if (data.IdSector !== undefined) {
+        if (dataConAutor.IdSector !== undefined) {
             setClauses.push(`IdSector = @param${paramIndex}`);
-            params.push({ value: normalizarIdSector(data.IdSector) });
+            params.push({ value: normalizarIdSector(dataConAutor.IdSector) });
             paramIndex++;
         }
 
-        if (data.MotivoConsulta !== undefined) {
+        if (dataConAutor.MotivoConsulta !== undefined) {
             setClauses.push(`MotivoConsulta = @param${paramIndex}`);
-            params.push({ value: valorTextoHci(data.MotivoConsulta) });
+            params.push({ value: valorTextoHci(dataConAutor.MotivoConsulta) });
             paramIndex++;
         }
 
-        if (data.EnfermedadActual !== undefined) {
+        if (dataConAutor.EnfermedadActual !== undefined) {
             setClauses.push(`EnfermedadActual = @param${paramIndex}`);
-            params.push({ value: valorTextoHci(data.EnfermedadActual) });
+            params.push({ value: valorTextoHci(dataConAutor.EnfermedadActual) });
             paramIndex++;
         }
 
-        if (data.IdProfecional !== undefined) {
+        if (dataConAutor.IdProfecional !== undefined) {
             setClauses.push(`IdProfecional = @param${paramIndex}`);
-            params.push({ value: normalizarNumero(data.IdProfecional) });
+            params.push({ value: normalizarNumero(dataConAutor.IdProfecional) });
             paramIndex++;
         }
 
-        if (data.fecha !== undefined || data.hora !== undefined || data.Fecha !== undefined) {
+        if (dataConAutor.fecha !== undefined || dataConAutor.hora !== undefined || dataConAutor.Fecha !== undefined) {
             setClauses.push(`Fecha = @param${paramIndex}`);
-            params.push({ value: normalizarFechaHci(data) });
+            params.push({ value: normalizarFechaHci(dataConAutor) });
             paramIndex++;
         }
         
         // Campos dinámicos del examen físico
         const prefijosValidos = ['SV','PF','TCS','SL','SOAM','C','CU','M','AR','AC','A','AUG','AIG','SN','EO','EC','RDT','PD','PT','AD','EN','MI','MP','EG','DIA'];
         
-        Object.keys(data).forEach(key => {
+        Object.keys(dataConAutor).forEach(key => {
             if (key === 'sincronizarSignosVitales') return;
             if (CAMPOS_BASICOS_HCI.includes(key)) return;
             if (key === 'fecha' || key === 'hora') return;
@@ -446,7 +492,7 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
             const prefijo = key.split('_')[0];
             if (!prefijosValidos.includes(prefijo)) return;
             
-            const valor = data[key];
+            const valor = dataConAutor[key];
             if (valor === undefined) return;
             
             setClauses.push(`[${mapColumnName(key)}] = @param${paramIndex}`);
@@ -456,9 +502,9 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
         
         // Campos especiales sin prefijo
         ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO'].forEach(campo => {
-            if (data[campo] !== undefined) {
+            if (dataConAutor[campo] !== undefined) {
                 setClauses.push(`[${campo}] = @param${paramIndex}`);
-                params.push({ value: data[campo] !== null ? valorTextoHci(data[campo]) : '' });
+                params.push({ value: dataConAutor[campo] !== null ? valorTextoHci(dataConAutor[campo]) : '' });
                 paramIndex++;
             }
         });
@@ -480,10 +526,16 @@ const actualizarHCIngreso = async (idHCIngreso, data) => {
 
         let signosVitalesEnControles = false;
         if (sincronizarSignosVitales) {
+            let payloadControles = { ...dataConAutor };
+            if (normalizarNumero(payloadControles.IdProfecional) <= 0) {
+                const hc = await obtenerHCIngresoPorId(idHCIngreso);
+                if (hc?.IdProfecional) payloadControles.IdProfecional = hc.IdProfecional;
+                payloadControles = await aplicarAutorSesion(payloadControles, auth);
+            }
             const resultadoControles = await guardarSignosVitalesEnControles({
-                ...data,
+                ...payloadControles,
                 IdHCIngreso: idHCIngreso,
-                NumeroVisita: data.NumeroVisita,
+                NumeroVisita: dataConAutor.NumeroVisita,
             });
             signosVitalesEnControles = resultadoControles.success;
             console.log('Resultado guardado en controles (signos vitales modificados):', resultadoControles.message);
