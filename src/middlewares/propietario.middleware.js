@@ -19,8 +19,19 @@
  *   failSafe     {boolean} Si es true (default), cuando NO hay columna de
  *                          autor o no hay registro deja pasar. Si es false,
  *                          bloquea ante la duda.
+ *   permitirAdmin {boolean} Si true (default), rol ADMIN omite verificación de autor.
  */
 const { executeQuery } = require('../models/db');
+
+/** ADMIN de tenant (no SUPER_ADMIN plataforma): puede editar registros ajenos en internación. */
+function esAdminClinico(req) {
+	const rn = req.rolNombre ?? req.auth?.rol?.nombre;
+	const rolNombre = rn ? String(rn).trim().toUpperCase() : '';
+	if (rolNombre === 'ADMIN') return true;
+	const rolId = req.auth?.rol?.id;
+	if (rolId != null && Number(rolId) === 1) return true;
+	return false;
+}
 
 function resolverIdentificadorSesion(req, { autorEsMatricula }) {
 	if (autorEsMatricula) {
@@ -41,9 +52,14 @@ function requirePropietario({
 	pkParam = 'id',
 	failSafe = true,
 	autorEsMatricula = false,
+	permitirAdmin = true,
 }) {
 	return async (req, res, next) => {
 		try {
+			if (permitirAdmin && esAdminClinico(req)) {
+				return next();
+			}
+
 			const pkRaw = req.params[pkParam];
 			if (!pkRaw) {
 				if (failSafe) return next();
