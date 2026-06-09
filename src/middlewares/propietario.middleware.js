@@ -23,13 +23,56 @@
  */
 const { executeQuery } = require('../models/db');
 
-/** ADMIN de tenant (no SUPER_ADMIN plataforma): puede editar registros ajenos en internación. */
-function esAdminClinico(req) {
+/** ADMIN de tenant: puede editar registros ajenos en internación. */
+async function esAdminClinico(req) {
 	const rn = req.rolNombre ?? req.auth?.rol?.nombre;
 	const rolNombre = rn ? String(rn).trim().toUpperCase() : '';
 	if (rolNombre === 'ADMIN') return true;
 	const rolId = req.auth?.rol?.id;
 	if (rolId != null && Number(rolId) === 1) return true;
+
+	if (!req.valorPersonal) return false;
+
+	try {
+		const rows = await executeQuery(
+			`
+      SELECT
+        pw.Grupo,
+        LTRIM(RTRIM(ISNULL(r.Nombre, ''))) AS RolNombre,
+        LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId
+      FROM dbo.imPassword pw
+      LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
+      LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
+      WHERE pw.ValorPersonal = @p0
+      `,
+			[{ value: Number(req.valorPersonal) }],
+		);
+		const row = rows[0];
+		if (!row) return false;
+		if (Number(row.Grupo) === 11) return true;
+		const dbRol = String(row.RolNombre || '').trim().toUpperCase();
+		if (dbRol === 'ADMIN') return true;
+		const dbRolId = row.RolId != null && row.RolId !== '' ? Number(row.RolId) : NaN;
+		if (Number.isFinite(dbRolId) && dbRolId === 1) return true;
+	} catch (err) {
+		console.warn('[propietario.middleware] esAdminClinico:', err.message);
+	}
+
+	return false;
+}
+
+function coincideAutor(autor, identificadorSesion, req) {
+	if (identificadorSesion != null && Number(autor) === Number(identificadorSesion)) {
+		return true;
+	}
+	// imHCEvolucion legacy: Profecional suele guardar ValorPersonal (idPersonal del sector), no Matricula
+	if (req.valorPersonal != null && Number(autor) === Number(req.valorPersonal)) {
+		return true;
+	}
+	const cod = req.auth?.usuario?.codOperador;
+	if (cod != null && cod !== '' && Number(autor) === Number(cod)) {
+		return true;
+	}
 	return false;
 }
 
@@ -56,7 +99,7 @@ function requirePropietario({
 }) {
 	return async (req, res, next) => {
 		try {
-			if (permitirAdmin && esAdminClinico(req)) {
+			if (permitirAdmin && (await esAdminClinico(req))) {
 				return next();
 			}
 
@@ -109,7 +152,7 @@ function requirePropietario({
 				});
 			}
 
-			if (Number(autor) === Number(identificadorSesion)) {
+			if (coincideAutor(autor, identificadorSesion, req)) {
 				return next(); // es el autor, puede editar
 			}
 
