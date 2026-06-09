@@ -96,21 +96,17 @@ const opcGrdService = {
     try {
       const query = `
         SELECT 
-          id,
+          rubro,
           descripcion,
-          habilitado,
-          fechaCreacion,
-          fechaModificacion,
-          usuarioCreacion,
-          usuarioModificacion
+          icono,
+          orden
         FROM 
           imOpcGrd 
         WHERE 
-          id = ${id}
+          rubro = @p0
       `;
       
-      console.log(`Ejecutando consulta para obtener opción de grilla con ID ${id}:`, query);
-      const result = await executeQuery(query);
+      const result = await executeQuery(query, [{ value: String(id) }]);
       
       if (result && result.length > 0) {
         console.log(`Opción de grilla encontrada con ID ${id}`);

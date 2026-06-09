@@ -32,8 +32,8 @@ const religionService = {
    */
   getReligion: async (valor) => {
     try {
-      const query = 'SELECT Valor, Descripcion FROM imReligion WHERE Valor = ?';
-      const result = await executeQuery(query, [valor]);
+      const query = 'SELECT Valor, Descripcion FROM imReligion WHERE Valor = @p0';
+      const result = await executeQuery(query, [{ value: valor }]);
       
       return result.length > 0 ? result[0] : null;
     } catch (error) {

@@ -22,12 +22,12 @@ class HCIService {
         FROM imHCI h
         LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
-        WHERE h.NumeroVisita = @numeroVisita
+        WHERE h.NumeroVisita = @p0
         ORDER BY h.Fecha DESC
       `;
       
       const result = await executeQuery(query, [
-        { name: 'numeroVisita', type: 'Int', value: numeroVisita }
+        { value: numeroVisita, type: 'Int' }
       ]);
       
       console.log(`[HCI SERVICE] ✅ ${result.length} registros encontrados`);
@@ -56,11 +56,11 @@ class HCIService {
         FROM imHCI h
         LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
-        WHERE h.IdHCIngreso = @id
+        WHERE h.IdHCIngreso = @p0
       `;
       
       const result = await executeQuery(query, [
-        { name: 'id', type: 'Int', value: id }
+        { value: id, type: 'Int' }
       ]);
       
       if (result.length === 0) {
@@ -136,11 +136,11 @@ class HCIService {
         UPDATE imHCI 
         SET ${campos}
         OUTPUT INSERTED.*
-        WHERE IdHCIngreso = @id
+        WHERE IdHCIngreso = @p0
       `;
       
       const params = [
-        { name: 'id', type: 'Int', value: id },
+        { value: id, type: 'Int' },
         ...Object.keys(data)
           .filter(k => k !== 'IdHCIngreso' && data[k] !== undefined && data[k] !== null)
           .map(campo => ({
@@ -184,12 +184,12 @@ class HCIService {
         INNER JOIN imHCI h ON v.NUMEROVISITA = h.NumeroVisita
         LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
-        WHERE v.IdPaciente = @idPaciente
+        WHERE v.IdPaciente = @p0
         ORDER BY h.Fecha DESC
       `;
       
       const result = await executeQuery(query, [
-        { name: 'idPaciente', type: 'Int', value: idPaciente }
+        { value: idPaciente, type: 'Int' }
       ]);
       
       console.log(`[HCI SERVICE] ✅ ${result.length} registros encontrados`);
@@ -217,7 +217,7 @@ class HCIService {
       `;
       
       await executeQuery(query, [
-        { name: 'id', type: 'Int', value: id }
+        { value: id, type: 'Int' }
       ]);
       
       console.log('[HCI SERVICE] ✅ HC eliminada exitosamente');

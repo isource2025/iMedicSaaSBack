@@ -934,6 +934,58 @@ const getLaboralCatalogs = async () => {
 	}
 };
 
+/** Catálogos combinados para formularios de paciente (admisión / ficha). */
+const obtenerTablasReferencia = async () => {
+	const safe = async (label, fn) => {
+		try {
+			return await fn();
+		} catch (err) {
+			console.warn(`[obtenerTablasReferencia] ${label}:`, err.message);
+			return [];
+		}
+	};
+
+	const [
+		sexos,
+		razas,
+		religiones,
+		estadosCiviles,
+		provincias,
+		nacionalidades,
+		gruposEtnicos,
+		estadosMilitares,
+		dadoresOrganos,
+		idiomasISO,
+		laboral,
+	] = await Promise.all([
+		safe('sexos', () => executeQuery(`SELECT CAST(valor AS VARCHAR(1)) AS valor, descripcion FROM imSexo ORDER BY descripcion`)),
+		safe('razas', () => executeQuery(`SELECT Valor, Descripcion FROM imRaza ORDER BY Descripcion`)),
+		safe('religiones', () => executeQuery(`SELECT Valor, Descripcion FROM imReligion ORDER BY Descripcion`)),
+		safe('estadosCiviles', () => executeQuery(`SELECT Valor, Descripcion FROM imEstadoCivil ORDER BY Descripcion`)),
+		safe('provincias', () => executeQuery(`SELECT Valor, Descripcion FROM imProvincias ORDER BY Descripcion`)),
+		safe('nacionalidades', () => executeQuery(`SELECT Valor, Descripcion FROM imNacionalidad ORDER BY Descripcion`)),
+		safe('gruposEtnicos', () => executeQuery(`SELECT Valor, descripcion AS Descripcion FROM imGrupoEtnico ORDER BY descripcion`)),
+		safe('estadosMilitares', () => executeQuery(`SELECT Valor, Descripcion FROM imEstadoMilitar ORDER BY Descripcion`)),
+		safe('dadoresOrganos', () => executeQuery(`SELECT Valor, Descripcion FROM imDadorOrganos ORDER BY Descripcion`)),
+		safe('idiomasISO', () => executeQuery(`SELECT Valor, descripcion AS Descripcion FROM imIdiomaISO ORDER BY descripcion`)),
+		safe('laboral', getLaboralCatalogs),
+	]);
+
+	return {
+		sexos,
+		razas,
+		religiones,
+		estadosCiviles,
+		provincias,
+		nacionalidades,
+		gruposEtnicos,
+		estadosMilitares,
+		dadoresOrganos,
+		idiomasISO,
+		...laboral,
+	};
+};
+
 module.exports = {
 	obtenerPacientes,
 	buscarPacientes,
@@ -945,5 +997,6 @@ module.exports = {
 	obtenerVisitaPorNumero,
 	registrarEgresoPaciente,
 	getLaboralCatalogs,
+	obtenerTablasReferencia,
 	contarPacientes,
 };

@@ -9,7 +9,7 @@ const { requirePropietario } = require("../middlewares/propietario.middleware");
 // deja pasar (el control real es el frontend + auditoría).
 const _ownEvolucion = requirePropietario({
     tabla: 'imHCEvolucion', pkCol: 'IdHCEvolucion', autorCol: 'Profecional',
-    pkParam: 'id', failSafe: true,
+    pkParam: 'id', failSafe: true, autorEsMatricula: true,
 });
 
 // Obtener evoluciones por visita y fecha

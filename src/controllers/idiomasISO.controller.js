@@ -22,8 +22,8 @@ const getIdiomaISOByValor = async (req, res) => {
     if (!valor) {
       return res.status(400).json({ error: 'El valor es requerido en los parámetros de la ruta' });
     }
-    const sql = `SELECT Valor, descripcion AS Descripcion FROM imIdiomaISO WHERE Valor = ?`;
-    const result = await executeQuery(sql, [valor.toUpperCase()]); // Conversión a mayúsculas
+    const sql = `SELECT Valor, descripcion AS Descripcion FROM imIdiomaISO WHERE Valor = @p0`;
+    const result = await executeQuery(sql, [{ value: String(valor).toUpperCase() }]);
     if (result.length === 0) {
       return res.status(404).json({ error: 'Idioma ISO no encontrado' });
     }

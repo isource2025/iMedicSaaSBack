@@ -89,15 +89,18 @@ const localidadService = {
     try {
       const query = `
         SELECT 
-          valor, 
-          descripcion 
+          Valor, 
+          NombreLocalidad,
+          Localidad,
+          CodigoPostal,
+          ValorProvincia
         FROM 
           imLocalidades 
         WHERE 
-          valor = ?
+          Valor = @p0
       `;
       
-      const result = await executeQuery(query, [valor]);
+      const result = await executeQuery(query, [{ value: valor }]);
       return result && result.length > 0 ? result[0] : null;
     } catch (error) {
       console.error(`Error al obtener localidad con valor ${valor}:`, error);

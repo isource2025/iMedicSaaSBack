@@ -12,15 +12,36 @@
  *   tabla        {string}  Nombre de la tabla (ej: 'imInterIndMedicas')
  *   pkCol        {string}  Columna PK (ej: 'Valor')
  *   autorCol     {string}  Columna que guarda el CodOperador del creador
- *                          (ej: 'OperadorCarga')
+ *                          (ej: 'OperadorCarga') o la Matricula (ej: 'Profecional')
  *   pkParam      {string}  Nombre del param de ruta (default: 'id')
+ *   autorEsMatricula {boolean} Si true, compara contra req.matricula / JWT matricula
+ *                              (imHCEvolucion.Profecional guarda matrícula, no CodOperador)
  *   failSafe     {boolean} Si es true (default), cuando NO hay columna de
  *                          autor o no hay registro deja pasar. Si es false,
  *                          bloquea ante la duda.
  */
 const { executeQuery } = require('../models/db');
 
-function requirePropietario({ tabla, pkCol, autorCol, pkParam = 'id', failSafe = true }) {
+function resolverIdentificadorSesion(req, { autorEsMatricula }) {
+	if (autorEsMatricula) {
+		const mat = req.matricula ?? req.auth?.usuario?.matricula;
+		const matNum = mat != null && mat !== '' ? Number(mat) : NaN;
+		if (Number.isFinite(matNum) && matNum > 0) return matNum;
+	}
+	const cod = req.auth?.usuario?.codOperador;
+	const codNum = cod != null && cod !== '' ? Number(cod) : NaN;
+	if (Number.isFinite(codNum)) return codNum;
+	return null;
+}
+
+function requirePropietario({
+	tabla,
+	pkCol,
+	autorCol,
+	pkParam = 'id',
+	failSafe = true,
+	autorEsMatricula = false,
+}) {
 	return async (req, res, next) => {
 		try {
 			const pkRaw = req.params[pkParam];
@@ -29,8 +50,9 @@ function requirePropietario({ tabla, pkCol, autorCol, pkParam = 'id', failSafe =
 				return res.status(400).json({ success: false, mensaje: 'ID de registro requerido' });
 			}
 
-			const codOperadorSesion = req.auth?.usuario?.codOperador;
-			if (!codOperadorSesion) {
+			const identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
+			if (identificadorSesion == null) {
+				if (failSafe) return next();
 				return res.status(401).json({ success: false, mensaje: 'No autenticado' });
 			}
 
@@ -56,7 +78,7 @@ function requirePropietario({ tabla, pkCol, autorCol, pkParam = 'id', failSafe =
 				});
 			}
 
-			if (Number(autor) === Number(codOperadorSesion)) {
+			if (Number(autor) === Number(identificadorSesion)) {
 				return next(); // es el autor, puede editar
 			}
 

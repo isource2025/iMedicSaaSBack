@@ -22,8 +22,8 @@ const getEstadoMilitarByValor = async (req, res) => {
     if (!valor) {
       return res.status(400).json({ error: 'El valor es requerido en los parámetros de la ruta' });
     }
-    const sql = `SELECT Valor AS valor, Descripcion AS descripcion FROM imEstadoMilitar WHERE Valor = ?`;
-    const result = await executeQuery(sql, [valor.toUpperCase()]); // La BD espera mayúscula para 'Valor'
+    const sql = `SELECT Valor AS valor, Descripcion AS descripcion FROM imEstadoMilitar WHERE Valor = @p0`;
+    const result = await executeQuery(sql, [{ value: String(valor).toUpperCase() }]);
     if (result.length === 0) {
       return res.status(404).json({ error: 'Estado militar no encontrado' });
     }

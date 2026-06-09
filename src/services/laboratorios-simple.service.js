@@ -508,6 +508,20 @@ async function getLabCabeceraVisitSqlColumn() {
   return null;
 }
 
+async function obtenerParametrosConfiguracion() {
+  const consulta = `
+    SELECT 
+      IdTipoLaboratorio,
+      Estudio,
+      ValorMinimo,
+      ValorMaximo,
+      ValorNormal
+    FROM imHCExamenesLabDetalleConf
+    ORDER BY IdTipoLaboratorio, Estudio
+  `;
+  return executeQuery(consulta);
+}
+
 module.exports = {
   procesarArchivoConOCR,
   guardarExamen,
@@ -515,5 +529,6 @@ module.exports = {
   obtenerExamenPorId,
   actualizarExamen,
   eliminarExamen,
-  getLabCabeceraVisitSqlColumn
+  getLabCabeceraVisitSqlColumn,
+  obtenerParametrosConfiguracion,
 };
