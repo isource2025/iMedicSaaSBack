@@ -50,7 +50,22 @@ function requirePropietario({
 				return res.status(400).json({ success: false, mensaje: 'ID de registro requerido' });
 			}
 
-			const identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
+			let identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
+
+			// JWT legacy (Render) puede traer id pero no matricula: resolver desde imPersonal
+			if (identificadorSesion == null && autorEsMatricula && req.valorPersonal) {
+				const mRows = await executeQuery(
+					'SELECT Matricula FROM dbo.imPersonal WHERE Valor = @p0',
+					[{ value: Number(req.valorPersonal) }],
+				);
+				const m = mRows[0]?.Matricula;
+				const mNum = m != null && m !== '' ? Number(m) : NaN;
+				if (Number.isFinite(mNum) && mNum > 0) {
+					identificadorSesion = mNum;
+					req.matricula = mNum;
+				}
+			}
+
 			if (identificadorSesion == null) {
 				if (failSafe) return next();
 				return res.status(401).json({ success: false, mensaje: 'No autenticado' });

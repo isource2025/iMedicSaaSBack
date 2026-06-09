@@ -2,6 +2,44 @@ const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/jwt');
 const { middlewareFromAuth } = require('../context/tenantContext');
 
+/** Resuelve ValorPersonal desde JWT (Render legacy + Railway actual). */
+function resolveValorPersonal(decoded) {
+	const u = decoded?.usuario || {};
+	const candidates = [
+		u.id,
+		u.idValorpersonal,
+		u.idValorPersonal,
+		u.valorPersonal,
+		u.ValorPersonal,
+	];
+	for (const c of candidates) {
+		const n = c != null && c !== '' ? Number(c) : NaN;
+		if (Number.isFinite(n) && n > 0) return n;
+	}
+	return null;
+}
+
+function resolveMatricula(decoded) {
+	const u = decoded?.usuario || {};
+	const candidates = [u.matricula, u.Matricula];
+	for (const c of candidates) {
+		const n = c != null && c !== '' ? Number(c) : NaN;
+		if (Number.isFinite(n) && n > 0) return n;
+	}
+	return null;
+}
+
+function resolveCodOperador(decoded) {
+	const u = decoded?.usuario || {};
+	const candidates = [u.codOperador, u.idCodOperador, u.CodOperador];
+	for (const c of candidates) {
+		if (c == null || c === '') continue;
+		const n = Number(c);
+		if (Number.isFinite(n)) return n;
+	}
+	return null;
+}
+
 /**
  * Requiere Authorization: Bearer <token> válido (mismo secret que /api/auth/login).
  * Asigna req.auth (payload) y req.valorPersonal (imPassword / imPersonal.Valor).
@@ -19,10 +57,19 @@ function requireAuth(req, res, next) {
 	try {
 		const decoded = jwt.verify(token, JWT_SECRET);
 		req.auth = decoded;
-		const id = decoded?.usuario?.id;
-		req.valorPersonal = id != null ? Number(id) : null;
-		const mat = decoded?.usuario?.matricula;
-		req.matricula = mat != null && Number.isFinite(Number(mat)) && Number(mat) > 0 ? Number(mat) : null;
+
+		const valorPersonal = resolveValorPersonal(decoded);
+		req.valorPersonal = valorPersonal;
+		if (decoded?.usuario && valorPersonal != null) {
+			decoded.usuario.id = valorPersonal;
+		}
+
+		req.matricula = resolveMatricula(decoded);
+		const codOp = resolveCodOperador(decoded);
+		if (decoded?.usuario && codOp != null) {
+			decoded.usuario.codOperador = codOp;
+		}
+
 		req.rolNombre = decoded?.rol?.nombre ? String(decoded.rol.nombre).toUpperCase() : null;
 		const idEmp = decoded?.idEmpresa;
 		req.idEmpresa =

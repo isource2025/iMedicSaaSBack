@@ -13,15 +13,12 @@ Mismo repositorio, **dos pistas** que no se pisan. Los commits nuevos apuntan a 
 
 Los datos clínicos **siempre** van al SQL Server de cada empresa (fila `Empresas`), no al MySQL de auth.
 
-## Pista A — Render + Front 1 (congelada)
+## Pista A — Render + Front 1
 
-1. En el repo backend/front, crear tag del commit estable, por ejemplo:
-   ```bash
-   git tag render-prod-2025-05-28 <commit-hash>
-   git push origin render-prod-2025-05-28
-   ```
-2. En Render: desplegar **solo ese tag/branch**, no `main` automático.
-3. Variables backend (Render):
+> **Hotfixes compartidos (auth, evoluciones, catálogos):** desplegar `main` también en Render
+> hasta estabilizar ambas pistas. Luego se puede volver a congelar en un tag.
+
+1. En Render: branch **`main`** (o tag de hotfix reciente en `main`).
    ```env
    DB_SERVER=...
    DB_PORT=1433
