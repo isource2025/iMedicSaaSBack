@@ -111,6 +111,8 @@ async function enviarTextoBot({
 	metaMessageIdEntrante = null,
 	/** Segundo (o más) mensaje del bot por el mismo mensaje entrante (ej. aviso + resultado de búsqueda). */
 	seguimiento = false,
+	/** No marcar el entrante como respondido (mensaje intermedio de una misma respuesta). */
+	omitirMarcarRespondido = false,
 }) {
 	if (!seguimiento) {
 		if (
@@ -141,6 +143,9 @@ async function enviarTextoBot({
 			contenido: texto,
 			origen: 'BOT',
 		});
+		if (!omitirMarcarRespondido && idMensajePaciente) {
+			await botConversacion.marcarEntranteRespondido(idConversacion, idMensajePaciente);
+		}
 		return { respondido: true, texto, motivo: 'guardado sin Meta (falta config WhatsApp)' };
 	}
 
@@ -157,6 +162,10 @@ async function enviarTextoBot({
 		origen: 'BOT',
 		metaMessageId: meta.messageId,
 	});
+
+	if (!omitirMarcarRespondido && idMensajePaciente) {
+		await botConversacion.marcarEntranteRespondido(idConversacion, idMensajePaciente);
+	}
 
 	return { respondido: true, texto, metaMessageId: meta.messageId };
 }
@@ -221,7 +230,7 @@ async function responderMensajeEntrante({
 			contenido: textoEntrada,
 		});
 		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.aviso && wizard.buscarTurno) {
-			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso });
+			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso, omitirMarcarRespondido: true });
 			let textoResultado =
 				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
 			try {

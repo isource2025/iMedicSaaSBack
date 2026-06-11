@@ -1133,9 +1133,19 @@ function esConsultaListaEspecialidades(texto) {
 	if (t === 'especialidades' || t === 'especialidad' || t === 'mostrame' || t === 'mostrar') {
 		return true;
 	}
-	const pregunta = /\b(que|cuales|cual|lista|hay|mostrar|mostrame|decime|ver|conocer)\b/.test(t);
 	const tema = /\b(especialidad|especialidades|areas|servicios|opciones)\b/.test(t);
-	return pregunta && tema;
+	if (!tema) return false;
+	const pregunta = /\b(que|cuales|cual|lista|hay|mostrar|mostrame|decime|ver|conocer|saber|informacion|info|contar|decir)\b/.test(
+		t,
+	);
+	const consultaDirecta =
+		/\b(me gustaria|quisiera|podrias|podes|pueden|tienen|tiene|ofrecen|brindan|cuentan)\b/.test(t) &&
+		/\b(saber|conocer|ver|mostrar|decir|contar|informacion|info)\b/.test(t);
+	const soloCatalogo =
+		/\b(que especialidades|cuales especialidades|lista de especialidades|especialidades disponibles|especialidades que)\b/.test(
+			t,
+		);
+	return pregunta || consultaDirecta || soloCatalogo;
 }
 
 function mensajeEspecialidadesDisponibles(lista) {

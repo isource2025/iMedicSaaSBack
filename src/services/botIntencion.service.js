@@ -163,6 +163,8 @@ Respondé ÚNICAMENTE JSON (una línea):
 {"intencion":"...","parametros":{"preferirDiasSemana":[],"excluirDiasSemana":[],"preferirFranja":null,"preferirFechas":[],"excluirFechas":[],"resumen":""}}
 
 Reglas:
+- Interpretá el significado en lenguaje natural, no palabras exactas.
+- "perfecto", "genial", "dale", "listo", "buenísimo", "confirmo", "de acuerdo" → confirmar_turno
 - "puedo jueves y viernes" → buscar_turno, preferirDiasSemana ["jueves","viernes"]
 - "¿tenés el jueves a la tarde?" → buscar_turno, preferir jueves + franja tarde
 - "el lunes no puedo" → buscar_turno, excluirDiasSemana ["lunes"]
@@ -191,6 +193,28 @@ function _promptConfirmarIdentidad(conv) {
 Paso: CONFIRMAR_IDENTIDAD (¿es esta persona?).
 
 Intenciones: confirmar_identidad | rechazar_identidad | elegir_especialidad (si menciona especialidad en vez de sí/no) | conversacion
+
+Interpretá lenguaje natural: "perfecto", "genial", "dale", "soy yo", "correcto" → confirmar_identidad.
+"no", "otra persona", "incorrecto" → rechazar_identidad.
+
+JSON: {"intencion":"...","parametros":{"especialidad":"NOMBRE EXACTO O null","resumen":""}}`;
+}
+
+function _promptTurnoCompletado(conv, especialidades) {
+	const lista = (especialidades || []).map((e) => e.nombre).join(', ');
+	return `Clasificador — post turno confirmado.
+
+El paciente ya tiene un turno reservado en esta sesión.
+Paciente identificado: ${conv?.idPaciente ? 'sí' : 'no'}.
+
+Intenciones:
+- agradecimiento: agradece o cierra cordialmente ("gracias", "genial", "perfecto")
+- solicitar_turno: pide otro turno (para sí u otra persona)
+- elegir_especialidad: menciona un área médica
+- listar_especialidades: pregunta qué hay disponible
+- conversacion: charla sin pedir turno nuevo
+
+Especialidades válidas: ${lista || '(sin catálogo)'}
 
 JSON: {"intencion":"...","parametros":{"especialidad":"NOMBRE EXACTO O null","resumen":""}}`;
 }
@@ -224,6 +248,8 @@ JSON (una sola línea):
 Reglas:
 - Interpretá el significado, no frases exactas.
 - "un turno para mi tío", "puede ser?", "holaa otro turno" → solicitar_turno
+- "me gustaría saber las especialidades", "qué tienen", "mostrame las áreas" → listar_especialidades (NO solicitar_turno)
+- Preguntar qué especialidades hay NO implica pedir turno todavía → listar_especialidades
 - "gracias", "genial" tras comprobante → agradecimiento
 - Si menciona especialidad junto con pedir turno → solicitar_turno y completar parametros.especialidad
 - No inventes especialidades fuera de la lista.`;
@@ -248,6 +274,8 @@ async function interpretarIntencion({ texto, conv, idConversacion, pasoBot }) {
 		system = _promptElegirEspecialidad(especialidades);
 	} else if (paso === 'CONFIRMAR_IDENTIDAD') {
 		system = _promptConfirmarIdentidad(conv);
+	} else if (paso === 'TURNO_COMPLETADO') {
+		system = _promptTurnoCompletado(conv, especialidades);
 	} else if (_esPasoIdentificacionLibre(paso, conv)) {
 		system = _promptIdentificarInicio(conv, especialidades);
 	} else {

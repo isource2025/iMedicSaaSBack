@@ -121,16 +121,32 @@ async function existeMensajePorMetaId(metaMessageId) {
 }
 
 async function yaRespondidoAlMensaje(idSesion, idMensajeEntrante) {
+	const idEnt = Number(idMensajeEntrante);
+	if (!idSesion || !Number.isFinite(idEnt) || idEnt <= 0) return false;
 	const rows = await executeQuery(
 		`SELECT TOP 1 IdRegistro FROM dbo.imBotChat
-		 WHERE Tipo = 'MSG' AND IdSesion = @p0 AND Direccion = 'OUT'
-		   AND IdRegistro > @p1`,
+		 WHERE Tipo = 'LOG' AND IdSesion = @p0 AND AccionLog = 'RESP_IN'
+		   AND PayloadJson = @p1`,
 		[
 			{ value: idSesion, type: 'VarChar' },
-			{ value: Number(idMensajeEntrante), type: 'Int' },
+			{ value: String(idEnt), type: 'VarChar' },
 		],
 	);
 	return rows.length > 0;
+}
+
+async function marcarEntranteRespondido(idSesion, idMensajeEntrante) {
+	const idEnt = Number(idMensajeEntrante);
+	if (!idSesion || !Number.isFinite(idEnt) || idEnt <= 0) return;
+	if (await yaRespondidoAlMensaje(idSesion, idEnt)) return;
+	await executeQuery(
+		`INSERT INTO dbo.imBotChat (Tipo, IdSesion, AccionLog, PayloadJson, ResultadoLog)
+		 VALUES ('LOG', @p0, 'RESP_IN', @p1, 'OK')`,
+		[
+			{ value: idSesion, type: 'VarChar' },
+			{ value: String(idEnt), type: 'VarChar' },
+		],
+	);
 }
 
 async function registrarMensajeEntrante({
@@ -322,6 +338,7 @@ module.exports = {
 	obtenerOCrearConversacion,
 	existeMensajePorMetaId,
 	yaRespondidoAlMensaje,
+	marcarEntranteRespondido,
 	registrarMensajeEntrante,
 	registrarMensajeSaliente,
 	listarConversaciones,

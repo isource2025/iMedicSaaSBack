@@ -114,6 +114,11 @@ router.delete(
 
 // Agenda operativa (slots / turnos) — rutas con :matricula al final
 router.get(
+	'/:matricula/dias-agenda',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.obtenerDiasConAgenda,
+);
+router.get(
 	'/:matricula/slots',
 	requirePermiso('TURNOS.AGENDA.VER'),
 	agendaCtrl.obtenerSlots,

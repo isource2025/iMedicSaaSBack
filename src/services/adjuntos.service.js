@@ -1,6 +1,5 @@
-const sql = require('mssql');
 const axios = require('axios');
-const { connectDB } = require('../config/database');
+const { executeQuery } = require('../models/db');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
@@ -14,31 +13,34 @@ class AdjuntosService {
    */
   async subirAdjunto(data, file, cargadoPor, patchServidor) {
     try {
-      const pool = await connectDB();
-
-      // Usar patchServidor (ruta en servidor SQL) en lugar de file.path (ruta local temporal)
       const rutaArchivo = patchServidor || file.path;
       const idTipo =
         data.idTipoImagen != null && String(data.idTipoImagen).trim() !== ''
           ? String(data.idTipoImagen).trim()
           : null;
 
-      const result = await pool.request()
-        .input('numeroVisita', sql.Int, data.numeroVisita)
-        .input('descripcion', sql.NVarChar(255), normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }))
-        .input('patch', sql.NVarChar(500), rutaArchivo)
-        .input('patchServidor', sql.NVarChar(500), rutaArchivo)
-        .input('fecha', sql.DateTime, new Date())
-        .input('idOperador', sql.Int, cargadoPor)
-        .input('idtipoimagen', sql.VarChar(20), idTipo)
-        .query(`
+      const rows = await executeQuery(
+        `
           INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, PatchServidor, Fecha, IdOperador, idtipoimagen)
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@numeroVisita, @descripcion, @patch, @patchServidor, @fecha, @idOperador, @idtipoimagen)
-        `);
+          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6)
+        `,
+        [
+          { value: data.numeroVisita, type: 'Int' },
+          {
+            value: normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }),
+            type: 'NVarChar',
+          },
+          { value: rutaArchivo, type: 'NVarChar' },
+          { value: rutaArchivo, type: 'NVarChar' },
+          { value: new Date(), type: 'DateTime' },
+          { value: cargadoPor, type: 'Int' },
+          { value: idTipo, type: 'VarChar' },
+        ],
+      );
 
-      const idAdjunto = result.recordset[0].IdAdjunto;
-      
+      const idAdjunto = rows[0]?.IdAdjunto;
+
       console.log(`✅ Adjunto subido para visita ${data.numeroVisita}: ${idAdjunto} - ${file.originalname}`);
       console.log(`📁 Ruta en servidor: ${rutaArchivo}`);
 
@@ -48,7 +50,7 @@ class AdjuntosService {
         nombreArchivo: file.originalname,
         rutaArchivo: rutaArchivo,
         tipoArchivo: file.mimetype,
-        tamanioBytes: file.size
+        tamanioBytes: file.size,
       };
     } catch (error) {
       console.error('❌ Error al subir adjunto:', error);
@@ -61,8 +63,7 @@ class AdjuntosService {
    */
   async listarTiposImagen() {
     try {
-      const pool = await connectDB();
-      const result = await pool.request().query(`
+      const rows = await executeQuery(`
         SELECT
           LTRIM(RTRIM(CAST(tipoimagen AS VARCHAR(20)))) AS TipoImagen,
           LTRIM(RTRIM(CAST(desctipoimagen AS VARCHAR(120)))) AS DescTipoImagen
@@ -71,7 +72,7 @@ class AdjuntosService {
           AND LTRIM(RTRIM(CAST(tipoimagen AS VARCHAR(20)))) <> ''
         ORDER BY desctipoimagen
       `);
-      return (result.recordset || []).map((r) => ({
+      return (rows || []).map((r) => ({
         TipoImagen: r.TipoImagen,
         DescTipoImagen: r.DescTipoImagen || r.TipoImagen,
       }));
@@ -87,13 +88,13 @@ class AdjuntosService {
   getTipoFromNombre(nombre) {
     const ext = nombre.split('.').pop().toLowerCase();
     const tipos = {
-      'pdf': 'application/pdf',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'png': 'image/png',
-      'gif': 'image/gif',
-      'doc': 'application/msword',
-      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      pdf: 'application/pdf',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     };
     return tipos[ext] || 'application/octet-stream';
   }
@@ -156,16 +157,35 @@ class AdjuntosService {
     }
   }
 
+  mapAdjuntoRow(adj) {
+    let nombreArchivo = adj.Descripcion;
+    if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
+      const rutaCompleta = adj.PatchServidor || '';
+      nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
+    }
+
+    return {
+      IdAdjunto: adj.IdAdjunto,
+      NumeroVisita: adj.NumeroVisita,
+      NombreArchivo: nombreArchivo || 'Sin nombre',
+      RutaArchivo: adj.PatchServidor,
+      TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
+      TamanioBytes: this.getFileSize(adj.PatchServidor),
+      CargadoPor: adj.IdOperador,
+      NombreUsuario: adj.NombreOperador || 'Desconocido',
+      FechaCarga: adj.Fecha,
+      TipoImagen: adj.idtipoimagen ? String(adj.idtipoimagen).trim() : null,
+      TipoImagenNombre: adj.TipoImagenNombre || 'Sin categoría',
+    };
+  }
+
   /**
    * Obtener adjuntos de una visita
    */
   async getAdjuntosPorVisita(numeroVisita) {
     try {
-      const pool = await connectDB();
-
-      const result = await pool.request()
-        .input('numeroVisita', sql.Int, numeroVisita)
-        .query(`
+      const rows = await executeQuery(
+        `
           SELECT 
             a.IdAdjunto,
             a.NumeroVisita,
@@ -179,33 +199,13 @@ class AdjuntosService {
           FROM imPedidosEstudiosAdjuntos a
           LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
           LEFT JOIN hctiposimagenes t ON a.idtipoimagen = t.tipoimagen
-          WHERE a.NumeroVisita = @numeroVisita
+          WHERE a.NumeroVisita = @p0
           ORDER BY a.Fecha DESC
-        `);
+        `,
+        [{ value: numeroVisita, type: 'Int' }],
+      );
 
-      return result.recordset.map(adj => {
-        // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
-        let nombreArchivo = adj.Descripcion;
-        if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
-          // Extraer solo el nombre del archivo (última parte después de \ o /)
-          const rutaCompleta = adj.PatchServidor || '';
-          nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
-        }
-        
-        return {
-          IdAdjunto: adj.IdAdjunto,
-          NumeroVisita: adj.NumeroVisita,
-          NombreArchivo: nombreArchivo || 'Sin nombre',
-          RutaArchivo: adj.PatchServidor,
-          TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
-          TamanioBytes: this.getFileSize(adj.PatchServidor),
-          CargadoPor: adj.IdOperador,
-          NombreUsuario: adj.NombreOperador || 'Desconocido',
-          FechaCarga: adj.Fecha,
-          TipoImagen: adj.idtipoimagen ? adj.idtipoimagen.trim() : null,
-          TipoImagenNombre: adj.TipoImagenNombre || 'Sin categoría'
-        };
-      });
+      return (rows || []).map((adj) => this.mapAdjuntoRow(adj));
     } catch (error) {
       console.error('❌ Error al obtener adjuntos por visita:', error);
       throw error;
@@ -218,28 +218,24 @@ class AdjuntosService {
   async getAdjuntosAgrupadosPorTipo(numeroVisita) {
     try {
       const adjuntos = await this.getAdjuntosPorVisita(numeroVisita);
-      
-      // Agrupar por TipoImagenNombre (descripción de la tabla hctiposimagenes)
+
       const grupos = {};
-      
-      adjuntos.forEach(adj => {
+
+      adjuntos.forEach((adj) => {
         const nombreTipo = adj.TipoImagenNombre || 'Sin categoría';
         if (!grupos[nombreTipo]) {
           grupos[nombreTipo] = {
             tipo: adj.TipoImagen,
             nombre: nombreTipo,
             adjuntos: [],
-            cantidad: 0
+            cantidad: 0,
           };
         }
         grupos[nombreTipo].adjuntos.push(adj);
         grupos[nombreTipo].cantidad++;
       });
-      
-      // Convertir a array y ordenar por cantidad descendente
-      const resultado = Object.values(grupos).sort((a, b) => b.cantidad - a.cantidad);
-      
-      return resultado;
+
+      return Object.values(grupos).sort((a, b) => b.cantidad - a.cantidad);
     } catch (error) {
       console.error('❌ Error al obtener adjuntos agrupados:', error);
       throw error;
@@ -251,11 +247,8 @@ class AdjuntosService {
    */
   async getAdjuntoPorId(idAdjunto) {
     try {
-      const pool = await connectDB();
-
-      const result = await pool.request()
-        .input('idAdjunto', sql.Int, idAdjunto)
-        .query(`
+      const rows = await executeQuery(
+        `
           SELECT 
             a.IdAdjunto,
             a.NumeroVisita,
@@ -266,35 +259,20 @@ class AdjuntosService {
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
           FROM imPedidosEstudiosAdjuntos a
           LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
-          WHERE a.IdAdjunto = @idAdjunto
-        `);
+          WHERE a.IdAdjunto = @p0
+        `,
+        [{ value: idAdjunto, type: 'Int' }],
+      );
 
-      if (result.recordset.length === 0) {
+      if (!rows?.length) {
         return null;
       }
 
-      const adj = result.recordset[0];
-      
-      // Si Descripcion está vacío o no tiene extensión, usar nombre del archivo desde PatchServidor
-      let nombreArchivo = adj.Descripcion;
-      if (!nombreArchivo || !/\.[a-zA-Z0-9]+$/.test(nombreArchivo)) {
-        // Extraer solo el nombre del archivo (última parte después de \ o /)
-        const rutaCompleta = adj.PatchServidor || '';
-        nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
-      }
-      
-      return {
-        IdAdjunto: adj.IdAdjunto,
-        NumeroVisita: adj.NumeroVisita,
-        NombreArchivo: nombreArchivo || 'Sin nombre',
-        RutaArchivo: adj.PatchServidor,
-        TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
-        TamanioBytes: this.getFileSize(adj.PatchServidor),
-        CargadoPor: adj.IdOperador,
-        NombreUsuario: adj.NombreOperador || 'Desconocido',
-        FechaCarga: adj.Fecha
-      };
-
+      const adj = rows[0];
+      const mapped = this.mapAdjuntoRow({ ...adj, idtipoimagen: null, TipoImagenNombre: null });
+      delete mapped.TipoImagen;
+      delete mapped.TipoImagenNombre;
+      return mapped;
     } catch (error) {
       console.error('❌ Error al obtener adjunto por ID:', error);
       throw error;
@@ -306,30 +284,23 @@ class AdjuntosService {
    */
   async eliminarAdjunto(idAdjunto, usuarioId) {
     try {
-      const pool = await connectDB();
-
-      // Obtener información del adjunto antes de eliminar
       const adjunto = await this.getAdjuntoPorId(idAdjunto);
-      
+
       if (!adjunto) {
         throw new Error('Adjunto no encontrado');
       }
 
-      // Eliminar archivo físico del servidor
-      const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
-      
       if (adjunto.RutaArchivo) {
         try {
-          const axios = require('axios');
           const encodedPath = encodeURIComponent(adjunto.RutaArchivo);
           const deleteUrl = `${FILE_SERVER_URL}/file?path=${encodedPath}`;
-          
+
           console.log(`🗑️ Eliminando archivo del servidor: ${adjunto.RutaArchivo}`);
-          
+
           const response = await axios.delete(deleteUrl, {
-            timeout: 30000
+            timeout: 30000,
           });
-          
+
           if (response.data.success) {
             console.log(`✅ Archivo físico eliminado: ${adjunto.RutaArchivo}`);
           } else {
@@ -338,14 +309,12 @@ class AdjuntosService {
         } catch (fileError) {
           console.warn(`⚠️ No se pudo eliminar archivo físico: ${adjunto.RutaArchivo}`);
           console.warn(`   Error: ${fileError.message}`);
-          // Continuar con la eliminación del registro aunque falle la eliminación del archivo
         }
       }
 
-      // Eliminar de la base de datos
-      await pool.request()
-        .input('idAdjunto', sql.Int, idAdjunto)
-        .query('DELETE FROM imPedidosEstudiosAdjuntos WHERE IdAdjunto = @idAdjunto');
+      await executeQuery('DELETE FROM imPedidosEstudiosAdjuntos WHERE IdAdjunto = @p0', [
+        { value: idAdjunto, type: 'Int' },
+      ]);
 
       console.log(`✅ Adjunto eliminado de BD: ${idAdjunto}`);
       return { success: true };

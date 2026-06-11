@@ -14,6 +14,8 @@ let contextoBotColumnReady = null;
 const memConversaciones = new Map();
 /** @type {Map<string, object[]>} */
 const memMensajes = new Map();
+/** @type {Map<string, Set<number>>} */
+const memEntrantesRespondidos = new Map();
 let memIdSeq = 1;
 
 function normalizarTelefono(tel) {
@@ -337,12 +339,8 @@ async function yaRespondidoAlMensaje(idConversacion, idMensajePaciente) {
 
 	await checkConversationTables();
 	if (useMemory) {
-		const list = memMensajes.get(idConv) || [];
-		return list.some(
-			(m) =>
-				(m.origen === 'BOT' || m.origen === 'AGENTE') &&
-				Number(m.idMensaje) > idMsg,
-		);
+		const set = memEntrantesRespondidos.get(idConv);
+		return set ? set.has(idMsg) : false;
 	}
 
 	if (useBotChat) {
@@ -360,6 +358,24 @@ async function yaRespondidoAlMensaje(idConversacion, idMensajePaciente) {
 		],
 	);
 	return rows.length > 0;
+}
+
+async function marcarEntranteRespondido(idConversacion, idMensajePaciente) {
+	const idConv = String(idConversacion || '').trim();
+	const idMsg = Number(idMensajePaciente);
+	if (!idConv || !Number.isFinite(idMsg) || idMsg <= 0) return;
+
+	await checkConversationTables();
+	if (useMemory) {
+		if (!memEntrantesRespondidos.has(idConv)) {
+			memEntrantesRespondidos.set(idConv, new Set());
+		}
+		memEntrantesRespondidos.get(idConv).add(idMsg);
+		return;
+	}
+	if (useBotChat) {
+		await botChatStorage.marcarEntranteRespondido(idConv, idMsg);
+	}
 }
 
 /** ¿Ya respondimos al mensaje entrante identificado por Meta wamid? */
@@ -891,6 +907,39 @@ async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR')
 	return obtenerConversacion(idConversacion);
 }
 
+/** Tras confirmar un turno: conserva paciente/DNI y pasa a estado post-turno. */
+async function finalizarTrasReservaExitosa(idConversacion) {
+	await checkConversationTables();
+	if (useMemory) {
+		const conv = memConversaciones.get(idConversacion);
+		if (conv) {
+			conv.contextoBot = null;
+			conv.pasoBot = 'TURNO_COMPLETADO';
+			memConversaciones.set(idConversacion, conv);
+		}
+		return obtenerConversacion(idConversacion);
+	}
+	if (useBotChat) {
+		await botChatStorage.guardarContextoBot(idConversacion, null);
+		await botChatStorage.actualizarSesion(
+			idConversacion,
+			['PasoBot = @p1'],
+			[
+				{ value: idConversacion, type: 'VarChar' },
+				{ value: 'TURNO_COMPLETADO', type: 'VarChar' },
+			],
+		);
+		return obtenerConversacion(idConversacion);
+	}
+	const hasCol = await ensureContextoBotColumn();
+	const ctxSql = hasCol ? ', ContextoBotJson = NULL' : '';
+	await executeQuery(
+		`UPDATE dbo.imBotConversacion SET PasoBot = 'TURNO_COMPLETADO'${ctxSql} WHERE IdConversacion = @p0`,
+		[{ value: idConversacion, type: 'VarChar' }],
+	);
+	return obtenerConversacion(idConversacion);
+}
+
 /**
  * Limpia paso del wizard, paciente y contexto (especialidad/turno sugerido).
  * Usar en #IMEDIC-ZERO y al reiniciar identificación.
@@ -1034,6 +1083,7 @@ module.exports = {
 	existeMensajePorMetaId,
 	yaRespondidoAlMensaje,
 	yaRespondidoAMetaMessage,
+	marcarEntranteRespondido,
 	registrarMensajeSaliente,
 	listarConversaciones,
 	obtenerConversacion,
@@ -1046,6 +1096,7 @@ module.exports = {
 	guardarContextoBot,
 	limpiarEstadoWizard,
 	reiniciarFlujoNuevoTurno,
+	finalizarTrasReservaExitosa,
 	resetConversacionPorTelefono,
 	resetTodasLasConversaciones,
 };

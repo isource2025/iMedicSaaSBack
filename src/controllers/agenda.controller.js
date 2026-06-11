@@ -22,6 +22,26 @@ async function obtenerSlots(req, res) {
 	try {
 		const m = _enforceAlcance(req, res, req.params.matricula);
 		if (m == null) return;
+		const { desde, hasta, ligero } = req.query;
+		if (!desde || !hasta) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Query params desde y hasta (YYYY-MM-DD) son requeridos',
+			});
+		}
+		const data = await service.generarSlots(m, String(desde), String(hasta), {
+			ligero: ligero === '1' || ligero === 'true',
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function obtenerDiasConAgenda(req, res) {
+	try {
+		const m = _enforceAlcance(req, res, req.params.matricula);
+		if (m == null) return;
 		const { desde, hasta } = req.query;
 		if (!desde || !hasta) {
 			return res.status(400).json({
@@ -29,7 +49,7 @@ async function obtenerSlots(req, res) {
 				mensaje: 'Query params desde y hasta (YYYY-MM-DD) son requeridos',
 			});
 		}
-		const data = await service.generarSlots(m, String(desde), String(hasta));
+		const data = await service.listarDiasConAgenda(m, String(desde), String(hasta));
 		res.json({ success: true, data });
 	} catch (e) {
 		_err(res, e);
@@ -254,6 +274,7 @@ async function listarProfesionales(req, res) {
 
 module.exports = {
 	obtenerSlots,
+	obtenerDiasConAgenda,
 	obtenerResumen,
 	listarTurnos,
 	buscarTurnosPorPaciente,

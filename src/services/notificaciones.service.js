@@ -2,6 +2,8 @@ const { executeQuery } = require('../models/db');
 const { resolveImNotificacionesColumns, sqlEscapeIdent } = require('./notificacionesColumns');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
+let warnedSchemaUnusable = false;
+
 function safeParseJson(s) {
   try {
     return JSON.parse(s);
@@ -154,7 +156,12 @@ async function crear({
 }) {
   const cols = await getCols();
   if (!cols.usable) {
-    console.warn('[notificaciones] crear: esquema no usable, se omite inserción.');
+    if (!warnedSchemaUnusable) {
+      warnedSchemaUnusable = true;
+      console.warn(
+        '[notificaciones] Esquema imNotificaciones no usable; se omiten inserciones. Ejecute scripts/migrar_imNotificaciones_local_a_aclysa.sql o configure NOTIFICACIONES_COL_* en .env',
+      );
+    }
     return { success: false };
   }
 

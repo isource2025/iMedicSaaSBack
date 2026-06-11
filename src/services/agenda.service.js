@@ -580,7 +580,8 @@ async function _resolverHoraSobreturno(matricula, fechaClarion, baseHoraClarion)
 /**
  * Genera la grilla de slots para un rango de fechas.
  */
-async function generarSlots(matricula, desdeIso, hastaIso) {
+async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
+	const ligero = !!opts.ligero;
 	const m = _validarMatricula(matricula);
 	const desde = _parseIso(desdeIso);
 	const hasta = _parseIso(hastaIso);
@@ -598,6 +599,8 @@ async function generarSlots(matricula, desdeIso, hastaIso) {
 		_cargarNoHorarios(m, desdeClarion, hastaClarion),
 		_cargarTurnos(m, desdeClarion, hastaClarion),
 	]);
+
+	const sectorPersonalMed = await _sectorPersonalAsignado(m);
 
 	const diasOut = [];
 	const cursor = new Date(desde);
@@ -631,7 +634,6 @@ async function generarSlots(matricula, desdeIso, hastaIso) {
 			continue;
 		}
 
-		const sectorPersonalMed = await _sectorPersonalAsignado(m);
 		const jornadas = _buildJornadasMeta(diaCfg.rangos);
 		const slots = [];
 		for (let jornadaIndex = 0; jornadaIndex < diaCfg.rangos.length; jornadaIndex++) {
@@ -693,11 +695,13 @@ async function generarSlots(matricula, desdeIso, hastaIso) {
 			}
 		}
 
-		_agregarSobreturnosEnSlots(slots, fechaIso, turnosData.rows, sectorPersonalMed, diaCfg.rangos);
-		const racMap = await _racResumenPorTurnos(
-			slots.map((s) => s.idTurno).filter(Boolean),
-		);
-		_aplicarRacResumenASlots(slots, racMap);
+		if (!ligero) {
+			_agregarSobreturnosEnSlots(slots, fechaIso, turnosData.rows, sectorPersonalMed, diaCfg.rangos);
+			const racMap = await _racResumenPorTurnos(
+				slots.map((s) => s.idTurno).filter(Boolean),
+			);
+			_aplicarRacResumenASlots(slots, racMap);
+		}
 		slots.sort((a, b) => {
 			const ha = a.horaClarion ?? 0;
 			const hb = b.horaClarion ?? 0;
@@ -721,6 +725,20 @@ async function generarSlots(matricula, desdeIso, hastaIso) {
 		hasta: hastaIso,
 		dias: diasOut,
 		profesional,
+	};
+}
+
+/** Fechas (YYYY-MM-DD) del mes/rango con al menos un cupo de agenda (para calendario). */
+async function listarDiasConAgenda(matricula, desdeIso, hastaIso) {
+	const data = await generarSlots(matricula, desdeIso, hastaIso, { ligero: true });
+	const fechas = (data.dias || [])
+		.filter((d) => !d.bloqueado && Array.isArray(d.slots) && d.slots.length > 0)
+		.map((d) => String(d.fecha).slice(0, 10));
+	return {
+		matricula: data.matricula,
+		desde: desdeIso,
+		hasta: hastaIso,
+		fechas,
 	};
 }
 
@@ -1899,6 +1917,7 @@ async function buscarClientes({ q, limit = 30 }) {
 
 module.exports = {
 	generarSlots,
+	listarDiasConAgenda,
 	resumenDia,
 	listarTurnos,
 	buscarTurnosPorPaciente,

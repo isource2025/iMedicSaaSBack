@@ -37,6 +37,10 @@ async function notificarMensajeWhatsAppEntrante({
 	idMensaje,
 }) {
 	try {
+		const { resolveImNotificacionesColumns } = require('./notificacionesColumns');
+		const cols = await resolveImNotificacionesColumns();
+		if (!cols.usable) return;
+
 		const destinatarios = await obtenerDestinatariosWhatsApp();
 		if (!destinatarios.length) {
 			console.log('[notif whatsapp] Sin destinatarios configurados o activos.');

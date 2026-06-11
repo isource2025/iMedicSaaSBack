@@ -90,6 +90,10 @@ async function getBotConfig() {
 				db.mensaje_pedir_dni ||
 				process.env.BOT_MENSAJE_PEDIR_DNI ||
 				'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+			agradecimiento:
+				db.mensaje_agradecimiento ||
+				process.env.BOT_MENSAJE_AGRADECIMIENTO ||
+				'¡De nada! Si necesitás otro turno, escribinos cuando quieras.',
 		},
 		promptSistema:
 			db.prompt_sistema ||
@@ -168,8 +172,9 @@ function defaultFlujoPasos() {
 			paso: 4,
 			id: 'ELEGIR_ESPECIALIDAD',
 			titulo: 'Especialidad',
-			mensajeUsuario: '¿Qué especialidad necesitás? Te muestro las disponibles.',
-			descripcion: 'Listado de especialidades con agenda',
+			mensajeUsuario:
+				'Perfecto, {nombre}. ¿Qué especialidad necesitás?\nO te muestro las disponibles.',
+			descripcion: 'Listado de especialidades con agenda. Variable: {nombre}',
 			activo: true,
 		},
 		{
@@ -195,6 +200,14 @@ function defaultFlujoPasos() {
 			mensajeUsuario: '¿Confirmás este turno? Te envío el comprobante.',
 			descripcion: 'Reserva y ticket WhatsApp',
 			activo: true,
+		},
+		{
+			paso: 8,
+			id: 'TURNO_COMPLETADO',
+			titulo: 'Turno confirmado',
+			mensajeUsuario: '¡De nada! Si necesitás otro turno, escribinos cuando quieras.',
+			descripcion: 'Estado tras confirmar turno; respuesta a agradecimientos (no es un paso del wizard)',
+			activo: false,
 		},
 	];
 }
@@ -274,6 +287,9 @@ async function saveBotConfig(payload = {}) {
 	}
 	if (mensajes.confirmacion != null) {
 		await upsertConfigClave('mensaje_confirmacion', mensajes.confirmacion, 'string');
+	}
+	if (mensajes.agradecimiento != null) {
+		await upsertConfigClave('mensaje_agradecimiento', mensajes.agradecimiento, 'string');
 	}
 	if (reglas.anticipacionMinHoras != null) {
 		const horas = Math.max(0, Math.round(Number(reglas.anticipacionMinHoras) || 0));

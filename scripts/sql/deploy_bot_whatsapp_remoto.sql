@@ -77,6 +77,10 @@ IF NOT EXISTS (SELECT 1 FROM dbo.imBotConfig WHERE Clave = 'whatsapp_waba_id' AN
 
 IF NOT EXISTS (SELECT 1 FROM dbo.imBotConfig WHERE Clave = 'whatsapp_access_token_enc' AND Activo = 1)
   INSERT INTO dbo.imBotConfig (Clave, Valor, Tipo) VALUES ('whatsapp_access_token_enc', '', 'string');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.imBotConfig WHERE Clave = 'mensaje_agradecimiento' AND Activo = 1)
+  INSERT INTO dbo.imBotConfig (Clave, Valor, Tipo) VALUES
+    ('mensaje_agradecimiento', N'¡De nada! Si necesitás otro turno, escribinos cuando quieras.', 'string');
 GO
 
 PRINT '=== [2/6] imBotChat (crear si no existe) ===';
