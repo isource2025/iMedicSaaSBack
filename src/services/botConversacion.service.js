@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const botChatStorage = require('./botChatStorage.service');
 
 /** @typedef {'BOT'|'HUMANO'|'PAUSADO'} ModoControl */
 /** @typedef {'IN'|'OUT'} Direccion */
@@ -6,6 +7,7 @@ const { executeQuery } = require('../models/db');
 
 let tablesChecked = null;
 let useMemory = false;
+let useBotChat = false;
 let contextoBotColumnReady = null;
 
 /** @type {Map<string, object>} */
@@ -56,6 +58,9 @@ async function guardarContextoBot(idConversacion, contextoBot) {
 		conv.contextoBot = contextoBot || null;
 		memConversaciones.set(idConversacion, conv);
 		return mapConversacion(conv);
+	}
+	if (useBotChat) {
+		return botChatStorage.guardarContextoBot(idConversacion, contextoBot);
 	}
 	const hasCol = await ensureContextoBotColumn();
 	if (!hasCol) return obtenerConversacion(idConversacion);
@@ -109,24 +114,95 @@ function mapMensaje(row) {
 	};
 }
 
+function assertAlmacenamientoSql() {
+	if (useMemory) {
+		const err = new Error(
+			'Las conversaciones WhatsApp requieren SQL Server. Ejecutá scripts/sql/setup_bot_minimal.sql (imBotConfig + imBotChat) en la BD tenant.',
+		);
+		err.statusCode = 503;
+		err.codigo = 'BOT_CONVERSACIONES_SIN_SQL';
+		throw err;
+	}
+}
+
+async function provisionBotTables() {
+	const fs = require('fs');
+	const path = require('path');
+	const sqlPath = path.join(__dirname, '../../scripts/sql/setup_bot_minimal.sql');
+	if (!fs.existsSync(sqlPath)) return;
+	const raw = fs.readFileSync(sqlPath, 'utf8');
+	const bloques = raw.split(/\r?\nGO\r?\n/i).map((b) => b.trim()).filter((b) => {
+		if (!b) return false;
+		if (b.startsWith('/*') && !b.includes('CREATE') && !b.includes('INSERT')) return false;
+		if (b.startsWith('PRINT')) return false;
+		return true;
+	});
+	for (const bloque of bloques) {
+		await executeQuery(bloque);
+	}
+}
+
+function resetStorageCache() {
+	tablesChecked = null;
+	useMemory = false;
+	useBotChat = false;
+	contextoBotColumnReady = null;
+}
+
 async function checkConversationTables() {
-	if (tablesChecked !== null) return tablesChecked;
+	// Siempre priorizar imBotChat: permite migrar legacy → imBotChat sin reiniciar el proceso.
 	try {
-		const rows = await executeQuery(
+		if (await botChatStorage.tableExists()) {
+			useBotChat = true;
+			useMemory = false;
+			tablesChecked = true;
+			return true;
+		}
+	} catch (e) {
+		if (tablesChecked === null) throw e;
+	}
+
+	if (tablesChecked !== null) {
+		if (!tablesChecked) assertAlmacenamientoSql();
+		return tablesChecked;
+	}
+	try {
+		const legacy = await executeQuery(
 			`SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES
 			 WHERE TABLE_SCHEMA = 'dbo'
 			   AND TABLE_NAME IN ('imBotConversacion', 'imBotMensaje')`,
 		);
-		tablesChecked = Number(rows?.[0]?.cnt) >= 2;
-		useMemory = !tablesChecked;
-		if (useMemory) {
-			console.warn(
-				'[botConversacion] Tablas imBotConversacion/imBotMensaje no encontradas — usando memoria (solo sesión actual)',
-			);
+		tablesChecked = Number(legacy?.[0]?.cnt) >= 2;
+		if (!tablesChecked) {
+			await provisionBotTables();
+			useBotChat = await botChatStorage.tableExists();
+			if (useBotChat) {
+				tablesChecked = true;
+				useMemory = false;
+				return true;
+			}
 		}
-	} catch {
+		const permitirMemoria = process.env.BOT_CONVERSACIONES_MEMORIA === '1';
+		useMemory = !tablesChecked && permitirMemoria;
+		if (!tablesChecked && !permitirMemoria) {
+			console.error('[botConversacion] Falta imBotChat — ejecutá setup_bot_minimal.sql');
+			assertAlmacenamientoSql();
+		}
+		if (useMemory) {
+			console.warn('[botConversacion] BOT_CONVERSACIONES_MEMORIA=1 — solo desarrollo');
+		}
+	} catch (e) {
+		if (e.codigo === 'BOT_CONVERSACIONES_SIN_SQL') throw e;
 		tablesChecked = false;
-		useMemory = true;
+		useMemory = process.env.BOT_CONVERSACIONES_MEMORIA === '1';
+		if (!useMemory) {
+			const err = new Error(
+				`No se pudo verificar almacenamiento WhatsApp: ${e.message}`,
+			);
+			err.statusCode = 503;
+			err.codigo = 'BOT_CONVERSACIONES_SIN_SQL';
+			throw err;
+		}
 	}
 	return tablesChecked;
 }
@@ -197,6 +273,16 @@ async function obtenerOCrearConversacion({
 		return mapConversacion(created);
 	}
 
+	if (useBotChat) {
+		return botChatStorage.obtenerOCrearConversacion({
+			idConversacion: idConv,
+			telefonoWhatsApp: tel,
+			nombreContacto,
+			idPaciente,
+			dniPaciente,
+		});
+	}
+
 	const rows = await executeQuery(
 		`SELECT TOP 1 * FROM dbo.imBotConversacion WHERE IdConversacion = @p0 AND Activo = 1`,
 		[{ value: idConv, type: 'VarChar' }],
@@ -233,6 +319,9 @@ async function existeMensajePorMetaId(metaMessageId) {
 		}
 		return null;
 	}
+	if (useBotChat) {
+		return botChatStorage.existeMensajePorMetaId(mid);
+	}
 	const rows = await executeQuery(
 		`SELECT TOP 1 * FROM dbo.imBotMensaje WHERE MetaMessageId = @p0 ORDER BY IdMensaje DESC`,
 		[{ value: mid, type: 'VarChar' }],
@@ -254,6 +343,10 @@ async function yaRespondidoAlMensaje(idConversacion, idMensajePaciente) {
 				(m.origen === 'BOT' || m.origen === 'AGENTE') &&
 				Number(m.idMensaje) > idMsg,
 		);
+	}
+
+	if (useBotChat) {
+		return botChatStorage.yaRespondidoAlMensaje(idConv, idMsg);
 	}
 
 	const rows = await executeQuery(
@@ -335,6 +428,31 @@ async function registrarMensajeEntrante({
 		return { conversacion: mapConversacion(memConversaciones.get(conv.idConversacion)), mensaje: mapMensaje(msg), duplicado: false };
 	}
 
+	if (useBotChat) {
+		const resultado = await botChatStorage.registrarMensajeEntrante({
+			conv,
+			texto,
+			metaMessageId,
+			nombreContacto,
+			idPaciente,
+			dniPaciente,
+			incrementarNoLeidos,
+		});
+		if (incrementarNoLeidos) {
+			setImmediate(() => {
+				const { notificarMensajeWhatsAppEntrante } = require('./notificacionesWhatsapp.service');
+				notificarMensajeWhatsAppEntrante({
+					idConversacion: resultado.conversacion.idConversacion,
+					telefono: resultado.conversacion.telefonoWhatsApp,
+					nombreContacto: resultado.conversacion.nombreContacto,
+					contenido: texto,
+					idMensaje: resultado.mensaje.idMensaje,
+				}).catch(() => {});
+			});
+		}
+		return { ...resultado, duplicado: false };
+	}
+
 	const rows = await executeQuery(
 		`INSERT INTO dbo.imBotMensaje
 		   (IdConversacion, Direccion, Origen, Contenido, EstadoEntrega, MetaMessageId)
@@ -373,11 +491,24 @@ async function registrarMensajeEntrante({
 		`SELECT TOP 1 * FROM dbo.imBotConversacion WHERE IdConversacion = @p0`,
 		[{ value: conv.idConversacion, type: 'VarChar' }],
 	);
-	return {
+	const resultado = {
 		conversacion: mapConversacion(convRows[0]),
 		mensaje: mapMensaje(msgRows[0]),
 		duplicado: false,
 	};
+	if (incrementarNoLeidos) {
+		setImmediate(() => {
+			const { notificarMensajeWhatsAppEntrante } = require('./notificacionesWhatsapp.service');
+			notificarMensajeWhatsAppEntrante({
+				idConversacion: resultado.conversacion.idConversacion,
+				telefono: resultado.conversacion.telefonoWhatsApp,
+				nombreContacto: resultado.conversacion.nombreContacto,
+				contenido: texto,
+				idMensaje: resultado.mensaje.idMensaje,
+			}).catch(() => {});
+		});
+	}
+	return resultado;
 }
 
 async function registrarMensajeSaliente({
@@ -417,6 +548,17 @@ async function registrarMensajeSaliente({
 		return { conversacion: mapConversacion(memConversaciones.get(idConversacion)), mensaje: mapMensaje(msg) };
 	}
 
+	if (useBotChat) {
+		return botChatStorage.registrarMensajeSaliente({
+			idConversacion,
+			texto,
+			origen,
+			idAgente,
+			nombreAgente,
+			metaMessageId,
+		});
+	}
+
 	const rows = await executeQuery(
 		`INSERT INTO dbo.imBotMensaje
 		   (IdConversacion, Direccion, Origen, Contenido, EstadoEntrega, IdAgente, NombreAgente, MetaMessageId)
@@ -452,8 +594,21 @@ async function registrarMensajeSaliente({
 	return { conversacion: mapConversacion(convRows[0]), mensaje: mapMensaje(msgRows[0]) };
 }
 
+async function contarMensajesNoLeidos() {
+	await checkConversationTables();
+	assertAlmacenamientoSql();
+	if (useBotChat) return botChatStorage.contarMensajesNoLeidos();
+	const rows = await executeQuery(
+		`SELECT ISNULL(SUM(NoLeidos), 0) AS total
+		 FROM dbo.imBotConversacion
+		 WHERE Activo = 1`,
+	);
+	return Number(rows?.[0]?.total ?? 0);
+}
+
 async function listarConversaciones({ limit = 50, soloNoLeidos = false } = {}) {
 	await checkConversationTables();
+	assertAlmacenamientoSql();
 	const lim = Math.min(100, Math.max(1, Number(limit) || 50));
 
 	if (useMemory) {
@@ -469,6 +624,11 @@ async function listarConversaciones({ limit = 50, soloNoLeidos = false } = {}) {
 			almacenamiento: 'memoria',
 			conversaciones: list.slice(0, lim),
 		};
+	}
+
+	if (useBotChat) {
+		const conversaciones = await botChatStorage.listarConversaciones({ limit: lim, soloNoLeidos });
+		return { disponible: true, almacenamiento: 'sql', conversaciones };
 	}
 
 	const filtro = soloNoLeidos ? 'AND NoLeidos > 0' : '';
@@ -492,6 +652,7 @@ async function obtenerConversacion(idConversacion) {
 		if (!conv) return null;
 		return mapConversacion(conv);
 	}
+	if (useBotChat) return botChatStorage.obtenerSesion(idConversacion);
 	const rows = await executeQuery(
 		`SELECT TOP 1 * FROM dbo.imBotConversacion WHERE IdConversacion = @p0 AND Activo = 1`,
 		[{ value: idConversacion, type: 'VarChar' }],
@@ -508,6 +669,10 @@ async function listarMensajes(idConversacion, { limit = 100, desdeId = null } = 
 		if (desdeId) list = list.filter((m) => m.idMensaje > Number(desdeId));
 		list.sort((a, b) => new Date(a.fechaMensaje).getTime() - new Date(b.fechaMensaje).getTime());
 		return list.slice(-lim);
+	}
+
+	if (useBotChat) {
+		return botChatStorage.listarMensajes(idConversacion, { limit: lim, desdeId });
 	}
 
 	let filtro = '';
@@ -536,6 +701,7 @@ async function marcarLeida(idConversacion) {
 		}
 		return obtenerConversacion(idConversacion);
 	}
+	if (useBotChat) return botChatStorage.marcarLeida(idConversacion);
 	await executeQuery(
 		`UPDATE dbo.imBotConversacion SET NoLeidos = 0 WHERE IdConversacion = @p0`,
 		[{ value: idConversacion, type: 'VarChar' }],
@@ -595,19 +761,36 @@ async function cambiarModoControl(idConversacion, modo, agente = null) {
 		throw err;
 	}
 
-	await executeQuery(
-		`UPDATE dbo.imBotConversacion SET
-		   ModoControl = @p1,
-		   IdAgente = @p2,
-		   NombreAgente = @p3
-		 WHERE IdConversacion = @p0`,
-		[
-			{ value: idConversacion, type: 'VarChar' },
-			{ value: modoUp, type: 'VarChar' },
-			{ value: modoUp === 'HUMANO' ? idAgente : null, type: 'Int' },
-			{ value: modoUp === 'HUMANO' ? nombreAgente : null, type: 'VarChar' },
-		],
-	);
+	if (useBotChat) {
+		await botChatStorage.actualizarSesion(
+			idConversacion,
+			[
+				'ModoControl = @p1',
+				'IdAgente = @p2',
+				'NombreAgente = @p3',
+			],
+			[
+				{ value: idConversacion, type: 'VarChar' },
+				{ value: modoUp, type: 'VarChar' },
+				{ value: modoUp === 'HUMANO' ? idAgente : null, type: 'Int' },
+				{ value: modoUp === 'HUMANO' ? nombreAgente : null, type: 'VarChar' },
+			],
+		);
+	} else {
+		await executeQuery(
+			`UPDATE dbo.imBotConversacion SET
+			   ModoControl = @p1,
+			   IdAgente = @p2,
+			   NombreAgente = @p3
+			 WHERE IdConversacion = @p0`,
+			[
+				{ value: idConversacion, type: 'VarChar' },
+				{ value: modoUp, type: 'VarChar' },
+				{ value: modoUp === 'HUMANO' ? idAgente : null, type: 'Int' },
+				{ value: modoUp === 'HUMANO' ? nombreAgente : null, type: 'VarChar' },
+			],
+		);
+	}
 
 	const sysMsg =
 		modoUp === 'BOT'
@@ -686,6 +869,10 @@ async function actualizarContextoPaciente(idConversacion, fields = {}) {
 	}
 	if (!sets.length) return obtenerConversacion(idConversacion);
 
+	if (useBotChat) {
+		return botChatStorage.actualizarSesion(idConversacion, sets, params);
+	}
+
 	await executeQuery(
 		`UPDATE dbo.imBotConversacion SET ${sets.join(', ')} WHERE IdConversacion = @p0`,
 		params,
@@ -723,6 +910,8 @@ async function limpiarEstadoWizard(idConversacion) {
 		return true;
 	}
 
+	if (useBotChat) return botChatStorage.limpiarEstadoWizard(idConversacion);
+
 	const hasCol = await ensureContextoBotColumn();
 	const ctxSql = hasCol ? ', ContextoBotJson = NULL' : '';
 	await executeQuery(
@@ -756,6 +945,11 @@ async function resetConversacionPorTelefono(telefonoWhatsApp) {
 			mensajesEliminados: nMsg,
 			conversacionesEliminadas: 1,
 		};
+	}
+
+	if (useBotChat) {
+		const r = await botChatStorage.resetConversacionPorTelefono(idConv);
+		return { ...r, telefono: tel };
 	}
 
 	const countRows = await executeQuery(
@@ -809,6 +1003,8 @@ async function resetTodasLasConversaciones() {
 		return { mensajesEliminados, conversacionesEliminadas };
 	}
 
+	if (useBotChat) return botChatStorage.resetTodasLasConversaciones();
+
 	const msgCount = await executeQuery(`SELECT COUNT(*) AS n FROM dbo.imBotMensaje`);
 	const convCount = await executeQuery(`SELECT COUNT(*) AS n FROM dbo.imBotConversacion`);
 	const mensajesEliminados = Number(msgCount?.[0]?.n || 0);
@@ -828,6 +1024,9 @@ async function resetTodasLasConversaciones() {
 
 module.exports = {
 	checkConversationTables,
+	resetStorageCache,
+	assertAlmacenamientoSql,
+	contarMensajesNoLeidos,
 	normalizarTelefono,
 	idDesdeTelefono,
 	obtenerOCrearConversacion,

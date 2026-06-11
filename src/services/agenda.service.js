@@ -391,9 +391,11 @@ async function _resolverSectorMedico(matricula, fechaIso, horaClarion) {
 /** Datos del médico titular del turno (imPersonal por Matricula). */
 async function _datosProfesionalParaTurno(matricula, fechaIso = null, horaClarion = null) {
 	const rows = await executeQuery(
-		`SELECT TOP 1 Matricula, ApellidoNombre, ValorEspecialidad, ValorServicio, Valor
-		 FROM dbo.imPersonal
-		 WHERE Matricula = @p0`,
+		`SELECT TOP 1 p.Matricula, p.ApellidoNombre, p.ValorEspecialidad, p.ValorServicio, p.Valor
+		 FROM dbo.imPersonal p
+		 INNER JOIN dbo.imPersonalHorarios h ON h.Matricula = p.Matricula
+		 WHERE p.Matricula = @p0
+		   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL`,
 		[{ value: matricula, type: 'Int' }],
 	);
 	if (!rows.length) {
@@ -936,8 +938,9 @@ async function listarProfesionalesAgenda(filtros = {}) {
 		`SELECT DISTINCT h.Matricula, h.IdServicio,
 		        p.ApellidoNombre, p.ValorEspecialidad, p.ValorServicio
 		 FROM dbo.imPersonalHorarios h
-		 LEFT JOIN dbo.imPersonal p ON p.Matricula = h.Matricula
-		 WHERE h.Matricula > 0`,
+		 INNER JOIN dbo.imPersonal p ON p.Matricula = h.Matricula
+		 WHERE h.Matricula > 0
+		   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL`,
 	);
 
 	const porMat = new Map();
@@ -951,9 +954,7 @@ async function listarProfesionalesAgenda(filtros = {}) {
 		if (!porMat.has(mat)) {
 			porMat.set(mat, {
 				matricula: mat,
-				nombre: r.ApellidoNombre
-					? String(r.ApellidoNombre).trim()
-					: `Matrícula ${mat}`,
+				nombre: String(r.ApellidoNombre).trim(),
 				total: 0,
 				ocupados: 0,
 				libres: 0,
@@ -1010,6 +1011,7 @@ async function asignarTurno({
 		e.statusCode = 400;
 		throw e;
 	}
+
 	const fechaClarion = convertirFechaAClarion(fecha);
 	const horaClarion =
 		horaClarionIn != null && Number(horaClarionIn) > 0
@@ -1020,6 +1022,15 @@ async function asignarTurno({
 		e.statusCode = 400;
 		throw e;
 	}
+
+	const profPre = await _datosProfesionalParaTurno(m, fecha, horaClarion);
+	if (!profPre?.nombre) {
+		const e = new Error('Profesional no encontrado en la nómina activa');
+		e.statusCode = 404;
+		e.code = 'PROFESIONAL_INEXISTENTE';
+		throw e;
+	}
+
 	const hoyClarion = convertirFechaAClarion(_isoDate(new Date()));
 	if (fechaClarion < hoyClarion) {
 		const e = new Error('No se pueden asignar turnos en fechas anteriores al día de hoy');
@@ -1071,6 +1082,12 @@ async function asignarTurno({
 
 	// Sector = IdServicio del horario del médico (no del operador logueado ni del slot UI)
 	const prof = await _datosProfesionalParaTurno(m, fecha, horaClarion);
+	if (!prof?.nombre) {
+		const e = new Error('Profesional no encontrado en la nómina activa');
+		e.statusCode = 404;
+		e.code = 'PROFESIONAL_INEXISTENTE';
+		throw e;
+	}
 	const sec =
 		(prof.sector && String(prof.sector).trim().slice(0, 4)) ||
 		String(slot.sector || sector || '')

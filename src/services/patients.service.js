@@ -474,9 +474,10 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 			query = `SELECT TOP 100
 				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
-          			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          			ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+          			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+          			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
         		END AS FechaNacimiento,
+				p.FechaNacimiento AS FechaNacimientoClarion,
 				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
@@ -498,9 +499,10 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 			query = `SELECT TOP 100
 				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
-          			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 2958465 THEN NULL
-          			ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento - 2, '19000101'))
+          			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+          			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
         		END AS FechaNacimiento,
+				p.FechaNacimiento AS FechaNacimientoClarion,
 				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,

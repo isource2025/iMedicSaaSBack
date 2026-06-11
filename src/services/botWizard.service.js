@@ -136,15 +136,22 @@ function nombreCompletoRenaper(renaper, pacienteLocal = null) {
 }
 
 /** Confirmación RENAPER: solo nombre completo y fecha de nacimiento. */
+function fechaLegibleBot(iso) {
+	if (!iso) return null;
+	const m = String(iso).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+	if (!m) return String(iso).trim();
+	return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
 function formatearPersonaRenaper(renaper, _dni, pacienteLocal = null) {
 	const lineas = [];
 	const nombre = nombreCompletoRenaper(renaper, pacienteLocal);
 	if (nombre) lineas.push(`Nombre: *${nombre}*`);
-	if (renaper?.fechaNacimiento) {
-		lineas.push(`Fecha de nacimiento: ${renaper.fechaNacimiento}`);
-	} else if (pacienteLocal?.fechaNacimiento) {
-		lineas.push(`Fecha de nacimiento: ${pacienteLocal.fechaNacimiento}`);
-	}
+	const fn =
+		renaper?.fechaNacimiento || pacienteLocal?.fechaNacimiento
+			? fechaLegibleBot(renaper?.fechaNacimiento || pacienteLocal?.fechaNacimiento)
+			: null;
+	if (fn) lineas.push(`Fecha de nacimiento: ${fn}`);
 	return lineas.join('\n');
 }
 
@@ -404,6 +411,165 @@ function mensajeErrorRenaper(err) {
 	return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 }
 
+async function _respuestaIdentificacionOk({
+	data,
+	dni,
+	conv,
+	flujo,
+	idConversacion,
+	pasoConfirmarActivo,
+}) {
+	const identificado = data.renaper?.encontrado || data.pacienteLocal?.existe;
+	if (!identificado) return null;
+
+	if (pasoConfirmarActivo) {
+		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
+		const espPendPreservar = conv.contextoBot?.especialidadPendiente || null;
+		if (conv.idPaciente || conv.contextoBot) {
+			await botConversacion.limpiarEstadoWizard(idConversacion);
+			if (espPendPreservar) {
+				await botConversacion.guardarContextoBot(idConversacion, {
+					especialidadPendiente: espPendPreservar,
+				});
+			}
+		} else {
+			await botConversacion.guardarContextoBot(
+				idConversacion,
+				espPendPreservar ? { especialidadPendiente: espPendPreservar } : null,
+			);
+		}
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			dniPaciente: String(dni),
+			pasoBot: 'CONFIRMAR_IDENTIDAD',
+			idPaciente: null,
+		});
+		return {
+			handled: true,
+			texto: mensajeConfirmacionRenaper({
+				renaper: data.renaper,
+				dni,
+				pacienteLocal: data.pacienteLocal,
+				pasoCfg,
+			}),
+		};
+	}
+
+	const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
+	const pasoCfg = pasoPorId(flujo, siguiente);
+	return {
+		handled: true,
+		texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
+	};
+}
+
+async function avanzarTrasIdentidadConfirmada({
+	idConversacion,
+	telefonoWhatsApp,
+	flujo,
+	config,
+	conv,
+	espPend,
+	idPaciente,
+}) {
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+
+	if (botAgenda.coberturaPasoHabilitado(flujo, config)) {
+		const pasoCob = pasoPorId(flujo, 'ELEGIR_COBERTURA');
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			idPaciente,
+			pasoBot: 'ELEGIR_COBERTURA',
+		});
+		const msg = await botAgenda.mensajePasoCobertura(pasoCob, idPaciente);
+		return {
+			handled: true,
+			texto: `${prefijoSaludo}${msg}`,
+		};
+	}
+
+	if (
+		espPend?.valor &&
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+	) {
+		return armarRespuestaBuscarTurnoInicial({
+			idConversacion,
+			telefonoWhatsApp,
+			flujo,
+			esp: espPend,
+			avisoPrefijo: prefijoSaludo,
+		});
+	}
+
+	let siguiente = siguientePasoActivo(flujo, 'CONFIRMAR_IDENTIDAD');
+	if (
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+	) {
+		siguiente = 'ELEGIR_ESPECIALIDAD';
+	}
+	const pasoCfg = pasoPorId(flujo, siguiente);
+	await botConversacion.actualizarContextoPaciente(idConversacion, {
+		idPaciente,
+		pasoBot: siguiente,
+	});
+	return {
+		handled: true,
+		texto: pasoCfg?.mensajeUsuario
+			? `${prefijoSaludo.trim()} ${pasoCfg.mensajeUsuario}`
+			: `Gracias${saludo ? `, ${saludo}` : ''}. Continuemos con tu turno.`,
+	};
+}
+
+async function avanzarTrasCobertura({
+	idConversacion,
+	telefonoWhatsApp,
+	flujo,
+	config,
+	conv,
+	espPend,
+	idPaciente,
+	nombreCobertura,
+}) {
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+	const coberturaMsg = nombreCobertura
+		? `Registramos cobertura: *${nombreCobertura}*.\n\n`
+		: '';
+
+	if (
+		espPend?.valor &&
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+	) {
+		const buscar = armarRespuestaBuscarTurnoInicial({
+			idConversacion,
+			telefonoWhatsApp,
+			flujo,
+			esp: espPend,
+			avisoPrefijo: `${prefijoSaludo}${coberturaMsg}`,
+		});
+		return buscar;
+	}
+
+	let siguiente = siguientePasoActivo(flujo, 'ELEGIR_COBERTURA');
+	if (
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
+	) {
+		siguiente = 'ELEGIR_ESPECIALIDAD';
+	}
+	const pasoCfg = pasoPorId(flujo, siguiente);
+	await botConversacion.actualizarContextoPaciente(idConversacion, {
+		idPaciente,
+		pasoBot: siguiente,
+	});
+	return {
+		handled: true,
+		texto: `${prefijoSaludo}${coberturaMsg}${pasoCfg?.mensajeUsuario || '¿Qué especialidad necesitás?'}`,
+	};
+}
+
 async function procesarIdentificacionDni({
 	idConversacion,
 	telefonoWhatsApp,
@@ -424,69 +590,91 @@ async function procesarIdentificacionDni({
 	}
 
 	try {
-		diag.line('wizard', 'Consultando RENAPER por DNI', { dni, idConversacion });
-		const data = await withTimeout(
-			consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pasoConfirmarActivo),
+		diag.line('wizard', 'Buscando ficha local por DNI', { dni, idConversacion });
+		const dataLocal = await botAgenda.identificarPaciente({
+			numeroDocumento: dni,
+			telefonoWhatsApp,
+			crearSiNoExiste: false,
+			idConversacion,
+			omitirAvancePaso: pasoConfirmarActivo,
+			fase: 'local',
+		});
+		diag.line('wizard', 'Ficha local', {
+			dni,
+			existe: !!dataLocal.pacienteLocal?.existe,
+			nombre: dataLocal.pacienteLocal?.nombre || null,
+		});
+
+		const respLocal = await _respuestaIdentificacionOk({
+			data: dataLocal,
+			dni,
+			conv,
+			flujo,
+			idConversacion,
+			pasoConfirmarActivo,
+		});
+		if (respLocal) return respLocal;
+
+		diag.line('wizard', 'Sin ficha local, consultando RENAPER', { dni, idConversacion });
+		const dataRenaper = await withTimeout(
+			botAgenda.identificarPaciente({
+				numeroDocumento: dni,
+				telefonoWhatsApp,
+				crearSiNoExiste: !pasoConfirmarActivo,
+				idConversacion,
+				omitirAvancePaso: pasoConfirmarActivo,
+				fase: 'renaper',
+			}),
 			RENAPER_TIMEOUT_MS,
 			'RENAPER',
 		);
 		diag.line('wizard', 'RENAPER respondió', {
 			dni,
-			encontrado: !!data.renaper?.encontrado,
-			nombre: data.renaper?.nombreCompleto || null,
+			encontrado: !!dataRenaper.renaper?.encontrado,
+			nombre: dataRenaper.renaper?.nombreCompleto || null,
 		});
 
-		if (!data.renaper?.encontrado) {
-			return {
-				handled: true,
-				texto: 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.',
-			};
-		}
+		const respRenaper = await _respuestaIdentificacionOk({
+			data: dataRenaper,
+			dni,
+			conv,
+			flujo,
+			idConversacion,
+			pasoConfirmarActivo,
+		});
+		if (respRenaper) return respRenaper;
 
-		if (pasoConfirmarActivo) {
-			const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
-			const espPendPreservar = conv.contextoBot?.especialidadPendiente || null;
-			if (conv.idPaciente || conv.contextoBot) {
-				await botConversacion.limpiarEstadoWizard(idConversacion);
-				if (espPendPreservar) {
-					await botConversacion.guardarContextoBot(idConversacion, {
-						especialidadPendiente: espPendPreservar,
-					});
-				}
-			} else {
-				await botConversacion.guardarContextoBot(
-					idConversacion,
-					espPendPreservar ? { especialidadPendiente: espPendPreservar } : null,
-				);
-			}
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				dniPaciente: String(dni),
-				pasoBot: 'CONFIRMAR_IDENTIDAD',
-				idPaciente: null,
-			});
-			return {
-				handled: true,
-				texto: mensajeConfirmacionRenaper({
-					renaper: data.renaper,
-					dni,
-					pacienteLocal: data.pacienteLocal,
-					pasoCfg,
-				}),
-			};
-		}
-
-		const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
-		const pasoCfg = pasoPorId(flujo, siguiente);
 		return {
 			handled: true,
-			texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
+			texto: 'No encontramos ese DNI en el sistema. Verificá el número e intentá de nuevo.',
 		};
 	} catch (err) {
-		diag.warn('wizard', 'Error consultando RENAPER', {
+		diag.warn('wizard', 'Error identificando DNI', {
 			dni,
 			error: err.message,
 			code: err.code,
 		});
+		try {
+			const fallback = await botAgenda.identificarPaciente({
+				numeroDocumento: dni,
+				telefonoWhatsApp,
+				crearSiNoExiste: false,
+				idConversacion,
+				omitirAvancePaso: pasoConfirmarActivo,
+				fase: 'local',
+			});
+			const resp = await _respuestaIdentificacionOk({
+				data: fallback,
+				dni,
+				conv,
+				flujo,
+				idConversacion,
+				pasoConfirmarActivo,
+			});
+			if (resp) return resp;
+		} catch {
+			/* ignore */
+		}
 		return { handled: true, texto: mensajeErrorRenaper(err) };
 	}
 }
@@ -678,39 +866,15 @@ async function intentarRespuestaWizard({
 				dniPaciente: String(conv.dniPaciente),
 			});
 
-			const saludo = primerNombre(nombreWhatsApp(conv));
-			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
-			if (
-				espPend?.valor &&
-				config.reglas.sugerirPrimerTurnoDisponible &&
-				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
-			) {
-				return armarRespuestaBuscarTurnoInicial({
-					idConversacion,
-					telefonoWhatsApp,
-					flujo,
-					esp: espPend,
-					avisoPrefijo: prefijoSaludo,
-				});
-			}
-
-			let siguiente = siguientePasoActivo(flujo, 'CONFIRMAR_IDENTIDAD');
-			if (
-				config.reglas.sugerirPrimerTurnoDisponible &&
-				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
-			) {
-				siguiente = 'ELEGIR_ESPECIALIDAD';
-			}
-			const pasoCfg = pasoPorId(flujo, siguiente);
-			await botConversacion.actualizarContextoPaciente(idConversacion, {
-				pasoBot: siguiente,
+			return avanzarTrasIdentidadConfirmada({
+				idConversacion,
+				telefonoWhatsApp,
+				flujo,
+				config,
+				conv,
+				espPend,
+				idPaciente: data.idPaciente,
 			});
-			return {
-				handled: true,
-				texto: pasoCfg?.mensajeUsuario
-					? `${prefijoSaludo.trim()} ${pasoCfg.mensajeUsuario}`
-					: `Gracias${saludo ? `, ${saludo}` : ''}. Continuemos con tu turno.`,
-			};
 		}
 		if (conf === false) {
 			await botConversacion.limpiarEstadoWizard(idConversacion);
@@ -771,6 +935,60 @@ async function intentarRespuestaWizard({
 			texto:
 				'Para continuar, confirmá la identidad de la persona del turno respondiendo *Sí* o *No*.',
 		};
+	}
+
+	// --- Obra social / cobertura (opcional, configurable) ---
+	const configBot = await botConfigService.getBotConfig();
+	if (pasoActual === 'ELEGIR_COBERTURA' && botAgenda.coberturaPasoHabilitado(flujo, configBot)) {
+		const pasoCobCfg = pasoPorId(flujo, 'ELEGIR_COBERTURA');
+		if (!conv.idPaciente) {
+			return {
+				handled: true,
+				texto: 'Primero confirmá tu identidad enviando el DNI.',
+			};
+		}
+		if (!texto) {
+			return {
+				handled: true,
+				texto: await botAgenda.mensajePasoCobertura(pasoCobCfg, conv.idPaciente),
+			};
+		}
+
+		const resuelta = await botAgenda.resolverCoberturaDesdeTexto(texto);
+		if (!resuelta) {
+			return {
+				handled: true,
+				texto: `No reconocí esa cobertura. ${await botAgenda.mensajeListaCoberturas(10)}`,
+			};
+		}
+
+		let nombreCobertura = resuelta.nombre;
+		try {
+			if (resuelta.omitido) {
+				nombreCobertura = 'Particular';
+			} else {
+				const saved = await botAgenda.actualizarCoberturaPacienteBot(conv.idPaciente, resuelta);
+				nombreCobertura = saved.nombre;
+			}
+		} catch (err) {
+			diag.warn('wizard', 'Error guardando cobertura', { error: err.message });
+			return {
+				handled: true,
+				texto: 'No pudimos registrar esa cobertura. Escribí el nombre exacto de la obra social.',
+			};
+		}
+
+		const espPend = conv.contextoBot?.especialidadPendiente;
+		return avanzarTrasCobertura({
+			idConversacion,
+			telefonoWhatsApp,
+			flujo,
+			config: configBot,
+			conv,
+			espPend,
+			idPaciente: conv.idPaciente,
+			nombreCobertura: resuelta.omitido ? 'Particular' : nombreCobertura,
+		});
 	}
 
 	// --- Especialidad → sugerir primer turno (si está activo en config) ---
@@ -913,6 +1131,24 @@ async function intentarRespuestaWizard({
 
 		if (conf === true && ctx.matricula && ctx.fecha && ctx.hora) {
 			try {
+				const valido = await botAgenda.validarSugerenciaTurno(
+					{
+						matricula: ctx.matricula,
+						medico: ctx.medico,
+						fecha: ctx.fecha,
+						hora: ctx.hora,
+						sector: ctx.sector,
+					},
+					ctx.especialidadValor,
+				);
+				if (!valido) {
+					await botConversacion.guardarContextoBot(idConversacion, null);
+					return {
+						handled: true,
+						texto:
+							'Ese profesional no está habilitado en la agenda. Indicá otra especialidad o contactá al centro.',
+					};
+				}
 				const reserva = await botAgenda.reservarTurno(
 					{
 						matricula: ctx.matricula,
@@ -933,7 +1169,15 @@ async function intentarRespuestaWizard({
 					texto: saludo ? `Perfecto, ${saludo}.\n\n${ticket}` : ticket,
 				};
 			} catch (err) {
-				diag.warn('wizard', 'Error reservando turno sugerido', { error: err.message });
+				diag.warn('wizard', 'Error reservando turno sugerido', { error: err.message, code: err.code });
+				if (err.code === 'PROFESIONAL_INEXISTENTE' || err.code === 'ESPECIALIDAD_NO_COINCIDE') {
+					await botConversacion.guardarContextoBot(idConversacion, null);
+					return {
+						handled: true,
+						texto:
+							'Ese profesional no está habilitado en la agenda. Indicá otra especialidad o contactá al centro.',
+					};
+				}
 				return {
 					handled: true,
 					texto:
@@ -1005,7 +1249,10 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 	try {
 		if (tipo === 'inicial') {
 			const pasoConfirmar = pasoPorId(flujo, buscarTurno.pasoConfirmarId || 'CONFIRMAR');
-			const sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(buscarTurno.especialidadValor);
+			let sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(buscarTurno.especialidadValor);
+			sugerencia = sugerencia
+				? await botAgenda.validarSugerenciaTurno(sugerencia, buscarTurno.especialidadValor)
+				: null;
 			await botConversacion.guardarContextoBot(idConversacion, {
 				tipo: 'turno_sugerido',
 				especialidadValor: buscarTurno.especialidadValor,
@@ -1041,6 +1288,13 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 				const pref = ajuste.resumen ? ` *${ajuste.resumen}*` : '';
 				return {
 					texto: `No encontré turno disponible${pref} en los próximos días. Decime otro día u horario que te sirva.`,
+				};
+			}
+
+			siguiente = await botAgenda.validarSugerenciaTurno(siguiente, ctx.especialidadValor);
+			if (!siguiente) {
+				return {
+					texto: 'No hay turnos con profesionales habilitados en la agenda. Contactá al centro o probá otra especialidad.',
 				};
 			}
 

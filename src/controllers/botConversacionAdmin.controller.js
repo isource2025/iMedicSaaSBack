@@ -1,6 +1,7 @@
 const botConversacion = require('../services/botConversacion.service');
 const whatsappEmpresa = require('../services/whatsappEmpresa.service');
 const whatsappMeta = require('../services/whatsappMeta.service');
+const { marcarLeidasConversacion } = require('../services/notificacionesWhatsapp.service');
 
 function agenteDesdeReq(req) {
 	const u = req.auth || {};
@@ -52,7 +53,20 @@ async function listarMensajes(req, res) {
 async function marcarLeida(req, res) {
 	try {
 		const conv = await botConversacion.marcarLeida(req.params.id);
+		const vp = req.valorPersonal ?? req.auth?.valorPersonal;
+		if (vp) {
+			marcarLeidasConversacion(req.params.id, vp).catch(() => {});
+		}
 		res.json({ success: true, data: conv });
+	} catch (err) {
+		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
+	}
+}
+
+async function contarNoLeidos(req, res) {
+	try {
+		const total = await botConversacion.contarMensajesNoLeidos();
+		res.json({ success: true, data: { total, almacenamiento: 'sql' } });
 	} catch (err) {
 		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
 	}
@@ -156,16 +170,22 @@ async function simularEntrante(req, res) {
 
 async function estadoAlmacenamiento(req, res) {
 	try {
-		const sql = await botConversacion.checkConversationTables();
+		const sqlOk = await botConversacion.checkConversationTables();
+		const botChat = await require('../services/botChatStorage.service').tableExists();
 		res.json({
 			success: true,
 			data: {
-				tablasSql: sql,
-				almacenamiento: sql ? 'sql' : 'memoria',
+				tablasSql: sqlOk,
+				almacenamiento: sqlOk ? 'sql' : 'memoria',
+				esquema: botChat ? 'imBotChat' : 'legacy',
 			},
 		});
 	} catch (err) {
-		res.status(500).json({ success: false, mensaje: err.message });
+		res.status(err.statusCode || 503).json({
+			success: false,
+			mensaje: err.message,
+			codigo: err.codigo || 'BOT_CONVERSACIONES_SIN_SQL',
+		});
 	}
 }
 
@@ -178,4 +198,5 @@ module.exports = {
 	enviarMensaje,
 	simularEntrante,
 	estadoAlmacenamiento,
+	contarNoLeidos,
 };

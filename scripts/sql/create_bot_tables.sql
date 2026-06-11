@@ -1,3 +1,4 @@
+-- DEPRECADO para inbox: usar setup_bot_minimal.sql (imBotChat unifica conversación+mensajes+log).
 -- Tablas de soporte para chatbot WhatsApp / integraciones
 -- Ejecutar en la BD tenant (SQL Server) de cada institución.
 

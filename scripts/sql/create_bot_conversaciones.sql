@@ -1,3 +1,4 @@
+-- DEPRECADO: usar scripts/sql/setup_bot_minimal.sql (imBotConfig + imBotChat unificado).
 -- Conversaciones y mensajes del chatbot WhatsApp (inbox agente)
 -- Ejecutar en la BD tenant (SQL Server) de cada institución.
 

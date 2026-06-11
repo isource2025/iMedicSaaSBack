@@ -9,7 +9,7 @@ const botLogService = require('./botLog.service');
 const botOpenai = require('./botOpenai.service');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
-const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { convertirFechaAClarion, convertirFechaClarionADate } = require('../utils/dateUtils');
 
 function _validarSexo(sexo) {
 	const s = String(sexo || '')
@@ -58,22 +58,39 @@ function _domicilioDesdeRenaper(persona) {
 	return `${persona?.calle || ''} ${persona?.numero || ''}`.trim().slice(0, 80) || null;
 }
 
+function _formatFechaIsoLocal(d) {
+	if (!d || Number.isNaN(d.getTime())) return null;
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _fechaNacimientoDesdeRow(row) {
+	const clarion = row.FechaNacimientoClarion ?? row.FechaNacimientoRaw;
+	if (clarion != null && Number.isFinite(Number(clarion))) {
+		const n = Number(clarion);
+		if (n > 0 && n <= 1_000_000) {
+			const d = convertirFechaClarionADate(n);
+			if (d) return _formatFechaIsoLocal(d);
+		}
+	}
+	const fn = row.FechaNacimiento;
+	if (fn instanceof Date && !Number.isNaN(fn.getTime())) {
+		return _formatFechaIsoLocal(fn);
+	}
+	if (fn != null && fn !== '') {
+		const s = String(fn).trim();
+		if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+	}
+	return null;
+}
+
 function _mapPacienteRow(row) {
 	if (!row) return null;
-	const fn = row.FechaNacimiento;
-	let fechaNacimiento = null;
-	if (fn instanceof Date && !Number.isNaN(fn.getTime())) {
-		fechaNacimiento = fn.toISOString().slice(0, 10);
-	} else if (fn) {
-		const s = String(fn);
-		fechaNacimiento = s.length >= 10 ? s.slice(0, 10) : s;
-	}
 	return {
 		idPaciente: row.IDPaciente,
 		nombre: row.ApellidoyNombre ? String(row.ApellidoyNombre).trim() : null,
 		dni: row.NumeroDocumento != null ? Number(row.NumeroDocumento) : null,
 		sexo: row.Sexo ? String(row.Sexo).trim() : null,
-		fechaNacimiento,
+		fechaNacimiento: _fechaNacimientoDesdeRow(row),
 		cobertura: row.Cobertura ? String(row.Cobertura).trim() : null,
 		telefonoParticular: row.TelefonoParticular ? String(row.TelefonoParticular).trim() : null,
 		telefonoCelular: row.TelefonoNegocio ? String(row.TelefonoNegocio).trim() : null,
@@ -81,11 +98,55 @@ function _mapPacienteRow(row) {
 	};
 }
 
+async function _validarProfesionalBot(matricula, especialidadValor = null) {
+	const mat = Number(matricula);
+	if (!Number.isFinite(mat) || mat <= 0) {
+		const e = new Error('matricula inválida');
+		e.statusCode = 400;
+		throw e;
+	}
+	const rows = await executeQuery(
+		`SELECT TOP 1 p.Matricula, p.ApellidoNombre, p.ValorEspecialidad
+		 FROM dbo.imPersonal p
+		 INNER JOIN dbo.imPersonalHorarios h ON h.Matricula = p.Matricula
+		 WHERE p.Matricula = @p0
+		   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL`,
+		[{ value: mat, type: 'Int' }],
+	);
+	if (!rows.length) {
+		const e = new Error('Profesional no encontrado en la nómina activa');
+		e.statusCode = 404;
+		e.code = 'PROFESIONAL_INEXISTENTE';
+		throw e;
+	}
+	const esp = especialidadValor != null ? Number(especialidadValor) : null;
+	if (esp != null && Number.isFinite(esp) && Number(rows[0].ValorEspecialidad) !== esp) {
+		const e = new Error('El profesional no pertenece a la especialidad indicada');
+		e.statusCode = 409;
+		e.code = 'ESPECIALIDAD_NO_COINCIDE';
+		throw e;
+	}
+	return {
+		matricula: mat,
+		nombre: String(rows[0].ApellidoNombre).trim(),
+		especialidad: Number(rows[0].ValorEspecialidad) || null,
+	};
+}
+
 async function _buscarPacienteLocalPorDni(dni) {
 	try {
-		const rows = await patientsService.buscarPacientes(String(dni));
-		const exact = rows.filter((r) => Number(r.NumeroDocumento) === dni);
-		return exact[0] || rows[0] || null;
+		const rows = await executeQuery(
+			`SELECT TOP 1
+				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Sexo,
+				p.FechaNacimiento AS FechaNacimientoClarion,
+				p.TelefonoParticular, p.TelefonoNegocio, p.Mail, c.RazonSocial AS Cobertura, p.NumeroCuenta
+			 FROM dbo.imPacientes p
+			 LEFT JOIN dbo.imClientes c ON p.NumeroCuenta = c.Valor
+			 WHERE p.NumeroDocumento = @p0
+			 ORDER BY p.IDPaciente DESC`,
+			[{ value: dni, type: 'Int' }],
+		);
+		return rows[0] || null;
 	} catch (err) {
 		console.warn('[botAgenda] Búsqueda paciente local falló:', err.message);
 		return null;
@@ -196,10 +257,13 @@ async function identificarPaciente({
 	forzarAltaLocal = false,
 	idConversacion,
 	omitirAvancePaso = false,
+	fase = 'completa',
 }) {
 	const config = await botConfigService.getBotConfig();
 	const dni = _validarDni(numeroDocumento);
 	const sexoHint = sexo ? _validarSexo(sexo) : null;
+	const soloLocal = fase === 'local';
+	const soloRenaper = fase === 'renaper';
 
 	let renaperData = null;
 	let renaperOk = false;
@@ -210,7 +274,12 @@ async function identificarPaciente({
 	const localRow = await _buscarPacienteLocalPorDni(dni);
 	let pacienteLocal = localRow ? _mapPacienteRow(localRow) : null;
 
-	if (config.reglas.requiereRenaper !== false) {
+	// Ficha local existente: no bloquear el flujo esperando RENAPER (LE/DNI legacy, timeouts MSAL).
+	if (pacienteLocal) {
+		renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
+		renaperOk = true;
+		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
+	} else if (!soloLocal && config.reglas.requiereRenaper !== false) {
 		const renaperOpts = {
 			debug: false,
 			timeoutMs: Number(process.env.BOT_RENAPER_TIMEOUT_MS || 35_000),
@@ -244,7 +313,7 @@ async function identificarPaciente({
 		renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
 		renaperOk = true;
 		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
-	} else if (!renaperOk && config.reglas.requiereRenaper === true) {
+	} else if (!renaperOk && !soloLocal && config.reglas.requiereRenaper === true) {
 		if (renaperError) {
 			const e = new Error('Servicio RENAPER no disponible desde el servidor');
 			e.statusCode = 503;
@@ -265,6 +334,7 @@ async function identificarPaciente({
 		accionSugerida = 'USAR_PACIENTE_EXISTENTE';
 		if (telefonoWhatsApp) await _actualizarTelefonoPaciente(idPaciente, telefonoWhatsApp);
 	} else if (
+		!soloLocal &&
 		renaperOk &&
 		(crearSiNoExiste || config.reglas.crearPacienteAutomatico || forzarAltaLocal)
 	) {
@@ -483,7 +553,9 @@ async function listarProfesionalesBot(especialidad, servicio) {
 
 	return {
 		especialidad: { valor: esp, nombre: espNombre },
-		profesionales: profesionales.map((p) => ({
+		profesionales: profesionales
+			.filter((p) => p.matricula && p.nombre)
+			.map((p) => ({
 			matricula: p.matricula,
 			nombre: p.nombre,
 			especialidad: esp,
@@ -770,6 +842,10 @@ async function reservarTurno(body, codOperador = 0) {
 
 	await _validarAnticipacion(fecha, hora, config);
 	await _validarMaxTurnosDia(idPaciente, fecha, config);
+	await _validarProfesionalBot(
+		matricula,
+		body.especialidad != null ? Number(body.especialidad) : null,
+	);
 
 	const obsBase = String(body.observaciones || 'Turno solicitado vía WhatsApp').slice(0, 950);
 	const tel = body.telefonoWhatsApp ? String(body.telefonoWhatsApp).replace(/\D/g, '').slice(-15) : '';
@@ -797,6 +873,12 @@ async function reservarTurno(body, codOperador = 0) {
 		);
 
 		const medicoNombre = med[0]?.ApellidoNombre ? String(med[0].ApellidoNombre).trim() : null;
+		if (!medicoNombre) {
+			const e = new Error('Profesional no encontrado en la nómina activa');
+			e.statusCode = 404;
+			e.code = 'PROFESIONAL_INEXISTENTE';
+			throw e;
+		}
 		const sectorUsado = body.sector ? String(body.sector).trim() : null;
 
 		const ticket = await _buildTicket({
@@ -1543,8 +1625,9 @@ async function _profesionalesConLibresEnDia(fechaIso, esp, ordenados) {
 		);
 		if (!mats.size) return [];
 		return ordenados.filter((p) => mats.has(Number(p.matricula)));
-	} catch {
-		return ordenados;
+	} catch (err) {
+		console.warn('[botAgenda] disponibilidadDia falló:', err.message);
+		return [];
 	}
 }
 
@@ -1572,14 +1655,39 @@ function _empaquetarTurnoSugerido(mejor, especialidadMeta, esp) {
 	};
 }
 
-function _elegirMejorTurno(candidatos) {
+async function _elegirMejorTurnoValido(candidatos, esp) {
 	if (!candidatos.length) return null;
-	const ordenados = [...candidatos].sort((a, b) => {
-		const diff = a.dt - b.dt;
-		if (diff !== 0) return diff;
-		return String(a.medico || '').localeCompare(String(b.medico || ''), 'es');
-	});
-	return ordenados[0];
+	const ordenados = [...candidatos]
+		.filter(Boolean)
+		.sort((a, b) => {
+			const diff = a.dt - b.dt;
+			if (diff !== 0) return diff;
+			return String(a.medico || '').localeCompare(String(b.medico || ''), 'es');
+		});
+	for (const c of ordenados) {
+		try {
+			await _validarProfesionalBot(c.matricula, esp);
+			return c;
+		} catch (err) {
+			console.warn(
+				'[botAgenda] Turno descartado — profesional no habilitado:',
+				c.matricula,
+				err.message,
+			);
+		}
+	}
+	return null;
+}
+
+async function _validarSugerenciaTurno(sugerencia, esp) {
+	if (!sugerencia?.matricula) return null;
+	try {
+		const prof = await _validarProfesionalBot(sugerencia.matricula, esp);
+		return { ...sugerencia, medico: prof.nombre };
+	} catch (err) {
+		console.warn('[botAgenda] Sugerencia rechazada:', err.message);
+		return null;
+	}
 }
 
 /** Solo generarSlots — sin disponibilidadDia ni validación SQL extra por médico. */
@@ -1655,11 +1763,130 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 				preferir,
 			),
 		);
-		const mejor = _elegirMejorTurno(turnos.filter(Boolean));
+		const mejor = await _elegirMejorTurnoValido(turnos.filter(Boolean), esp);
 		if (mejor) return _empaquetarTurnoSugerido(mejor, especialidad, esp);
 	}
 
 	return null;
+}
+
+async function listarCoberturasBot(q = '', limit = 20) {
+	return agendaService.buscarClientes({ q: String(q || '').trim(), limit });
+}
+
+async function _resolverNumeroCuenta(input) {
+	if (input == null) return null;
+	const raw = String(input).trim();
+	if (!raw) return null;
+	if (/^\d+$/.test(raw)) {
+		const n = Number(raw);
+		if (!Number.isFinite(n)) return null;
+		const rows = await executeQuery(
+			`SELECT TOP 1 Valor, RTRIM(LTRIM(RazonSocial)) AS RazonSocial
+			 FROM dbo.imClientes WHERE Valor = @p0`,
+			[{ value: n, type: 'Int' }],
+		);
+		if (rows.length) {
+			return {
+				valor: Number(rows[0].Valor),
+				nombre: String(rows[0].RazonSocial || '').trim() || String(n),
+			};
+		}
+		return null;
+	}
+	const like = `%${raw.replace(/\s+/g, '%')}%`;
+	const rows = await executeQuery(
+		`SELECT TOP 5 Valor, RTRIM(LTRIM(RazonSocial)) AS RazonSocial
+		 FROM dbo.imClientes
+		 WHERE RazonSocial LIKE @p0 OR CAST(Valor AS VARCHAR(20)) LIKE @p0
+		 ORDER BY CASE WHEN RazonSocial = @p1 THEN 0 ELSE 1 END, RazonSocial`,
+		[
+			{ value: like, type: 'VarChar' },
+			{ value: raw, type: 'VarChar' },
+		],
+	);
+	if (!rows.length) return null;
+	return {
+		valor: Number(rows[0].Valor),
+		nombre: String(rows[0].RazonSocial || '').trim(),
+	};
+}
+
+async function resolverCoberturaDesdeTexto(texto) {
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase();
+	if (!t) return null;
+	if (/^(particular|sin cobertura|no tengo|ninguna|omitir|saltar)$/.test(t)) {
+		return { valor: null, nombre: 'Particular', omitido: true };
+	}
+	return _resolverNumeroCuenta(texto);
+}
+
+async function actualizarCoberturaPacienteBot(idPaciente, cobertura) {
+	const id = Number(idPaciente);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idPaciente inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (cobertura?.omitido) {
+		return { idPaciente: id, cobertura: null, nombre: 'Particular', omitido: true };
+	}
+	const valor = cobertura?.valor != null ? Number(cobertura.valor) : null;
+	if (!Number.isFinite(valor) || valor <= 0) {
+		const e = new Error('Cobertura no reconocida');
+		e.statusCode = 404;
+		e.code = 'COBERTURA_NO_ENCONTRADA';
+		throw e;
+	}
+	await executeQuery(
+		`UPDATE dbo.imPacientes SET NumeroCuenta = @p0 WHERE IDPaciente = @p1`,
+		[
+			{ value: valor, type: 'Int' },
+			{ value: id, type: 'Int' },
+		],
+	);
+	return {
+		idPaciente: id,
+		cobertura: valor,
+		nombre: cobertura?.nombre || String(valor),
+	};
+}
+
+async function mensajeListaCoberturas(limit = 12) {
+	const rows = await listarCoberturasBot('', limit);
+	if (!rows.length) return 'Escribí el nombre de tu obra social tal como figura en tu credencial.';
+	const lineas = rows.map((r) => `• ${r.razonSocial}`).join('\n');
+	return `Algunas coberturas registradas:\n${lineas}`;
+}
+
+async function mensajePasoCobertura(pasoCfg, idPaciente) {
+	const pasoMsg =
+		pasoCfg?.mensajeUsuario ||
+		'Indicá tu obra social o cobertura médica. Si no tenés, escribí *Particular*.';
+	let actual = '';
+	if (idPaciente) {
+		const rows = await executeQuery(
+			`SELECT TOP 1 c.RazonSocial
+			 FROM dbo.imPacientes p
+			 LEFT JOIN dbo.imClientes c ON c.Valor = p.NumeroCuenta
+			 WHERE p.IDPaciente = @p0`,
+			[{ value: Number(idPaciente), type: 'Int' }],
+		);
+		if (rows[0]?.RazonSocial) {
+			actual = `\n\nCobertura actual en ficha: *${String(rows[0].RazonSocial).trim()}*`;
+		}
+	}
+	const lista = await mensajeListaCoberturas(10);
+	return `${pasoMsg}${actual}\n\n${lista}`;
+}
+
+function coberturaPasoHabilitado(flujo, config) {
+	return (
+		config?.reglas?.preguntarCobertura === true &&
+		(flujo || []).some((p) => p.id === 'ELEGIR_COBERTURA' && p.activo !== false)
+	);
 }
 
 function mensajeAvisoBusquedaDisponibilidad(_opts = {}) {
@@ -1713,6 +1940,13 @@ module.exports = {
 	buscarPaciente,
 	listarEspecialidadesBot,
 	listarProfesionalesBot,
+	listarCoberturasBot,
+	resolverCoberturaDesdeTexto,
+	actualizarCoberturaPacienteBot,
+	mensajePasoCobertura,
+	mensajeListaCoberturas,
+	coberturaPasoHabilitado,
+	validarSugerenciaTurno: _validarSugerenciaTurno,
 	disponibilidadBot,
 	resolverEspecialidadDesdeTexto,
 	resolverEspecialidadConGpt,

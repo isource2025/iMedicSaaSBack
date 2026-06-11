@@ -14,6 +14,7 @@ router.patch('/whatsapp', requirePermiso('TURNOS.ADMIN.VER'), ctrl.guardarWhatsa
 router.get('/logs', requirePermiso('TURNOS.ADMIN.VER'), ctrl.listarLogs);
 
 router.get('/conversaciones/estado-almacen', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.estadoAlmacenamiento);
+router.get('/conversaciones/no-leidos', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.contarNoLeidos);
 router.get('/conversaciones', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.listarConversaciones);
 router.post('/conversaciones/simular', requirePermiso('TURNOS.AGENDA.EDITAR'), convCtrl.simularEntrante);
 router.get('/conversaciones/:id', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.obtenerDetalle);

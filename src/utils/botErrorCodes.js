@@ -11,6 +11,7 @@ const ERROR_MAP = [
 	{ match: /ya atendido/i, code: 'TURNO_ATENDIDO', mensajeBot: 'No se puede modificar un turno ya atendido.' },
 	{ match: /RENAPER|not_found/i, code: 'RENAPER_NO_ENCONTRADO', mensajeBot: 'No encontramos datos en RENAPER con ese DNI. Verificá el número.' },
 	{ match: /matricula del profesional es requerida/i, code: 'MATRICULA_REQUERIDA', mensajeBot: 'Primero elegí un profesional de la especialidad.' },
+	{ match: /Profesional no encontrado|PROFESIONAL_INEXISTENTE/i, code: 'PROFESIONAL_INEXISTENTE', mensajeBot: 'Ese profesional no está habilitado en la agenda. Elegí otro médico de la lista.' },
 	{ match: /no pertenece a la especialidad/i, code: 'ESPECIALIDAD_NO_COINCIDE', mensajeBot: 'El profesional no corresponde a la especialidad elegida.' },
 ];
 

@@ -104,6 +104,7 @@ async function getBotConfig() {
 			requiereRenaper: db.requiere_renaper ?? envBool('BOT_REQUIERE_RENAPER', true),
 			permiteSobreturno: db.permite_sobreturno ?? envBool('BOT_PERMITE_SOBRETURNO', false),
 			crearPacienteAutomatico: db.crear_paciente_automatico ?? envBool('BOT_CREAR_PACIENTE_AUTO', true),
+			preguntarCobertura: db.preguntar_cobertura ?? envBool('BOT_PREGUNTAR_COBERTURA', false),
 			sugerirPrimerTurnoDisponible: resolveSugerirPrimerTurno(db),
 			/** Panel Bot → Reglas → Búsqueda de disponibilidad */
 			busquedaMaxDias: db.busqueda_max_dias ?? envInt('BOT_BUSQUEDA_MAX_DIAS', 21),
@@ -156,6 +157,15 @@ function defaultFlujoPasos() {
 		},
 		{
 			paso: 3,
+			id: 'ELEGIR_COBERTURA',
+			titulo: 'Obra social / cobertura',
+			mensajeUsuario:
+				'Indicá tu obra social o cobertura médica (por ejemplo: PAMI, OSDE, IOMA). Si no tenés, escribí *Particular*.',
+			descripcion: 'Actualiza NumeroCuenta en imPacientes según imClientes',
+			activo: false,
+		},
+		{
+			paso: 4,
 			id: 'ELEGIR_ESPECIALIDAD',
 			titulo: 'Especialidad',
 			mensajeUsuario: '¿Qué especialidad necesitás? Te muestro las disponibles.',
@@ -163,7 +173,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 4,
+			paso: 5,
 			id: 'ELEGIR_PROFESIONAL',
 			titulo: 'Profesional',
 			mensajeUsuario: 'Elegí el profesional de la especialidad seleccionada.',
@@ -171,7 +181,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 5,
+			paso: 6,
 			id: 'ELEGIR_FECHA_HORA',
 			titulo: 'Fecha y hora',
 			mensajeUsuario: 'Indicá la fecha y te muestro los horarios libres.',
@@ -179,7 +189,7 @@ function defaultFlujoPasos() {
 			activo: true,
 		},
 		{
-			paso: 6,
+			paso: 7,
 			id: 'CONFIRMAR',
 			titulo: 'Confirmación',
 			mensajeUsuario: '¿Confirmás este turno? Te envío el comprobante.',
@@ -189,10 +199,20 @@ function defaultFlujoPasos() {
 	];
 }
 
+function _mergeFlujoConDefaults(pasosDb) {
+	const defaults = defaultFlujoPasos();
+	const byId = new Map(pasosDb.map((p) => [p.id, p]));
+	for (const d of defaults) {
+		if (!byId.has(d.id)) byId.set(d.id, { ...d });
+	}
+	const merged = [...byId.values()].sort((a, b) => (a.paso ?? 99) - (b.paso ?? 99));
+	return merged.map((p, i) => ({ ...p, paso: i + 1 }));
+}
+
 async function getFlujoPasos() {
 	const db = await getDbConfigMap();
 	if (Array.isArray(db.flujo_pasos) && db.flujo_pasos.length) {
-		return db.flujo_pasos.map((p, i) => ({
+		const pasos = db.flujo_pasos.map((p, i) => ({
 			paso: p.paso ?? i + 1,
 			id: p.id || `PASO_${i + 1}`,
 			titulo: p.titulo || p.id || `Paso ${i + 1}`,
@@ -200,6 +220,7 @@ async function getFlujoPasos() {
 			descripcion: p.descripcion || '',
 			activo: p.activo !== false,
 		}));
+		return _mergeFlujoConDefaults(pasos);
 	}
 	return defaultFlujoPasos();
 }
@@ -271,6 +292,13 @@ async function saveBotConfig(payload = {}) {
 		await upsertConfigClave(
 			'crear_paciente_automatico',
 			reglas.crearPacienteAutomatico ? 'true' : 'false',
+			'bool',
+		);
+	}
+	if (reglas.preguntarCobertura != null) {
+		await upsertConfigClave(
+			'preguntar_cobertura',
+			reglas.preguntarCobertura ? 'true' : 'false',
 			'bool',
 		);
 	}
