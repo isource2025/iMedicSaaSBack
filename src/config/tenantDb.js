@@ -16,6 +16,7 @@ const poolCache = new Map();
 let empresasColumnsCache = null;
 
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
+const REQUEST_MS = Number(process.env.TENANT_REQUEST_TIMEOUT_MS) || 120000;
 
 /** Misma estrategia que database.js: IP + puerto (sin instanceName salvo que esté en la fila Empresas). */
 function envDefaultConfig() {
@@ -29,6 +30,7 @@ function envDefaultConfig() {
 			encrypt: false,
 			trustServerCertificate: true,
 			enableArithAbort: true,
+			requestTimeout: REQUEST_MS,
 		},
 		connectionTimeout: PROBE_MS,
 		pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
@@ -38,9 +40,6 @@ function envDefaultConfig() {
 function rowToSqlConfig(row) {
 	const empresa = normalizeEmpresaRow(row);
 	if (!empresaRowHasSqlConnection(empresa)) {
-		if (isPlatformSqlConfigured()) {
-			return envDefaultConfig();
-		}
 		const err = new Error(
 			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPasswordEnc (o DbPassword en texto)',
 		);
@@ -63,6 +62,7 @@ function rowToSqlConfig(row) {
 			encrypt: false,
 			trustServerCertificate: true,
 			enableArithAbort: true,
+			requestTimeout: REQUEST_MS,
 		},
 		connectionTimeout: PROBE_MS,
 		pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
@@ -148,12 +148,16 @@ async function loadEmpresaConnectionRow(idEmpresa) {
 
 async function getTenantPool(idEmpresa) {
 	if (idEmpresa == null || idEmpresa === '' || idEmpresa === 0 || idEmpresa === '0') {
-		return connectPlatform();
+		const err = new Error('idEmpresa inválido para conexión tenant');
+		err.code = 'TENANT_REQUIRED';
+		throw err;
 	}
 
 	const id = Number(idEmpresa);
 	if (!Number.isFinite(id) || id <= 0) {
-		return connectPlatform();
+		const err = new Error('idEmpresa inválido para conexión tenant');
+		err.code = 'TENANT_REQUIRED';
+		throw err;
 	}
 
 	const row = await loadEmpresaConnectionRow(id);
@@ -174,8 +178,15 @@ async function getTenantPool(idEmpresa) {
 	}
 
 	const pool = new sql.ConnectionPool(config);
+	pool.on('error', (err) => {
+		console.error(`[tenant] error pool empresa ${id}:`, err.message);
+		poolCache.delete(id);
+	});
 	try {
 		await pool.connect();
+		console.log(
+			`[tenant] pool empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}`,
+		);
 	} catch (e) {
 		console.error(
 			`[tenant] SQL empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}:`,

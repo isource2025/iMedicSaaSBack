@@ -6,6 +6,7 @@ const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
+const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
 class AdjuntosService {
   /**
@@ -122,11 +123,15 @@ class AdjuntosService {
       const url = `${FILE_SERVER_URL}/file?path=${encodeURIComponent(rutaN)}`;
       const res = await axios.get(url, {
         responseType: 'arraybuffer',
-        timeout: 6000,
+        timeout: FILE_SERVER_TIMEOUT_MS,
         maxContentLength: 50 * 1024 * 1024,
         maxBodyLength: 50 * 1024 * 1024,
       });
-      return { buffer: Buffer.from(res.data), nombreArchivo };
+      const buffer = Buffer.from(res.data);
+      if (!buffer.length) {
+        return { buffer: null, nombreArchivo, error: 'Archivo vacío en el servidor de archivos' };
+      }
+      return { buffer, nombreArchivo };
     } catch (e) {
       const candidates = [rutaN, adj.RutaArchivo].filter((p) => typeof p === 'string' && p.length > 0);
       for (const p of candidates) {

@@ -1,5 +1,4 @@
 const { executeQuery, sql } = require('../models/db');
-const { connectDB } = require('../config/database');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 

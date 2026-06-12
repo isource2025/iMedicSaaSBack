@@ -40,7 +40,8 @@ function buildSqlAuthConfig() {
     options: {
       encrypt: false,
       trustServerCertificate: true,
-      enableArithAbort: true
+      enableArithAbort: true,
+      requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT_MS) || 120000,
     },
     connectionTimeout: 30000,
     pool: {

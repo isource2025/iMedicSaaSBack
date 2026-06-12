@@ -5,6 +5,7 @@
 const { sql, connectDB } = require('../config/database');
 const { getTenantPool } = require('../config/tenantDb');
 const { getTenantId } = require('../context/tenantContext');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 async function resolvePool(forcePlatform = false) {
   if (forcePlatform) return connectDB();
@@ -12,7 +13,19 @@ async function resolvePool(forcePlatform = false) {
   if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
     return getTenantPool(idEmpresa);
   }
+  if (isAuthCentralEnabled()) {
+    const err = new Error(
+      'Sesión sin empresa activa. Cerrá sesión e iniciá de nuevo seleccionando una empresa.',
+    );
+    err.code = 'TENANT_REQUIRED';
+    throw err;
+  }
   return connectDB();
+}
+
+/** Pool SQL del tenant actual (o plataforma en modo legacy). */
+async function getRequestPool(opts = {}) {
+  return resolvePool(!!opts.platform);
 }
 
 /**
@@ -97,5 +110,6 @@ module.exports = {
   executeQuery,
   executePlatformQuery,
   executeProcedure,
+  getRequestPool,
   sql
 };

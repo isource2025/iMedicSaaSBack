@@ -9,8 +9,7 @@
  * Este service expone la API en formato ISO/HH:MM y se encarga de la conversión.
  */
 const sql = require('mssql');
-const { connectDB } = require('../config/database');
-const { executeQuery } = require('../models/db');
+const { executeQuery, getRequestPool } = require('../models/db');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -246,7 +245,7 @@ async function reemplazarHorarios(matricula, payload) {
 	}
 
 	// Transacción: por cada día, DELETE + INSERT.
-	const pool = await connectDB();
+	const pool = await getRequestPool();
 	const tx = new sql.Transaction(pool);
 	await tx.begin();
 	try {
@@ -401,7 +400,7 @@ async function actualizarNoHorario(matricula, codOperador, body) {
 	const v = _validarPayloadNoHorario(body);
 
 	// Estrategia: borrar la fila vieja por PK e insertar la nueva (la PK puede cambiar).
-	const pool = await connectDB();
+	const pool = await getRequestPool();
 	const tx = new sql.Transaction(pool);
 	await tx.begin();
 	try {

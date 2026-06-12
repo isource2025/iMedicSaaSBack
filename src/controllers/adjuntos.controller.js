@@ -18,6 +18,10 @@ const FILE_SERVER_FALLBACK_LOCAL =
   process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
   process.env.NODE_ENV !== 'production';
 
+function resolveUserId(req) {
+  return req.valorPersonal || req.auth?.usuario?.id || req.body?.userId || 1;
+}
+
 function isFileServerNetworkError(err) {
   const code = err && (err.code || (err.cause && err.cause.code));
   return (
@@ -119,7 +123,7 @@ const upload = multer({
 router.post('/upload', upload.single('archivo'), async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
-    const userId = req.user?.id || req.body.userId || 1;
+    const userId = resolveUserId(req);
 
     // Validaciones
     if (!numeroVisita) {
@@ -251,7 +255,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
 router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
-    const userId = req.user?.id || req.body.userId || 1;
+    const userId = resolveUserId(req);
 
     // Validaciones
     if (!numeroVisita) {
@@ -500,8 +504,18 @@ router.get('/:idAdjunto/download', async (req, res) => {
       
       const response = await axios.get(fileUrl, {
         responseType: 'stream',
-        timeout: FILE_SERVER_TIMEOUT_MS
+        timeout: FILE_SERVER_TIMEOUT_MS,
+        validateStatus: (s) => s >= 200 && s < 300,
       });
+
+      const contentLength = Number(response.headers['content-length'] || 0);
+      if (contentLength === 0) {
+        return res.status(502).json({
+          success: false,
+          error: 'El servidor de archivos devolvió un archivo vacío',
+          rutaNormalizada,
+        });
+      }
       
       const fileName = adjunto.NombreArchivo || path.basename(rutaNormalizada);
       const contentType = contentTypeForAdjuntoFileName(fileName);
@@ -576,7 +590,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
 router.delete('/:idAdjunto', async (req, res) => {
   try {
     const { idAdjunto } = req.params;
-    const userId = req.user?.id || req.body.userId || 1;
+    const userId = resolveUserId(req);
     
     await adjuntosService.eliminarAdjunto(parseInt(idAdjunto), userId);
     

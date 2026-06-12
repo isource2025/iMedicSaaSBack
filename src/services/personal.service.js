@@ -8,13 +8,12 @@
  * La tabla imPersonal en la base legacy no es IDENTITY → generamos Valor con MAX+1
  * (excluyendo los registros "admin" con Valor = 999999 / 1000000).
  */
-const { executeQuery, sql } = require('../models/db');
+const { executeQuery, sql, getRequestPool } = require('../models/db');
 const {
 	convertirFechaAClarion,
 	convertirFechaClarionADate,
 } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
-const { connectDB } = require('../config/database');
 
 const ADMIN_VALOR_THRESHOLD = 900000; // Valor >= 900000 se considera "reservado" (admin/sistema)
 
@@ -185,7 +184,7 @@ async function listar(page = 1, limit = 30, search = '') {
 	const searchTerm = `%${String(search || '').trim()}%`;
 	const hasSearch = String(search || '').trim().length > 0;
 
-	const pool = await connectDB();
+	const pool = await getRequestPool();
 
 	const whereParts = [`p.Valor < ${ADMIN_VALOR_THRESHOLD}`];
 	const whereArgs = [];
@@ -649,7 +648,7 @@ function _sniffImageMime(buf) {
 }
 
 async function obtenerFirmaPersonal(valor) {
-	const pool = await connectDB();
+	const pool = await getRequestPool();
 	const r = await pool.request().input('v', sql.Int, valor).query(`
 		SELECT Firma FROM dbo.imPersonal WHERE Valor = @v
 	`);
@@ -671,7 +670,7 @@ async function actualizarFirmaPersonal(valor, buffer) {
 		e.statusCode = 400;
 		throw e;
 	}
-	const pool = await connectDB();
+	const pool = await getRequestPool();
 	await pool
 		.request()
 		.input('v', sql.Int, valor)

@@ -177,6 +177,7 @@ app.use((err, req, res, next) => {
 		'TENANT_DB_NOT_CONFIGURED',
 		'TENANT_DB_DECRYPT_FAILED',
 		'TENANT_EMPRESA_NOT_FOUND',
+		'TENANT_REQUIRED',
 	]);
 	const status = tenantCodes.has(err.code) ? 503 : 500;
 	res.status(status).json({
