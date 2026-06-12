@@ -240,13 +240,14 @@ Intenciones:
 - elegir_especialidad: menciona un área médica concreta (ej. traumato, cardio, clínica)
 - listar_especialidades: pregunta qué especialidades hay / "mostrame"
 - agradecimiento: agradece o cierra cordialmente tras un turno ya confirmado, sin pedir turno nuevo todavía
-- conversacion: charla o pregunta general que no implica acción de agenda
+- conversacion: charla sin pedir turno nuevo
 
 JSON (una sola línea):
 {"intencion":"...","parametros":{"especialidad":"NOMBRE EXACTO O null","resumen":""}}
 
 Reglas:
 - Interpretá el significado, no frases exactas.
+- Si en el historial reciente el bot envió comprobante o "Turno confirmado", "muchas gracias" / "gracias" → agradecimiento (NO solicitar_turno).
 - "un turno para mi tío", "puede ser?", "holaa otro turno" → solicitar_turno
 - "me gustaría saber las especialidades", "qué tienen", "mostrame las áreas" → listar_especialidades (NO solicitar_turno)
 - Preguntar qué especialidades hay NO implica pedir turno todavía → listar_especialidades
@@ -256,6 +257,8 @@ Reglas:
 }
 
 function _esPasoIdentificacionLibre(paso, conv) {
+	if (paso === 'TURNO_COMPLETADO') return false;
+	if (conv?.idPaciente && paso === 'CONFIRMAR' && !conv?.contextoBot) return false;
 	if (paso === 'IDENTIFICAR' || paso === 'inicio' || !paso) return true;
 	if (paso === 'CONFIRMAR' && conv?.contextoBot?.tipo !== 'turno_sugerido') return true;
 	return false;

@@ -271,9 +271,12 @@ async function responderMensajeEntrante({
 	const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 	const pasoActual = convAct?.pasoBot || botWizard.pasoInicial(flujo);
 	const config = await botConfigService.getBotConfig();
+	const postTurno = await botWizard.esContextoPostTurno(convAct);
 
 	const enPasoIdentificacion =
-		pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual;
+		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual) &&
+		!convAct?.idPaciente &&
+		!postTurno;
 	if (
 		dniDetectado &&
 		(pasoActual === 'CONFIRMAR_IDENTIDAD' ||
@@ -295,7 +298,7 @@ async function responderMensajeEntrante({
 		});
 	}
 
-	// Identificación: no dejar que GPT repita "pedí DNI" sin procesar RENAPER.
+	// Identificación: pedir DNI solo si aún no hay paciente ni turno reciente confirmado.
 	if (enPasoIdentificacion) {
 		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
 		return enviarTextoBot({
@@ -303,6 +306,13 @@ async function responderMensajeEntrante({
 			texto:
 				pasoId?.mensajeUsuario ||
 				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+		});
+	}
+
+	if (postTurno && botWizard.esCierreCordial(textoEntrada)) {
+		return enviarTextoBot({
+			...enviarOpts,
+			texto: botWizard.resolverMensajePostTurno(flujo, config, convAct),
 		});
 	}
 

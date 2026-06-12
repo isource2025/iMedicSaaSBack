@@ -218,6 +218,63 @@ function resolverMensajePostTurno(flujo, config, conv) {
 	return aplicarPlantillaMensaje(raw, conv);
 }
 
+function normalizarTextoBot(texto) {
+	return String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Cierre cordial (gracias, perfecto solo, etc.) — no reinicia el flujo a DNI. */
+function esCierreCordial(texto) {
+	const t = normalizarTextoBot(texto);
+	if (!t || t.length > 120) return false;
+	if (/\b(muchas\s+gracias|mil\s+gracias|gracias|thank\s*you|thanks)\b/.test(t)) return true;
+	if (/^(ok|listo|genial|perfecto|excelente|buenisimo|de\s+10|bien|dale)[!.?\s]*$/.test(t)) {
+		return true;
+	}
+	return false;
+}
+
+function mensajeBotIndicaTurnoConfirmado(contenido) {
+	const t = String(contenido || '');
+	return (
+		/turno confirmado/i.test(t) ||
+		/comprobante\s*:/i.test(t) ||
+		/\bT-\d+-\d{8}\b/i.test(t)
+	);
+}
+
+/**
+ * Detecta sesión post-reserva aunque PasoBot quedó desincronizado (CONFIRMAR/inicio).
+ */
+async function esContextoPostTurno(conv, historialOpcional = null) {
+	if (!conv) return false;
+	if (conv.pasoBot === 'TURNO_COMPLETADO') return true;
+
+	if (conv.idPaciente && conv.pasoBot === 'CONFIRMAR' && !conv.contextoBot) {
+		return true;
+	}
+
+	let msgs = historialOpcional;
+	if (!msgs && conv.idConversacion) {
+		try {
+			msgs = await botConversacion.listarMensajes(conv.idConversacion, { limit: 10 });
+		} catch {
+			msgs = [];
+		}
+	}
+	const ultimosBot = (msgs || []).filter((m) => m.origen === 'BOT').slice(-5);
+	return ultimosBot.some((m) => mensajeBotIndicaTurnoConfirmado(m.contenido));
+}
+
+async function sincronizarPasoTurnoCompletado(idConversacion, conv) {
+	if (conv?.pasoBot === 'TURNO_COMPLETADO') return conv;
+	await botConversacion.finalizarTrasReservaExitosa(idConversacion);
+	return (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+}
+
 function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
 	const fuente = renaper?.fuente === 'local' ? 'ficha local' : 'RENAPER';
 	const detalle = formatearPersonaRenaper(renaper, dni, pacienteLocal);
@@ -342,6 +399,14 @@ async function procesarIntencionGptEntrada({
 
 	if (!gptHabilitado()) return null;
 
+	if ((await esContextoPostTurno(conv)) && esCierreCordial(texto)) {
+		await sincronizarPasoTurnoCompletado(idConversacion, conv);
+		return {
+			handled: true,
+			texto: resolverMensajePostTurno(flujo, await botConfigService.getBotConfig(), conv),
+		};
+	}
+
 	const pasoGpt =
 		pasoActual === 'CONFIRMAR' && conv?.contextoBot?.tipo !== 'turno_sugerido'
 			? 'IDENTIFICAR'
@@ -364,6 +429,18 @@ async function procesarIntencionGptEntrada({
 	});
 
 	if (intent.intencion === 'solicitar_turno') {
+		if ((await esContextoPostTurno(conv)) && esCierreCordial(texto)) {
+			await sincronizarPasoTurnoCompletado(idConversacion, conv);
+			return {
+				handled: true,
+				texto: resolverMensajePostTurno(
+					flujo,
+					await botConfigService.getBotConfig(),
+					conv,
+				),
+			};
+		}
+
 		let espPend = null;
 		const resEsp = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
 		if (resEsp?.tipo === 'especialidad') {
@@ -375,11 +452,9 @@ async function procesarIntencionGptEntrada({
 		};
 	}
 
-	if (intent.intencion === 'agradecimiento') {
+	if (intent.intencion === 'agradecimiento' || esCierreCordial(texto)) {
 		const config = await botConfigService.getBotConfig();
-		if (pasoActual !== 'TURNO_COMPLETADO') {
-			await botConversacion.finalizarTrasReservaExitosa(idConversacion);
-		}
+		await sincronizarPasoTurnoCompletado(idConversacion, conv);
 		return {
 			handled: true,
 			texto: resolverMensajePostTurno(flujo, config, conv),
@@ -641,6 +716,10 @@ async function procesarPasoTurnoCompletado({
 	config,
 	texto,
 }) {
+	if (esCierreCordial(texto)) {
+		return { handled: true, texto: resolverMensajePostTurno(flujo, config, conv) };
+	}
+
 	if (!gptHabilitado()) {
 		return { handled: true, texto: resolverMensajePostTurno(flujo, config, conv) };
 	}
@@ -652,7 +731,11 @@ async function procesarPasoTurnoCompletado({
 		pasoBot: 'TURNO_COMPLETADO',
 	});
 
-	if (intent?.intencion === 'agradecimiento' || intent?.intencion === 'conversacion') {
+	if (
+		intent?.intencion === 'agradecimiento' ||
+		intent?.intencion === 'conversacion' ||
+		esCierreCordial(texto)
+	) {
 		return { handled: true, texto: resolverMensajePostTurno(flujo, config, conv) };
 	}
 
@@ -873,6 +956,21 @@ async function intentarRespuestaWizard({
 	let pasoActual = conv.pasoBot || pasoInicial(flujo);
 
 	const texto = String(contenido || '').trim();
+	const historialCorto = await botConversacion.listarMensajes(idConversacion, { limit: 10 });
+	const postTurno = await esContextoPostTurno(conv, historialCorto);
+
+	if (postTurno) {
+		conv = await sincronizarPasoTurnoCompletado(idConversacion, conv);
+		pasoActual = conv?.pasoBot || 'TURNO_COMPLETADO';
+		return procesarPasoTurnoCompletado({
+			idConversacion,
+			telefonoWhatsApp,
+			conv,
+			flujo,
+			config,
+			texto,
+		});
+	}
 
 	if (pasoActual === 'TURNO_COMPLETADO') {
 		return procesarPasoTurnoCompletado({
@@ -1491,4 +1589,7 @@ module.exports = {
 	extraerDni,
 	interpretarConfirmacion,
 	interpretarRechazoTurno,
+	esContextoPostTurno,
+	esCierreCordial,
+	resolverMensajePostTurno,
 };
