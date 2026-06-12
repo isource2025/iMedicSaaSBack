@@ -63,13 +63,19 @@ function assignAuthFromDecoded(req, decoded) {
 			: null;
 }
 
-function verifyBearerToken(req, res) {
+function extractTokenFromRequest(req) {
 	const h = req.headers.authorization;
-	if (!h || typeof h !== 'string' || !h.startsWith('Bearer ')) {
-		res.status(401).json({ success: false, mensaje: 'No autorizado' });
-		return null;
+	if (h && typeof h === 'string' && h.startsWith('Bearer ')) {
+		const t = h.slice(7).trim();
+		if (t) return t;
 	}
-	const token = h.slice(7).trim();
+	const q = req.query?.access_token ?? req.query?.token;
+	if (typeof q === 'string' && q.trim()) return q.trim();
+	return null;
+}
+
+function verifyBearerToken(req, res) {
+	const token = extractTokenFromRequest(req);
 	if (!token) {
 		res.status(401).json({ success: false, mensaje: 'No autorizado' });
 		return null;
