@@ -40,6 +40,9 @@ function envDefaultConfig() {
 function rowToSqlConfig(row) {
 	const empresa = normalizeEmpresaRow(row);
 	if (!empresaRowHasSqlConnection(empresa)) {
+		if (isPlatformSqlConfigured()) {
+			return envDefaultConfig();
+		}
 		const err = new Error(
 			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPasswordEnc (o DbPassword en texto)',
 		);
@@ -148,16 +151,12 @@ async function loadEmpresaConnectionRow(idEmpresa) {
 
 async function getTenantPool(idEmpresa) {
 	if (idEmpresa == null || idEmpresa === '' || idEmpresa === 0 || idEmpresa === '0') {
-		const err = new Error('idEmpresa inválido para conexión tenant');
-		err.code = 'TENANT_REQUIRED';
-		throw err;
+		return connectPlatform();
 	}
 
 	const id = Number(idEmpresa);
 	if (!Number.isFinite(id) || id <= 0) {
-		const err = new Error('idEmpresa inválido para conexión tenant');
-		err.code = 'TENANT_REQUIRED';
-		throw err;
+		return connectPlatform();
 	}
 
 	const row = await loadEmpresaConnectionRow(id);
