@@ -57,7 +57,8 @@ async function syncPassword(valorPersonal) {
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (!row) return;
-	await upsertRow('imPassword', ['ValorPersonal'], row);
+	// MySQL auth: PK imPassword = CodOperador (espejo SQL Server), no ValorPersonal.
+	await upsertRow('imPassword', ['CodOperador'], row);
 }
 
 async function syncPersonal(valorPersonal) {
