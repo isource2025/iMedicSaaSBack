@@ -30,10 +30,16 @@ function normalizeEmpresaRow(row) {
 }
 
 /**
- * Contraseña SQL desde fila Empresas: DbPasswordEnc (cifrado) es la fuente principal.
+ * Contraseña SQL desde fila Empresas.
+ * DbPassword en claro tiene prioridad (Railway); si no, DbPasswordEnc.
  */
 function resolvePasswordFromEmpresaRow(row) {
 	if (!row) return '';
+
+	const plain = pickField(row, 'DbPassword', 'dbpassword');
+	if (plain != null && String(plain).trim() !== '') {
+		return String(plain).trim();
+	}
 
 	const enc = pickField(row, 'DbPasswordEnc', 'dbpasswordenc');
 	if (enc) {
@@ -46,11 +52,6 @@ function resolvePasswordFromEmpresaRow(row) {
 			e.code = 'TENANT_DB_DECRYPT_FAILED';
 			throw e;
 		}
-	}
-
-	const plain = pickField(row, 'DbPassword', 'dbpassword');
-	if (plain != null && String(plain).trim() !== '') {
-		return String(plain).trim();
 	}
 
 	return '';
