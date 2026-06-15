@@ -11,6 +11,8 @@
  * de relación sin tocar este servicio.
  */
 const { executeQuery } = require('../models/db');
+const authCentralSync = require('./authCentralSync.service');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 let _permisosService;
 function _invalidarCachePermisos(idRol) {
 	try {
@@ -91,6 +93,9 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 		await executeQuery(`UPDATE dbo.imPersonal SET Rol = NULL WHERE Valor = @p0`, [
 			{ value: Number(valorPersonal), type: 'Int' },
 		]);
+		if (isAuthCentralEnabled()) {
+			await authCentralSync.syncPersonal(Number(valorPersonal));
+		}
 		return null;
 	}
 
@@ -125,6 +130,10 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 	// cambian, sólo el usuario afectado tiene un rol distinto la próxima
 	// vez que loguee).
 	_invalidarCachePermisos(rol.IdRol);
+
+	if (isAuthCentralEnabled()) {
+		await authCentralSync.syncPersonal(Number(valorPersonal));
+	}
 
 	return rol;
 }

@@ -120,6 +120,33 @@ async function removeSector(valor) {
 	await mysqlExec(`DELETE FROM ${q('imSectores')} WHERE Valor = ?`, [String(valor)]);
 }
 
+/** Elimina credenciales auth en MySQL si el personal ya no está vinculado a ninguna empresa. */
+async function purgePersonalAuthIfOrphan(valorPersonal) {
+	if (!isAuthCentralEnabled()) return;
+	const id = Number(valorPersonal);
+	const pool = await getAuthCentralPool();
+	const [countRows] = await pool.query(
+		`SELECT COUNT(*) AS c FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ?`,
+		[id],
+	);
+	const count = Number(countRows?.[0]?.c) || 0;
+	if (count > 0) return;
+
+	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ?`, [id]);
+	await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE Valor = ?`, [id]);
+	await mysqlExec(`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ?`, [id]);
+}
+
+/** Elimina del espejo MySQL todo el login de un personal (tras borrado en tenant). */
+async function purgePersonalAuth(valorPersonal) {
+	if (!isAuthCentralEnabled()) return;
+	const id = Number(valorPersonal);
+	await mysqlExec(`DELETE FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ?`, [id]);
+	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ?`, [id]);
+	await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE Valor = ?`, [id]);
+	await mysqlExec(`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ?`, [id]);
+}
+
 /**
  * Bundle completo para que el usuario pueda iniciar sesión en la empresa.
  */
@@ -154,6 +181,8 @@ module.exports = {
 	removePersonalSector,
 	syncSector,
 	removeSector,
+	purgePersonalAuthIfOrphan,
+	purgePersonalAuth,
 	syncUserLoginBundle,
 	vincularUsuarioEmpresaTenant,
 };

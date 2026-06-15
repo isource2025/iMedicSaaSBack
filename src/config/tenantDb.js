@@ -197,6 +197,16 @@ async function getTenantPool(idEmpresa) {
 	return pool;
 }
 
+/** Invalida pool cacheado tras cambiar credenciales SQL en Empresas (MySQL). */
+function invalidateTenantPool(idEmpresa) {
+	const id = Number(idEmpresa);
+	const cached = poolCache.get(id);
+	if (cached?.pool) {
+		cached.pool.close().catch(() => {});
+	}
+	poolCache.delete(id);
+}
+
 async function testTenantConnection(configOrIdEmpresa) {
 	let config;
 	if (typeof configOrIdEmpresa === 'number' || typeof configOrIdEmpresa === 'string') {
@@ -226,5 +236,6 @@ module.exports = {
 	rowToSqlConfig,
 	configCacheKey,
 	testTenantConnection,
+	invalidateTenantPool,
 	envDefaultConfig,
 };

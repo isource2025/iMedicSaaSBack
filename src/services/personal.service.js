@@ -515,6 +515,11 @@ async function eliminar(valor) {
 	await executeQuery(`DELETE FROM dbo.imPersonal WHERE Valor = @p0`, [
 		{ value: valor, type: 'Int' },
 	]);
+	try {
+		await authCentralSync.purgePersonalAuth(valor);
+	} catch (e) {
+		console.warn('[personal] purgePersonalAuth MySQL:', e.message);
+	}
 	return true;
 }
 
@@ -690,6 +695,7 @@ async function quitarEmpresaPersonal(valor, idEmpresa) {
 		],
 	);
 	await authCentralSync.removePersonalEmpresa(id, valor);
+	await authCentralSync.purgePersonalAuthIfOrphan(valor);
 	return listarEmpresasPersonal(valor);
 }
 

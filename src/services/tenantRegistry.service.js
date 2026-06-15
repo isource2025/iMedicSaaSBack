@@ -352,6 +352,15 @@ async function empresasDelUsuarioEnTenant(idEmpresa, username) {
 
 async function guardarConexionEmpresa(idEmpresa, data) {
 	const id = Number(idEmpresa);
+
+	if (authCentralService.isAuthCentralEnabled()) {
+		const platformMysql = require('./platformMysql.service');
+		const { invalidateTenantPool } = require('../config/tenantDb');
+		await platformMysql.guardarConexionEmpresa(id, data);
+		invalidateTenantPool(id);
+		return loadEmpresaConnectionRow(id);
+	}
+
 	const enc =
 		data.dbPassword != null && String(data.dbPassword).trim() !== ''
 			? encrypt(String(data.dbPassword))

@@ -245,7 +245,7 @@ async function obtenerEmpresaPorId(idEmpresa) {
     SELECT
       IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
       Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
-      DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc
+      DbServer, DbPort, DbInstance, DbName, DbUser, DbPassword, DbPasswordEnc
     FROM \`Empresas\`
     WHERE IDEMPRESA = ?
     LIMIT 1

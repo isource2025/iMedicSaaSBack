@@ -17,6 +17,18 @@ Este backend puede usar una base MySQL central en Railway para resolver el login
 - `EmpresasModuloPack`
 - `imIVA`
 
+### Tablas plataforma Super Admin (SaaS)
+
+Migración adicional: `scripts/sql/setup_platform_mysql.sql`
+
+- `EmpresasOnboarding`
+- `EmpresasSuscripcion`
+- `imPlataformaConfig`
+
+```bash
+npm run auth:mysql:platform-migrate
+```
+
 ## Setup
 
 ```bash
@@ -64,3 +76,13 @@ La migracion actual es **no destructiva**:
 - inserta o actualiza por clave primaria / unica.
 
 Si existen colisiones de IDs legacy entre tenants (`ValorPersonal`, `IdRol`, `IdPermiso`, etc.), MySQL hara `update` sobre la fila existente en vez de crear otra. Eso no borra datos, pero puede mezclar identidades que compartan la misma clave.
+
+## Reconciliación
+
+Comparar espejo MySQL vs SQL tenant y corregir drift:
+
+```bash
+npm run auth:mysql:reconcile
+npm run auth:mysql:reconcile -- --empresa=1
+npm run auth:mysql:reconcile -- --fix
+```

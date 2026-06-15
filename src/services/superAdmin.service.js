@@ -8,6 +8,7 @@ const rolesService = require('./roles.service');
 const sectoresService = require('./sectores.service');
 const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
+const platformMysql = require('./platformMysql.service');
 const {
 	PACKS_PRINCIPALES,
 	MODULOS_GENERALES,
@@ -17,6 +18,10 @@ const {
 	packsActivosToModulos,
 	todosModulosHabilitados,
 } = require('../utils/empresaModulos');
+
+function useMysqlPlatform() {
+	return authCentralService.isAuthCentralEnabled();
+}
 
 function mapEmpresaRow(r) {
 	return {
@@ -41,6 +46,17 @@ function mapEmpresaRow(r) {
 }
 
 async function listarEmpresas(filtro = '') {
+	if (useMysqlPlatform()) {
+		const rows = await platformMysql.listarEmpresasRows(filtro);
+		const empresas = rows.map(mapEmpresaRow);
+		for (const emp of empresas) {
+			emp.packs = await obtenerPacksEmpresa(Number(emp.id));
+			emp.onboarding = await obtenerOnboardingEmpresa(Number(emp.id));
+			emp.suscripcion = await obtenerSuscripcionEmpresa(Number(emp.id));
+		}
+		return empresas;
+	}
+
 	const q = String(filtro || '').trim();
 	const params = [];
 	let where = '';
@@ -83,13 +99,13 @@ async function listarEmpresas(filtro = '') {
 }
 
 async function obtenerPacksEmpresa(idEmpresa) {
-	try {
-		if (authCentralService.isAuthCentralEnabled()) {
-			const packsCentral = await authCentralService.obtenerPacksEmpresa(idEmpresa);
-			if (packsCentral.length) return packsCentral;
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.obtenerPacks(idEmpresa);
+		} catch (e) {
+			console.warn('[superAdmin] obtenerPacksEmpresa MySQL:', e.message);
+			return [];
 		}
-	} catch {
-		/* fallback SQL Server */
 	}
 	try {
 		const rows = await executeQuery(
@@ -117,6 +133,14 @@ function parseOnboardingConfigJson(raw) {
 }
 
 async function obtenerOnboardingEmpresa(idEmpresa) {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.obtenerOnboarding(idEmpresa);
+		} catch (e) {
+			console.warn('[superAdmin] obtenerOnboardingEmpresa MySQL:', e.message);
+			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [] };
+		}
+	}
 	try {
 		const rows = await executeQuery(
 			`SELECT PasoActual, Completado, Notas, FechaInicio, FechaCompletado, ConfigJson
@@ -142,6 +166,14 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 }
 
 async function obtenerSuscripcionEmpresa(idEmpresa) {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.obtenerSuscripcion(idEmpresa);
+		} catch (e) {
+			console.warn('[superAdmin] obtenerSuscripcionEmpresa MySQL:', e.message);
+			return { plan: 'STARTER', estado: 'PRUEBA', importeMensual: null, moneda: 'ARS' };
+		}
+	}
 	try {
 		const rows = await executeQuery(
 			`SELECT [Plan], Estado, ImporteMensual, Moneda, FechaInicio, FechaProximoCobro, MetodoPago, Notas
@@ -168,6 +200,22 @@ async function obtenerSuscripcionEmpresa(idEmpresa) {
 }
 
 async function obtenerEmpresaDetalle(idEmpresa) {
+	if (useMysqlPlatform()) {
+		const row = await platformMysql.obtenerEmpresaRow(idEmpresa);
+		if (!row) return null;
+		const base = mapEmpresaRow(row);
+		const packs = await obtenerPacksEmpresa(idEmpresa);
+		return {
+			...base,
+			packs,
+			modulosHabilitados: packsActivosToModulos(packs),
+			modulosGenerales: [...MODULOS_GENERALES],
+			onboarding: await obtenerOnboardingEmpresa(idEmpresa),
+			suscripcion: await obtenerSuscripcionEmpresa(idEmpresa),
+			usuarios: await listarUsuariosEmpresa(idEmpresa),
+		};
+	}
+
 	const rows = await executeQuery(
 		`SELECT IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
             Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
@@ -202,6 +250,30 @@ async function crearEmpresa(data) {
 		const e = new Error('La descripción de la empresa es obligatoria');
 		e.statusCode = 400;
 		throw e;
+	}
+
+	if (useMysqlPlatform()) {
+		const nuevoId = await platformMysql.crearEmpresaRow(data);
+		const packsDefault = Array.isArray(data.packs) && data.packs.length ? data.packs : ['AGENDA'];
+		await platformMysql.actualizarPacks(nuevoId, packsDefault);
+		await platformMysql.upsertOnboarding(nuevoId, { pasoActual: 'MODULOS', completado: false });
+		await platformMysql.upsertSuscripcion(nuevoId, {
+			plan: data.plan || 'STARTER',
+			estado: 'PRUEBA',
+			importeMensual: data.importeMensual ?? null,
+		});
+		if (data.conexion || data.dbServer || data.dbName) {
+			const c = data.conexion || data;
+			await tenantRegistry.guardarConexionEmpresa(nuevoId, {
+				dbServer: c.dbServer,
+				dbPort: c.dbPort,
+				dbInstance: c.dbInstance,
+				dbName: c.dbName,
+				dbUser: c.dbUser,
+				dbPassword: c.dbPassword,
+			});
+		}
+		return obtenerEmpresaDetalle(nuevoId);
 	}
 
 	const idRows = await executeQuery(`SELECT ISNULL(MAX(IDEMPRESA), 0) + 1 AS NuevoId FROM dbo.Empresas`);
@@ -269,6 +341,11 @@ async function actualizarEmpresa(idEmpresa, data) {
 	const desc = String(data.descripcion || '').trim();
 	if (!desc) throw new Error('La descripción es obligatoria');
 
+	if (useMysqlPlatform()) {
+		await platformMysql.actualizarEmpresaRow(idEmpresa, data);
+		return obtenerEmpresaDetalle(idEmpresa);
+	}
+
 	await executeQuery(
 		`
     UPDATE dbo.Empresas SET
@@ -302,6 +379,15 @@ async function actualizarPacksEmpresa(idEmpresa, packsActivos) {
 	const validos = new Set(PACKS_PRINCIPALES.map((p) => p.codigo));
 	const activos = (packsActivos || []).filter((c) => validos.has(String(c).toUpperCase()));
 
+	if (useMysqlPlatform()) {
+		await platformMysql.actualizarPacks(idEmpresa, activos);
+		return {
+			packs: activos,
+			modulosHabilitados: packsActivosToModulos(activos),
+			modulosGenerales: [...MODULOS_GENERALES],
+		};
+	}
+
 	try {
 		await executeQuery(`DELETE FROM dbo.EmpresasModuloPack WHERE IdEmpresa = @p0`, [
 			{ value: idEmpresa, type: 'Int' },
@@ -327,6 +413,14 @@ async function actualizarPacksEmpresa(idEmpresa, packsActivos) {
 }
 
 async function upsertOnboarding(idEmpresa, data) {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.upsertOnboarding(idEmpresa, data);
+		} catch (e) {
+			console.warn('[superAdmin] upsertOnboarding MySQL:', e.message);
+			return obtenerOnboardingEmpresa(idEmpresa);
+		}
+	}
 	try {
 		const exists = await executeQuery(
 			`SELECT IdEmpresa, ConfigJson FROM dbo.EmpresasOnboarding WHERE IdEmpresa = @p0`,
@@ -566,6 +660,10 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 }
 
 async function eliminarEmpresa(idEmpresa) {
+	if (useMysqlPlatform()) {
+		return platformMysql.eliminarEmpresa(idEmpresa);
+	}
+
 	const exists = await executeQuery(`SELECT TOP 1 IDEMPRESA FROM dbo.Empresas WHERE IDEMPRESA = @p0`, [
 		{ value: idEmpresa, type: 'Int' },
 	]);
@@ -722,6 +820,14 @@ async function eliminarSector(valor, idEmpresa) {
 }
 
 async function upsertSuscripcion(idEmpresa, data) {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.upsertSuscripcion(idEmpresa, data);
+		} catch (e) {
+			console.warn('[superAdmin] upsertSuscripcion MySQL:', e.message);
+			return obtenerSuscripcionEmpresa(idEmpresa);
+		}
+	}
 	try {
 		const exists = await executeQuery(
 			`SELECT IdEmpresa FROM dbo.EmpresasSuscripcion WHERE IdEmpresa = @p0`,
@@ -921,6 +1027,7 @@ async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
 			],
 		);
 		await authCentralSync.removePersonalEmpresa(idEmpresa, idPersonal);
+		await authCentralSync.purgePersonalAuthIfOrphan(idPersonal);
 		return listarUsuariosEmpresa(idEmpresa);
 	});
 }
@@ -934,8 +1041,12 @@ async function obtenerDashboard() {
 
 	let usuariosTotal = 0;
 	try {
-		const u = await executeQuery(`SELECT COUNT(DISTINCT ValorPersonal) AS c FROM dbo.imPassword`);
-		usuariosTotal = Number(u[0]?.c) || 0;
+		if (useMysqlPlatform()) {
+			usuariosTotal = await platformMysql.contarUsuariosAuth();
+		} else {
+			const u = await executeQuery(`SELECT COUNT(DISTINCT ValorPersonal) AS c FROM dbo.imPassword`);
+			usuariosTotal = Number(u[0]?.c) || 0;
+		}
 	} catch {
 		/* ignore */
 	}
@@ -999,6 +1110,13 @@ async function obtenerModulosEmpresaActiva(idEmpresa) {
 }
 
 async function listarConfigPlataforma() {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.listarConfigPlataforma();
+		} catch {
+			return [];
+		}
+	}
 	try {
 		const rows = await executeQuery(
 			`SELECT Clave, Valor, Descripcion FROM dbo.imPlataformaConfig ORDER BY Clave`,
@@ -1014,6 +1132,9 @@ async function listarConfigPlataforma() {
 }
 
 async function guardarConfigPlataforma(clave, valor) {
+	if (useMysqlPlatform()) {
+		return platformMysql.guardarConfigPlataforma(clave, valor);
+	}
 	await executeQuery(
 		`
     IF EXISTS (SELECT 1 FROM dbo.imPlataformaConfig WHERE Clave = @p0)
