@@ -2,7 +2,6 @@
  * Servicio para gestionar la información de la empresa
  */
 const { executeQuery, executePlatformQuery } = require('../models/db');
-const { runWithTenant } = require('../context/tenantContext');
 const { isPlatformSqlConfigured } = require('../config/database');
 const authCentralService = require('./authCentral.service');
 
@@ -24,11 +23,11 @@ const EMPRESA_SELECT = `
   FROM empresas
 `;
 
-async function mapearEmpresaRow(empresa) {
+async function mapearEmpresaRow(empresa, { skipIva = false } = {}) {
   if (!empresa) return null;
 
   let condicionIva = '-';
-  if (empresa.IdTipoIVA) {
+  if (!skipIva && empresa.IdTipoIVA) {
     try {
       const tipoIvaResult = await executeQuery(
         'SELECT Descripcion FROM imIVA WHERE Valor = @param0',
@@ -76,7 +75,7 @@ const obtenerInfoEmpresaPorId = async (idEmpresa) => {
       try {
         const rowCentral = await authCentralService.obtenerEmpresaPorId(id);
         if (rowCentral) {
-          return runWithTenant(id, () => mapearEmpresaRow(rowCentral));
+          return mapearEmpresaRow(rowCentral, { skipIva: true });
         }
       } catch (e) {
         console.warn(`[authCentral] obtenerInfoEmpresaPorId ${id}:`, e.message);
@@ -109,6 +108,13 @@ const obtenerInfoEmpresaPorId = async (idEmpresa) => {
 const obtenerInfoEmpresa = async (idEmpresa = null) => {
   if (idEmpresa != null && idEmpresa !== '') {
     return obtenerInfoEmpresaPorId(idEmpresa);
+  }
+
+  if (authCentralService.isAuthCentralEnabled()) {
+    return {
+      id: '1',
+      descripcion: 'iMedicWS',
+    };
   }
 
   try {
