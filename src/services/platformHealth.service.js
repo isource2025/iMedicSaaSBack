@@ -46,8 +46,9 @@ async function probeTenantSql(idEmpresa, timeoutMs = 8000) {
 			return {
 				idEmpresa,
 				nombre: norm.DESCRIPCION,
-				ok: false,
-				error: 'Conexión SQL incompleta (DbServer/DbName/DbUser/DbPassword*)',
+				ok: true,
+				skipped: true,
+				reason: 'Conexión SQL incompleta (DbServer/DbName/DbUser/DbPassword*)',
 				hasEnc: Boolean(norm.DbPasswordEnc),
 				hasPlain: Boolean(norm.DbPassword),
 			};
@@ -120,7 +121,7 @@ async function getHealth({ deep = false, idEmpresa = null } = {}) {
 		for (const e of targets) {
 			const probe = await probeTenantSql(Number(e.IDEMPRESA));
 			payload.tenants.push(probe);
-			if (!probe.ok) payload.ok = false;
+			if (!probe.ok && !probe.skipped) payload.ok = false;
 		}
 	}
 

@@ -43,6 +43,10 @@ async function main() {
 		console.log('\nTenants SQL:');
 		for (const t of health.tenants) {
 			if (empresa != null && t.idEmpresa !== empresa) continue;
+			if (t.skipped) {
+				console.log(`  ○ ${t.idEmpresa}${t.nombre ? ` (${t.nombre})` : ''}: skip — ${t.reason}`);
+				continue;
+			}
 			const icon = t.ok ? '✓' : '✗';
 			console.log(
 				`  ${icon} ${t.idEmpresa}${t.nombre ? ` (${t.nombre})` : ''}: ${t.ok ? `${t.ms}ms → ${t.dbServer}/${t.dbName}` : t.error}`,
@@ -57,6 +61,10 @@ async function main() {
 			fix: false,
 		});
 		for (const r of result.reports) {
+			if (r.skipped) {
+				console.log(`  ○ Empresa ${r.idEmpresa}: skip — ${r.reason}`);
+				continue;
+			}
 			const icon = r.ok ? '✓' : '⚠';
 			console.log(
 				`  ${icon} Empresa ${r.idEmpresa}: tenant=${r.tenant} mysql=${r.central} issues=${r.issues?.length || 0}`,

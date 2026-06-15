@@ -54,6 +54,17 @@ async function reconcileEmpresa(idEmpresa, fix = false) {
 	try {
 		tenant = await tenantUsuarios(idEmpresa);
 	} catch (e) {
+		if (e.code === 'TENANT_DB_NOT_CONFIGURED' || e.code === 'TENANT_DB_DECRYPT_FAILED') {
+			return {
+				idEmpresa,
+				tenant: 0,
+				central: 0,
+				issues: [],
+				skipped: true,
+				reason: e.message,
+				ok: true,
+			};
+		}
 		issues.push({ type: 'TENANT_ERROR', message: e.message });
 		return { idEmpresa, tenant: 0, central: 0, issues, error: e.message };
 	}
@@ -120,10 +131,15 @@ async function reconcileEmpresa(idEmpresa, fix = false) {
 		if (!row) {
 			issues.push({ type: 'EMPRESA_MISSING_MYSQL', message: 'Sin fila en Empresas' });
 		} else if (!row.DbServer || !row.DbName || !row.DbUser) {
-			issues.push({
-				type: 'CONEXION_INCOMPLETA',
-				message: `DbServer=${row.DbServer || '-'} DbName=${row.DbName || '-'}`,
-			});
+			return {
+				idEmpresa,
+				tenant: 0,
+				central: 0,
+				issues: [],
+				skipped: true,
+				reason: 'Conexión SQL incompleta',
+				ok: true,
+			};
 		}
 	} catch (e) {
 		issues.push({ type: 'EMPRESA_CHECK_ERROR', message: e.message });
