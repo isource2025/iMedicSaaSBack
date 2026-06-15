@@ -252,56 +252,68 @@ async function testMetaWebhookSubscriptions(appId, appToken) {
 	}
 }
 
-async function testEmpresa1OnStartup() {
+async function testEmpresasOnStartup() {
 	try {
 		const { isAuthCentralEnabled, getAuthCentralPool } = require('../config/authCentralDb');
 		if (!isAuthCentralEnabled()) {
-			line('startup', 'Test empresa 1: AUTH_DB deshabilitado, skip');
+			line('startup', 'Test empresas: AUTH_DB deshabilitado, skip');
 			return;
 		}
 		const pool = await getAuthCentralPool();
 		const [rows] = await pool.query(
 			`SELECT IDEMPRESA, DESCRIPCION, DbServer, DbPort, DbName, DbUser,
-			        DbPasswordEnc, WhatsAppPhoneNumberId, WhatsAppAccessTokenEnc
-			 FROM Empresas WHERE IDEMPRESA = 1 LIMIT 1`,
+			        DbPassword, DbPasswordEnc, WhatsAppPhoneNumberId, WhatsAppAccessTokenEnc
+			 FROM Empresas ORDER BY IDEMPRESA`,
 		);
 		if (!rows.length) {
-			warn('startup', 'Test empresa 1: no existe IDEMPRESA=1 en MySQL');
+			warn('startup', 'MySQL Empresas vacío — configurá al menos una empresa');
 			return;
 		}
-		const r = rows[0];
-		line('startup', 'Empresa 1 MySQL', {
-			id: r.IDEMPRESA,
-			nombre: r.DESCRIPCION,
-			dbServer: r.DbServer,
-			dbPort: r.DbPort,
-			dbName: r.DbName,
-			dbUser: r.DbUser,
-			dbPasswordEncLen: r.DbPasswordEnc ? String(r.DbPasswordEnc).length : 0,
-			whatsappPhone: r.WhatsAppPhoneNumberId || null,
-			whatsappTokenEncLen: r.WhatsAppAccessTokenEnc ? String(r.WhatsAppAccessTokenEnc).length : 0,
-		});
 
-		if (r.DbPasswordEnc) {
-			const dbPwd = logDecryptAttempts('DbPasswordEnc/empresa1', r.DbPasswordEnc);
-			if (!dbPwd.ok) {
-				warn('startup', 'CRÍTICO: DbPasswordEnc empresa 1 NO descifrable — tenant SQL fallará');
-			}
-		} else {
-			warn('startup', 'Empresa 1 sin DbPasswordEnc');
-		}
+		line('startup', `Empresas en MySQL: ${rows.length}`);
+		for (const r of rows) {
+			const hasPlain = r.DbPassword != null && String(r.DbPassword).trim() !== '';
+			const hasEnc = Boolean(r.DbPasswordEnc);
+			const connOk = Boolean(r.DbServer && r.DbName && r.DbUser && (hasPlain || hasEnc));
 
-		if (r.WhatsAppAccessTokenEnc) {
-			const waTok = logDecryptAttempts('WhatsAppAccessTokenEnc/empresa1', r.WhatsAppAccessTokenEnc);
-			if (!waTok.ok) {
-				warn('startup', 'WhatsApp token empresa 1 NO descifrable — respuestas salientes fallarán');
+			line('startup', `Empresa ${r.IDEMPRESA}`, {
+				nombre: r.DESCRIPCION,
+				sql: connOk ? `${r.DbServer}:${r.DbPort || 1433}/${r.DbName}` : 'incompleta',
+				password: hasPlain ? 'DbPassword' : hasEnc ? 'DbPasswordEnc' : 'ninguna',
+			});
+
+			if (!connOk) {
+				warn('startup', `Empresa ${r.IDEMPRESA}: conexión tenant incompleta — reconcile/sync fallará`);
+				continue;
 			}
-		} else {
-			warn('startup', 'Empresa 1 sin WhatsAppAccessTokenEnc en MySQL');
+
+			if (hasEnc && !hasPlain) {
+				const dbPwd = logDecryptAttempts(`DbPasswordEnc/empresa${r.IDEMPRESA}`, r.DbPasswordEnc);
+				if (!dbPwd.ok) {
+					warn(
+						'startup',
+						`Empresa ${r.IDEMPRESA}: DbPasswordEnc NO descifrable — tenant SQL fallará`,
+					);
+				}
+			}
+
+			if (r.WhatsAppAccessTokenEnc) {
+				const waTok = logDecryptAttempts(
+					`WhatsAppAccessTokenEnc/empresa${r.IDEMPRESA}`,
+					r.WhatsAppAccessTokenEnc,
+				);
+				if (!waTok.ok) {
+					warn('startup', `Empresa ${r.IDEMPRESA}: WhatsApp token NO descifrable`);
+				}
+			}
 		}
 	} catch (e) {
-		warn('startup', 'Test empresa 1 falló', { error: e.message });
+		warn('startup', 'Test empresas falló', { error: e.message });
 	}
+}
+
+async function testEmpresa1OnStartup() {
+	return testEmpresasOnStartup();
 }
 
 module.exports = {
@@ -317,6 +329,7 @@ module.exports = {
 	logWhatsappEmpresa,
 	testMetaAppSecretOnStartup,
 	testEmpresa1OnStartup,
+	testEmpresasOnStartup,
 	sha256Preview,
 	labelSecret,
 };

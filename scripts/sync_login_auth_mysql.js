@@ -304,27 +304,53 @@ async function syncOneTable(mysqlPool, source, table) {
 	return copied;
 }
 
+async function listarEmpresasDesdeMysql(mysqlPool) {
+	const [rows] = await mysqlPool.query('SELECT IDEMPRESA FROM Empresas ORDER BY IDEMPRESA');
+	return rows || [];
+}
+
 async function listarEmpresas(pool) {
 	const result = await pool.request().query(`SELECT IDEMPRESA FROM dbo.Empresas ORDER BY IDEMPRESA`);
 	return result.recordset || [];
 }
 
-async function resolveTenantSources(platformPool) {
-	const empresas = await listarEmpresas(platformPool);
-	const sources = [{ label: 'plataforma', pool: platformPool, key: 'platform' }];
-	const seen = new Set(['platform']);
+async function resolveTenantSources(mysqlPool, platformPool) {
+	const { isAuthCentralEnabled } = require('../src/config/authCentralDb');
+	const { empresaRowHasSqlConnection } = require('../src/utils/empresaDbConnection');
+
+	const sources = [];
+	const seen = new Set();
+
+	let empresas = [];
+	if (isAuthCentralEnabled()) {
+		empresas = await listarEmpresasDesdeMysql(mysqlPool);
+	} else if (platformPool) {
+		empresas = await listarEmpresas(platformPool);
+	} else {
+		return sources;
+	}
 
 	for (const empresa of empresas) {
 		const idEmpresa = Number(empresa.IDEMPRESA);
-		const row = await loadEmpresaConnectionRow(idEmpresa);
-		const key = configCacheKey(rowToSqlConfig(row));
-		if (seen.has(key)) continue;
-		seen.add(key);
-		sources.push({
-			label: `tenant ${idEmpresa}`,
-			pool: await getTenantPool(idEmpresa),
-			key,
-		});
+		if (!Number.isFinite(idEmpresa) || idEmpresa <= 0) continue;
+
+		try {
+			const row = await loadEmpresaConnectionRow(idEmpresa);
+			if (!empresaRowHasSqlConnection(row)) {
+				console.warn(`• empresa ${idEmpresa}: sin conexión SQL configurada — skip tenant sync`);
+				continue;
+			}
+			const key = configCacheKey(rowToSqlConfig(row));
+			if (seen.has(key)) continue;
+			seen.add(key);
+			sources.push({
+				label: `tenant ${idEmpresa}`,
+				pool: await getTenantPool(idEmpresa),
+				key,
+			});
+		} catch (e) {
+			console.warn(`• empresa ${idEmpresa}: ${e.message}`);
+		}
 	}
 
 	return sources;
@@ -351,18 +377,39 @@ async function getMySqlCounts(mysqlPool, tables) {
 		process.exit(1);
 	}
 
-	const platformPool = await connectDB();
+	const { isAuthCentralEnabled } = require('../src/config/authCentralDb');
+	const { isPlatformSqlConfigured } = require('../src/config/database');
+
 	const mysqlPool = await createMySqlPool();
+	const saasMode = isAuthCentralEnabled() && !isPlatformSqlConfigured();
+	let platformPool = null;
+
+	if (isPlatformSqlConfigured()) {
+		platformPool = await connectDB();
+		console.log('• Origen plataforma SQL Server disponible (DB_*)');
+	} else if (saasMode) {
+		console.log('• Modo SaaS puro: catálogo Empresas ya en MySQL (sin DB_* plataforma)');
+	} else {
+		console.error('Configurá AUTH_DB_* (Railway) o DB_* (SQL plataforma legacy)');
+		process.exit(1);
+	}
 
 	console.log('• Modo merge: no se borran datos existentes en Railway.');
-	console.log('• Auditando origen SQL Server y sincronizando esquema real…');
+	console.log('• Auditando origen y sincronizando esquema real…\n');
 
-	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'Empresas');
-	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imIVA');
-	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imUsuarioEmpresaLogin');
-	await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'EmpresasModuloPack');
+	if (platformPool) {
+		await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'Empresas');
+		await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imIVA');
+		await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'imUsuarioEmpresaLogin');
+		await syncOneTable(mysqlPool, { label: 'plataforma', pool: platformPool }, 'EmpresasModuloPack');
+	} else {
+		console.log('• Skip tablas plataforma desde SQL (Empresas/packs ya en MySQL)');
+	}
 
-	const tenantSources = await resolveTenantSources(platformPool);
+	const tenantSources = await resolveTenantSources(mysqlPool, platformPool);
+	if (!tenantSources.length) {
+		console.warn('⚠ Ningún tenant SQL disponible — configurá DbServer/DbName/DbUser/DbPassword en Empresas');
+	}
 	for (const source of tenantSources) {
 		for (const table of TENANT_TABLES) {
 			await syncOneTable(mysqlPool, source, table);

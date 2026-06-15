@@ -59,6 +59,7 @@ const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 const botIntegrationRoutes = require('./routes/botIntegration.routes');
 const botAdminRoutes = require('./routes/botAdmin.routes');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook.routes');
+const healthRoutes = require('./routes/health.routes');
 const { whatsappRawBody } = require('./middlewares/whatsappRawBody.middleware');
 
 // Importar conexión a la base de datos
@@ -113,6 +114,7 @@ app.use('/media/patients', express.static(patientPhotosDir));
 const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');
 
 app.use('/api/auth', authRoutes);
+app.use('/api/health', healthRoutes);
 // JWT + idEmpresa en contexto (sin esto, /api/beds e indicadores usan DB_* de plataforma y fallan en Railway)
 app.use('/api', apiAuthUnlessPublic);
 

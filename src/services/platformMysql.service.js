@@ -406,6 +406,22 @@ async function contarUsuariosAuth() {
 	return Number(rows[0]?.c) || 0;
 }
 
+async function aplicarMigracionInfra() {
+	assertMysql();
+	const fs = require('fs');
+	const path = require('path');
+	const sqlPath = path.join(__dirname, '../../scripts/sql/migrate_auth_infra_mysql.sql');
+	const raw = fs.readFileSync(sqlPath, 'utf8');
+	const statements = raw
+		.split(';')
+		.map((s) => s.trim())
+		.filter((s) => s && !s.startsWith('--'));
+	for (const stmt of statements) {
+		await mysqlExec(stmt);
+	}
+	return { ok: true, statements: statements.length };
+}
+
 async function aplicarMigracionPlataforma() {
 	assertMysql();
 	const fs = require('fs');
@@ -438,5 +454,6 @@ module.exports = {
 	listarConfigPlataforma,
 	guardarConfigPlataforma,
 	contarUsuariosAuth,
+	aplicarMigracionInfra,
 	aplicarMigracionPlataforma,
 };

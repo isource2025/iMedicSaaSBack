@@ -86,3 +86,17 @@ npm run auth:mysql:reconcile
 npm run auth:mysql:reconcile -- --empresa=1
 npm run auth:mysql:reconcile -- --fix
 ```
+
+## Infraestructura
+
+```bash
+npm run auth:mysql:infra-migrate   # migraciones SQL incrementales
+npm run auth:mysql:infra-check     # diagnóstico MySQL
+npm run auth:mysql:infra-check -- --deep --reconcile
+```
+
+API: `GET /api/health?deep=1`
+
+## Sync sin SQL plataforma
+
+Con `AUTH_DB=1` y **sin** `DB_*` en `.env` (modo Railway puro), `auth:mysql:sync` lee empresas desde MySQL y sincroniza auth desde cada SQL tenant configurado en `Empresas.Db*`.

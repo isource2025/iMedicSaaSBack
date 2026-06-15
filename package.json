@@ -12,6 +12,8 @@
 		"db:super-admin": "node scripts/setup_super_admin.js",
 		"auth:mysql:sync": "node scripts/sync_login_auth_mysql.js",
 		"auth:mysql:platform-migrate": "node scripts/apply_platform_mysql.js",
+		"auth:mysql:infra-migrate": "node scripts/apply_infra_mysql.js",
+		"auth:mysql:infra-check": "node scripts/infra_check_mysql.js",
 		"auth:mysql:reconcile": "node scripts/reconcile_auth_mysql.js",
 		"setup:whatsapp": "node scripts/setup_whatsapp_bot.js",
 		"setup:whatsapp:all": "node scripts/setup_whatsapp_bot.js all",

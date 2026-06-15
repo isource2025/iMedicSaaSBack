@@ -68,6 +68,12 @@ async function reconcileEmpresa(idEmpresa, fix = false) {
 	const tenantSet = new Set(tenant.map((u) => u.valorPersonal));
 	const centralSet = new Set(central.map((u) => u.valorPersonal));
 
+	let missingCount = 0;
+	for (const u of tenant) {
+		if (!centralSet.has(u.valorPersonal)) missingCount++;
+	}
+
+	let fixDone = 0;
 	for (const u of tenant) {
 		if (!centralSet.has(u.valorPersonal)) {
 			issues.push({
@@ -76,9 +82,21 @@ async function reconcileEmpresa(idEmpresa, fix = false) {
 				nombreRed: u.nombreRed,
 			});
 			if (fix) {
-				await runWithTenant(idEmpresa, () =>
-					authCentralSync.syncUserLoginBundle(idEmpresa, u.valorPersonal),
-				);
+				try {
+					await runWithTenant(idEmpresa, () =>
+						authCentralSync.syncUserLoginBundle(idEmpresa, u.valorPersonal),
+					);
+					fixDone++;
+					if (fixDone % 50 === 0 || fixDone === missingCount) {
+						console.log(`  sync ${fixDone}/${missingCount} usuarios…`);
+					}
+				} catch (e) {
+					issues.push({
+						type: 'SYNC_ERROR',
+						valorPersonal: u.valorPersonal,
+						message: e.message,
+					});
+				}
 			}
 		}
 	}
@@ -141,6 +159,9 @@ async function reconcileAll({ idEmpresa = null, fix = false, migrate = false } =
 	for (const e of empresas) {
 		const id = Number(e.IDEMPRESA);
 		try {
+			if (fix) {
+				console.log(`[reconcile] Empresa ${id}…`);
+			}
 			reports.push(await reconcileEmpresa(id, fix));
 		} catch (err) {
 			reports.push({
