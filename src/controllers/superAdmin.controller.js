@@ -232,6 +232,19 @@ async function configPlataforma(req, res) {
 	}
 }
 
+async function authReconcile(req, res) {
+	try {
+		const authReconcileService = require('../services/authReconcile.service');
+		const fix = req.query.fix === '1' || req.query.fix === 'true';
+		const migrate = req.query.migrate === '1' || req.query.migrate === 'true';
+		const idEmpresa = req.query.idEmpresa != null ? Number(req.query.idEmpresa) : null;
+		const data = await authReconcileService.reconcileAll({ idEmpresa, fix, migrate });
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 500).json({ success: false, mensaje: e.message });
+	}
+}
+
 module.exports = {
 	dashboard,
 	catalogos,
@@ -256,4 +269,5 @@ module.exports = {
 	eliminarSector,
 	modulosEmpresa,
 	configPlataforma,
+	authReconcile,
 };

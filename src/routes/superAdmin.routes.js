@@ -34,4 +34,10 @@ router.delete('/sectores/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONA
 
 router.get('/usuarios', requirePermiso('PLATAFORMA.USUARIOS.VER'), ctrl.listarUsuarios);
 
+router.post(
+	'/auth-reconcile',
+	requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'),
+	ctrl.authReconcile,
+);
+
 module.exports = router;
