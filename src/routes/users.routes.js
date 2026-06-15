@@ -1,26 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const usersController = require('../controllers/users.controller');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
 
-// Obtener todos los usuarios
-router.get('/', usersController.obtenerUsuarios);
+router.use(requireTenant);
 
-// Obtener un usuario por ID
-router.get('/:id', usersController.obtenerUsuario);
-
-// Crear un nuevo usuario
-router.post('/', usersController.crearUsuario);
-
-// Actualizar datos de un usuario
-router.put('/:id', usersController.actualizarUsuario);
-
-// Cambiar contraseña de un usuario
-router.put('/:id/password', usersController.cambiarPassword);
-
-// Asignar sector a un usuario
-router.post('/:id/sectores', usersController.asignarSector);
-
-// Quitar sector de un usuario
-router.delete('/:id/sectores/:idSector', usersController.quitarSector);
+router.get('/', requirePermiso('CONFIGURACION.USUARIOS.VER'), usersController.obtenerUsuarios);
+router.get('/:id', requirePermiso('CONFIGURACION.USUARIOS.VER'), usersController.obtenerUsuario);
+router.post('/', requirePermiso('CONFIGURACION.USUARIOS.CREAR'), usersController.crearUsuario);
+router.put('/:id', requirePermiso('CONFIGURACION.USUARIOS.EDITAR'), usersController.actualizarUsuario);
+router.put('/:id/password', requirePermiso('CONFIGURACION.USUARIOS.EDITAR'), usersController.cambiarPassword);
+router.post('/:id/sectores', requirePermiso('CONFIGURACION.USUARIOS.EDITAR'), usersController.asignarSector);
+router.delete(
+	'/:id/sectores/:idSector',
+	requirePermiso('CONFIGURACION.USUARIOS.EDITAR'),
+	usersController.quitarSector,
+);
 
 module.exports = router;

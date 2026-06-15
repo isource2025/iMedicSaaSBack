@@ -975,15 +975,35 @@ async function consultarTurnosPaciente({ idPaciente, dni, proximos = true }) {
 async function cancelarTurnoBot(body) {
 	const matricula = Number(body.matricula);
 	const idTurno = Number(body.idTurno);
-	const idPaciente = body.idPaciente != null ? Number(body.idPaciente) : null;
+	const telefonoWhatsApp = String(body.telefonoWhatsApp || '').trim();
 
 	if (!Number.isFinite(matricula) || !Number.isFinite(idTurno)) {
 		const e = new Error('matricula e idTurno son requeridos');
 		e.statusCode = 400;
 		throw e;
 	}
+	if (!telefonoWhatsApp) {
+		const e = new Error('telefonoWhatsApp es requerido para cancelar un turno');
+		e.statusCode = 400;
+		throw e;
+	}
 
-	if (idPaciente) await _verificarTelefonoPaciente(idPaciente, body.telefonoWhatsApp);
+	const turnRows = await executeQuery(
+		`SELECT TOP 1 IDPaciente FROM dbo.imTurnos WHERE IdTurno = @p0`,
+		[{ value: idTurno, type: 'Int' }],
+	);
+	if (!turnRows.length) {
+		const e = new Error('Turno no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+	const idPacienteTurno = Number(turnRows[0].IDPaciente);
+	if (!Number.isFinite(idPacienteTurno) || idPacienteTurno <= 0) {
+		const e = new Error('El turno no tiene paciente asociado');
+		e.statusCode = 400;
+		throw e;
+	}
+	await _verificarTelefonoPaciente(idPacienteTurno, telefonoWhatsApp);
 
 	const motivo = body.motivo ? String(body.motivo).slice(0, 200) : 'Cancelado vía WhatsApp';
 	try {
@@ -998,7 +1018,7 @@ async function cancelarTurnoBot(body) {
 		await botLogService.registrarLog({
 			accion: 'CANCELACION',
 			idTurno,
-			idPaciente,
+			idPaciente: idPacienteTurno,
 			telefonoWhatsApp: body.telefonoWhatsApp,
 			idConversacion: body.idConversacion,
 			resultado: 'OK',
@@ -1008,7 +1028,7 @@ async function cancelarTurnoBot(body) {
 		await botLogService.registrarLog({
 			accion: 'CANCELACION',
 			idTurno,
-			idPaciente,
+			idPaciente: idPacienteTurno,
 			telefonoWhatsApp: body.telefonoWhatsApp,
 			resultado: 'ERROR',
 			mensajeError: err.message,

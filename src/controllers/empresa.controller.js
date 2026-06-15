@@ -2,6 +2,7 @@
  * Controlador para gestionar la información de la empresa
  */
 const empresaService = require('../services/empresa.service');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 /**
  * Obtener la información de la empresa
@@ -10,7 +11,10 @@ const empresaService = require('../services/empresa.service');
  */
 const obtenerInfoEmpresa = async (req, res) => {
   try {
-    const idEmpresa = req.query.id ?? req.query.idEmpresa ?? null;
+    let idEmpresa = req.idEmpresa ?? req.auth?.idEmpresa ?? null;
+    if (!isAuthCentralEnabled()) {
+      idEmpresa = idEmpresa ?? req.query.id ?? req.query.idEmpresa ?? null;
+    }
     const empresaInfo = await empresaService.obtenerInfoEmpresa(idEmpresa);
     
     res.json({

@@ -1,27 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const hciController = require('../controllers/hci.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-/**
- * Rutas para Historia Clínica de Ingreso (imHCI)
- */
+router.use(requireTenant);
 
-// GET - Obtener HC por número de visita
-router.get('/visita/:numeroVisita', hciController.getByNumeroVisita);
-
-// GET - Obtener HC por ID
-router.get('/:id', hciController.getById);
-
-// GET - Obtener HC por ID de paciente
-router.get('/paciente/:idPaciente', hciController.getByIdPaciente);
-
-// POST - Crear nueva HC
-router.post('/', hciController.crear);
-
-// PUT - Actualizar HC
-router.put('/:id', hciController.actualizar);
-
-// DELETE - Eliminar HC
-router.delete('/:id', hciController.eliminar);
+router.get(
+	'/visita/:numeroVisita',
+	requirePermiso('INTERNACION.HISTORIA_CLINICA.VER'),
+	hciController.getByNumeroVisita,
+);
+router.get('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.VER'), hciController.getById);
+router.get(
+	'/paciente/:idPaciente',
+	requirePermiso('INTERNACION.HISTORIA_CLINICA.VER'),
+	hciController.getByIdPaciente,
+);
+router.post('/', requirePermiso('INTERNACION.HISTORIA_CLINICA.CREAR'), hciController.crear);
+router.put('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.EDITAR'), hciController.actualizar);
+router.delete('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.ELIMINAR'), hciController.eliminar);
 
 module.exports = router;

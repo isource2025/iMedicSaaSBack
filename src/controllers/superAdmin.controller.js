@@ -19,6 +19,16 @@ async function catalogos(req, res) {
 	}
 }
 
+async function catalogosEmpresa(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const data = await superAdminService.obtenerCatalogosTenant(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 500).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function listarEmpresas(req, res) {
 	try {
 		const data = await superAdminService.listarEmpresas(req.query.q);
@@ -200,7 +210,8 @@ async function actualizarSector(req, res) {
 
 async function eliminarSector(req, res) {
 	try {
-		const data = await superAdminService.eliminarSector(req.params.valor);
+		const idEmpresa = Number(req.query.idEmpresa ?? req.body?.idEmpresa);
+		const data = await superAdminService.eliminarSector(req.params.valor, idEmpresa);
 		res.json({ success: true, data });
 	} catch (e) {
 		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
@@ -224,6 +235,7 @@ async function configPlataforma(req, res) {
 module.exports = {
 	dashboard,
 	catalogos,
+	catalogosEmpresa,
 	listarEmpresas,
 	obtenerEmpresa,
 	crearEmpresa,

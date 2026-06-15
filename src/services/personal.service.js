@@ -9,6 +9,9 @@
  * (excluyendo los registros "admin" con Valor = 999999 / 1000000).
  */
 const { executeQuery, sql, getRequestPool } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
+const authCentralService = require('./authCentral.service');
+const authCentralSync = require('./authCentralSync.service');
 const {
 	convertirFechaAClarion,
 	convertirFechaClarionADate,
@@ -16,6 +19,23 @@ const {
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
 const ADMIN_VALOR_THRESHOLD = 900000; // Valor >= 900000 se considera "reservado" (admin/sistema)
+
+function resolveTenantEmpresaId() {
+	const id = getTenantId();
+	if (id != null && Number.isFinite(Number(id)) && Number(id) > 0) return Number(id);
+	return null;
+}
+
+async function assertEmpresaPermitida(idEmpresa) {
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId == null) return Number(idEmpresa);
+	if (Number(idEmpresa) !== tenantId) {
+		const e = new Error('Solo puede operar sobre la empresa de la sesión actual');
+		e.statusCode = 403;
+		throw e;
+	}
+	return tenantId;
+}
 
 /** Convierte Clarion date -> "YYYY-MM-DD" */
 function clarionToIso(fechaClarion) {
@@ -377,6 +397,11 @@ async function crear(data) {
 					{ value: 1, type: 'TinyInt' },
 				],
 			);
+			const tenantId = resolveTenantEmpresaId();
+			if (tenantId != null) {
+				await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
+			}
+			await authCentralSync.syncPersonal(nuevoValor);
 			return await obtenerPorId(nuevoValor);
 		} catch (err) {
 			const n = err?.number ?? err?.originalError?.info?.number;
@@ -475,6 +500,7 @@ async function actualizar(valor, data) {
 			{ value: input.IdEspecialidadME, type: 'Int' },
 		],
 	);
+	await authCentralSync.syncPersonal(valor);
 	return await obtenerPorId(valor);
 }
 
@@ -545,6 +571,20 @@ async function listarClases() {
 }
 
 async function listarEmpresasCatalogo() {
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId != null && authCentralService.isAuthCentralEnabled()) {
+		const row = await authCentralService.obtenerEmpresaPorId(tenantId);
+		if (row) {
+			return [
+				{
+					IdEmpresa: tenantId,
+					Descripcion: String(row.DESCRIPCION || row.descripcion || '').trim(),
+				},
+			];
+		}
+		return [{ IdEmpresa: tenantId, Descripcion: `Empresa ${tenantId}` }];
+	}
+
 	const rows = await executeQuery(
 		`SELECT IDEMPRESA AS IdEmpresa, RTRIM(LTRIM(ISNULL(DESCRIPCION, ''))) AS Descripcion
 		 FROM dbo.Empresas ORDER BY DESCRIPCION`,
@@ -583,14 +623,32 @@ async function actualizarServicioPersonal(valor, data) {
 }
 
 async function listarEmpresasPersonal(valor) {
+	const tenantId = resolveTenantEmpresaId();
+	const params = [{ value: valor, type: 'Int' }];
+	let where = 'pe.IdPersonal = @p0';
+	if (tenantId != null) {
+		where += ' AND pe.IdEmpresa = @p1';
+		params.push({ value: tenantId, type: 'Int' });
+	}
+
 	const rows = await executeQuery(
 		`SELECT pe.IdEmpresa, RTRIM(LTRIM(ISNULL(e.DESCRIPCION, ''))) AS Descripcion
 		 FROM dbo.imPersonalEmpresas pe
-		 INNER JOIN dbo.Empresas e ON e.IDEMPRESA = pe.IdEmpresa
-		 WHERE pe.IdPersonal = @p0
-		 ORDER BY e.DESCRIPCION`,
-		[{ value: valor, type: 'Int' }],
+		 LEFT JOIN dbo.Empresas e ON e.IDEMPRESA = pe.IdEmpresa
+		 WHERE ${where}
+		 ORDER BY pe.IdEmpresa`,
+		params,
 	);
+
+	if (tenantId != null && authCentralService.isAuthCentralEnabled()) {
+		const central = await authCentralService.obtenerEmpresaPorId(tenantId);
+		const descCentral = String(central?.DESCRIPCION || '').trim();
+		return rows.map((r) => ({
+			IdEmpresa: Number(r.IdEmpresa),
+			Descripcion: descCentral || String(r.Descripcion || '').trim() || `Empresa ${tenantId}`,
+		}));
+	}
+
 	return rows.map((r) => ({
 		IdEmpresa: Number(r.IdEmpresa),
 		Descripcion: String(r.Descripcion || '').trim(),
@@ -598,12 +656,7 @@ async function listarEmpresasPersonal(valor) {
 }
 
 async function agregarEmpresaPersonal(valor, idEmpresa) {
-	const id = Number(idEmpresa);
-	if (!Number.isFinite(id)) {
-		const e = new Error('IdEmpresa inválido');
-		e.statusCode = 400;
-		throw e;
-	}
+	const id = await assertEmpresaPermitida(idEmpresa);
 	const dup = await executeQuery(
 		`SELECT 1 FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
 		[
@@ -623,11 +676,12 @@ async function agregarEmpresaPersonal(valor, idEmpresa) {
 			{ value: id, type: 'Int' },
 		],
 	);
+	await authCentralSync.syncPersonalEmpresa(id, valor);
 	return listarEmpresasPersonal(valor);
 }
 
 async function quitarEmpresaPersonal(valor, idEmpresa) {
-	const id = Number(idEmpresa);
+	const id = await assertEmpresaPermitida(idEmpresa);
 	await executeQuery(
 		`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
 		[
@@ -635,6 +689,7 @@ async function quitarEmpresaPersonal(valor, idEmpresa) {
 			{ value: id, type: 'Int' },
 		],
 	);
+	await authCentralSync.removePersonalEmpresa(id, valor);
 	return listarEmpresasPersonal(valor);
 }
 
@@ -727,6 +782,10 @@ async function agregarSectorPersonal(valor, idSector) {
 			{ value: sid, type: 'VarChar' },
 		],
 	);
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId != null) {
+		await authCentralSync.syncPersonalSectores(valor);
+	}
 	return listarSectoresPersonal(valor);
 }
 
@@ -744,6 +803,10 @@ async function quitarSectorPersonal(valor, idSector) {
 			{ value: sid, type: 'VarChar' },
 		],
 	);
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId != null) {
+		await authCentralSync.removePersonalSector(valor, sid);
+	}
 	return listarSectoresPersonal(valor);
 }
 

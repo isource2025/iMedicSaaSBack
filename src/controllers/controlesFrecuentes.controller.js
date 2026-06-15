@@ -1,4 +1,5 @@
 const controlesFrecuentesService = require("../services/controlesFrecuentes.service");
+const { requireOperadorCarga } = require("../utils/sessionIdentity");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -142,7 +143,6 @@ const crearControl = async (req, res) => {
             numeroVisita,
             fechaControl,
             horaControl,
-            operadorCarga,
             idHci,
             pulso,
             presionMax,
@@ -171,11 +171,14 @@ const crearControl = async (req, res) => {
             });
         }
 
+        const operadorCarga = requireOperadorCarga(req, res);
+        if (operadorCarga == null) return;
+
         const resultado = await controlesFrecuentesService.crearControl({
             numeroVisita: parseInt(numeroVisita),
             fechaControl,
             horaControl,
-            operadorCarga: operadorCarga ? parseInt(operadorCarga) : 0,
+            operadorCarga,
             idHci: idHci ? parseInt(idHci) : 0,
             pulso: pulso ? parseInt(pulso) : 0,
             presionMax: presionMax ? parseInt(presionMax) : 0,

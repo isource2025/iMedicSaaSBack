@@ -1,23 +1,40 @@
 const express = require('express');
 const router = express.Router();
 const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// Obtiene el último movimiento de una visita
-router.get('/ultimo/:numeroVisita', visitaMovimientosController.obtenerUltimoMovimientoVisita);
+router.use(requireTenant);
 
-// Obtiene todos los movimientos de una visita
-router.get('/visita/:numeroVisita', visitaMovimientosController.obtenerMovimientosVisita);
-
-// Actualiza el último movimiento de una visita con datos de egreso
-router.put('/ultimo/:numeroVisita', visitaMovimientosController.actualizarUltimoMovimientoVisita);
-
-// Mueve un paciente a una cama vacía
-router.post('/mover/:numeroVisita', visitaMovimientosController.moverPacienteACamaVacia);
-
-// Intercambia las camas entre dos pacientes
-router.post('/intercambiar/:numeroVisita1/:numeroVisita2', visitaMovimientosController.intercambiarCamasPacientes);
-
-// Obtiene los últimos movimientos de internación para el dashboard
-router.get('/recientes', visitaMovimientosController.obtenerMovimientosRecientes);
+router.get(
+	'/ultimo/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	visitaMovimientosController.obtenerUltimoMovimientoVisita,
+);
+router.get(
+	'/visita/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	visitaMovimientosController.obtenerMovimientosVisita,
+);
+router.put(
+	'/ultimo/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.actualizarUltimoMovimientoVisita,
+);
+router.post(
+	'/mover/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.moverPacienteACamaVacia,
+);
+router.post(
+	'/intercambiar/:numeroVisita1/:numeroVisita2',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.intercambiarCamasPacientes,
+);
+router.get(
+	'/recientes',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	visitaMovimientosController.obtenerMovimientosRecientes,
+);
 
 module.exports = router;

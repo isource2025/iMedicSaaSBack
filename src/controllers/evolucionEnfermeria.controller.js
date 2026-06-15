@@ -1,4 +1,5 @@
 const evolucionEnfermeriaService = require("../services/evolucionEnfermeria.service");
+const { requireProfesional } = require("../utils/sessionIdentity");
 const { convertirFechaAClarion } = require("../utils/dateUtils");
 
 /**
@@ -128,7 +129,7 @@ const eliminarEvolucion = async (req, res) => {
  */
 const crearEvolucion = async (req, res) => {
     try {
-        const { NumeroVisita, FechaControl, HoraControl, Observaciones, Profesional } = req.body;
+        const { NumeroVisita, FechaControl, HoraControl, Observaciones } = req.body;
 
         // Validaciones
         if (!NumeroVisita) {
@@ -158,6 +159,9 @@ const crearEvolucion = async (req, res) => {
                 mensaje: "Observaciones es requerida",
             });
         }
+
+        const Profesional = requireProfesional(req, res);
+        if (Profesional == null) return;
 
         const resultado = await evolucionEnfermeriaService.crearEvolucion({
             NumeroVisita,

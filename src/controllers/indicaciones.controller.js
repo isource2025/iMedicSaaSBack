@@ -1,4 +1,5 @@
 const indicacionesService = require("../services/indicaciones.service");
+const { requireOperadorCarga, requireProfesional } = require("../utils/sessionIdentity");
 
 /**
  * Obtener la última indicación por número de visita
@@ -225,6 +226,13 @@ const nuevaIndicacion = async (req, res) => {
                 invalidFields,
             });
         }
+
+        const OperadorCarga = requireOperadorCarga(req, res);
+        if (OperadorCarga == null) return;
+        const ProfesionalAsiste = requireProfesional(req, res);
+        if (ProfesionalAsiste == null) return;
+        data.OperadorCarga = OperadorCarga;
+        data.ProfesionalAsiste = ProfesionalAsiste;
 
         const result = await indicacionesService.nuevaIndicacion(data);
         res.status(201).json({

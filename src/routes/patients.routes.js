@@ -3,14 +3,15 @@ const router = express.Router();
 const patientsController = require('../controllers/patients.controller');
 const multer = require('multer');
 const path = require('path');
+const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// Configuración de almacenamiento para fotos de pacientes
 const storage = multer.diskStorage({
 	destination: function (req, file, cb) {
 		cb(null, path.join(__dirname, '..', '..', 'uploads', 'patient-photos'));
 	},
 	filename: function (req, file, cb) {
-		// nombre ofuscado: timestamp-random + hash parcial original
 		const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9).toString(36);
 		const ext = (path.extname(file.originalname) || '.jpg').toLowerCase();
 		cb(null, uniqueSuffix + ext);
@@ -25,55 +26,50 @@ const upload = multer({
 		}
 		cb(null, true);
 	},
-	limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+	limits: { fileSize: 5 * 1024 * 1024 },
 });
-const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
 
-// IMPORTANTE: El orden de las rutas es crucial
-// Las rutas más específicas deben ir antes que las más generales
+router.use(requireTenant);
 
-// Rutas para movimientos de visita (más específicas)
 router.get(
 	'/visitas/:numeroVisita/movimientos/ultimo',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
 	visitaMovimientosController.obtenerUltimoMovimientoVisita,
 );
 router.put(
 	'/visitas/:numeroVisita/movimientos/ultimo',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.actualizarUltimoMovimientoVisita,
 );
 router.get(
 	'/visitas/:numeroVisita/movimientos',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
 	visitaMovimientosController.obtenerMovimientosVisita,
 );
-
-// Ruta para mover un paciente a una nueva cama
 router.put(
 	'/visitas/:numeroVisita/mover-cama',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.moverPacienteACamaVacia,
 );
-
-// Ruta para intercambiar camas entre dos pacientes
 router.put(
 	'/visitas/:numeroVisita1/intercambiar-cama/:numeroVisita2',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.intercambiarCamasPacientes,
 );
+router.post(
+	'/visitas/egreso',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	patientsController.registrarEgresoPaciente,
+);
 
-// Ruta para registrar egreso (específica)
-router.post('/visitas/egreso', patientsController.registrarEgresoPaciente);
-
-// Ruta para obtener visita por número (más general)
-router.get('/visitas/:numeroVisita', patientsController.obtenerVisitaPorNumero);
-
-// Rutas generales de pacientes
-router.get('/', patientsController.obtenerPacientes);
-router.get('/search', patientsController.buscarPacientes);
-
-// Obtiene las tablas de referencia (sexo, raza, provincia, etc.)
-router.get('/reference-tables', patientsController.obtenerTablasReferencia);
-router.get('/catalogo-laboral', patientsController.obtenerCatalogosLaborales);
-router.get('/:id', patientsController.obtenerPacientePorId);
-router.post('/', upload.single('Foto'), patientsController.crearPaciente);
-router.put('/:id', upload.single('Foto'), patientsController.actualizarPaciente);
-router.delete('/:id', patientsController.eliminarPaciente);
+router.get('/visitas/:numeroVisita', requirePermiso('ADMISION.VIGENTES.VER'), patientsController.obtenerVisitaPorNumero);
+router.get('/', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerPacientes);
+router.get('/search', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.buscarPacientes);
+router.get('/reference-tables', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerTablasReferencia);
+router.get('/catalogo-laboral', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerCatalogosLaborales);
+router.get('/:id', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerPacientePorId);
+router.post('/', requirePermiso('ADMISION.PACIENTES.CREAR'), upload.single('Foto'), patientsController.crearPaciente);
+router.put('/:id', requirePermiso('ADMISION.PACIENTES.EDITAR'), upload.single('Foto'), patientsController.actualizarPaciente);
+router.delete('/:id', requirePermiso('ADMISION.PACIENTES.ELIMINAR'), patientsController.eliminarPaciente);
 
 module.exports = router;

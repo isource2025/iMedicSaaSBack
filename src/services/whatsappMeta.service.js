@@ -53,7 +53,12 @@ function isMetaUserAgent(req) {
 }
 
 /** Railway/proxy a veces altera bytes; Graph API OK + UA Meta → confiar si está habilitado. */
+function isDevBypassAllowed() {
+	return process.env.NODE_ENV !== 'production';
+}
+
 function shouldTrustMetaWithoutSignature(req) {
+	if (!isDevBypassAllowed()) return false;
 	if (process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === '1') return true;
 	if (
 		process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '1' &&
@@ -113,7 +118,12 @@ function normalizarTelefonoWa(to) {
 function verificarFirmaWebhook(req) {
 	const secret = getAppSecret();
 	if (!secret) {
-		diag.warn('webhook', 'META_APP_SECRET no configurado — firma omitida');
+		if (!isDevBypassAllowed()) {
+			const err = new Error('META_APP_SECRET requerido en producción');
+			err.statusCode = 503;
+			throw err;
+		}
+		diag.warn('webhook', 'META_APP_SECRET no configurado — firma omitida (dev)');
 		return true;
 	}
 
@@ -127,7 +137,12 @@ function verificarFirmaWebhook(req) {
 
 	const raw = req.rawBody;
 	if (!raw) {
-		diag.warn('webhook', 'rawBody no disponible — firma NO validada (riesgo)', {
+		if (!isDevBypassAllowed()) {
+			const err = new Error('rawBody requerido para validar firma del webhook');
+			err.statusCode = 400;
+			throw err;
+		}
+		diag.warn('webhook', 'rawBody no disponible — firma NO validada (dev)', {
 			contentType: req.headers['content-type'],
 			contentLength: req.headers['content-length'],
 			contentEncoding: req.headers['content-encoding'] || '(none)',

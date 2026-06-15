@@ -1,4 +1,5 @@
 const https = require('https');
+const { getTenantId } = require('../context/tenantContext');
 
 const RENAPER_BASE = 'https://federador.msal.gob.ar/masterfile-federacion-service';
 const LOGIN_URL = `${RENAPER_BASE}/api/usuarios/aplicacion/login`;
@@ -319,7 +320,13 @@ const renaperService = {
 async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 	const base = String(process.env.RENAPER_PROXY_BASE_URL || '').replace(/\/$/, '');
 	const key = String(process.env.RENAPER_PROXY_API_KEY || process.env.BOT_API_KEY || '').trim();
-	const idEmpresa = String(process.env.BOT_EMPRESA_ID || process.env.WHATSAPP_EMPRESA_ID || '1').trim();
+	const tenantId = getTenantId();
+	const idEmpresa = String(
+		tenantId ||
+			process.env.BOT_EMPRESA_ID ||
+			process.env.WHATSAPP_EMPRESA_ID ||
+			'1',
+	).trim();
 	const timeoutMs = Number(opts.timeoutMs) || 25000;
 	const url = `${base}/renaper/${encodeURIComponent(String(NumeroDocumento).trim())}`;
 

@@ -1,4 +1,5 @@
 const signosVitalesService = require('../services/signosVitales.service');
+const { requireOperadorCarga, requireProfesional } = require('../utils/sessionIdentity');
 
 /**
  * Controlador para Signos Vitales
@@ -16,8 +17,6 @@ const guardarSignosVitales = async (req, res) => {
       IdHCIngreso,
       medibles,
       antropometricos,
-      OperadorCarga,
-      Profesional,
       IdSector
     } = req.body;
     
@@ -29,12 +28,10 @@ const guardarSignosVitales = async (req, res) => {
       });
     }
     
-    if (!OperadorCarga || !Profesional) {
-      return res.status(400).json({
-        success: false,
-        mensaje: 'OperadorCarga y Profesional son requeridos'
-      });
-    }
+    const OperadorCarga = requireOperadorCarga(req, res);
+    if (OperadorCarga == null) return;
+    const Profesional = requireProfesional(req, res);
+    if (Profesional == null) return;
     
     // Validar que haya al menos algún dato para guardar
     const tieneMedibles = medibles && Object.keys(medibles).some(k => medibles[k] !== null && medibles[k] !== undefined);

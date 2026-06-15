@@ -1,23 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const signosVitalesController = require('../controllers/signosVitales.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-/**
- * Rutas para Signos Vitales
- * Integración entre Historia Clínica y Controles de Enfermería
- */
+router.use(requireTenant);
 
-/**
- * POST /api/signos-vitales
- * Guarda signos vitales con doble guardado automático
- * Body: { NumeroVisita, IdHCIngreso?, medibles, antropometricos, OperadorCarga, Profesional, IdSector? }
- */
-router.post('/', signosVitalesController.guardarSignosVitales);
-
-/**
- * GET /api/signos-vitales/:idHCIngreso
- * Obtiene signos vitales completos (HC + Control asociado)
- */
-router.get('/:idHCIngreso', signosVitalesController.obtenerSignosVitales);
+router.post('/', requirePermiso('INTERNACION.SIGNOS_VITALES.CREAR'), signosVitalesController.guardarSignosVitales);
+router.get(
+	'/:idHCIngreso',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.VER'),
+	signosVitalesController.obtenerSignosVitales,
+);
 
 module.exports = router;

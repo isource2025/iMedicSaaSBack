@@ -1,26 +1,19 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const hcIngresoController = require("../controllers/hcIngreso.controller");
-const { requireAuth, requireAuthPlatform } = require("../middlewares/authJwt.middleware");
-const { isAuthCentralEnabled } = require("../config/authCentralDb");
+const hcIngresoController = require('../controllers/hcIngreso.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-/** Render legacy: BD plataforma. Railway: tenant por idEmpresa en JWT. */
-const authHcWrite = (req, res, next) =>
-	isAuthCentralEnabled() ? requireAuth(req, res, next) : requireAuthPlatform(req, res, next);
+router.use(requireTenant);
 
-// Obtener HC de Ingreso por visita
-router.get("/visita/:numeroVisita", hcIngresoController.obtenerHCIngresoPorVisita);
-
-// Obtener HC de Ingreso por ID
-router.get("/:id", hcIngresoController.obtenerHCIngresoPorId);
-
-// Crear nueva HC de Ingreso
-router.post("/", authHcWrite, hcIngresoController.crearHCIngreso);
-
-// Actualizar HC de Ingreso
-router.put("/:id", authHcWrite, hcIngresoController.actualizarHCIngreso);
-
-// Eliminar HC de Ingreso
-router.delete("/:id", hcIngresoController.eliminarHCIngreso);
+router.get(
+	'/visita/:numeroVisita',
+	requirePermiso('INTERNACION.HISTORIA_CLINICA.VER'),
+	hcIngresoController.obtenerHCIngresoPorVisita,
+);
+router.get('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.VER'), hcIngresoController.obtenerHCIngresoPorId);
+router.post('/', requirePermiso('INTERNACION.HISTORIA_CLINICA.CREAR'), hcIngresoController.crearHCIngreso);
+router.put('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.EDITAR'), hcIngresoController.actualizarHCIngreso);
+router.delete('/:id', requirePermiso('INTERNACION.HISTORIA_CLINICA.ELIMINAR'), hcIngresoController.eliminarHCIngreso);
 
 module.exports = router;

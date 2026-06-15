@@ -2,15 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const ctrl = require('../controllers/botAdmin.controller');
 const convCtrl = require('../controllers/botConversacionAdmin.controller');
 
-router.use(requireAuth);
+router.use(requireAuth, requireTenant);
 
 router.get('/config', requirePermiso('TURNOS.ADMIN.VER'), ctrl.obtenerConfigAdmin);
-router.patch('/config', requirePermiso('TURNOS.ADMIN.VER'), ctrl.guardarConfigAdmin);
+router.patch('/config', requirePermiso('TURNOS.ADMIN.EDITAR'), ctrl.guardarConfigAdmin);
 router.get('/whatsapp', requirePermiso('TURNOS.ADMIN.VER'), ctrl.obtenerWhatsappConfig);
-router.patch('/whatsapp', requirePermiso('TURNOS.ADMIN.VER'), ctrl.guardarWhatsappConfig);
+router.patch('/whatsapp', requirePermiso('TURNOS.ADMIN.GESTIONAR'), ctrl.guardarWhatsappConfig);
 router.get('/logs', requirePermiso('TURNOS.ADMIN.VER'), ctrl.listarLogs);
 
 router.get('/conversaciones/estado-almacen', requirePermiso('TURNOS.AGENDA.VER'), convCtrl.estadoAlmacenamiento);

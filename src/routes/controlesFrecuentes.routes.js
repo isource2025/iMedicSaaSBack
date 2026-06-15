@@ -1,29 +1,26 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const controlesFrecuentesController = require("../controllers/controlesFrecuentes.controller");
+const controlesFrecuentesController = require('../controllers/controlesFrecuentes.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// Obtener controles frecuentes por número de visita y fecha (?fecha=YYYY-MM-DD)
+router.use(requireTenant);
+
 router.get(
-    "/:numeroVisita/byDate",
-    controlesFrecuentesController.obtenerControlesPorVisitaYFecha
+	'/:numeroVisita/byDate',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.VER'),
+	controlesFrecuentesController.obtenerControlesPorVisitaYFecha,
 );
-
-// Obtener un control frecuente por ID
 router.get(
-    "/detalle/:valor",
-    controlesFrecuentesController.obtenerControlPorId
+	'/detalle/:valor',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.VER'),
+	controlesFrecuentesController.obtenerControlPorId,
 );
-
-// Crear un nuevo control frecuente
-router.post(
-    "/",
-    controlesFrecuentesController.crearControl
-);
-
-// Eliminar un control frecuente por ID
+router.post('/', requirePermiso('INTERNACION.SIGNOS_VITALES.CREAR'), controlesFrecuentesController.crearControl);
 router.delete(
-    "/:valor",
-    controlesFrecuentesController.eliminarControl
+	'/:valor',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.ELIMINAR'),
+	controlesFrecuentesController.eliminarControl,
 );
 
 module.exports = router;

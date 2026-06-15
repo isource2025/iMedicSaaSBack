@@ -1,10 +1,13 @@
 const { executePlatformQuery: executeQuery } = require('../models/db');
+const tenantDb = require('../models/db');
+const { runWithTenant } = require('../context/tenantContext');
 const tenantRegistry = require('./tenantRegistry.service');
 const { testTenantConnection } = require('../config/tenantDb');
 const usersService = require('./users.service');
 const rolesService = require('./roles.service');
 const sectoresService = require('./sectores.service');
 const authCentralService = require('./authCentral.service');
+const authCentralSync = require('./authCentralSync.service');
 const {
 	PACKS_PRINCIPALES,
 	MODULOS_GENERALES,
@@ -383,7 +386,7 @@ async function upsertOnboarding(idEmpresa, data) {
 
 /** Ficha mínima en imPersonal (mismo Valor que imPassword.ValorPersonal) para rol y permisos. */
 async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroDocumento }) {
-	const rows = await executeQuery(`SELECT Valor FROM dbo.imPersonal WHERE Valor = @p0`, [
+	const rows = await tenantDb.executeQuery(`SELECT Valor FROM dbo.imPersonal WHERE Valor = @p0`, [
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (rows.length) return;
@@ -398,7 +401,7 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
 			: null;
 	const matricula = Number.isFinite(num) && num > 0 ? num : valorPersonal;
 
-	await executeQuery(
+	await tenantDb.executeQuery(
 		`
     INSERT INTO dbo.imPersonal (
       Valor, Matricula, MatriculaNacional, TipoDocumento, Numero,
@@ -429,127 +432,137 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
 async function crearUsuarioEmpresa(idEmpresa, body) {
-	const {
-		nombreRed,
-		password,
-		apellido,
-		nombres,
-		numeroDocumento,
-		legajo,
-		codOperador,
-		idRol,
-		sectores,
-	} = body;
+	return runWithTenant(idEmpresa, async () => {
+		const {
+			nombreRed,
+			password,
+			apellido,
+			nombres,
+			numeroDocumento,
+			legajo,
+			codOperador,
+			idRol,
+			sectores,
+		} = body;
 
-	if (!nombreRed?.trim() || !password?.trim()) {
-		const e = new Error('Usuario de red y contraseña son obligatorios');
-		e.statusCode = 400;
-		throw e;
-	}
-	if (!apellido?.trim() || !nombres?.trim()) {
-		const e = new Error('Apellido y nombres son obligatorios');
-		e.statusCode = 400;
-		throw e;
-	}
-
-	const usuario = await usersService.crearUsuario({
-		codOperador: codOperador || '',
-		apellido: apellido.trim(),
-		nombres: nombres.trim(),
-		nombreRed: nombreRed.trim(),
-		password: password.trim(),
-		numeroDocumento: numeroDocumento || '',
-		legajo: legajo || '',
-	});
-
-	const valorPersonal = Number(usuario.ValorPersonal ?? usuario.valorPersonal);
-	if (!Number.isFinite(valorPersonal)) {
-		const e = new Error('No se pudo obtener el ID del usuario creado');
-		e.statusCode = 500;
-		throw e;
-	}
-
-	await asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroDocumento });
-
-	if (idRol != null && idRol !== '') {
-		await rolesService.asignarRolAPersonal(valorPersonal, Number(idRol));
-	}
-
-	await vincularUsuarioEmpresa(idEmpresa, valorPersonal);
-
-	const sectoresAsignar =
-		Array.isArray(sectores) && sectores.length
-			? sectores
-			: (await obtenerOnboardingEmpresa(idEmpresa)).sectoresDefecto || [];
-
-	for (const idSector of sectoresAsignar) {
-		try {
-			await usersService.asignarSector(valorPersonal, String(idSector));
-		} catch (err) {
-			if (!String(err.message || '').includes('ya tiene asignado')) throw err;
+		if (!nombreRed?.trim() || !password?.trim()) {
+			const e = new Error('Usuario de red y contraseña son obligatorios');
+			e.statusCode = 400;
+			throw e;
 		}
-	}
+		if (!apellido?.trim() || !nombres?.trim()) {
+			const e = new Error('Apellido y nombres son obligatorios');
+			e.statusCode = 400;
+			throw e;
+		}
 
-	const lista = await listarUsuariosEmpresa(idEmpresa);
-	return lista.find((u) => u.idPersonal === valorPersonal) || lista[lista.length - 1];
-}
-
-async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
-	const vinculo = await executeQuery(
-		`SELECT TOP 1 1 FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @p0 AND IdPersonal = @p1`,
-		[
-			{ value: idEmpresa, type: 'Int' },
-			{ value: idPersonal, type: 'Int' },
-		],
-	);
-	if (!vinculo.length) {
-		const e = new Error('El usuario no está vinculado a esta empresa');
-		e.statusCode = 404;
-		throw e;
-	}
-
-	if (
-		body.apellido != null ||
-		body.nombres != null ||
-		body.nombreRed != null ||
-		body.numeroDocumento != null ||
-		body.codOperador != null ||
-		body.legajo != null
-	) {
-		const actual = await usersService.obtenerUsuarioPorId(idPersonal);
-		await usersService.actualizarUsuario(idPersonal, {
-			codOperador: body.codOperador ?? actual?.CodOperador ?? '',
-			apellido: body.apellido ?? actual?.Apellido ?? '',
-			nombres: body.nombres ?? actual?.Nombres ?? '',
-			nombreRed: body.nombreRed ?? actual?.NombreRed ?? '',
-			numeroDocumento: body.numeroDocumento ?? actual?.NumeroDocumento ?? '',
-			legajo: body.legajo ?? actual?.Legajo ?? '',
+		const usuario = await usersService.crearUsuario({
+			codOperador: codOperador || '',
+			apellido: apellido.trim(),
+			nombres: nombres.trim(),
+			nombreRed: nombreRed.trim(),
+			password: password.trim(),
+			numeroDocumento: numeroDocumento || '',
+			legajo: legajo || '',
 		});
-	}
 
-	if (body.password?.trim()) {
-		await usersService.cambiarPassword(idPersonal, body.password.trim());
-	}
+		const valorPersonal = Number(usuario.ValorPersonal ?? usuario.valorPersonal);
+		if (!Number.isFinite(valorPersonal)) {
+			const e = new Error('No se pudo obtener el ID del usuario creado');
+			e.statusCode = 500;
+			throw e;
+		}
 
-	if (body.idRol != null && body.idRol !== '') {
-		await rolesService.asignarRolAPersonal(idPersonal, Number(body.idRol));
-	}
+		await asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroDocumento });
 
-	if (Array.isArray(body.sectores)) {
-		await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
-			{ value: idPersonal, type: 'Int' },
-		]);
-		for (const idSector of body.sectores) {
+		if (idRol != null && idRol !== '') {
+			await rolesService.asignarRolAPersonal(valorPersonal, Number(idRol));
+			await authCentralSync.syncPersonal(valorPersonal);
+		}
+
+		await vincularUsuarioEmpresa(idEmpresa, valorPersonal);
+
+		const sectoresAsignar =
+			Array.isArray(sectores) && sectores.length
+				? sectores
+				: (await obtenerOnboardingEmpresa(idEmpresa)).sectoresDefecto || [];
+
+		for (const idSector of sectoresAsignar) {
 			try {
-				await usersService.asignarSector(idPersonal, String(idSector));
+				await usersService.asignarSector(valorPersonal, String(idSector));
 			} catch (err) {
 				if (!String(err.message || '').includes('ya tiene asignado')) throw err;
 			}
 		}
-	}
 
-	const lista = await listarUsuariosEmpresa(idEmpresa);
-	return lista.find((u) => u.idPersonal === idPersonal) || null;
+		await authCentralSync.syncUserLoginBundle(idEmpresa, valorPersonal);
+
+		const lista = await listarUsuariosEmpresa(idEmpresa);
+		return lista.find((u) => u.idPersonal === valorPersonal) || lista[lista.length - 1];
+	});
+}
+
+async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
+	return runWithTenant(idEmpresa, async () => {
+		const vinculo = await tenantDb.executeQuery(
+			`SELECT TOP 1 1 FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @p0 AND IdPersonal = @p1`,
+			[
+				{ value: idEmpresa, type: 'Int' },
+				{ value: idPersonal, type: 'Int' },
+			],
+		);
+		if (!vinculo.length) {
+			const e = new Error('El usuario no está vinculado a esta empresa');
+			e.statusCode = 404;
+			throw e;
+		}
+
+		if (
+			body.apellido != null ||
+			body.nombres != null ||
+			body.nombreRed != null ||
+			body.numeroDocumento != null ||
+			body.codOperador != null ||
+			body.legajo != null
+		) {
+			const actual = await usersService.obtenerUsuarioPorId(idPersonal);
+			await usersService.actualizarUsuario(idPersonal, {
+				codOperador: body.codOperador ?? actual?.CodOperador ?? '',
+				apellido: body.apellido ?? actual?.Apellido ?? '',
+				nombres: body.nombres ?? actual?.Nombres ?? '',
+				nombreRed: body.nombreRed ?? actual?.NombreRed ?? '',
+				numeroDocumento: body.numeroDocumento ?? actual?.NumeroDocumento ?? '',
+				legajo: body.legajo ?? actual?.Legajo ?? '',
+			});
+		}
+
+		if (body.password?.trim()) {
+			await usersService.cambiarPassword(idPersonal, body.password.trim());
+		}
+
+		if (body.idRol != null && body.idRol !== '') {
+			await rolesService.asignarRolAPersonal(idPersonal, Number(body.idRol));
+			await authCentralSync.syncPersonal(idPersonal);
+		}
+
+		if (Array.isArray(body.sectores)) {
+			await tenantDb.executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
+				{ value: idPersonal, type: 'Int' },
+			]);
+			for (const idSector of body.sectores) {
+				try {
+					await usersService.asignarSector(idPersonal, String(idSector));
+				} catch (err) {
+					if (!String(err.message || '').includes('ya tiene asignado')) throw err;
+				}
+			}
+		}
+
+		await authCentralSync.syncUserLoginBundle(idEmpresa, idPersonal);
+
+		const lista = await listarUsuariosEmpresa(idEmpresa);
+		return lista.find((u) => u.idPersonal === idPersonal) || null;
+	});
 }
 
 async function eliminarEmpresa(idEmpresa) {
@@ -585,97 +598,127 @@ async function eliminarEmpresa(idEmpresa) {
 }
 
 async function crearSector(data) {
-	const valor = String(data.valor || '')
-		.trim()
-		.toUpperCase()
-		.slice(0, 3);
-	const descripcion = String(data.descripcion || '').trim();
-	if (!valor || valor.length < 2) {
-		const e = new Error('El código del sector es obligatorio (2-3 caracteres)');
-		e.statusCode = 400;
-		throw e;
-	}
-	if (!descripcion) {
-		const e = new Error('La descripción del sector es obligatoria');
+	const idEmpresa = Number(data.idEmpresa);
+	if (!Number.isFinite(idEmpresa) || idEmpresa <= 0) {
+		const e = new Error('idEmpresa es obligatorio para crear sectores en el tenant');
 		e.statusCode = 400;
 		throw e;
 	}
 
-	const dup = await executeQuery(`SELECT TOP 1 Valor FROM dbo.imSectores WHERE Valor = @p0`, [
-		{ value: valor, type: 'VarChar' },
-	]);
-	if (dup.length) {
-		const e = new Error('Ya existe un sector con ese código');
-		e.statusCode = 409;
-		throw e;
-	}
+	return runWithTenant(idEmpresa, async () => {
+		const valor = String(data.valor || '')
+			.trim()
+			.toUpperCase()
+			.slice(0, 3);
+		const descripcion = String(data.descripcion || '').trim();
+		if (!valor || valor.length < 2) {
+			const e = new Error('El código del sector es obligatorio (2-3 caracteres)');
+			e.statusCode = 400;
+			throw e;
+		}
+		if (!descripcion) {
+			const e = new Error('La descripción del sector es obligatoria');
+			e.statusCode = 400;
+			throw e;
+		}
 
-	const ambInt = String(data.ambInt || 'A').trim().slice(0, 1) || 'A';
-	const valorServicio = `${valor} `.slice(0, 4);
+		const dup = await tenantDb.executeQuery(`SELECT TOP 1 Valor FROM dbo.imSectores WHERE Valor = @p0`, [
+			{ value: valor, type: 'VarChar' },
+		]);
+		if (dup.length) {
+			const e = new Error('Ya existe un sector con ese código');
+			e.statusCode = 409;
+			throw e;
+		}
 
-	await executeQuery(
-		`
+		const ambInt = String(data.ambInt || 'A').trim().slice(0, 1) || 'A';
+		const valorServicio = `${valor} `.slice(0, 4);
+
+		await tenantDb.executeQuery(
+			`
     INSERT INTO dbo.imSectores (Valor, ValorServicio, Descripcion, ProtocoloN, AmbInt)
     VALUES (@p0, @p1, @p2, 0, @p3)
     `,
-		[
-			{ value: valor, type: 'VarChar' },
-			{ value: valorServicio, type: 'VarChar' },
-			{ value: descripcion, type: 'VarChar' },
-			{ value: ambInt, type: 'Char' },
-		],
-	);
-
-	return { id: valor, descripcion, ambInt };
-}
-
-async function actualizarSector(valor, data) {
-	const id = String(valor || '').trim().toUpperCase();
-	const descripcion = String(data.descripcion || '').trim();
-	if (!descripcion) {
-		const e = new Error('La descripción es obligatoria');
-		e.statusCode = 400;
-		throw e;
-	}
-
-	const ambInt =
-		data.ambInt != null ? String(data.ambInt).trim().slice(0, 1) || 'A' : undefined;
-
-	if (ambInt) {
-		await executeQuery(
-			`UPDATE dbo.imSectores SET Descripcion = @p1, AmbInt = @p2 WHERE Valor = @p0`,
 			[
-				{ value: id, type: 'VarChar' },
+				{ value: valor, type: 'VarChar' },
+				{ value: valorServicio, type: 'VarChar' },
 				{ value: descripcion, type: 'VarChar' },
 				{ value: ambInt, type: 'Char' },
 			],
 		);
-	} else {
-		await executeQuery(`UPDATE dbo.imSectores SET Descripcion = @p1 WHERE Valor = @p0`, [
-			{ value: id, type: 'VarChar' },
-			{ value: descripcion, type: 'VarChar' },
-		]);
-	}
 
-	return { id, descripcion, ambInt: ambInt || null };
+		await authCentralSync.syncSector(valor);
+		return { id: valor, descripcion, ambInt };
+	});
 }
 
-async function eliminarSector(valor) {
-	const id = String(valor || '').trim().toUpperCase();
-	const enUso = await executeQuery(
-		`SELECT TOP 1 1 FROM dbo.imPersonalSectores WHERE idSector = @p0`,
-		[{ value: id, type: 'VarChar' }],
-	);
-	if (enUso.length) {
-		const e = new Error('No se puede eliminar: el sector está asignado a personal');
-		e.statusCode = 409;
+async function actualizarSector(valor, data) {
+	const idEmpresa = Number(data.idEmpresa);
+	if (!Number.isFinite(idEmpresa) || idEmpresa <= 0) {
+		const e = new Error('idEmpresa es obligatorio para actualizar sectores del tenant');
+		e.statusCode = 400;
 		throw e;
 	}
 
-	await executeQuery(`DELETE FROM dbo.imSectores WHERE Valor = @p0`, [
-		{ value: id, type: 'VarChar' },
-	]);
-	return { ok: true, id };
+	return runWithTenant(idEmpresa, async () => {
+		const id = String(valor || '').trim().toUpperCase();
+		const descripcion = String(data.descripcion || '').trim();
+		if (!descripcion) {
+			const e = new Error('La descripción es obligatoria');
+			e.statusCode = 400;
+			throw e;
+		}
+
+		const ambInt =
+			data.ambInt != null ? String(data.ambInt).trim().slice(0, 1) || 'A' : undefined;
+
+		if (ambInt) {
+			await tenantDb.executeQuery(
+				`UPDATE dbo.imSectores SET Descripcion = @p1, AmbInt = @p2 WHERE Valor = @p0`,
+				[
+					{ value: id, type: 'VarChar' },
+					{ value: descripcion, type: 'VarChar' },
+					{ value: ambInt, type: 'Char' },
+				],
+			);
+		} else {
+			await tenantDb.executeQuery(`UPDATE dbo.imSectores SET Descripcion = @p1 WHERE Valor = @p0`, [
+				{ value: id, type: 'VarChar' },
+				{ value: descripcion, type: 'VarChar' },
+			]);
+		}
+
+		await authCentralSync.syncSector(id);
+		return { id, descripcion, ambInt: ambInt || null };
+	});
+}
+
+async function eliminarSector(valor, idEmpresa) {
+	const tenantId = Number(idEmpresa);
+	if (!Number.isFinite(tenantId) || tenantId <= 0) {
+		const e = new Error('idEmpresa es obligatorio para eliminar sectores del tenant');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	return runWithTenant(tenantId, async () => {
+		const id = String(valor || '').trim().toUpperCase();
+		const enUso = await tenantDb.executeQuery(
+			`SELECT TOP 1 1 FROM dbo.imPersonalSectores WHERE idSector = @p0`,
+			[{ value: id, type: 'VarChar' }],
+		);
+		if (enUso.length) {
+			const e = new Error('No se puede eliminar: el sector está asignado a personal');
+			e.statusCode = 409;
+			throw e;
+		}
+
+		await tenantDb.executeQuery(`DELETE FROM dbo.imSectores WHERE Valor = @p0`, [
+			{ value: id, type: 'VarChar' },
+		]);
+		await authCentralSync.removeSector(id);
+		return { ok: true, id };
+	});
 }
 
 async function upsertSuscripcion(idEmpresa, data) {
@@ -721,9 +764,10 @@ async function upsertSuscripcion(idEmpresa, data) {
 }
 
 async function listarUsuariosEmpresa(idEmpresa) {
-	try {
-		const rows = await executeQuery(
-			`
+	return runWithTenant(idEmpresa, async () => {
+		try {
+			const rows = await tenantDb.executeQuery(
+				`
       SELECT
         pw.ValorPersonal AS IdPersonal,
         pw.NombreRed AS Usuario,
@@ -741,47 +785,48 @@ async function listarUsuariosEmpresa(idEmpresa) {
       WHERE pe.IdEmpresa = @p0
       ORDER BY pw.Apellido, pw.Nombres
       `,
-			[{ value: idEmpresa, type: 'Int' }],
-		);
+				[{ value: idEmpresa, type: 'Int' }],
+			);
 
-		const usuarios = [];
-		for (const r of rows) {
-			const idPersonal = Number(r.IdPersonal);
-			let sectores = [];
-			try {
-				const secRows = await executeQuery(
-					`
+			const usuarios = [];
+			for (const r of rows) {
+				const idPersonal = Number(r.IdPersonal);
+				let sectores = [];
+				try {
+					const secRows = await tenantDb.executeQuery(
+						`
           SELECT ps.idSector AS idSector, s.Descripcion AS descripcion
           FROM dbo.imPersonalSectores ps
           LEFT JOIN dbo.imSectores s ON s.Valor = ps.idSector
           WHERE ps.idPersonal = @p0
           `,
-					[{ value: idPersonal, type: 'Int' }],
-				);
-				sectores = (secRows || []).map((s) => ({
-					id: String(s.idSector || ''),
-					descripcion: String(s.descripcion || s.idSector || ''),
-				}));
-			} catch {
-				sectores = [];
+						[{ value: idPersonal, type: 'Int' }],
+					);
+					sectores = (secRows || []).map((s) => ({
+						id: String(s.idSector || ''),
+						descripcion: String(s.descripcion || s.idSector || ''),
+					}));
+				} catch {
+					sectores = [];
+				}
+				usuarios.push({
+					idPersonal,
+					usuario: String(r.Usuario || '').trim(),
+					nombre: String(r.Nombre || '').trim(),
+					apellido: String(r.Apellido || '').trim(),
+					numeroDocumento: String(r.NumeroDocumento || '').trim(),
+					codOperador: r.CodOperador,
+					idRol: r.IdRol != null ? Number(r.IdRol) : null,
+					rol: r.RolNombre || null,
+					activo: r.EstadoPersonal == null || Number(r.EstadoPersonal) === 1,
+					sectores,
+				});
 			}
-			usuarios.push({
-				idPersonal,
-				usuario: String(r.Usuario || '').trim(),
-				nombre: String(r.Nombre || '').trim(),
-				apellido: String(r.Apellido || '').trim(),
-				numeroDocumento: String(r.NumeroDocumento || '').trim(),
-				codOperador: r.CodOperador,
-				idRol: r.IdRol != null ? Number(r.IdRol) : null,
-				rol: r.RolNombre || null,
-				activo: r.EstadoPersonal == null || Number(r.EstadoPersonal) === 1,
-				sectores,
-			});
+			return usuarios;
+		} catch {
+			return [];
 		}
-		return usuarios;
-	} catch {
-		return [];
-	}
+	});
 }
 
 async function listarTodosUsuarios(filtro = '') {
@@ -850,28 +895,34 @@ async function listarTodosUsuarios(filtro = '') {
 }
 
 async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	await executeQuery(
-		`
+	return runWithTenant(idEmpresa, async () => {
+		await tenantDb.executeQuery(
+			`
     IF NOT EXISTS (SELECT 1 FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1)
       INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa) VALUES (@p0, @p1)
     `,
-		[
-			{ value: idPersonal, type: 'Int' },
-			{ value: idEmpresa, type: 'Int' },
-		],
-	);
-	return listarUsuariosEmpresa(idEmpresa);
+			[
+				{ value: idPersonal, type: 'Int' },
+				{ value: idEmpresa, type: 'Int' },
+			],
+		);
+		await authCentralSync.syncPersonalEmpresa(idEmpresa, idPersonal);
+		return listarUsuariosEmpresa(idEmpresa);
+	});
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	await executeQuery(
-		`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
-		[
-			{ value: idPersonal, type: 'Int' },
-			{ value: idEmpresa, type: 'Int' },
-		],
-	);
-	return listarUsuariosEmpresa(idEmpresa);
+	return runWithTenant(idEmpresa, async () => {
+		await tenantDb.executeQuery(
+			`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
+			[
+				{ value: idPersonal, type: 'Int' },
+				{ value: idEmpresa, type: 'Int' },
+			],
+		);
+		await authCentralSync.removePersonalEmpresa(idEmpresa, idPersonal);
+		return listarUsuariosEmpresa(idEmpresa);
+	});
 }
 
 async function obtenerDashboard() {
@@ -901,30 +952,41 @@ async function obtenerDashboard() {
 }
 
 async function obtenerCatalogos() {
-	const [sectores, roles] = await Promise.all([
-		sectoresService.obtenerSectores().catch(() => []),
-		rolesService.listarRoles().catch(() => []),
-	]);
 	return {
 		packs: PACKS_PRINCIPALES,
 		modulosGenerales: MODULOS_GENERALES,
 		pasosOnboarding: PASOS_ONBOARDING,
 		planes: PLANES,
 		estadosSuscripcion: ESTADOS_SUSCRIPCION,
-		sectores: (sectores || []).map((s) => ({
-			id: String(s.IdSector ?? s.idSector ?? ''),
-			descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
-			ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
-		})),
-		roles: (roles || [])
-			.filter((r) => r.Nombre !== 'SUPER_ADMIN')
-			.map((r) => ({
-				idRol: r.IdRol,
-				nombre: r.Nombre,
-				descripcion: r.Descripcion,
-				nivel: r.Nivel,
-			})),
+		sectores: [],
+		roles: [],
 	};
+}
+
+async function obtenerCatalogosTenant(idEmpresa) {
+	const base = await obtenerCatalogos();
+	return runWithTenant(idEmpresa, async () => {
+		const [sectores, roles] = await Promise.all([
+			sectoresService.obtenerSectores().catch(() => []),
+			rolesService.listarRoles().catch(() => []),
+		]);
+		return {
+			...base,
+			sectores: (sectores || []).map((s) => ({
+				id: String(s.IdSector ?? s.idSector ?? ''),
+				descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
+				ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
+			})),
+			roles: (roles || [])
+				.filter((r) => r.Nombre !== 'SUPER_ADMIN')
+				.map((r) => ({
+					idRol: r.IdRol,
+					nombre: r.Nombre,
+					descripcion: r.Descripcion,
+					nivel: r.Nivel,
+				})),
+		};
+	});
 }
 
 async function obtenerModulosEmpresaActiva(idEmpresa) {
@@ -989,6 +1051,7 @@ module.exports = {
 	eliminarSector,
 	obtenerDashboard,
 	obtenerCatalogos,
+	obtenerCatalogosTenant,
 	obtenerModulosEmpresaActiva,
 	listarConfigPlataforma,
 	guardarConfigPlataforma,

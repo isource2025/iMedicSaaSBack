@@ -211,11 +211,23 @@ async function actualizarTriage(idTurno, { idClasificacionTriage, observaciones 
 	return obtenerRac(id);
 }
 
+async function assertAlcanceTurno(idTurno, req) {
+	const turno = await _obtenerTurno(_validarIdTurno(idTurno));
+	const rol = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
+	if (rol === 'MEDICO' && req.matricula != null && Number(turno.profesional) !== Number(req.matricula)) {
+		const e = new Error('Sólo podés acceder al RAC de turnos de tu agenda');
+		e.statusCode = 403;
+		throw e;
+	}
+	return turno;
+}
+
 module.exports = {
 	obtenerRac,
 	crearControlTurno,
 	crearMedicacionTurno,
 	actualizarTriage,
+	assertAlcanceTurno,
 	eliminarControl: controlesService.eliminarControl,
 	eliminarMedicacion: medicacionService.eliminarMedicacion,
 };

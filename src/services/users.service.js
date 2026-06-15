@@ -1,20 +1,44 @@
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
+const authCentralSync = require('./authCentralSync.service');
 
-/** @type {string|null} 'int' | otros — cache por proceso */
-let cachedFechaActualTipo = null;
+/** Cache de esquema imPassword por tenant (evita mezclar metadatos entre BDs). */
+const schemaCacheByTenant = new Map();
 
-/** @type {boolean|null} ValorPersonal es IDENTITY (no se puede insertar manual) */
-let cachedValorPersonalIsIdentity = null;
+function tenantCacheKey() {
+  const id = getTenantId();
+  return id != null && Number.isFinite(Number(id)) && Number(id) > 0 ? String(id) : 'platform';
+}
 
-/** @type {boolean|null} CodOperador es IDENTITY (muy frecuente en Clarion; no incluir en INSERT) */
-let cachedCodOperadorIsIdentity = null;
+function getTenantSchemaCache() {
+  const key = tenantCacheKey();
+  if (!schemaCacheByTenant.has(key)) {
+    schemaCacheByTenant.set(key, {
+      fechaActualTipo: null,
+      valorPersonalIsIdentity: null,
+      codOperadorIsIdentity: null,
+    });
+  }
+  return schemaCacheByTenant.get(key);
+}
+
+async function afterUserMutation(valorPersonal) {
+  const idEmpresa = getTenantId();
+  if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+    await authCentralSync.syncUserLoginBundle(Number(idEmpresa), valorPersonal);
+    return;
+  }
+  await authCentralSync.syncPassword(valorPersonal);
+  await authCentralSync.syncPersonalSectores(valorPersonal);
+}
 
 /**
  * imPassword.FechaActual es int (días Clarion) en muchas bases legacy; en otras es datetime.
  */
 async function getImPasswordFechaActualTipo() {
-  if (cachedFechaActualTipo) return cachedFechaActualTipo;
+  const cache = getTenantSchemaCache();
+  if (cache.fechaActualTipo) return cache.fechaActualTipo;
   try {
     const rows = await executeQuery(`
       SELECT DATA_TYPE
@@ -22,11 +46,11 @@ async function getImPasswordFechaActualTipo() {
       WHERE UPPER(TABLE_NAME) = 'IMPASSWORD' AND UPPER(COLUMN_NAME) = 'FECHAACTUAL'
     `);
     const t = (rows[0]?.DATA_TYPE || 'datetime').toLowerCase();
-    cachedFechaActualTipo = ['int', 'smallint', 'bigint', 'tinyint'].includes(t) ? 'int' : t;
+    cache.fechaActualTipo = ['int', 'smallint', 'bigint', 'tinyint'].includes(t) ? 'int' : t;
   } catch {
-    cachedFechaActualTipo = 'datetime';
+    cache.fechaActualTipo = 'datetime';
   }
-  return cachedFechaActualTipo;
+  return cache.fechaActualTipo;
 }
 
 function readFirstIntCell(row) {
@@ -43,7 +67,8 @@ function readFirstIntCell(row) {
  * COLUMNPROPERTY suele funcionar aunque sys.identity_columns no devuelva filas (sinónimos, permisos).
  */
 async function getImPasswordValorPersonalIsIdentity() {
-  if (cachedValorPersonalIsIdentity !== null) return cachedValorPersonalIsIdentity;
+  const cache = getTenantSchemaCache();
+  if (cache.valorPersonalIsIdentity !== null) return cache.valorPersonalIsIdentity;
   try {
     let rows = await executeQuery(`
       SELECT TOP 1 COLUMNPROPERTY(t.object_id, N'ValorPersonal', N'IsIdentity') AS IsId
@@ -54,11 +79,11 @@ async function getImPasswordValorPersonalIsIdentity() {
     `);
     let id = readFirstIntCell(rows[0]);
     if (id === 1) {
-      cachedValorPersonalIsIdentity = true;
+      cache.valorPersonalIsIdentity = true;
       return true;
     }
     if (id === 0) {
-      cachedValorPersonalIsIdentity = false;
+      cache.valorPersonalIsIdentity = false;
       return false;
     }
     rows = await executeQuery(`
@@ -70,18 +95,19 @@ async function getImPasswordValorPersonalIsIdentity() {
     `);
     id = readFirstIntCell(rows[0]);
     if (id === 1) {
-      cachedValorPersonalIsIdentity = true;
+      cache.valorPersonalIsIdentity = true;
       return true;
     }
   } catch {
     /* seguir */
   }
-  cachedValorPersonalIsIdentity = false;
+  cache.valorPersonalIsIdentity = false;
   return false;
 }
 
 async function getImPasswordCodOperadorIsIdentity() {
-  if (cachedCodOperadorIsIdentity !== null) return cachedCodOperadorIsIdentity;
+  const cache = getTenantSchemaCache();
+  if (cache.codOperadorIsIdentity !== null) return cache.codOperadorIsIdentity;
   try {
     let rows = await executeQuery(`
       SELECT TOP 1 COLUMNPROPERTY(t.object_id, N'CodOperador', N'IsIdentity') AS IsId
@@ -92,11 +118,11 @@ async function getImPasswordCodOperadorIsIdentity() {
     `);
     let id = readFirstIntCell(rows[0]);
     if (id === 1) {
-      cachedCodOperadorIsIdentity = true;
+      cache.codOperadorIsIdentity = true;
       return true;
     }
     if (id === 0) {
-      cachedCodOperadorIsIdentity = false;
+      cache.codOperadorIsIdentity = false;
       return false;
     }
     rows = await executeQuery(`
@@ -108,13 +134,13 @@ async function getImPasswordCodOperadorIsIdentity() {
     `);
     id = readFirstIntCell(rows[0]);
     if (id === 1) {
-      cachedCodOperadorIsIdentity = true;
+      cache.codOperadorIsIdentity = true;
       return true;
     }
   } catch {
     /* seguir */
   }
-  cachedCodOperadorIsIdentity = false;
+  cache.codOperadorIsIdentity = false;
   return false;
 }
 
@@ -443,7 +469,7 @@ const crearUsuario = async (userData) => {
       } catch (err) {
         if (!isSqlIdentityInsertError(err)) throw err;
         if (!omitCodOperador) {
-          cachedCodOperadorIsIdentity = true;
+          getTenantSchemaCache().codOperadorIsIdentity = true;
           nuevoValorPersonal = await insertImPasswordManualId(
             fechaTipo,
             true,
@@ -452,11 +478,17 @@ const crearUsuario = async (userData) => {
             fechaClarionHoy
           );
         } else {
-          cachedValorPersonalIsIdentity = true;
+          getTenantSchemaCache().valorPersonalIsIdentity = true;
           nuevoValorPersonal = await insertImPasswordConIdentity(fechaTipo, baseParamsSinCod, fechaClarionHoy);
         }
       }
     }
+
+    const idEmpresa = getTenantId();
+    if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+      await authCentralSync.vincularUsuarioEmpresaTenant(Number(idEmpresa), nuevoValorPersonal);
+    }
+    await afterUserMutation(nuevoValorPersonal);
 
     return await obtenerUsuarioPorId(nuevoValorPersonal);
   } catch (error) {
@@ -491,6 +523,7 @@ const cambiarPassword = async (valorPersonal, nuevaPassword) => {
     ];
     
     await executeQuery(consulta, parametros);
+    await afterUserMutation(valorPersonal);
     return true;
   } catch (error) {
     console.error('Error al cambiar contraseña:', error.message);
@@ -532,6 +565,7 @@ const asignarSector = async (valorPersonal, idSector) => {
     ];
     
     await executeQuery(consulta, parametros);
+    await afterUserMutation(valorPersonal);
     return true;
   } catch (error) {
     console.error('Error al asignar sector:', error.message);
@@ -558,6 +592,12 @@ const quitarSector = async (valorPersonal, idSector) => {
     ];
     
     await executeQuery(consulta, parametros);
+    const idEmpresa = getTenantId();
+    if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+      await authCentralSync.removePersonalSector(valorPersonal, idSector);
+    } else {
+      await afterUserMutation(valorPersonal);
+    }
     return true;
   } catch (error) {
     console.error('Error al quitar sector:', error.message);
@@ -598,7 +638,8 @@ const actualizarUsuario = async (valorPersonal, userData) => {
     ];
     
     await executeQuery(consulta, parametros);
-    
+    await afterUserMutation(valorPersonal);
+
     return await obtenerUsuarioPorId(valorPersonal);
   } catch (error) {
     console.error('Error al actualizar usuario:', error.message);

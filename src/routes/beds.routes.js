@@ -1,32 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const bedsController = require('../controllers/beds.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// Obtiene todas las camas
-router.get('/', bedsController.obtenerCamas);
+router.use(requireTenant);
 
-// Obtiene todos los estados de cama de la tabla imEstadoCama
-router.get('/estados', bedsController.obtenerEstadosCama);
-
-// Obtiene todos los sectores de la tabla imSectores
-router.get('/sectores', bedsController.obtenerSectores);
-
-// Obtiene el total de camas y estadísticas
-router.get('/total', bedsController.obtenerTotalCamas);
-
-// Filtra camas por su relación con estados en imestadocama
-router.get('/filtrar/:estado', bedsController.filtrarCamasPorEstado);
-
-// Obtiene los controles frecuentes por número de visita
+router.get('/', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerCamas);
+router.get('/estados', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerEstadosCama);
+router.get('/sectores', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerSectores);
+router.get('/total', requirePermiso('INTERNACION.OCUPACION.VER'), bedsController.obtenerTotalCamas);
+router.get('/filtrar/:estado', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.filtrarCamasPorEstado);
 router.get(
 	'/controles-frecuentes/:numeroVisita',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.VER'),
 	bedsController.obtenerControlesFrecuentesPorVisita,
 );
-
-// Obtiene una cama específica por su ID (DEBE IR AL FINAL)
-router.get('/:id', bedsController.obtenerCamaPorId);
-
-// Actualiza el estado de una cama
-router.put('/:id/status', bedsController.actualizarEstadoCama);
+router.get('/:id', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerCamaPorId);
+router.put('/:id/status', requirePermiso('INTERNACION.CAMAS.GESTIONAR'), bedsController.actualizarEstadoCama);
 
 module.exports = router;

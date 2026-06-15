@@ -1,15 +1,16 @@
 /**
- * Rutas temporales para actualización masiva
+ * Rutas de mantenimiento masivo — solo plataforma en SaaS.
  */
-
 const express = require('express');
 const router = express.Router();
 const actualizacionController = require('../controllers/actualizacion.controller');
+const { requireAuth } = require('../middlewares/authJwt.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// POST /api/actualizacion/ejecutar - Ejecutar actualización masiva
+router.use(requireAuth);
+router.use(requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'));
+
 router.post('/ejecutar', actualizacionController.ejecutarActualizacionMasiva);
-
-// GET /api/actualizacion/frecuencias - Verificar valores de frecuencias
 router.get('/frecuencias', actualizacionController.verificarFrecuencias);
 
 module.exports = router;

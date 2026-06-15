@@ -5,6 +5,11 @@ const webhookDedup = require('./webhookDedup.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const diag = require('../utils/diagLog');
 const { runWithTenant } = require('../context/tenantContext');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
+
+function allowLegacyDefaultEmpresa() {
+	return !isAuthCentralEnabled() || process.env.WHATSAPP_ALLOW_DEFAULT_EMPRESA === '1';
+}
 
 function getVerifyToken() {
 	return String(process.env.WHATSAPP_VERIFY_TOKEN || '').trim();
@@ -266,10 +271,17 @@ async function procesarWebhookEntrante(body) {
 	const empresas = new Set();
 
 	for (const [phoneKey, grupo] of porPhone) {
-		let idEmpresa = getDefaultEmpresaId();
-		let sourceLabel = 'BOT_EMPRESA_ID default';
+		let idEmpresa = null;
+		let sourceLabel = '';
 
-		if (phoneKey !== '__default__') {
+		if (phoneKey === '__default__') {
+			if (!allowLegacyDefaultEmpresa()) {
+				console.warn('[whatsappWebhook] Mensaje sin phone_number_id — omitido (SaaS multi-tenant)');
+				continue;
+			}
+			idEmpresa = getDefaultEmpresaId();
+			sourceLabel = 'BOT_EMPRESA_ID default (legacy)';
+		} else {
 			const cfg = await whatsappEmpresa.resolveByPhoneNumberId(phoneKey);
 			diag.logWhatsappEmpresa('resolveByPhoneNumberId', {
 				phoneNumberId: phoneKey,
@@ -281,10 +293,17 @@ async function procesarWebhookEntrante(body) {
 			if (cfg?.idEmpresa) {
 				idEmpresa = cfg.idEmpresa;
 				sourceLabel = cfg.source || 'phone_number_id';
+			} else if (allowLegacyDefaultEmpresa()) {
+				idEmpresa = getDefaultEmpresaId();
+				sourceLabel = 'BOT_EMPRESA_ID fallback';
+				console.warn(
+					`[whatsappWebhook] phone_number_id ${phoneKey} sin mapeo; usando empresa ${idEmpresa} (legacy)`,
+				);
 			} else {
 				console.warn(
-					`[whatsappWebhook] phone_number_id ${phoneKey} sin mapeo; usando empresa ${idEmpresa}`,
+					`[whatsappWebhook] phone_number_id ${phoneKey} sin mapeo en MySQL — mensaje omitido`,
 				);
+				continue;
 			}
 		}
 

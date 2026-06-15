@@ -21,6 +21,7 @@ router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctr
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
 router.put('/empresas/:id/onboarding', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarOnboarding);
 router.put('/empresas/:id/suscripcion', requirePermiso('PLATAFORMA.COBRANZA.GESTIONAR'), ctrl.actualizarSuscripcion);
+router.get('/empresas/:id/catalogos', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.catalogosEmpresa);
 router.get('/empresas/:id/modulos', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.modulosEmpresa);
 router.post('/empresas/:id/usuarios', requirePermiso('PLATAFORMA.USUARIOS.GESTIONAR'), ctrl.vincularUsuario);
 router.post('/empresas/:id/usuarios/nuevo', requirePermiso('PLATAFORMA.USUARIOS.GESTIONAR'), ctrl.crearUsuario);

@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const ctrl = require('../controllers/agendaConfig.controller');
 const agendaCtrl = require('../controllers/agenda.controller');
 const racCtrl = require('../controllers/agendaRac.controller');
 
-router.use(requireAuth);
+router.use(requireAuth, requireTenant);
 
 // Catálogos (cualquier usuario autenticado con acceso a TURNOS)
 router.get('/catalogos', requirePermiso('TURNOS'), ctrl.obtenerCatalogos);

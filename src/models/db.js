@@ -5,12 +5,19 @@
 const { sql, connectDB } = require('../config/database');
 const { getTenantPool } = require('../config/tenantDb');
 const { getTenantId } = require('../context/tenantContext');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 async function resolvePool(forcePlatform = false) {
   if (forcePlatform) return connectDB();
   const idEmpresa = getTenantId();
   if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
     return getTenantPool(idEmpresa);
+  }
+  if (isAuthCentralEnabled()) {
+    const err = new Error('Se requiere empresa activa (idEmpresa) para acceder a datos clínicos');
+    err.code = 'TENANT_EMPRESA_REQUIRED';
+    err.statusCode = 400;
+    throw err;
   }
   // Render legacy / sin idEmpresa en JWT → BD plataforma (.env DB_*)
   return connectDB();
@@ -32,14 +39,18 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
   try {
     const pool = await resolvePool(!!opts.platform);
     const request = pool.request();
-    
-    console.log('Ejecutando consulta SQL:', consulta);
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Ejecutando consulta SQL:', consulta);
+    }
     
     // Añadir parámetros si existen
     if (parametros && parametros.length > 0) {
       parametros.forEach((parametro, indice) => {
         const nombreParametro = `param${indice}`;
-        console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value, `Tipo: ${parametro.type || 'auto'}`);
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value, `Tipo: ${parametro.type || 'auto'}`);
+        }
         
         // Si se especifica un tipo, usarlo; si no, dejar que SQL Server lo infiera
         if (parametro.type) {
@@ -53,9 +64,13 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
       });
     }
     
-    console.log('Consulta final:', consulta);
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Consulta final:', consulta);
+    }
     const resultado = await request.query(consulta);
-    console.log('Resultado consulta:', resultado.recordset ? `${resultado.recordset.length} registros encontrados` : 'Sin registros');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Resultado consulta:', resultado.recordset ? `${resultado.recordset.length} registros encontrados` : 'Sin registros');
+    }
     return resultado.recordset;
   } catch (error) {
     console.error('Error al ejecutar consulta SQL:', error.message);

@@ -1,29 +1,30 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const medicacionControlController = require("../controllers/medicacionControl.controller");
+const medicacionControlController = require('../controllers/medicacionControl.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
-// Obtener medicación suministrada por número de visita
+router.use(requireTenant);
+
 router.get(
-    "/:numeroVisita",
-    medicacionControlController.obtenerMedicacionPorVisita
+	'/:numeroVisita',
+	requirePermiso('INTERNACION.MEDICACION.VER'),
+	medicacionControlController.obtenerMedicacionPorVisita,
 );
-
-// Obtener medicación suministrada por número de visita y fecha (?fecha=YYYY-MM-DD)
 router.get(
-    "/:numeroVisita/byDate",
-    medicacionControlController.obtenerMedicacionPorVisitaYFecha
+	'/:numeroVisita/byDate',
+	requirePermiso('INTERNACION.MEDICACION.VER'),
+	medicacionControlController.obtenerMedicacionPorVisitaYFecha,
 );
-
-// Obtener un registro de medicación por ID
 router.get(
-    "/detalle/:idCtrlMedica",
-    medicacionControlController.obtenerMedicacionPorId
+	'/detalle/:idCtrlMedica',
+	requirePermiso('INTERNACION.MEDICACION.VER'),
+	medicacionControlController.obtenerMedicacionPorId,
 );
-
-// Eliminar un registro de medicación por ID
 router.delete(
-    "/:idCtrlMedica",
-    medicacionControlController.eliminarMedicacion
+	'/:idCtrlMedica',
+	requirePermiso('INTERNACION.MEDICACION.ELIMINAR'),
+	medicacionControlController.eliminarMedicacion,
 );
 
 module.exports = router;

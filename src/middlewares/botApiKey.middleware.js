@@ -1,4 +1,5 @@
 const { runWithTenant } = require('../context/tenantContext');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 function parseApiKeys() {
 	const raw = process.env.BOT_API_KEYS;
@@ -21,7 +22,13 @@ function parseApiKeys() {
 function resolveEmpresaFromRequest(req, apiKeys) {
 	const headerEmpresa = req.headers['x-empresa-id'];
 	const queryEmpresa = req.query?.idEmpresa;
-	const raw = headerEmpresa ?? queryEmpresa ?? process.env.BOT_EMPRESA_ID ?? null;
+	let raw = headerEmpresa ?? queryEmpresa ?? null;
+	if ((raw == null || raw === '') && !isAuthCentralEnabled()) {
+		raw = process.env.BOT_EMPRESA_ID ?? null;
+	}
+	if ((raw == null || raw === '') && Object.keys(apiKeys).length === 1) {
+		raw = Object.keys(apiKeys)[0];
+	}
 	if (raw == null || raw === '') return null;
 	const id = Number(raw);
 	return Number.isFinite(id) && id > 0 ? id : null;

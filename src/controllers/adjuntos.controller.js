@@ -8,6 +8,8 @@ const FormData = require('form-data');
 const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
@@ -19,7 +21,7 @@ const FILE_SERVER_FALLBACK_LOCAL =
   process.env.NODE_ENV !== 'production';
 
 function resolveUserId(req) {
-  return req.valorPersonal || req.auth?.usuario?.id || req.body?.userId || 1;
+  return req.valorPersonal || req.auth?.usuario?.id || null;
 }
 
 function isFileServerNetworkError(err) {
@@ -116,11 +118,13 @@ const upload = multer({
   }
 });
 
+router.use(requireTenant);
+
 /**
  * POST /api/adjuntos/upload
  * Subir archivo adjunto para una visita
  */
-router.post('/upload', upload.single('archivo'), async (req, res) => {
+router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.single('archivo'), async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
     const userId = resolveUserId(req);
@@ -252,7 +256,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
  * POST /api/adjuntos/upload-multiple
  * Subir múltiples archivos adjuntos para una visita
  */
-router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) => {
+router.post('/upload-multiple', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.array('archivos', 5), async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
     const userId = resolveUserId(req);
@@ -376,7 +380,7 @@ router.post('/upload-multiple', upload.array('archivos', 5), async (req, res) =>
  * GET /api/adjuntos/tipos-imagenes
  * Catálogo para tipo de adjunto (HCTiposImagenes).
  */
-router.get('/tipos-imagenes', async (req, res) => {
+router.get('/tipos-imagenes', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
   try {
     const tipos = await adjuntosService.listarTiposImagen();
     res.json({ success: true, data: tipos });
@@ -393,7 +397,7 @@ router.get('/tipos-imagenes', async (req, res) => {
  * GET /api/adjuntos/visita/:numeroVisita
  * Obtener adjuntos de una visita
  */
-router.get('/visita/:numeroVisita', async (req, res) => {
+router.get('/visita/:numeroVisita', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
   try {
     const { numeroVisita } = req.params;
     
@@ -417,7 +421,7 @@ router.get('/visita/:numeroVisita', async (req, res) => {
  * GET /api/adjuntos/visita/:numeroVisita/agrupados
  * Obtener adjuntos de una visita agrupados por tipo de imagen
  */
-router.get('/visita/:numeroVisita/agrupados', async (req, res) => {
+router.get('/visita/:numeroVisita/agrupados', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
   try {
     const { numeroVisita } = req.params;
     
@@ -442,7 +446,7 @@ router.get('/visita/:numeroVisita/agrupados', async (req, res) => {
  * GET /api/adjuntos/:idAdjunto
  * Obtener información de un adjunto
  */
-router.get('/:idAdjunto', async (req, res) => {
+router.get('/:idAdjunto', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
   try {
     const { idAdjunto } = req.params;
     
@@ -472,7 +476,7 @@ router.get('/:idAdjunto', async (req, res) => {
  * GET /api/adjuntos/:idAdjunto/download
  * Descargar archivo adjunto desde el servidor HTTP de archivos
  */
-router.get('/:idAdjunto/download', async (req, res) => {
+router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
   try {
     const { idAdjunto } = req.params;
     
@@ -587,7 +591,7 @@ router.get('/:idAdjunto/download', async (req, res) => {
  * DELETE /api/adjuntos/:idAdjunto
  * Eliminar adjunto
  */
-router.delete('/:idAdjunto', async (req, res) => {
+router.delete('/:idAdjunto', requirePermiso('INTERNACION.ADJUNTOS.ELIMINAR'), async (req, res) => {
   try {
     const { idAdjunto } = req.params;
     const userId = resolveUserId(req);

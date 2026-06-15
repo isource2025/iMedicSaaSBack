@@ -5,44 +5,45 @@ function _err(res, e) {
 	return res.status(code).json({ success: false, mensaje: e?.message || 'Error interno' });
 }
 
-async function obtenerRac(req, res) {
+async function _withTurno(req, res, idTurno, fn) {
 	try {
+		await racService.assertAlcanceTurno(idTurno, req);
+		return await fn();
+	} catch (e) {
+		return _err(res, e);
+	}
+}
+
+async function obtenerRac(req, res) {
+	return _withTurno(req, res, req.params.idTurno, async () => {
 		const data = await racService.obtenerRac(req.params.idTurno);
 		res.json({ success: true, data });
-	} catch (e) {
-		_err(res, e);
-	}
+	});
 }
 
 async function crearControl(req, res) {
-	try {
+	return _withTurno(req, res, req.params.idTurno, async () => {
 		const data = await racService.crearControlTurno(req.params.idTurno, req.body || {});
 		res.json({ success: true, data });
-	} catch (e) {
-		_err(res, e);
-	}
+	});
 }
 
 async function crearMedicacion(req, res) {
-	try {
+	return _withTurno(req, res, req.params.idTurno, async () => {
 		const data = await racService.crearMedicacionTurno(req.params.idTurno, req.body || {});
 		res.json({ success: true, data });
-	} catch (e) {
-		_err(res, e);
-	}
+	});
 }
 
 async function actualizarTriage(req, res) {
-	try {
+	return _withTurno(req, res, req.params.idTurno, async () => {
 		const body = req.body || {};
 		const data = await racService.actualizarTriage(req.params.idTurno, {
 			idClasificacionTriage: body.idClasificacionTriage,
 			observaciones: body.observaciones,
 		});
 		res.json({ success: true, data });
-	} catch (e) {
-		_err(res, e);
-	}
+	});
 }
 
 async function eliminarControl(req, res) {

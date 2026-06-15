@@ -156,6 +156,11 @@ const obtenerCamaPorId = async (id) => {
  * @returns {Promise<Object>} Cama actualizada
  */
 const actualizarEstadoCama = async (id, estado) => {
+	const idStr = String(id || '');
+	const dash = idStr.indexOf('-');
+	const ValorSector = dash >= 0 ? idStr.slice(0, dash) : null;
+	const ValorHabitacionCama = dash >= 0 ? idStr.slice(dash + 1) : idStr;
+
 	// Mapear estados descriptivos a valores de la tabla imEstadoCama
 	let valorEstado;
 	switch (estado) {
@@ -174,10 +179,14 @@ const actualizarEstadoCama = async (id, estado) => {
 
 	console.log(`Actualizando cama ID ${id} a estado: ${estado}, valor en DB: ${valorEstado}`);
 
+	const whereClause = ValorSector
+		? 'hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param2'
+		: 'hc.ValorHabitacionCama = @param0';
+
 	const consulta = `
     UPDATE imHabitacionCamas
     SET ValorEstadoCama = @param1
-    WHERE ValorHabitacionCama = @param0;
+    WHERE ValorHabitacionCama = @param0${ValorSector ? ' AND ValorSector = @param2' : ''};
 
     SELECT 
       hc.*,
@@ -198,10 +207,12 @@ const actualizarEstadoCama = async (id, estado) => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.ValorHabitacionCama = @param0;
+    WHERE ${whereClause};
   `;
 
-	const parametros = [{ value: id }, { value: valorEstado }];
+	const parametros = ValorSector
+		? [{ value: ValorHabitacionCama }, { value: valorEstado }, { value: ValorSector }]
+		: [{ value: ValorHabitacionCama }, { value: valorEstado }];
 
 	try {
 		const resultado = await executeQuery(consulta, parametros);
