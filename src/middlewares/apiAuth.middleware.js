@@ -8,6 +8,7 @@ function isPublicApiPath(req) {
 	const path = (req.path || req.url || '').split('?')[0];
 	return (
 		path === '/health' ||
+		path === '/empresa' ||
 		path.startsWith('/auth') ||
 		path.startsWith('/webhook/whatsapp') ||
 		path.startsWith('/integrations/bot')
