@@ -85,6 +85,7 @@ const MODULOS = Object.freeze([
 			{ id: 'HISTORIA_CLINICA',     label: 'Historia clínica',         acciones: [...CRUD] },
 			{ id: 'INDICACIONES',         label: 'Indicaciones médicas',     acciones: [...CRUD, ACCIONES.APLICAR] },
 			{ id: 'EVOLUCIONES',          label: 'Evoluciones médicas',      acciones: [...CRUD] },
+			{ id: 'INTERCONSULTAS',       label: 'Interconsultas',           acciones: [...CRUD] },
 			{ id: 'EVOLUCION_ENFERMERIA', label: 'Evolución de enfermería',  acciones: [...CRUD] },
 			{ id: 'SIGNOS_VITALES',       label: 'Controles / signos vitales', acciones: [...CRUD] },
 			{ id: 'MEDICACION',           label: 'Medicación suministrada',  acciones: [...CRUD] },
@@ -219,6 +220,7 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.INDICACIONES.EDITAR',
 		'INTERNACION.INDICACIONES.ELIMINAR',
 		..._todas('INTERNACION', 'EVOLUCIONES'),
+		..._todas('INTERNACION', 'INTERCONSULTAS'),
 		..._todas('INTERNACION', 'ESTUDIOS'),
 		..._todas('INTERNACION', 'PROTOCOLOS'),
 		..._todas('INTERNACION', 'PROCEDIMIENTOS'),
@@ -345,6 +347,18 @@ const PLANTILLAS = Object.freeze({
 		'CONFIGURACION.PERSONAL.EDITAR',
 		'CONFIGURACION.PERSONAL.GESTIONAR', // necesario para abrir la solapa "Agenda" del modal de Personal
 
+		'USUARIO.PERFIL.VER',
+		'USUARIO.PERFIL.EDITAR',
+	]),
+
+	CARGA_HC: Object.freeze([
+		'DASHBOARD.INICIO.VER',
+		'INTERNACION.CAMAS.VER',
+		'INTERNACION.CAMAS.GESTIONAR',
+		'INTERNACION.ESTUDIOS.VER',
+		'INTERNACION.ESTUDIOS.CREAR',
+		'INTERNACION.ADJUNTOS.VER',
+		'INTERNACION.ADJUNTOS.CREAR',
 		'USUARIO.PERFIL.VER',
 		'USUARIO.PERFIL.EDITAR',
 	]),
