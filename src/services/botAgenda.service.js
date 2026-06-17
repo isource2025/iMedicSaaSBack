@@ -1234,6 +1234,16 @@ function _mejorMatchPorTokens(texto, lista) {
 	return bestScore >= 55 ? best : null;
 }
 
+function _nombreCoincideProfesional(nombreNorm, busqueda) {
+	if (!busqueda || busqueda.length < 3) return false;
+	if (nombreNorm === busqueda) return true;
+	const tokens = nombreNorm.split(/\s+/).filter((t) => t.length >= 2);
+	if (tokens.some((t) => t === busqueda || t.startsWith(busqueda) || busqueda.startsWith(t))) {
+		return true;
+	}
+	return busqueda.length >= 4 && nombreNorm.includes(busqueda);
+}
+
 async function resolverProfesionalDesdeTexto(texto, especialidadValor) {
 	const esp = Number(especialidadValor);
 	if (!Number.isFinite(esp) || esp <= 0) return null;
@@ -1250,17 +1260,19 @@ async function resolverProfesionalDesdeTexto(texto, especialidadValor) {
 	}
 
 	let busqueda = _normalizarTextoBusqueda(texto);
-	if (!busqueda) return null;
+	if (!busqueda || busqueda.length < 3) return null;
 	busqueda = busqueda
 		.replace(/\b(con|el|la|los|las|dr|dra|doctor|doctora|profesional|medico|medicos)\b/g, ' ')
 		.replace(/\s+/g, ' ')
 		.trim();
-	if (!busqueda) return null;
+	if (!busqueda || busqueda.length < 3) return null;
 
 	let match = profesionales.find((p) => _normalizarTextoBusqueda(p.nombre) === busqueda);
 	if (match) return match;
 
-	match = profesionales.find((p) => _normalizarTextoBusqueda(p.nombre).includes(busqueda));
+	match = profesionales.find((p) =>
+		_nombreCoincideProfesional(_normalizarTextoBusqueda(p.nombre), busqueda),
+	);
 	if (match) return match;
 
 	match = _mejorMatchPorTokens(busqueda, profesionales);
