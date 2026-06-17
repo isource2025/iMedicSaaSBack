@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const botChatStorage = require('./botChatStorage.service');
+const audioTranscripcion = require('./audioTranscripcion.service');
 
 /** @typedef {'BOT'|'HUMANO'|'PAUSADO'} ModoControl */
 /** @typedef {'IN'|'OUT'} Direccion */
@@ -102,12 +103,15 @@ function mapConversacion(row) {
 }
 
 function mapMensaje(row) {
+	const contenidoRaw = row.Contenido ?? row.contenido;
+	const esAudio = audioTranscripcion.esTranscripcionAudio(contenidoRaw);
 	return {
 		idMensaje: row.IdMensaje ?? row.idMensaje,
 		idConversacion: row.IdConversacion ?? row.idConversacion,
 		direccion: row.Direccion ?? row.direccion,
 		origen: row.Origen ?? row.origen,
-		contenido: row.Contenido ?? row.contenido,
+		contenido: esAudio ? audioTranscripcion.quitarMarcadorAudio(contenidoRaw) : contenidoRaw,
+		esAudio,
 		estadoEntrega: row.EstadoEntrega ?? row.estadoEntrega ?? 'ENVIADO',
 		idAgente: row.IdAgente ?? row.idAgente ?? null,
 		nombreAgente: row.NombreAgente ?? row.nombreAgente ?? null,

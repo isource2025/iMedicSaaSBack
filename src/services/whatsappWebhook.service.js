@@ -3,9 +3,12 @@ const botResponder = require('./botResponder.service');
 const botReset = require('./botReset.service');
 const webhookDedup = require('./webhookDedup.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
+const audioTranscripcion = require('./audioTranscripcion.service');
 const diag = require('../utils/diagLog');
 const { runWithTenant } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+
+const TIPOS_AUDIO = new Set(['audio', 'voice']);
 
 function allowLegacyDefaultEmpresa() {
 	if (process.env.WHATSAPP_ALLOW_DEFAULT_EMPRESA === '0') return false;
@@ -86,6 +89,7 @@ function extraerMensajesEntrantes(body) {
 				// Eco de mensajes salientes (evita respuestas duplicadas)
 				if (msg.from === value.metadata?.phone_number_id) continue;
 				let contenido = '';
+				let media = null;
 				if (tipo === 'text') contenido = msg.text?.body || '';
 				else if (tipo === 'button') contenido = msg.button?.text || msg.button?.payload || '';
 				else if (tipo === 'interactive') {
@@ -94,14 +98,24 @@ function extraerMensajesEntrantes(body) {
 						msg.interactive?.list_reply?.title ||
 						msg.interactive?.list_reply?.description ||
 						'';
+				} else if (TIPOS_AUDIO.has(tipo)) {
+					// El contenido real se resuelve transcribiendo el audio más adelante.
+					const audioNode = msg.audio || msg.voice || {};
+					media = {
+						tipo: 'audio',
+						id: audioNode.id || null,
+						mimeType: audioNode.mime_type || null,
+					};
+					contenido = '';
 				} else {
 					contenido = `[${tipo}]`;
 				}
-				if (!contenido.trim()) continue;
+				if (!contenido.trim() && !media?.id) continue;
 
 				mensajes.push({
 					telefono: String(msg.from),
 					contenido: contenido.trim(),
+					media,
 					metaMessageId: msg.id || null,
 					nombreContacto: contactByWaId.get(String(msg.from)) || null,
 					idConversacion: botConversacion.idDesdeTelefono(msg.from),
@@ -129,7 +143,40 @@ function describeSkippedPayload(body) {
 	return fields.length ? fields.join(',') : 'sin changes reconocibles';
 }
 
-async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
+async function resolverContenidoAudio(m, idEmpresa, waCfg) {
+	if (!m.media?.id) return;
+	let accessToken = waCfg?.accessToken || null;
+	if (!accessToken) {
+		const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa).catch(() => null);
+		accessToken = cfg?.accessToken || null;
+	}
+
+	const texto = accessToken
+		? await audioTranscripcion.transcribirAudioMeta({
+				mediaId: m.media.id,
+				accessToken,
+				mimeType: m.media.mimeType,
+			})
+		: null;
+
+	if (texto) {
+		m.contenido = audioTranscripcion.marcarTranscripcionAudio(texto);
+		diag.line('webhook', 'Audio transcripto', {
+			idEmpresa,
+			telefono: m.telefono,
+			chars: texto.length,
+		});
+	} else {
+		m.contenido = audioTranscripcion.marcarTranscripcionAudio('(audio sin transcripción)');
+		diag.warn('webhook', 'Audio sin transcripción', {
+			idEmpresa,
+			telefono: m.telefono,
+			hasToken: Boolean(accessToken),
+		});
+	}
+}
+
+async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel, waCfg = null) {
 	const resultados = [];
 	diag.logWhatsappEmpresa('procesarGrupo', {
 		idEmpresa,
@@ -141,6 +188,9 @@ async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel) {
 	try {
 		await runWithTenant(idEmpresa, async () => {
 			for (const m of mensajes) {
+				if (m.media?.id && !m.contenido) {
+					await resolverContenidoAudio(m, idEmpresa, waCfg);
+				}
 				const claim = webhookDedup.tryClaimIncoming(m.metaMessageId, {
 					telefono: m.telefono,
 					timestamp: m.timestamp,
@@ -277,6 +327,7 @@ async function procesarWebhookEntrante(body) {
 	for (const [phoneKey, grupo] of porPhone) {
 		let idEmpresa = null;
 		let sourceLabel = '';
+		let waCfg = null;
 
 		if (phoneKey === '__default__') {
 			if (!allowLegacyDefaultEmpresa()) {
@@ -297,6 +348,7 @@ async function procesarWebhookEntrante(body) {
 			if (cfg?.idEmpresa) {
 				idEmpresa = cfg.idEmpresa;
 				sourceLabel = cfg.source || 'phone_number_id';
+				waCfg = cfg;
 			} else if (allowLegacyDefaultEmpresa()) {
 				idEmpresa = getDefaultEmpresaId();
 				sourceLabel = 'BOT_EMPRESA_ID fallback';
@@ -311,7 +363,7 @@ async function procesarWebhookEntrante(body) {
 			}
 		}
 
-		const batch = await procesarGrupoMensajes(idEmpresa, grupo, sourceLabel);
+		const batch = await procesarGrupoMensajes(idEmpresa, grupo, sourceLabel, waCfg);
 		resultados.push(...batch);
 		empresas.add(idEmpresa);
 	}

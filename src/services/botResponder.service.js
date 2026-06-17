@@ -6,6 +6,7 @@ const botConversacion = require('./botConversacion.service');
 const botOpenai = require('./botOpenai.service');
 const botWizard = require('./botWizard.service');
 const botAgenda = require('./botAgenda.service');
+const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
 const diag = require('../utils/diagLog');
@@ -213,7 +214,9 @@ async function responderMensajeEntrante({
 		return { respondido: false, motivo: 'ya-respondido' };
 	}
 
-	const textoEntrada = contenidoUltimo || ultimo.contenido;
+	const textoEntrada = audioTranscripcion.quitarMarcadorAudio(
+		contenidoUltimo || ultimo.contenido,
+	);
 	const dniDetectado = botWizard.extraerDni(textoEntrada);
 	const enviarOpts = {
 		idEmpresa,

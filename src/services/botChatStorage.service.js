@@ -3,6 +3,7 @@
  * La turnera sigue en imTurnos / imPersonalHorarios (sin tablas extra).
  */
 const { executeQuery } = require('../models/db');
+const audioTranscripcion = require('./audioTranscripcion.service');
 
 function mapSesion(row) {
 	if (!row) return null;
@@ -26,12 +27,16 @@ function mapSesion(row) {
 
 function mapMsg(row) {
 	if (!row) return null;
+	const esAudio = audioTranscripcion.esTranscripcionAudio(row.Contenido);
 	return {
 		idMensaje: row.IdRegistro,
 		idConversacion: row.IdSesion,
 		direccion: row.Direccion,
 		origen: row.Origen,
-		contenido: row.Contenido,
+		contenido: esAudio
+			? audioTranscripcion.quitarMarcadorAudio(row.Contenido)
+			: row.Contenido,
+		esAudio,
 		estadoEntrega: row.EstadoEntrega ?? 'ENVIADO',
 		idAgente: row.IdAgente ?? null,
 		nombreAgente: row.NombreAgente ?? null,
