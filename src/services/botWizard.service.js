@@ -58,9 +58,9 @@ function interpretarConfirmacion(texto) {
 		.toLowerCase()
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '');
-	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|1|soy yo|afirmativo|su)$/.test(t)) return true;
+	if (/^(si|s|yes|ok|dale|confirmo|correcto|exacto|soy yo|afirmativo|su)$/.test(t)) return true;
 	if (/^dale\b/.test(t)) return true;
-	if (/^(no|n|nop|incorrecto|otra persona|2|negativo)$/.test(t)) return false;
+	if (/^(no|n|nop|incorrecto|otra persona|negativo)$/.test(t)) return false;
 	// "no tenés para el miércoles" es pregunta de disponibilidad, no rechazo binario
 	if (/\bno\s+tenes?\b/.test(t) || /\bno\s+hay\b/.test(t)) return null;
 	if (/\b(si|confirmo|correcto)\b/.test(t)) return true;
@@ -550,7 +550,13 @@ async function guardarContextoTurnoPendiente(idConversacion, conv) {
 	return ctx;
 }
 
-function esRespuestaConfirmacionBinaria(texto) {
+function esSeleccionNumerada(texto) {
+	return /^\d{1,2}\.?\s*$/.test(String(texto || '').trim());
+}
+
+function esRespuestaConfirmacionBinaria(texto, pasoActual) {
+	if (pasoActual !== 'CONFIRMAR_IDENTIDAD') return false;
+	if (esSeleccionNumerada(texto)) return false;
 	return interpretarConfirmacion(texto) !== null;
 }
 
@@ -563,6 +569,7 @@ async function mostrarProfesionalesEspecialidad(idConversacion, espValor) {
 
 async function procesarEleccionProfesional({
 	idConversacion,
+	telefonoWhatsApp,
 	conv,
 	flujo,
 	texto,
@@ -571,7 +578,7 @@ async function procesarEleccionProfesional({
 	if (!espPend?.valor || !texto || extraerDni(texto)) return null;
 
 	const pasoActual = conv?.pasoBot;
-	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || esRespuestaConfirmacionBinaria(texto)) {
+	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || esRespuestaConfirmacionBinaria(texto, pasoActual)) {
 		return null;
 	}
 
@@ -579,7 +586,7 @@ async function procesarEleccionProfesional({
 	if (pasoProf?.activo === false) return null;
 
 	const enPasoProf = pasoActual === 'ELEGIR_PROFESIONAL';
-	if (!enPasoProf && textoPideTurnoExplicito(texto)) return null;
+	if (!enPasoProf && !esSeleccionNumerada(texto) && textoPideTurnoExplicito(texto)) return null;
 
 	const prof = await botAgenda.resolverProfesionalDesdeTexto(texto, espPend.valor);
 	if (!prof) return null;
@@ -588,20 +595,44 @@ async function procesarEleccionProfesional({
 		especialidadPendiente: espPend,
 		profesionalPendiente: { matricula: prof.matricula, nombre: prof.nombre },
 	});
+
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+	const config = await botConfigService.getBotConfig();
+
+	if (conv.idPaciente) {
+		if (config.reglas.sugerirPrimerTurnoDisponible) {
+			return armarRespuestaBuscarTurnoInicial({
+				idConversacion,
+				telefonoWhatsApp,
+				flujo,
+				esp: espPend,
+				avisoPrefijo: prefijoSaludo,
+				matricula: prof.matricula,
+				medico: prof.nombre,
+			});
+		}
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			idPaciente: conv.idPaciente,
+			pasoBot: 'ELEGIR_FECHA_HORA',
+		});
+		return {
+			handled: true,
+			texto: `${prefijoSaludo}Continuemos con *${prof.nombre}*. Indicá qué día preferís o escribí *disponibilidad* para ver horarios.`,
+		};
+	}
+
 	await botConversacion.actualizarContextoPaciente(idConversacion, {
 		pasoBot: 'IDENTIFICAR',
 	});
 
 	const pasoId = pasoPorId(flujo, 'IDENTIFICAR');
-	const saludo = primerNombre(nombreWhatsApp(conv));
 	const msg =
 		pasoId?.mensajeUsuario ||
 		'Indicá el DNI de la persona que va a atenderse (sin puntos).';
 	return {
 		handled: true,
-		texto: saludo
-			? `Perfecto, ${saludo}. Elegiste *${prof.nombre}*. ${msg}`
-			: `Perfecto. Elegiste *${prof.nombre}*. ${msg}`,
+		texto: `${prefijoSaludo}Elegiste *${prof.nombre}*. ${msg}`,
 	};
 }
 
@@ -617,6 +648,8 @@ function armarRespuestaBuscarTurnoInicial({
 	flujo,
 	esp,
 	avisoPrefijo = '',
+	matricula = null,
+	medico = null,
 }) {
 	const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
 	return {
@@ -629,6 +662,8 @@ function armarRespuestaBuscarTurnoInicial({
 			telefonoWhatsApp,
 			especialidadValor: esp.valor,
 			especialidadNombre: esp.nombre,
+			matricula: matricula || undefined,
+			medico: medico || undefined,
 			pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
 		},
 	};
@@ -1329,7 +1364,7 @@ async function intentarRespuestaWizard({
 	}
 
 	// Especialidad mencionada sin pedir turno (ej. "En traumato") → listado real desde agenda
-	if (!dniEnMensaje && texto && !textoPideTurnoExplicito(texto)) {
+	if (!dniEnMensaje && texto && !textoPideTurnoExplicito(texto) && !esSeleccionNumerada(texto)) {
 		const pasoListaProf =
 			!conv.idPaciente ||
 			pasoActual === 'ELEGIR_PROFESIONAL' ||
@@ -1355,6 +1390,7 @@ async function intentarRespuestaWizard({
 	if (!dniEnMensaje && texto) {
 		const respProf = await procesarEleccionProfesional({
 			idConversacion,
+			telefonoWhatsApp,
 			conv,
 			flujo,
 			texto,
@@ -1477,6 +1513,17 @@ async function intentarRespuestaWizard({
 	}
 
 	if ((esPasoEspecialidad || esPasoProfConSugerir) && conv.idPaciente) {
+		if (pasoActual === 'ELEGIR_PROFESIONAL' && conv.contextoBot?.especialidadPendiente) {
+			const respProf = await procesarEleccionProfesional({
+				idConversacion,
+				telefonoWhatsApp,
+				conv,
+				flujo,
+				texto,
+			});
+			if (respProf) return respProf;
+		}
+
 		let resolucion = { tipo: 'no_encontrada' };
 		if (gptHabilitado()) {
 			const intent = await botIntencion.interpretarIntencion({
@@ -1508,6 +1555,15 @@ async function intentarRespuestaWizard({
 
 		const esp = resolucion.tipo === 'especialidad' ? resolucion.especialidad : null;
 		if (!esp) {
+			if (esPasoProfConSugerir && pasoActual === 'ELEGIR_PROFESIONAL') {
+				const pasoProf = pasoPorId(flujo, 'ELEGIR_PROFESIONAL');
+				return {
+					handled: true,
+					texto:
+						pasoProf?.mensajeUsuario ||
+						'Indicá el profesional por número de la lista o por nombre (por ejemplo: *2* o *Aquino*).',
+				};
+			}
 			if (esPasoProfConSugerir) {
 				return {
 					handled: true,
@@ -1716,7 +1772,14 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 	try {
 		if (tipo === 'inicial') {
 			const pasoConfirmar = pasoPorId(flujo, buscarTurno.pasoConfirmarId || 'CONFIRMAR');
-			let sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(buscarTurno.especialidadValor);
+			const opcionesBusqueda = {};
+			if (buscarTurno.matricula != null) {
+				opcionesBusqueda.matricula = buscarTurno.matricula;
+			}
+			let sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(
+				buscarTurno.especialidadValor,
+				opcionesBusqueda,
+			);
 			sugerencia = sugerencia
 				? await botAgenda.validarSugerenciaTurno(sugerencia, buscarTurno.especialidadValor)
 				: null;

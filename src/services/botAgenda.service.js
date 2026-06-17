@@ -1854,6 +1854,14 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	const ordenados = [...profesionales]
 		.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
 		.slice(0, _maxProfesionalesBusqueda(config.reglas));
+	const matriculaFiltro =
+		opciones.matricula != null && Number.isFinite(Number(opciones.matricula))
+			? Number(opciones.matricula)
+			: null;
+	const candidatos = matriculaFiltro
+		? ordenados.filter((p) => Number(p.matricula) === matriculaFiltro)
+		: ordenados;
+	if (!candidatos.length) return null;
 	const fechas = _fechasCandidatasBusqueda(maxDias, excluir, preferir);
 	const deadline = Date.now() + _busquedaTurnoTimeoutMs(config.reglas);
 	const concurrencia = _busquedaTurnoConcurrencia(config.reglas);
@@ -1861,7 +1869,7 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 	for (const fechaIso of fechas) {
 		if (Date.now() > deadline) break;
 
-		const profsDia = await _profesionalesConLibresEnDia(fechaIso, esp, ordenados);
+		const profsDia = await _profesionalesConLibresEnDia(fechaIso, esp, candidatos);
 		if (!profsDia.length) continue;
 
 		const turnos = await _mapEnLotes(profsDia, concurrencia, (prof) =>
