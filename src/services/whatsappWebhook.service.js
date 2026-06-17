@@ -8,7 +8,11 @@ const { runWithTenant } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 function allowLegacyDefaultEmpresa() {
-	return !isAuthCentralEnabled() || process.env.WHATSAPP_ALLOW_DEFAULT_EMPRESA === '1';
+	if (process.env.WHATSAPP_ALLOW_DEFAULT_EMPRESA === '0') return false;
+	if (process.env.WHATSAPP_ALLOW_DEFAULT_EMPRESA === '1') return true;
+	// Bot hospital (BOT_EMPRESA_ID): fallback a empresa default si phone_number_id no está en MySQL
+	if (process.env.BOT_EMPRESA_ID?.trim()) return true;
+	return !isAuthCentralEnabled();
 }
 
 function getVerifyToken() {

@@ -251,6 +251,14 @@ async function resolveByPhoneNumberId(phoneNumberId) {
 		}
 	}
 
+	const fallbackEmpresa = Number(process.env.BOT_EMPRESA_ID || 1);
+	const tenantOnly = await loadFromTenantImBotConfig(fallbackEmpresa);
+	if (tenantOnly?.phoneNumberId === phone) {
+		cacheSet(phoneCache, phone, tenantOnly);
+		cacheSet(empresaCache, tenantOnly.idEmpresa, tenantOnly);
+		return tenantOnly;
+	}
+
 	return null;
 }
 
