@@ -64,6 +64,21 @@ function esPayloadSoloEstados(body) {
 	return tieneEstados && !tieneMensajes;
 }
 
+/** True solo si el body Meta trae al menos un mensaje entrante (no envoltorios vacíos del gateway). */
+function payloadMetaTieneMensajes(body) {
+	if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
+		return false;
+	}
+	for (const entry of body.entry) {
+		for (const change of entry.changes || []) {
+			if (change.field === 'messages' && (change.value?.messages || []).length) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 const TIPOS_MENSAJE_IGNORAR = new Set(['reaction', 'sticker', 'unsupported', 'system', 'unknown']);
 
 function extraerMensajesEntrantes(body) {
@@ -352,4 +367,5 @@ module.exports = {
 	verificarSuscripcion,
 	procesarWebhookEntrante,
 	extraerMensajesEntrantes,
+	payloadMetaTieneMensajes,
 };

@@ -30,7 +30,8 @@ function getResetPin() {
  * @returns {{ tipo: 'chat'|'todo'|'none', pin?: string }}
  */
 function parseComandoReset(contenido) {
-	const raw = String(contenido || '').trim();
+	const audioTranscripcion = require('./audioTranscripcion.service');
+	const raw = audioTranscripcion.quitarMarcadorAudio(String(contenido || '').trim());
 	const norm = normalizarTextoComando(raw);
 
 	if (norm === normalizarTextoComando(CMD_CHAT)) {
