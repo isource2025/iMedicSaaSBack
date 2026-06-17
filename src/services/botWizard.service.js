@@ -6,10 +6,11 @@ const botAgenda = require('./botAgenda.service');
 const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
 const botIntencion = require('./botIntencion.service');
+const botInterpretacion = require('./botInterpretacion.service');
 const diag = require('../utils/diagLog');
 
 function gptHabilitado() {
-	return botIntencion.gptHabilitado();
+	return botInterpretacion.gptHabilitado();
 }
 
 const RENAPER_TIMEOUT_MS = Number(process.env.BOT_RENAPER_TIMEOUT_MS || 40_000);
@@ -226,6 +227,91 @@ function normalizarTextoBot(texto) {
 		.replace(/[\u0300-\u036f]/g, '');
 }
 
+/** El paciente quiere abandonar la gestión de turno (no buscar otra opción). */
+function interpretarSalidaFlujo(texto) {
+	const t = normalizarTextoBot(texto);
+	if (!t) return false;
+
+	if (
+		/^(cancela|cancelar|cancelalo|cancel|salir|chau|deja|dejalo|olvida|olvidate|basta|alcanza|no gracias)$/.test(
+			t,
+		)
+	) {
+		return true;
+	}
+
+	if (
+		/\b(no quiero|no necesito|no busco|no voy a sacar|no saco|no reservo)\b/.test(t) &&
+		/\b(ningun|ningún|turno|turnos|cita|reserva)\b/.test(t)
+	) {
+		return true;
+	}
+
+	if (/\b(cancelar|cancela|anular|abandonar)\b/.test(t) && /\b(turno|todo|flujo|gestion)\b/.test(t)) {
+		return true;
+	}
+
+	if (/\b(no quiero|deja|dejá)\b/.test(t) && /\b(nada|seguir|continuar)\b/.test(t)) {
+		return true;
+	}
+
+	return false;
+}
+
+function esSaludoSimple(texto) {
+	const t = normalizarTextoBot(texto);
+	return /^(hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)[!.?\s]*$/.test(t);
+}
+
+function esPasoReservaActivo(pasoActual, conv) {
+	if (pasoActual === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') return true;
+	return [
+		'ELEGIR_ESPECIALIDAD',
+		'ELEGIR_PROFESIONAL',
+		'ELEGIR_FECHA_HORA',
+		'ELEGIR_COBERTURA',
+	].includes(pasoActual);
+}
+
+function mensajeSalidaFlujo(config, conv) {
+	const raw =
+		config?.mensajes?.cancelacionFlujo ||
+		'Entendido, cancelamos la búsqueda de turno. Cuando quieras solicitar uno, escribinos.';
+	return aplicarPlantillaMensaje(raw, conv);
+}
+
+async function cancelarFlujoTurnoActivo(idConversacion) {
+	await botConversacion.guardarContextoBot(idConversacion, null);
+	await botConversacion.actualizarContextoPaciente(idConversacion, {
+		pasoBot: 'inicio',
+	});
+}
+
+async function procesarSalidaFlujo({
+	idConversacion,
+	conv,
+	config,
+	texto,
+	pasoActual,
+	interpretacion,
+}) {
+	if (!esPasoReservaActivo(pasoActual, conv)) return null;
+	if (!botInterpretacion.debeSalirFlujo(interpretacion, texto)) return null;
+
+	await cancelarFlujoTurnoActivo(idConversacion);
+	return {
+		handled: true,
+		tipoRespuesta: 'SALIDA_FLUJO',
+		texto: mensajeSalidaFlujo(config, conv),
+		interpretacion,
+	};
+}
+
+function withInterpretacion(payload, interpretacion) {
+	if (!interpretacion) return payload;
+	return { ...payload, interpretacion };
+}
+
 /** Cierre cordial (gracias, perfecto solo, etc.) — no reinicia el flujo a DNI. */
 function esCierreCordial(texto) {
 	const t = normalizarTextoBot(texto);
@@ -381,6 +467,7 @@ async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend = n
 async function responderListaEspecialidades() {
 	return {
 		handled: true,
+		tipoRespuesta: 'LISTA_ESPECIALIDADES',
 		texto: botAgenda.mensajeEspecialidadesDisponibles(await botAgenda.listarEspecialidadesBot()),
 	};
 }
@@ -393,6 +480,7 @@ async function procesarIntencionGptEntrada({
 	texto,
 	pasoActual,
 	pasoIdentificar,
+	interpretacion: interpretacionPrecalculada,
 }) {
 	if (pasoIdentificar?.activo === false) return null;
 
@@ -402,6 +490,7 @@ async function procesarIntencionGptEntrada({
 		await sincronizarPasoTurnoCompletado(idConversacion, conv);
 		return {
 			handled: true,
+			tipoRespuesta: 'POST_TURNO',
 			texto: resolverMensajePostTurno(flujo, await botConfigService.getBotConfig(), conv),
 		};
 	}
@@ -412,12 +501,14 @@ async function procesarIntencionGptEntrada({
 			: pasoActual;
 	if (!botIntencion.esPasoIdentificacionLibre(pasoActual, conv)) return null;
 
-	const intent = await botIntencion.interpretarIntencion({
-		texto,
-		conv,
-		idConversacion,
-		pasoBot: pasoGpt,
-	});
+	const intent =
+		interpretacionPrecalculada ||
+		(await botIntencion.interpretarIntencion({
+			texto,
+			conv,
+			idConversacion,
+			pasoBot: pasoGpt,
+		}));
 	if (!intent?.intencion) return null;
 
 	diag.line('wizard', 'Intención GPT', {
@@ -447,7 +538,9 @@ async function procesarIntencionGptEntrada({
 		}
 		return {
 			handled: true,
+			tipoRespuesta: 'INICIO_FLUJO',
 			texto: await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend }),
+			interpretacion: intent,
 		};
 	}
 
@@ -456,7 +549,9 @@ async function procesarIntencionGptEntrada({
 		await sincronizarPasoTurnoCompletado(idConversacion, conv);
 		return {
 			handled: true,
+			tipoRespuesta: 'POST_TURNO',
 			texto: resolverMensajePostTurno(flujo, config, conv),
+			interpretacion: intent,
 		};
 	}
 
@@ -717,6 +812,7 @@ async function _respuestaIdentificacionOk({
 		});
 		return {
 			handled: true,
+			tipoRespuesta: 'CONFIRMAR_IDENTIDAD',
 			texto: mensajeConfirmacionRenaper({
 				renaper: data.renaper,
 				dni,
@@ -1252,6 +1348,27 @@ async function intentarRespuestaWizard({
 	const historialCorto = await botConversacion.listarMensajes(idConversacion, { limit: 10 });
 	const postTurno = await esContextoPostTurno(conv, historialCorto);
 
+	let interpretacion = await botInterpretacion.interpretarMensaje({
+		texto,
+		conv,
+		idConversacion,
+		pasoBot: pasoActual,
+	});
+	if (interpretacion) {
+		await botInterpretacion.registrarSesion(idConversacion, interpretacion, conv);
+		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+	}
+
+	const salidaFlujo = await procesarSalidaFlujo({
+		idConversacion,
+		conv,
+		config,
+		texto,
+		pasoActual,
+		interpretacion,
+	});
+	if (salidaFlujo) return salidaFlujo;
+
 	if (postTurno) {
 		conv = await sincronizarPasoTurnoCompletado(idConversacion, conv);
 		pasoActual = conv?.pasoBot || 'TURNO_COMPLETADO';
@@ -1408,8 +1525,11 @@ async function intentarRespuestaWizard({
 			texto,
 			pasoActual,
 			pasoIdentificar,
+			interpretacion,
 		});
-		if (gptEntrada?.handled && gptEntrada.texto) return gptEntrada;
+		if (gptEntrada?.handled && gptEntrada.texto) {
+			return withInterpretacion(gptEntrada, interpretacion || gptEntrada.interpretacion);
+		}
 		if (gptEntrada?.handled === false && gptEntrada.motivo === 'gpt-conversacion') {
 			return gptEntrada;
 		}
@@ -1547,10 +1667,14 @@ async function intentarRespuestaWizard({
 		}
 
 		if (resolucion.tipo === 'listar') {
-			return {
-				handled: true,
-				texto: botAgenda.mensajeEspecialidadesDisponibles(resolucion.lista),
-			};
+			return withInterpretacion(
+				{
+					handled: true,
+					tipoRespuesta: 'LISTA_ESPECIALIDADES',
+					texto: botAgenda.mensajeEspecialidadesDisponibles(resolucion.lista),
+				},
+				interpretacion,
+			);
 		}
 
 		const esp = resolucion.tipo === 'especialidad' ? resolucion.especialidad : null;
@@ -1582,12 +1706,15 @@ async function intentarRespuestaWizard({
 		}
 
 		if (sugerirTurno) {
-			return armarRespuestaBuscarTurnoInicial({
-				idConversacion,
-				telefonoWhatsApp,
-				flujo,
-				esp,
-			});
+			return withInterpretacion(
+				armarRespuestaBuscarTurnoInicial({
+					idConversacion,
+					telefonoWhatsApp,
+					flujo,
+					esp,
+				}),
+				interpretacion,
+			);
 		}
 
 		const pasoProf = pasoPorId(flujo, 'ELEGIR_PROFESIONAL');
@@ -1621,32 +1748,39 @@ async function intentarRespuestaWizard({
 	if (pasoActual === 'CONFIRMAR' && convAct.contextoBot?.tipo === 'turno_sugerido') {
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR');
 		const ctx = convAct.contextoBot;
-		let intentGpt = null;
+		const intentGpt = interpretacion;
 		let conf = null;
 
-		if (gptHabilitado()) {
-			intentGpt = await botIntencion.interpretarIntencion({
-				texto,
-				conv: convAct,
-				idConversacion,
-				pasoBot: pasoActual,
-			});
-			if (intentGpt?.intencion === 'confirmar_turno') conf = true;
-			else if (intentGpt?.intencion === 'rechazar_turno') conf = false;
-			else conf = interpretarConfirmacion(texto);
-		} else {
-			conf = interpretarConfirmacion(texto);
-		}
+		if (intentGpt?.intencion === 'confirmar_turno') conf = true;
+		else if (intentGpt?.intencion === 'rechazar_turno') conf = false;
+		else if (intentGpt?.intencion === 'buscar_turno') conf = false;
+		else conf = interpretarConfirmacion(texto);
 
 		if (intentGpt?.intencion === 'cambiar_especialidad') {
 			await botConversacion.guardarContextoBot(idConversacion, null);
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
 				pasoBot: 'ELEGIR_ESPECIALIDAD',
 			});
-			return {
-				handled: true,
-				texto: pasoEspecialidad?.mensajeUsuario || '¿Qué especialidad necesitás?',
-			};
+			return withInterpretacion(
+				{
+					handled: true,
+					tipoRespuesta: 'ACLARACION',
+					texto: pasoEspecialidad?.mensajeUsuario || '¿Qué especialidad necesitás?',
+				},
+				interpretacion,
+			);
+		}
+
+		if (botInterpretacion.debeSalirFlujo(interpretacion, texto)) {
+			await cancelarFlujoTurnoActivo(idConversacion);
+			return withInterpretacion(
+				{
+					handled: true,
+					tipoRespuesta: 'SALIDA_FLUJO',
+					texto: mensajeSalidaFlujo(config, convAct),
+				},
+				interpretacion,
+			);
 		}
 
 		if (conf === true && ctx.matricula && ctx.fecha && ctx.hora) {
@@ -1684,10 +1818,21 @@ async function intentarRespuestaWizard({
 				await botConversacion.finalizarTrasReservaExitosa(idConversacion);
 				const saludo = primerNombre(nombreWhatsApp(convAct));
 				const ticket = reserva.ticket?.mensajeWhatsApp || reserva.mensajeConfirmacion;
-				return {
-					handled: true,
-					texto: saludo ? `Perfecto, ${saludo}.\n\n${ticket}` : ticket,
-				};
+				return withInterpretacion(
+					{
+						handled: true,
+						tipoRespuesta: 'CONFIRMACION_TURNO_OK',
+						texto: saludo ? `Perfecto, ${saludo}.\n\n${ticket}` : ticket,
+						datosOperativos: {
+							medico: ctx.medico,
+							especialidad: ctx.especialidadNombre,
+							fechaLegible: ctx.fechaLegible,
+							hora: ctx.hora,
+							comprobante: ticket,
+						},
+					},
+					interpretacion,
+				);
 			} catch (err) {
 				diag.warn('wizard', 'Error reservando turno sugerido', { error: err.message, code: err.code });
 				if (err.code === 'PROFESIONAL_INEXISTENTE' || err.code === 'ESPECIALIDAD_NO_COINCIDE') {
@@ -1717,7 +1862,10 @@ async function intentarRespuestaWizard({
 				buscarPorGpt && intentGpt
 					? botIntencion.intencionAAjusteTurno(intentGpt.intencion, intentGpt.parametros, ctx)
 					: botAgenda.interpretarAjusteTurno(texto, ctx);
-			return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajuste);
+			return withInterpretacion(
+				_planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajuste),
+				interpretacion,
+			);
 		}
 
 		if (!gptHabilitado()) {
@@ -1727,21 +1875,40 @@ async function intentarRespuestaWizard({
 				ajusteLocal.preferir.fechas.length ||
 				ajusteLocal.preferir.franja;
 			if (interpretarRechazoTurno(texto, ctx) || tienePref) {
-				return _planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajusteLocal);
+				return withInterpretacion(
+					_planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajusteLocal),
+					interpretacion,
+				);
 			}
 		}
 
-		if (intentGpt?.intencion === 'conversacion') {
-			return {
-				handled: true,
-				texto: `${botAgenda.mensajeSugerenciaTurno(ctx, pasoCfg)}\n\nRespondé *Sí* para confirmar el turno o indicá otro día u horario.`,
-			};
+		if (intentGpt?.intencion === 'conversacion' || interpretacion?.flags?.es_saludo) {
+			return withInterpretacion(
+				{
+					handled: true,
+					tipoRespuesta: 'ACLARACION',
+					texto:
+						'Seguimos con el turno que te propuse. ¿Lo confirmás con *Sí*, preferís otro horario con *No*, o escribís *cancelar* si ya no querés sacar turno?',
+				},
+				interpretacion,
+			);
 		}
 
-		return {
-			handled: true,
-			texto: botAgenda.mensajeSugerenciaTurno(ctx, pasoCfg),
-		};
+		return withInterpretacion(
+			{
+				handled: true,
+				tipoRespuesta: 'SUGERENCIA_TURNO',
+				texto: botAgenda.mensajeSugerenciaTurno(ctx, pasoCfg),
+				datosOperativos: {
+					medico: ctx.medico,
+					especialidad: ctx.especialidadNombre,
+					fechaLegible: ctx.fechaLegible,
+					diaSemana: ctx.diaSemana,
+					hora: ctx.hora,
+				},
+			},
+			interpretacion,
+		);
 	}
 
 	return { handled: false, motivo: 'wizard no aplica' };
@@ -1794,6 +1961,16 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 			});
 			return {
 				texto: botAgenda.mensajeSugerenciaTurno(sugerencia, pasoConfirmar),
+				tipoRespuesta: sugerencia ? 'SUGERENCIA_TURNO' : 'SIN_DISPONIBILIDAD',
+				datosOperativos: sugerencia
+					? {
+							medico: sugerencia.medico,
+							especialidad: sugerencia.especialidadNombre,
+							fechaLegible: sugerencia.fechaLegible,
+							diaSemana: sugerencia.diaSemana,
+							hora: sugerencia.hora,
+						}
+					: { especialidad: buscarTurno.especialidadNombre },
 			};
 		}
 
@@ -1840,6 +2017,14 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 					alternativa: true,
 					preferencia: ajuste.resumen,
 				}),
+				tipoRespuesta: 'SUGERENCIA_TURNO',
+				datosOperativos: {
+					medico: siguiente.medico,
+					especialidad: siguiente.especialidadNombre,
+					fechaLegible: siguiente.fechaLegible,
+					diaSemana: siguiente.diaSemana,
+					hora: siguiente.hora,
+				},
 			};
 		}
 	} catch (err) {
@@ -1862,6 +2047,7 @@ module.exports = {
 	extraerDni,
 	interpretarConfirmacion,
 	interpretarRechazoTurno,
+	interpretarSalidaFlujo,
 	esContextoPostTurno,
 	esCierreCordial,
 	resolverMensajePostTurno,

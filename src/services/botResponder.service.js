@@ -6,6 +6,7 @@ const botConversacion = require('./botConversacion.service');
 const botOpenai = require('./botOpenai.service');
 const botWizard = require('./botWizard.service');
 const botAgenda = require('./botAgenda.service');
+const botHumanizer = require('./botHumanizer.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
@@ -82,6 +83,9 @@ async function buildSystemPrompt(config, flujo, conv) {
 		);
 		reglasFlujo.push(
 			'Si el paciente pide otro día u horario (ej. "¿tenés el miércoles a la tarde?"), el sistema busca automáticamente; podés confirmar que estás buscando esa opción. No inventes horarios.',
+		);
+		reglasFlujo.push(
+			'Si el paciente quiere salir ("cancelar", "no quiero ningún turno", "dejá"), el sistema cancela la gestión; no sigas ofreciendo turnos.',
 		);
 	}
 
@@ -172,6 +176,19 @@ async function enviarTextoBot({
 	return { respondido: true, texto, metaMessageId: meta.messageId };
 }
 
+async function humanizarSalidaWizard(wizard, conv, config) {
+	if (!wizard?.texto) return wizard;
+	const texto = await botHumanizer.humanizar({
+		conv,
+		config,
+		tipoRespuesta: wizard.tipoRespuesta || 'GENERICO',
+		textoBase: wizard.texto,
+		interpretacion: wizard.interpretacion,
+		datosOperativos: wizard.datosOperativos,
+	});
+	return { ...wizard, texto };
+}
+
 /**
  * @returns {Promise<{ respondido: boolean, texto?: string, metaMessageId?: string, motivo?: string }>}
  */
@@ -233,23 +250,41 @@ async function responderMensajeEntrante({
 			telefonoWhatsApp,
 			contenido: textoEntrada,
 		});
+		const configBot = await botConfigService.getBotConfig();
+		const convHum = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+
 		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.aviso && wizard.buscarTurno) {
 			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso, omitirMarcarRespondido: true });
 			let textoResultado =
 				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
+			let tipoRespuesta = 'SIN_DISPONIBILIDAD';
+			let datosOperativos = wizard.datosOperativos;
 			try {
 				const resultado = await botWizard.ejecutarBusquedaTurno(wizard.buscarTurno);
 				if (resultado?.texto) textoResultado = resultado.texto;
+				if (resultado?.tipoRespuesta) tipoRespuesta = resultado.tipoRespuesta;
+				if (resultado?.datosOperativos) datosOperativos = resultado.datosOperativos;
 			} catch (buscarErr) {
 				diag.warn('webhook', 'Búsqueda turno falló', {
 					error: buscarErr.message,
 					idConversacion,
 				});
 			}
-			return enviarTextoBot({ ...enviarOpts, texto: textoResultado, seguimiento: true });
+			const humanizado = await humanizarSalidaWizard(
+				{
+					texto: textoResultado,
+					tipoRespuesta,
+					datosOperativos,
+					interpretacion: wizard.interpretacion,
+				},
+				convHum,
+				configBot,
+			);
+			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto, seguimiento: true });
 		}
 		if (wizard.handled && wizard.texto) {
-			return enviarTextoBot({ ...enviarOpts, texto: wizard.texto });
+			const humanizado = await humanizarSalidaWizard(wizard, convHum, configBot);
+			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto });
 		}
 	} catch (wizardErr) {
 		diag.warn('webhook', 'Wizard error', { error: wizardErr.message, code: wizardErr.code });
