@@ -310,6 +310,37 @@ async function testEmpresasOnStartup() {
 				}
 			}
 		}
+
+		// Probe SQL tenant del hospital (BOT_EMPRESA_ID) — el bot no responde sin esto.
+		const botEmpresa = Number(process.env.BOT_EMPRESA_ID || 1);
+		if (Number.isFinite(botEmpresa) && botEmpresa > 0) {
+			try {
+				const { testTenantConnection } = require('../config/tenantDb');
+				const t0 = Date.now();
+				await testTenantConnection(botEmpresa);
+				line('startup', `SQL tenant empresa ${botEmpresa}: OK`, { ms: Date.now() - t0 });
+				console.log(`✓ SQL tenant empresa ${botEmpresa} accesible (${Date.now() - t0}ms)`);
+			} catch (sqlErr) {
+				const row = rows.find((r) => Number(r.IDEMPRESA) === botEmpresa);
+				const target = row
+					? `${row.DbServer}:${row.DbPort || 1433}/${row.DbName}`
+					: `empresa ${botEmpresa}`;
+				warn('startup', `SQL tenant empresa ${botEmpresa} INACCESIBLE`, {
+					target,
+					error: sqlErr.message,
+					code: sqlErr.code,
+				});
+				console.error('');
+				console.error('══════════════════════════════════════════════════════════════');
+				console.error(`✗ SQL tenant INACCESIBLE — el bot WhatsApp NO puede responder`);
+				console.error(`  Destino: ${target}`);
+				console.error(`  Error:   ${sqlErr.message}`);
+				console.error('  Railway no llega al SQL Server del hospital (firewall / puerto 1433).');
+				console.error('  Abrí el puerto 1433 en el firewall para las IPs de salida de Railway.');
+				console.error('══════════════════════════════════════════════════════════════');
+				console.error('');
+			}
+		}
 	} catch (e) {
 		warn('startup', 'Test empresas falló', { error: e.message });
 	}
