@@ -7,6 +7,7 @@ const convCtrl = require('../controllers/botConversacionWebhook.controller');
 router.use(requireBotApiKey);
 
 /** Webhooks conversación — Meta / middleware WhatsApp */
+router.post('/webhook/meta', convCtrl.webhookMetaEntrante);
 router.post('/webhook/mensaje', convCtrl.webhookMensajeEntrante);
 router.post('/webhook/mensaje-saliente', convCtrl.webhookMensajeSaliente);
 router.get('/conversaciones/estado', convCtrl.consultarEstado);

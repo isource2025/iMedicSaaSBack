@@ -24,6 +24,15 @@ function verificar(req, res) {
  */
 async function recibirEventos(req, res) {
 	diag.logWebhookIncoming(req);
+	const msgCount = (req.body?.entry || []).reduce((n, e) => {
+		for (const c of e.changes || []) {
+			n += (c.value?.messages || []).length;
+		}
+		return n;
+	}, 0);
+	console.log(
+		`[whatsapp] POST webhook (${msgCount} mensaje(s), object=${req.body?.object || '?'})`,
+	);
 	try {
 		whatsappMeta.verificarFirmaWebhook(req);
 	} catch (err) {

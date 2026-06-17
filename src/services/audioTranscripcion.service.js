@@ -49,7 +49,10 @@ function marcarTranscripcionAudio(texto) {
 
 /** True si el contenido almacenado corresponde a un audio transcripto. */
 function esTranscripcionAudio(texto) {
-	return String(texto || '').startsWith(AUDIO_PREFIX.trimEnd());
+	const s = String(texto || '');
+	if (s.startsWith(AUDIO_PREFIX.trimEnd())) return true;
+	// Mensajes viejos guardados antes de Groq Whisper
+	return /^\[audio\]$/i.test(s.trim());
 }
 
 /** Devuelve el texto sin el marcador de audio (para que lo consuma el bot). */
@@ -176,6 +179,110 @@ async function transcribirAudioMeta({ mediaId, accessToken, mimeType }) {
 	}
 }
 
+/**
+ * Transcribe y asigna m.contenido (mismo flujo que texto → registrar → bot).
+ * @param {{ media?: { id?: string, mimeType?: string }, contenido?: string, telefono?: string }} m
+ */
+async function aplicarTranscripcionAMensaje(m, idEmpresa, waCfg) {
+	const mediaId = m.media?.id;
+	if (!mediaId) return;
+
+	let accessToken = waCfg?.accessToken || null;
+	if (!accessToken) {
+		const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa).catch(() => null);
+		accessToken = cfg?.accessToken || null;
+	}
+
+	const texto = accessToken
+		? await transcribirAudioMeta({
+				mediaId,
+				accessToken,
+				mimeType: m.media?.mimeType,
+			})
+		: null;
+
+	if (texto) {
+		m.contenido = marcarTranscripcionAudio(texto);
+		console.log(`[whatsapp] Audio transcripto (${texto.length} chars) → ${m.telefono || '?'}`);
+		diag.line('webhook', 'Audio transcripto', {
+			idEmpresa,
+			telefono: m.telefono,
+			chars: texto.length,
+		});
+	} else {
+		m.contenido = marcarTranscripcionAudio('(audio sin transcripción)');
+		console.warn(`[whatsapp] Audio sin transcripción → ${m.telefono || '?'}`);
+		diag.warn('webhook', 'Audio sin transcripción', {
+			idEmpresa,
+			telefono: m.telefono,
+			hasToken: Boolean(accessToken),
+			groq: transcripcionHabilitada(),
+		});
+	}
+}
+
+function extraerAudioDesdeMetaMessage(msg) {
+	if (!msg || typeof msg !== 'object') return null;
+	const tipo = String(msg.type || '').toLowerCase();
+	if (tipo !== 'audio' && tipo !== 'voice') return null;
+	const node = msg.audio || msg.voice || {};
+	return {
+		mediaId: node.id || null,
+		mimeType: node.mime_type || null,
+		telefono: msg.from ? String(msg.from) : null,
+	};
+}
+
+/**
+ * Resuelve texto de entrada para POST /api/integrations/bot/webhook/mensaje
+ * (mismo resultado que el webhook Meta directo: transcribe con Groq y marca 🎤).
+ */
+async function resolverContenidoDesdeIntegrationBody(body, idEmpresa) {
+	let contenido = String(body?.mensaje ?? body?.contenido ?? body?.text ?? body?.body ?? '').trim();
+	let tipo = String(body?.tipo ?? body?.type ?? '').toLowerCase();
+	let mediaId =
+		body?.mediaId ?? body?.audioId ?? body?.audio?.id ?? body?.media?.id ?? null;
+	let mimeType =
+		body?.mimeType ?? body?.mime_type ?? body?.audio?.mime_type ?? body?.media?.mimeType ?? null;
+	const telefonoHint =
+		body?.telefono ?? body?.telefonoWhatsApp ?? body?.from ?? body?.wa_id ?? body?.phone ?? null;
+
+	const metaMsg = body?.message ?? body?.messages?.[0] ?? null;
+	if (metaMsg) {
+		const audio = extraerAudioDesdeMetaMessage(metaMsg);
+		if (audio?.mediaId) {
+			mediaId = audio.mediaId;
+			mimeType = audio.mimeType;
+			tipo = 'audio';
+		} else if (metaMsg.type === 'text') {
+			contenido = metaMsg.text?.body || contenido;
+		}
+	}
+
+	const esPlaceholderAudio = /^\[audio\]$/i.test(contenido);
+	const necesitaTranscripcion =
+		mediaId && (!contenido || esPlaceholderAudio || tipo === 'audio' || tipo === 'voice');
+
+	if (necesitaTranscripcion) {
+		const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa).catch(() => null);
+		const texto = cfg?.accessToken
+			? await transcribirAudioMeta({
+					mediaId,
+					accessToken: cfg.accessToken,
+					mimeType,
+				})
+			: null;
+		contenido = texto
+			? marcarTranscripcionAudio(texto)
+			: marcarTranscripcionAudio('(audio sin transcripción)');
+		console.log(
+			`[integrations/bot] Audio ${texto ? 'transcripto' : 'sin transcripción'} → ${telefonoHint || '?'}`,
+		);
+	}
+
+	return contenido.trim();
+}
+
 module.exports = {
 	AUDIO_PREFIX,
 	transcripcionHabilitada,
@@ -185,4 +292,6 @@ module.exports = {
 	descargarMediaMeta,
 	transcribirBuffer,
 	transcribirAudioMeta,
+	aplicarTranscripcionAMensaje,
+	resolverContenidoDesdeIntegrationBody,
 };

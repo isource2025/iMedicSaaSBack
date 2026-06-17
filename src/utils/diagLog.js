@@ -241,11 +241,13 @@ async function testMetaWebhookSubscriptions(appId, appToken) {
 				fields: s.fields,
 			})),
 		});
-		const domain = process.env.RAILWAY_PUBLIC_DOMAIN || 'imedicwsback-production.up.railway.app';
-		const ours = subs.filter((s) => String(s.callback_url || '').includes(domain));
-		if (!ours.length) {
-			warn('startup', `Ninguna suscripción apunta a ${domain} en app ${appId}`, {
-				hint: 'Configurá el webhook en Meta Developers → esta app → WhatsApp → Configuración',
+		const wa = subs.find((s) => s.object === 'whatsapp_business_account');
+		const callback = wa?.callback_url || null;
+		const domain = process.env.RAILWAY_PUBLIC_DOMAIN || '';
+		if (callback && domain && !String(callback).includes(domain)) {
+			line('startup', 'Webhook Meta registrado en otro dominio (puede ser intencional)', {
+				callback_url: callback,
+				este_servicio: domain,
 			});
 		}
 	} catch (e) {

@@ -144,36 +144,7 @@ function describeSkippedPayload(body) {
 }
 
 async function resolverContenidoAudio(m, idEmpresa, waCfg) {
-	if (!m.media?.id) return;
-	let accessToken = waCfg?.accessToken || null;
-	if (!accessToken) {
-		const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa).catch(() => null);
-		accessToken = cfg?.accessToken || null;
-	}
-
-	const texto = accessToken
-		? await audioTranscripcion.transcribirAudioMeta({
-				mediaId: m.media.id,
-				accessToken,
-				mimeType: m.media.mimeType,
-			})
-		: null;
-
-	if (texto) {
-		m.contenido = audioTranscripcion.marcarTranscripcionAudio(texto);
-		diag.line('webhook', 'Audio transcripto', {
-			idEmpresa,
-			telefono: m.telefono,
-			chars: texto.length,
-		});
-	} else {
-		m.contenido = audioTranscripcion.marcarTranscripcionAudio('(audio sin transcripción)');
-		diag.warn('webhook', 'Audio sin transcripción', {
-			idEmpresa,
-			telefono: m.telefono,
-			hasToken: Boolean(accessToken),
-		});
-	}
+	await audioTranscripcion.aplicarTranscripcionAMensaje(m, idEmpresa, waCfg);
 }
 
 async function procesarGrupoMensajes(idEmpresa, mensajes, sourceLabel, waCfg = null) {
