@@ -58,6 +58,7 @@ function envSummary() {
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY?.trim() ? 'set' : 'MISSING',
 		BOT_GPT_ENABLED: process.env.BOT_GPT_ENABLED ?? '(default on if OpenAI set)',
 		BOT_API_KEY: process.env.BOT_API_KEY?.trim() ? 'set' : 'MISSING',
+		GROQ_API_KEY: process.env.GROQ_API_KEY?.trim() ? 'set' : 'MISSING (audios no se transcriben)',
 		RAILWAY_PUBLIC_DOMAIN: process.env.RAILWAY_PUBLIC_DOMAIN || '(unset)',
 	};
 }
