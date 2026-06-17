@@ -54,7 +54,6 @@ app.listen(PORT, () => {
 
   setTimeout(() => {
     diag.testMetaAppSecretOnStartup()
-      .then(() => require('./services/metaWebhookSync.service').syncWebhookIfNeeded())
       .then(() => diag.testEmpresa1OnStartup())
       .catch((e) => {
         diag.warn('startup', 'Diagnóstico error', { error: e.message });

@@ -1,6 +1,5 @@
 const botConversacion = require('../services/botConversacion.service');
 const botResponder = require('../services/botResponder.service');
-const audioTranscripcion = require('../services/audioTranscripcion.service');
 
 /**
  * Webhook entrante — Meta / middleware WhatsApp → iMedic
@@ -9,20 +8,9 @@ const audioTranscripcion = require('../services/audioTranscripcion.service');
 async function webhookMensajeEntrante(req, res) {
 	try {
 		const body = req.body || {};
-
-		// Gateway reenvía payload Meta COMPLETO (con mensajes) → mismo pipeline que /api/webhook/whatsapp
-		const whatsappWebhook = require('../services/whatsappWebhook.service');
-		if (whatsappWebhook.esPayloadMetaConMensajes(body)) {
-			const result = await whatsappWebhook.procesarWebhookEntrante(body);
-			return res.json({ success: true, data: result });
-		}
-
 		const telefono =
 			body.telefono ?? body.telefonoWhatsApp ?? body.from ?? body.wa_id ?? body.phone;
-		const contenido = await audioTranscripcion.resolverContenidoDesdeIntegrationBody(
-			body,
-			req.idEmpresa,
-		);
+		const contenido = body.mensaje ?? body.contenido ?? body.text ?? body.body;
 		const idConversacion = body.idConversacion ?? body.conversationId ?? null;
 		const nombreContacto = body.nombreContacto ?? body.profileName ?? body.nombre ?? null;
 		const metaMessageId = body.metaMessageId ?? body.messageId ?? body.id ?? null;
@@ -65,7 +53,7 @@ async function webhookMensajeEntrante(req, res) {
 		let botReply = null;
 		if (result.duplicado) {
 			webhookDedup.markCompleted(claim.key, true);
-		} else if (estado.puedeResponderBot) {
+		} else if (botResponder.gptHabilitado() && estado.puedeResponderBot) {
 			try {
 				botReply = await botResponder.responderMensajeEntrante({
 					idEmpresa: req.idEmpresa,
@@ -187,32 +175,9 @@ async function actualizarContexto(req, res) {
 	}
 }
 
-/**
- * POST /api/integrations/bot/webhook/meta
- * Gateway reenvía el body Meta sin transformar → transcribe audios + responde igual que texto.
- */
-async function webhookMetaEntrante(req, res) {
-	try {
-		const body = req.body || {};
-		const whatsappWebhook = require('../services/whatsappWebhook.service');
-		if (!whatsappWebhook.esPayloadMetaConMensajes(body)) {
-			return res.status(400).json({
-				success: false,
-				mensaje: 'Se espera payload Meta con mensajes (entry[].changes[].value.messages)',
-				codigo: 'PAYLOAD_INVALIDO',
-			});
-		}
-		const result = await whatsappWebhook.procesarWebhookEntrante(body);
-		res.json({ success: true, data: result });
-	} catch (err) {
-		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
-	}
-}
-
 module.exports = {
 	webhookMensajeEntrante,
 	webhookMensajeSaliente,
-	webhookMetaEntrante,
 	consultarEstado,
 	actualizarContexto,
 };
