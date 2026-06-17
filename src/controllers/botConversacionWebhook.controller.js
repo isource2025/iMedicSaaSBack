@@ -1,26 +1,41 @@
 const botConversacion = require('../services/botConversacion.service');
 const botResponder = require('../services/botResponder.service');
+const botReset = require('../services/botReset.service');
+const whatsappWebhook = require('../services/whatsappWebhook.service');
+const audioTranscripcion = require('../services/audioTranscripcion.service');
 
 /**
- * Webhook entrante — Meta / middleware WhatsApp → iMedic
+ * Webhook entrante — Meta / chatbot-volt / middleware → iMedic
  * POST /api/integrations/bot/webhook/mensaje
+ *
+ * Mismo pipeline que POST /api/webhook/whatsapp (wizard + GPT + audio Groq).
  */
 async function webhookMensajeEntrante(req, res) {
 	try {
 		const body = req.body || {};
+
+		if (whatsappWebhook.esPayloadMetaConMensajes(body)) {
+			const result = await whatsappWebhook.procesarWebhookEntrante(body);
+			return res.json({ success: true, data: result });
+		}
+
 		const telefono =
 			body.telefono ?? body.telefonoWhatsApp ?? body.from ?? body.wa_id ?? body.phone;
-		const contenido = body.mensaje ?? body.contenido ?? body.text ?? body.body;
 		const idConversacion = body.idConversacion ?? body.conversationId ?? null;
 		const nombreContacto = body.nombreContacto ?? body.profileName ?? body.nombre ?? null;
 		const metaMessageId = body.metaMessageId ?? body.messageId ?? body.id ?? null;
 		const idPaciente = body.idPaciente != null ? Number(body.idPaciente) : null;
 		const dniPaciente = body.dniPaciente ?? body.numeroDocumento ?? null;
 
-		if (!telefono || !contenido) {
+		const contenido = await audioTranscripcion.resolverContenidoDesdeIntegrationBody(
+			body,
+			req.idEmpresa,
+		);
+
+		if (!telefono || !String(contenido || '').trim()) {
 			return res.status(400).json({
 				success: false,
-				mensaje: 'telefono y mensaje/contenido son obligatorios',
+				mensaje: 'telefono y mensaje/contenido (o audio con mediaId) son obligatorios',
 				codigo: 'PAYLOAD_INVALIDO',
 			});
 		}
@@ -38,6 +53,16 @@ async function webhookMensajeEntrante(req, res) {
 			});
 		}
 
+		if (botReset.esComandoReset(contenido)) {
+			const reset = await botReset.procesarComandoReset({
+				idEmpresa: req.idEmpresa,
+				telefonoWhatsApp: telefono,
+				contenido,
+			});
+			webhookDedup.markCompleted(claim.key, true);
+			return res.json({ success: true, data: { reset, botReply: { respondido: false, motivo: 'comando-reset' } } });
+		}
+
 		const result = await botConversacion.registrarMensajeEntrante({
 			telefonoWhatsApp: telefono,
 			contenido,
@@ -53,7 +78,7 @@ async function webhookMensajeEntrante(req, res) {
 		let botReply = null;
 		if (result.duplicado) {
 			webhookDedup.markCompleted(claim.key, true);
-		} else if (botResponder.gptHabilitado() && estado.puedeResponderBot) {
+		} else if (estado.puedeResponderBot) {
 			try {
 				botReply = await botResponder.responderMensajeEntrante({
 					idEmpresa: req.idEmpresa,
@@ -63,8 +88,9 @@ async function webhookMensajeEntrante(req, res) {
 					idMensajePaciente: result.mensaje?.idMensaje,
 					metaMessageIdEntrante: metaMessageId,
 				});
-			} catch (gptErr) {
-				botReply = { respondido: false, motivo: gptErr.message };
+			} catch (botErr) {
+				console.warn('[integrations/bot] Bot:', botErr.message);
+				botReply = { respondido: false, motivo: botErr.message };
 			}
 			webhookDedup.markCompleted(claim.key, true);
 		} else {

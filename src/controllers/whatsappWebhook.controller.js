@@ -33,11 +33,25 @@ async function recibirEventos(req, res) {
 	console.log(
 		`[whatsapp] POST webhook (${msgCount} mensaje(s), object=${req.body?.object || '?'})`,
 	);
+	if (msgCount > 0) {
+		const tipos = [];
+		for (const entry of req.body?.entry || []) {
+			for (const change of entry.changes || []) {
+				for (const m of change.value?.messages || []) {
+					tipos.push(m.type || '?');
+				}
+			}
+		}
+		console.log(`[whatsapp] tipos: ${tipos.join(', ')} | UA: ${String(req.headers['user-agent'] || '').slice(0, 40)}`);
+	}
 	try {
 		whatsappMeta.verificarFirmaWebhook(req);
 	} catch (err) {
 		if (err.statusCode === 401) {
-			console.warn('[whatsapp] Firma inválida:', err.message);
+			console.error(
+				'[whatsapp] Firma inválida — Meta descartó el mensaje. En Railway: WHATSAPP_WEBHOOK_TRUST_META_UA=1 (o redeploy con trust prod por defecto).',
+				err.message,
+			);
 			return res.status(401).json({ success: false, mensaje: err.message });
 		}
 		diag.warn('webhook', 'Error verificando firma', { error: err.message, code: err.code });

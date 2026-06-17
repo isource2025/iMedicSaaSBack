@@ -44,6 +44,14 @@ app.listen(PORT, () => {
     console.log(`  Verify token configurado (WHATSAPP_VERIFY_TOKEN)`);
     if (process.env.META_APP_SECRET?.trim()) {
       console.log('  Firma webhook activa (META_APP_SECRET)');
+      if (process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '0') {
+        console.warn('  ⚠ WHATSAPP_WEBHOOK_TRUST_META_UA=0 — si el teléfono no responde, activá trust Meta UA');
+      } else if (process.env.NODE_ENV === 'production') {
+        console.log('  Trust Meta UA en prod si HMAC falla (Graph API OK) — teléfono real');
+      }
+    }
+    if (!process.env.BOT_API_KEY?.trim() && !process.env.BOT_API_KEYS?.trim()) {
+      console.warn('  ⚠ BOT_API_KEY ausente — /integrations/bot/* inactivo (webhook directo /api/webhook/whatsapp OK)');
     }
     if (process.env.META_APP_ID?.trim()) {
       console.log(`  Meta App ID: ${process.env.META_APP_ID.trim()}`);

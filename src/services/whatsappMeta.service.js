@@ -57,16 +57,30 @@ function isDevBypassAllowed() {
 	return process.env.NODE_ENV !== 'production';
 }
 
+/**
+ * En Railway/producción el proxy a veces altera bytes del body y el HMAC no coincide,
+ * aunque META_APP_SECRET sea válido (Graph API OK). Meta siempre envía User-Agent reconocible.
+ */
 function shouldTrustMetaWithoutSignature(req) {
-	if (!isDevBypassAllowed()) return false;
-	if (process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === '1') return true;
+	if (process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '0') return false;
+
+	const trustExplicit = process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '1';
+	const trustDefaultProd =
+		process.env.NODE_ENV === 'production' && process.env.WHATSAPP_WEBHOOK_TRUST_META_UA !== '0';
+
 	if (
-		process.env.WHATSAPP_WEBHOOK_TRUST_META_UA === '1' &&
+		(trustExplicit || trustDefaultProd) &&
 		global.__metaAppSecretGraphOk === true &&
 		isMetaUserAgent(req)
 	) {
 		return true;
 	}
+
+	if (process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === '1') {
+		if (process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE_PROD === '1') return true;
+		return isDevBypassAllowed();
+	}
+
 	return false;
 }
 
