@@ -181,6 +181,7 @@ Especialidades válidas (nombre EXACTO): ${lista || '(sin catálogo)'}
 Intenciones:
 - elegir_especialidad: el paciente elige o menciona un área (ej. "gineco", "para cardio")
 - listar_especialidades: pregunta qué hay / "mostrame"
+- listar_profesionales: pregunta qué médicos/profesionales atienden en un área
 - conversacion: no elige especialidad todavía
 
 JSON:
@@ -239,6 +240,7 @@ Intenciones:
 - solicitar_turno: quiere sacar, pedir o gestionar un turno (para sí o para otra persona: tío, hermanita, hijo, etc.). Incluye seguimientos como "puede ser?", "ahora", "otro turno".
 - elegir_especialidad: menciona un área médica concreta (ej. traumato, cardio, clínica)
 - listar_especialidades: pregunta qué especialidades hay / "mostrame"
+- listar_profesionales: pregunta qué médicos/profesionales atienden (con o sin especialidad en el mensaje)
 - agradecimiento: agradece o cierra cordialmente tras un turno ya confirmado, sin pedir turno nuevo todavía
 - conversacion: charla sin pedir turno nuevo
 
@@ -250,6 +252,7 @@ Reglas:
 - Si en el historial reciente el bot envió comprobante o "Turno confirmado", "muchas gracias" / "gracias" → agradecimiento (NO solicitar_turno).
 - "un turno para mi tío", "puede ser?", "holaa otro turno" → solicitar_turno
 - "me gustaría saber las especialidades", "qué tienen", "mostrame las áreas" → listar_especialidades (NO solicitar_turno)
+- "qué profesionales atienden", "médicos de traumato" → listar_profesionales (completar parametros.especialidad si la menciona)
 - Preguntar qué especialidades hay NO implica pedir turno todavía → listar_especialidades
 - "gracias", "genial" tras comprobante → agradecimiento
 - Si menciona especialidad junto con pedir turno → solicitar_turno y completar parametros.especialidad
@@ -311,10 +314,33 @@ async function interpretarIntencion({ texto, conv, idConversacion, pasoBot }) {
 	};
 }
 
+async function resolverProfesionalesDesdeIntencion(intencion) {
+	if (!intencion) return { tipo: 'no_encontrada' };
+	if (intencion.intencion !== 'listar_profesionales') {
+		return { tipo: 'no_encontrada' };
+	}
+
+	const nombre = String(intencion.parametros?.especialidad || '').trim();
+	if (nombre) {
+		const res = await resolverEspecialidadDesdeIntencion({
+			intencion: 'elegir_especialidad',
+			parametros: { especialidad: nombre },
+		});
+		if (res.tipo === 'especialidad') {
+			return { tipo: 'profesionales', especialidad: res.especialidad };
+		}
+	}
+
+	return { tipo: 'sin_especialidad' };
+}
+
 async function resolverEspecialidadDesdeIntencion(intencion) {
 	if (!intencion) return { tipo: 'no_encontrada' };
 	if (intencion.intencion === 'listar_especialidades') {
 		return { tipo: 'listar', lista: await botAgenda.listarEspecialidadesBot() };
+	}
+	if (intencion.intencion === 'listar_profesionales') {
+		return resolverProfesionalesDesdeIntencion(intencion);
 	}
 	if (intencion.intencion === 'conversacion') {
 		return { tipo: 'conversacion' };
@@ -358,5 +384,6 @@ module.exports = {
 	interpretarIntencion,
 	intencionAAjusteTurno,
 	resolverEspecialidadDesdeIntencion,
+	resolverProfesionalesDesdeIntencion,
 	esPasoIdentificacionLibre: _esPasoIdentificacionLibre,
 };

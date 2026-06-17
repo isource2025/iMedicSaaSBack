@@ -113,7 +113,7 @@ async function getBotConfig() {
 			/** Panel Bot → Reglas → Búsqueda de disponibilidad */
 			busquedaMaxDias: db.busqueda_max_dias ?? envInt('BOT_BUSQUEDA_MAX_DIAS', 21),
 			busquedaMaxProfesionales:
-				db.busqueda_max_profesionales ?? envInt('BOT_MAX_PROF_BUSQUEDA', 12),
+				db.busqueda_max_profesionales ?? envInt('BOT_MAX_PROF_BUSQUEDA', 40),
 			busquedaConcurrencia:
 				db.busqueda_concurrencia ?? envInt('BOT_BUSQUEDA_CONCURRENCIA', 4),
 			busquedaTimeoutMs:
@@ -337,7 +337,7 @@ async function saveBotConfig(payload = {}) {
 		await upsertConfigClave('busqueda_max_dias', dias, 'int');
 	}
 	if (reglas.busquedaMaxProfesionales != null) {
-		const n = Math.max(1, Math.min(30, Math.round(Number(reglas.busquedaMaxProfesionales) || 12)));
+		const n = Math.max(1, Math.min(60, Math.round(Number(reglas.busquedaMaxProfesionales) || 40)));
 		await upsertConfigClave('busqueda_max_profesionales', n, 'int');
 	}
 	if (reglas.busquedaConcurrencia != null) {

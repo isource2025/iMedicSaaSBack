@@ -54,7 +54,7 @@ async function buildSystemPrompt(config, flujo, conv) {
 			? 'Cuando corresponda, pedí especialidad. Interpretá lenguaje natural (ej. "gineco", "para gineco un turno" = GINECOLOGÍA). Si preguntan qué hay, listá las especialidades de forma amigable.'
 			: 'NO pidas especialidad (paso desactivado en el wizard).',
 		incluirProfesional
-			? 'Después de especialidad, pedí profesional si aplica.'
+			? 'Después de especialidad, pedí profesional si aplica. NUNCA inventes nombres: el sistema lista los médicos reales desde la agenda.'
 			: 'NO pidas profesional (paso desactivado en el wizard).',
 	].filter(Boolean);
 
@@ -91,6 +91,7 @@ async function buildSystemPrompt(config, flujo, conv) {
 		'Objetivo: conversar de forma natural; las acciones de agenda (buscar turno, especialidad, confirmar) las ejecuta el sistema según la intención detectada.',
 		...reglasFlujo,
 		'No inventes horarios ni médicos; si no tenés datos, pedí el siguiente dato del flujo.',
+		'NUNCA inventes nombres de profesionales: el listado lo genera el sistema desde la agenda.',
 		'Respuestas cortas (máx. 2-3 párrafos). Sin markdown complejo.',
 		conv?.nombreContacto
 			? `Siempre dirigite al paciente como *${String(conv.nombreContacto).trim().split(/\s+/)[0]}* (nombre del contacto WhatsApp), no uses el nombre legal de RENAPER.`
@@ -255,7 +256,9 @@ async function responderMensajeEntrante({
 					? 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.'
 					: wizardErr.code === 'RENAPER_TIMEOUT'
 						? 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo.'
-						: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
+						: wizardErr.code === 'DNI_INVALIDO'
+							? 'El DNI indicado no es válido. Enviá solo números, sin puntos.'
+							: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
 			return enviarTextoBot({ ...enviarOpts, texto });
 		}
 		if (conv?.pasoBot === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
@@ -332,6 +335,26 @@ async function responderMensajeEntrante({
 
 	if (!gptHabilitado()) {
 		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
+	}
+
+	// Evitar que GPT invente médicos cuando el wizard dejó pasar una consulta de profesionales
+	if (
+		!dniDetectado &&
+		(botAgenda.esConsultaListaProfesionales(textoEntrada) ||
+			(convAct?.pasoBot === 'ELEGIR_PROFESIONAL' && convAct?.contextoBot?.especialidadPendiente))
+	) {
+		const espCtx = convAct?.contextoBot?.especialidadPendiente;
+		if (espCtx?.valor) {
+			return enviarTextoBot({
+				...enviarOpts,
+				texto: await botAgenda.mensajeProfesionalesDisponibles(espCtx.valor),
+			});
+		}
+		return enviarTextoBot({
+			...enviarOpts,
+			texto:
+				'¿En qué especialidad querés ver los profesionales? Por ejemplo: *Traumatología*, *Cardiología*…',
+		});
 	}
 
 	// 2) GPT para el resto del flujo

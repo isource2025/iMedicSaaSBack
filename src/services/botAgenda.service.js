@@ -134,6 +134,7 @@ async function _validarProfesionalBot(matricula, especialidadValor = null) {
 }
 
 async function _buscarPacienteLocalPorDni(dni) {
+	const dniStr = String(dni).trim();
 	try {
 		const rows = await executeQuery(
 			`SELECT TOP 1
@@ -143,8 +144,13 @@ async function _buscarPacienteLocalPorDni(dni) {
 			 FROM dbo.imPacientes p
 			 LEFT JOIN dbo.imClientes c ON p.NumeroCuenta = c.Valor
 			 WHERE p.NumeroDocumento = @p0
+			    OR LTRIM(RTRIM(CAST(p.NumeroDocumento AS VARCHAR(20)))) = @p1
+			    OR (TRY_CAST(LTRIM(RTRIM(CAST(p.NumeroDocumento AS VARCHAR(20)))) AS BIGINT) = @p0)
 			 ORDER BY p.IDPaciente DESC`,
-			[{ value: dni, type: 'Int' }],
+			[
+				{ value: Number(dniStr), type: 'Int' },
+				{ value: dniStr, type: 'VarChar' },
+			],
 		);
 		return rows[0] || null;
 	} catch (err) {
@@ -314,16 +320,29 @@ async function identificarPaciente({
 		renaperOk = true;
 		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
 	} else if (!renaperOk && !soloLocal && config.reglas.requiereRenaper === true) {
-		if (renaperError) {
-			const e = new Error('Servicio RENAPER no disponible desde el servidor');
-			e.statusCode = 503;
-			e.code = renaperError.code === 'RENAPER_TIMEOUT' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+		// Último intento: ficha local (p. ej. NumeroDocumento como texto)
+		if (!pacienteLocal) {
+			const retryRow = await _buscarPacienteLocalPorDni(dni);
+			if (retryRow) {
+				pacienteLocal = _mapPacienteRow(retryRow);
+				renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
+				renaperOk = true;
+				sexoDetectado = pacienteLocal.sexo || sexoDetectado;
+			}
+		}
+		if (!renaperOk) {
+			if (renaperError) {
+				const e = new Error('Servicio RENAPER no disponible desde el servidor');
+				e.statusCode = 503;
+				e.code =
+					renaperError.code === 'RENAPER_TIMEOUT' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+				throw e;
+			}
+			const e = new Error('No se encontraron datos en RENAPER');
+			e.statusCode = 404;
+			e.code = 'RENAPER_NO_ENCONTRADO';
 			throw e;
 		}
-		const e = new Error('No se encontraron datos en RENAPER');
-		e.statusCode = 404;
-		e.code = 'RENAPER_NO_ENCONTRADO';
-		throw e;
 	}
 
 	let idPaciente = pacienteLocal?.idPaciente ?? null;
@@ -975,35 +994,15 @@ async function consultarTurnosPaciente({ idPaciente, dni, proximos = true }) {
 async function cancelarTurnoBot(body) {
 	const matricula = Number(body.matricula);
 	const idTurno = Number(body.idTurno);
-	const telefonoWhatsApp = String(body.telefonoWhatsApp || '').trim();
+	const idPaciente = body.idPaciente != null ? Number(body.idPaciente) : null;
 
 	if (!Number.isFinite(matricula) || !Number.isFinite(idTurno)) {
 		const e = new Error('matricula e idTurno son requeridos');
 		e.statusCode = 400;
 		throw e;
 	}
-	if (!telefonoWhatsApp) {
-		const e = new Error('telefonoWhatsApp es requerido para cancelar un turno');
-		e.statusCode = 400;
-		throw e;
-	}
 
-	const turnRows = await executeQuery(
-		`SELECT TOP 1 IDPaciente FROM dbo.imTurnos WHERE IdTurno = @p0`,
-		[{ value: idTurno, type: 'Int' }],
-	);
-	if (!turnRows.length) {
-		const e = new Error('Turno no encontrado');
-		e.statusCode = 404;
-		throw e;
-	}
-	const idPacienteTurno = Number(turnRows[0].IDPaciente);
-	if (!Number.isFinite(idPacienteTurno) || idPacienteTurno <= 0) {
-		const e = new Error('El turno no tiene paciente asociado');
-		e.statusCode = 400;
-		throw e;
-	}
-	await _verificarTelefonoPaciente(idPacienteTurno, telefonoWhatsApp);
+	if (idPaciente) await _verificarTelefonoPaciente(idPaciente, body.telefonoWhatsApp);
 
 	const motivo = body.motivo ? String(body.motivo).slice(0, 200) : 'Cancelado vía WhatsApp';
 	try {
@@ -1018,7 +1017,7 @@ async function cancelarTurnoBot(body) {
 		await botLogService.registrarLog({
 			accion: 'CANCELACION',
 			idTurno,
-			idPaciente: idPacienteTurno,
+			idPaciente,
 			telefonoWhatsApp: body.telefonoWhatsApp,
 			idConversacion: body.idConversacion,
 			resultado: 'OK',
@@ -1028,7 +1027,7 @@ async function cancelarTurnoBot(body) {
 		await botLogService.registrarLog({
 			accion: 'CANCELACION',
 			idTurno,
-			idPaciente: idPacienteTurno,
+			idPaciente,
 			telefonoWhatsApp: body.telefonoWhatsApp,
 			resultado: 'ERROR',
 			mensajeError: err.message,
@@ -1173,6 +1172,44 @@ function mensajeEspecialidadesDisponibles(lista) {
 	return `Estas son las especialidades con turno disponible:\n\n${opciones}\n\nDecime cuál necesitás (podés escribirla con tus palabras, por ejemplo *gineco* o *clínica*).`;
 }
 
+async function mensajeProfesionalesDisponibles(especialidadValor, opciones = {}) {
+	const esp = Number(especialidadValor);
+	if (!Number.isFinite(esp) || esp <= 0) {
+		return 'Indicá la especialidad (por ejemplo: *Traumatología*) y te muestro los profesionales con agenda.';
+	}
+	const config = await botConfigService.getBotConfig();
+	const max =
+		Number(opciones.max) ||
+		Number(config.reglas.busquedaMaxProfesionales) ||
+		40;
+	const { especialidad, profesionales } = await listarProfesionalesBot(esp);
+	if (!profesionales.length) {
+		return `No hay profesionales con agenda en *${especialidad?.nombre || 'esa especialidad'}* por ahora.`;
+	}
+	const visibles = profesionales.slice(0, max);
+	const lista = visibles.map((p, i) => `${i + 1}. ${p.nombre}`).join('\n');
+	const extra =
+		profesionales.length > visibles.length
+			? `\n\n(Mostrando ${visibles.length} de ${profesionales.length} profesionales con agenda.)`
+			: '';
+	return `Profesionales con agenda en *${especialidad?.nombre || 'la especialidad'}*:\n\n${lista}${extra}\n\nIndicá con quién querés atenderte o enviá el DNI para continuar con el turno.`;
+}
+
+function esConsultaListaProfesionales(texto) {
+	const t = String(texto || '')
+		.trim()
+		.toLowerCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '');
+	if (!t) return false;
+	return (
+		/\b(profesional|profesionales|medico|medicos|doctor|doctores|quien atiende|quienes atienden)\b/.test(
+			t,
+		) &&
+		/\b(que|cuales|cual|lista|hay|atienden|atiende|mostrar|mostrame|decime|ver|saber|conocer)\b/.test(t)
+	);
+}
+
 function _mejorMatchPorTokens(texto, lista) {
 	const tokens = _tokensDesdeTexto(texto);
 	if (!tokens.length) return null;
@@ -1195,6 +1232,39 @@ function _mejorMatchPorTokens(texto, lista) {
 		}
 	}
 	return bestScore >= 55 ? best : null;
+}
+
+async function resolverProfesionalDesdeTexto(texto, especialidadValor) {
+	const esp = Number(especialidadValor);
+	if (!Number.isFinite(esp) || esp <= 0) return null;
+
+	const { profesionales } = await listarProfesionalesBot(esp);
+	if (!profesionales.length) return null;
+
+	const numMatch = String(texto || '')
+		.trim()
+		.match(/^(\d{1,2})\.?\s*$/);
+	if (numMatch) {
+		const idx = Number(numMatch[1]) - 1;
+		if (idx >= 0 && idx < profesionales.length) return profesionales[idx];
+	}
+
+	let busqueda = _normalizarTextoBusqueda(texto);
+	if (!busqueda) return null;
+	busqueda = busqueda
+		.replace(/\b(con|el|la|los|las|dr|dra|doctor|doctora|profesional|medico|medicos)\b/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!busqueda) return null;
+
+	let match = profesionales.find((p) => _normalizarTextoBusqueda(p.nombre) === busqueda);
+	if (match) return match;
+
+	match = profesionales.find((p) => _normalizarTextoBusqueda(p.nombre).includes(busqueda));
+	if (match) return match;
+
+	match = _mejorMatchPorTokens(busqueda, profesionales);
+	return match || null;
 }
 
 async function resolverEspecialidadDesdeTexto(texto) {
@@ -1644,7 +1714,7 @@ function _maxDiasBusquedaBot(config, preferir) {
 }
 
 function _maxProfesionalesBusqueda(reglas) {
-	return Math.max(1, Math.min(30, Number(reglas?.busquedaMaxProfesionales ?? 12)));
+	return Math.max(1, Math.min(60, Number(reglas?.busquedaMaxProfesionales ?? 40)));
 }
 
 async function _profesionalesConLibresEnDia(fechaIso, esp, ordenados) {
@@ -1979,10 +2049,13 @@ module.exports = {
 	validarSugerenciaTurno: _validarSugerenciaTurno,
 	disponibilidadBot,
 	resolverEspecialidadDesdeTexto,
+	resolverProfesionalDesdeTexto,
 	resolverEspecialidadConGpt,
 	resolverEspecialidadInteligente,
 	esConsultaListaEspecialidades,
+	esConsultaListaProfesionales,
 	mensajeEspecialidadesDisponibles,
+	mensajeProfesionalesDisponibles,
 	sugerirPrimerTurnoDisponible,
 	mensajeAvisoBusquedaDisponibilidad,
 	construirExclusionesRechazo,
