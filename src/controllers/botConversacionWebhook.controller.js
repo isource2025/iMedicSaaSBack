@@ -1,6 +1,5 @@
 const botConversacion = require('../services/botConversacion.service');
 const botResponder = require('../services/botResponder.service');
-const botReset = require('../services/botReset.service');
 const audioTranscripcion = require('../services/audioTranscripcion.service');
 
 /**
@@ -10,10 +9,10 @@ const audioTranscripcion = require('../services/audioTranscripcion.service');
 async function webhookMensajeEntrante(req, res) {
 	try {
 		const body = req.body || {};
-		const whatsappWebhook = require('../services/whatsappWebhook.service');
 
-		// Solo payload Meta con mensajes reales (evita tragar { entry: [] } del gateway)
-		if (whatsappWebhook.payloadMetaTieneMensajes(body)) {
+		// Gateway reenvía payload Meta COMPLETO (con mensajes) → mismo pipeline que /api/webhook/whatsapp
+		const whatsappWebhook = require('../services/whatsappWebhook.service');
+		if (whatsappWebhook.esPayloadMetaConMensajes(body)) {
 			const result = await whatsappWebhook.procesarWebhookEntrante(body);
 			return res.json({ success: true, data: result });
 		}
@@ -30,28 +29,7 @@ async function webhookMensajeEntrante(req, res) {
 		const idPaciente = body.idPaciente != null ? Number(body.idPaciente) : null;
 		const dniPaciente = body.dniPaciente ?? body.numeroDocumento ?? null;
 
-		if (!telefono) {
-			return res.status(400).json({
-				success: false,
-				mensaje: 'telefono es obligatorio',
-				codigo: 'PAYLOAD_INVALIDO',
-			});
-		}
-
-		const contenidoCmd = audioTranscripcion.quitarMarcadorAudio(contenido);
-		if (botReset.esComandoReset(contenidoCmd)) {
-			const reset = await botReset.procesarComandoReset({
-				idEmpresa: req.idEmpresa,
-				telefonoWhatsApp: telefono,
-				contenido: contenidoCmd,
-			});
-			return res.json({
-				success: true,
-				data: { reset, botReply: { respondido: false, motivo: 'comando-reset' } },
-			});
-		}
-
-		if (!contenido) {
+		if (!telefono || !contenido) {
 			return res.status(400).json({
 				success: false,
 				mensaje: 'telefono y mensaje/contenido son obligatorios',
@@ -217,10 +195,10 @@ async function webhookMetaEntrante(req, res) {
 	try {
 		const body = req.body || {};
 		const whatsappWebhook = require('../services/whatsappWebhook.service');
-		if (!whatsappWebhook.payloadMetaTieneMensajes(body)) {
+		if (!whatsappWebhook.esPayloadMetaConMensajes(body)) {
 			return res.status(400).json({
 				success: false,
-				mensaje: 'Se espera payload Meta con mensajes (object=whatsapp_business_account, entry[].changes[].value.messages)',
+				mensaje: 'Se espera payload Meta con mensajes (entry[].changes[].value.messages)',
 				codigo: 'PAYLOAD_INVALIDO',
 			});
 		}

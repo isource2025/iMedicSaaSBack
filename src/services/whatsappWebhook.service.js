@@ -64,21 +64,6 @@ function esPayloadSoloEstados(body) {
 	return tieneEstados && !tieneMensajes;
 }
 
-/** True solo si el body Meta trae al menos un mensaje entrante (no envoltorios vacíos del gateway). */
-function payloadMetaTieneMensajes(body) {
-	if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
-		return false;
-	}
-	for (const entry of body.entry) {
-		for (const change of entry.changes || []) {
-			if (change.field === 'messages' && (change.value?.messages || []).length) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
 const TIPOS_MENSAJE_IGNORAR = new Set(['reaction', 'sticker', 'unsupported', 'system', 'unknown']);
 
 function extraerMensajesEntrantes(body) {
@@ -141,6 +126,21 @@ function extraerMensajesEntrantes(body) {
 		}
 	}
 	return mensajes;
+}
+
+/** True solo si el body trae mensajes reales (no basta object+entry vacío). */
+function esPayloadMetaConMensajes(body) {
+	if (body?.object !== 'whatsapp_business_account' || !Array.isArray(body.entry) || body.entry.length === 0) {
+		return false;
+	}
+	for (const entry of body.entry) {
+		for (const change of entry.changes || []) {
+			if (change.field === 'messages' && (change.value?.messages?.length ?? 0) > 0) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 function describeSkippedPayload(body) {
@@ -367,5 +367,5 @@ module.exports = {
 	verificarSuscripcion,
 	procesarWebhookEntrante,
 	extraerMensajesEntrantes,
-	payloadMetaTieneMensajes,
+	esPayloadMetaConMensajes,
 };
