@@ -5,3 +5,15 @@ requests.http
 
 # Directorio de archivos subidos (no versionar)
 uploads/
+
+# Artefactos locales / sensibles (no versionar)
+tmp-*.txt
+*-tok.txt
+audit_*.txt
+smoke-endpoints-report.json
+reconcile-*.log
+temp_*.js
+temp_tipos.json
+cabecera_sample.txt
+empresa_columns.txt
+query_result.txt

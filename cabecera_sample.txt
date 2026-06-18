@@ -1,2 +1,0 @@
-Sqlcmd: error: Microsoft ODBC Driver 17 for SQL Server: Error de inicio de sesión del usuario 'WEBDEV\iSource'..
-Sqlcmd: error: Microsoft ODBC Driver 17 for SQL Server: No se puede abrir la base de datos 'iMedicWs' solicitada por el inicio de sesión. Error de inicio de sesión..

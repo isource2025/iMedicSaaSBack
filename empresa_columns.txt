@@ -1,1 +1,0 @@
-Sqlcmd: error: Microsoft ODBC Driver 17 for SQL Server: Error de inicio de sesión del usuario 'sa'..
