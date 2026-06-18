@@ -53,21 +53,39 @@ async function ensureContextoBotColumn() {
 	return contextoBotColumnReady;
 }
 
-async function guardarContextoBot(idConversacion, contextoBot) {
+async function guardarContextoBot(idConversacion, contextoBot, { reemplazar = false } = {}) {
 	await checkConversationTables();
+
+	let payload = contextoBot;
+	const actual = await obtenerConversacion(idConversacion);
+
+	if (!reemplazar) {
+		if (payload === null) {
+			const botSesionIa = require('./botSesionIa.service');
+			const meta = botSesionIa.extraerMetaPersistente(actual?.contextoBot);
+			const sesion = actual?.contextoBot?.sesionInterpretacion;
+			payload =
+				Object.keys(meta).length || sesion
+					? { ...meta, ...(sesion ? { sesionInterpretacion: sesion } : {}) }
+					: null;
+		} else if (payload && typeof payload === 'object' && actual?.contextoBot) {
+			payload = { ...actual.contextoBot, ...payload };
+		}
+	}
+
 	if (useMemory) {
 		const conv = memConversaciones.get(idConversacion);
 		if (!conv) return null;
-		conv.contextoBot = contextoBot || null;
+		conv.contextoBot = payload || null;
 		memConversaciones.set(idConversacion, conv);
 		return mapConversacion(conv);
 	}
 	if (useBotChat) {
-		return botChatStorage.guardarContextoBot(idConversacion, contextoBot);
+		return botChatStorage.guardarContextoBot(idConversacion, payload);
 	}
 	const hasCol = await ensureContextoBotColumn();
 	if (!hasCol) return obtenerConversacion(idConversacion);
-	const json = contextoBot != null ? JSON.stringify(contextoBot).slice(0, 8000) : null;
+	const json = payload != null ? JSON.stringify(payload).slice(0, 8000) : null;
 	await executeQuery(
 		`UPDATE dbo.imBotConversacion SET ContextoBotJson = @p1 WHERE IdConversacion = @p0`,
 		[

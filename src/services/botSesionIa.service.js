@@ -89,7 +89,7 @@ async function resetearSesionIa(idConversacion) {
 		desdeIdMensaje: lastId,
 		resetAt: new Date().toISOString(),
 	};
-	await botConversacion.guardarContextoBot(idConversacion, meta);
+	await botConversacion.guardarContextoBot(idConversacion, meta, { reemplazar: true });
 }
 
 /**

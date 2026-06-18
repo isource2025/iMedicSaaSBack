@@ -294,7 +294,11 @@ async function cancelarFlujoTurnoActivo(idConversacion) {
 	await botSesionIa.resetearSesionIa(idConversacion);
 	const conv = await botConversacion.obtenerConversacion(idConversacion);
 	const meta = botSesionIa.extraerMetaPersistente(conv?.contextoBot);
-	await botConversacion.guardarContextoBot(idConversacion, Object.keys(meta).length ? meta : null);
+	await botConversacion.guardarContextoBot(
+		idConversacion,
+		Object.keys(meta).length ? meta : null,
+		{ reemplazar: true },
+	);
 	await botConversacion.actualizarContextoPaciente(idConversacion, {
 		pasoBot: 'inicio',
 	});
@@ -421,12 +425,16 @@ async function consultarRenaperPorDni(dni, telefonoWhatsApp, idConversacion, pas
 
 function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo, dni) {
 	if (!dni) return false;
-	// Sin paciente vinculado: siempre procesar DNI (aunque el paso IDENTIFICAR esté desfasado por GPT).
+
+	const mismoDni =
+		conv?.dniPaciente && String(conv.dniPaciente) === String(dni);
+
+	// Paciente ya vinculado con el mismo DNI: no repetir identificación
+	if (conv?.idPaciente && mismoDni) return false;
+
 	if (!conv?.idPaciente) return true;
 
-	if (conv.dniPaciente && String(conv.dniPaciente) !== String(dni)) {
-		return true;
-	}
+	if (conv.dniPaciente && !mismoDni) return true;
 
 	if (
 		pasoActual === 'IDENTIFICAR' ||
@@ -437,27 +445,12 @@ function debeProcesarDni(conv, pasoActual, pasoIdentificar, pasoConfirmarActivo,
 		return true;
 	}
 
-	if (
-		['CONFIRMAR', 'ELEGIR_ESPECIALIDAD', 'ELEGIR_PROFESIONAL', 'ELEGIR_FECHA_HORA'].includes(
-			pasoActual,
-		)
-	) {
-		return true;
-	}
-
 	return false;
 }
 
 function necesitaReinicioPorNuevoPaciente(conv, pasoActual, dniEnMensaje) {
 	if (!dniEnMensaje) return false;
-	const dniDistinto = conv.dniPaciente && String(conv.dniPaciente) !== String(dniEnMensaje);
-	const pasoTurnoAnterior = [
-		'CONFIRMAR',
-		'ELEGIR_ESPECIALIDAD',
-		'ELEGIR_PROFESIONAL',
-		'ELEGIR_FECHA_HORA',
-	].includes(pasoActual);
-	return dniDistinto || (!!conv.idPaciente && pasoTurnoAnterior);
+	return conv.dniPaciente && String(conv.dniPaciente) !== String(dniEnMensaje);
 }
 
 async function resolverEspecialidadDesdeIntencionGpt(texto, conv, idConversacion, pasoBot) {
@@ -690,7 +683,9 @@ async function capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, t
 
 function preservarContextoTurnoPendiente(conv) {
 	const ctx = conv?.contextoBot || {};
-	const out = {};
+	const meta = botSesionIa.extraerMetaPersistente(ctx);
+	const out = { ...meta };
+	if (ctx.sesionInterpretacion) out.sesionInterpretacion = ctx.sesionInterpretacion;
 	if (ctx.especialidadPendiente?.valor) out.especialidadPendiente = ctx.especialidadPendiente;
 	if (ctx.profesionalPendiente?.matricula) out.profesionalPendiente = ctx.profesionalPendiente;
 	return out;

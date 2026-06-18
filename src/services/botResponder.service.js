@@ -190,6 +190,14 @@ function _prepararGeneracionWizard(wizard, conv) {
 	let pauta = wizard.pauta || wizard.avisoPauta;
 	const saludo = botSesionIa.contextoSaludo(conv);
 	datos.saludo = saludo;
+	datos.pacienteIdentificado = !!conv?.idPaciente;
+	datos.pasoBot = conv?.pasoBot || null;
+	if (conv?.contextoBot?.profesionalPendiente?.nombre) {
+		datos.medico = datos.medico || conv.contextoBot.profesionalPendiente.nombre;
+	}
+	if (conv?.contextoBot?.especialidadPendiente?.nombre) {
+		datos.especialidad = datos.especialidad || conv.contextoBot.especialidadPendiente.nombre;
+	}
 
 	if (!pauta && wizard.aviso) {
 		pauta = botHumanizer.pautaPorTipo('AVISO_BUSQUEDA');
@@ -234,6 +242,12 @@ async function _enviarBotYMarcaSaludo({ enviarOpts, texto, idConversacion, conv,
 	});
 	if (res.respondido && marcarSaludo) {
 		await botSesionIa.marcarSaludoEnviado(idConversacion, conv);
+		if (conv?.contextoBot) {
+			conv.contextoBot = {
+				...conv.contextoBot,
+				saludoDia: botSesionIa.fechaArgentinaHoy(),
+			};
+		}
 	}
 	return res;
 }
@@ -361,7 +375,7 @@ async function responderMensajeEntrante({
 			contenido: textoEntrada,
 		});
 		const configBot = await botConfigService.getBotConfig();
-		const convHum = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+		let convHum = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 
 		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.buscarTurno) {
 			if (wizard.aviso || wizard.avisoPauta) {
@@ -384,6 +398,7 @@ async function responderMensajeEntrante({
 					marcarSaludo: avisoHum.marcarSaludo,
 					omitirMarcarRespondido: true,
 				});
+				convHum = (await botConversacion.obtenerConversacion(idConversacion)) || convHum;
 			}
 			let textoResultado =
 				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';

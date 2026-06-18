@@ -80,6 +80,18 @@ function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 	}
 
 	if (plan.siguiente === 'pedir_dni') {
+		if (conv?.idPaciente) {
+			return {
+				pauta: 'El paciente ya está identificado. Confirmá médico/especialidad y seguí con la búsqueda de turno sin pedir DNI.',
+				datosOperativos: {
+					medico: d?.profesional?.nombre || conv?.contextoBot?.profesionalPendiente?.nombre,
+					especialidad:
+						d?.especialidad?.nombre || conv?.contextoBot?.especialidadPendiente?.nombre,
+					nombreSaludo: nombre,
+					pacienteIdentificado: true,
+				},
+			};
+		}
 		if (d?.tipo === 'unico') {
 			return {
 				pauta: 'Confirmar el médico elegido y pedir el DNI para buscar el turno.',
@@ -230,7 +242,19 @@ async function procesarMensaje({
 	const esp = ctx.especialidadPendiente;
 	const prof = ctx.profesionalPendiente;
 
-	if (plan.siguiente === 'sugerir_turno' && convAct?.idPaciente && esp?.valor) {
+	if (plan.siguiente === 'pedir_dni' && convAct?.idPaciente) {
+		plan.siguiente = prof?.matricula || esp?.valor ? 'sugerir_turno' : 'preguntar';
+	}
+
+	if (plan.siguiente === 'sugerir_turno' && !convAct?.idPaciente) {
+		plan.siguiente = 'pedir_dni';
+	}
+
+	if (
+		plan.siguiente === 'sugerir_turno' &&
+		convAct?.idPaciente &&
+		(esp?.valor || prof?.matricula)
+	) {
 		const prefijo = _primerNombre(convAct.nombreContacto)
 			? `Perfecto, ${_primerNombre(convAct.nombreContacto)}. `
 			: '';
@@ -242,8 +266,8 @@ async function procesarMensaje({
 				tipo: 'inicial',
 				idConversacion,
 				telefonoWhatsApp,
-				especialidadValor: esp.valor,
-				especialidadNombre: esp.nombre,
+				especialidadValor: esp?.valor,
+				especialidadNombre: esp?.nombre,
 				matricula: prof?.matricula,
 				medico: prof?.nombre,
 				pasoConfirmarId: 'CONFIRMAR',
@@ -253,14 +277,15 @@ async function procesarMensaje({
 		};
 	}
 
-	if (plan.siguiente === 'sugerir_turno' && !convAct?.idPaciente) {
-		plan.siguiente = 'pedir_dni';
-	}
-
 	const { pauta, datosOperativos } = _pautaYDatosDesdePlan(plan, resultados, convAct, config);
 	const tipoResp = _tipoHumanizar(plan.siguiente);
 	const saludo = botSesionIa.contextoSaludo(convAct);
-	const datosConSaludo = { ...(datosOperativos || {}), saludo };
+	const datosConSaludo = {
+		...(datosOperativos || {}),
+		saludo,
+		pacienteIdentificado: !!convAct?.idPaciente,
+		pasoBot: convAct?.pasoBot || null,
+	};
 
 	let textoFinal = '';
 	try {
@@ -283,6 +308,7 @@ async function procesarMensaje({
 		await botConversacion.guardarContextoBot(
 			idConversacion,
 			Object.keys(meta).length ? meta : null,
+			{ reemplazar: true },
 		);
 		await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'inicio' });
 	}

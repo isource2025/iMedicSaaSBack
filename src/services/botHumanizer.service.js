@@ -94,7 +94,13 @@ function _bloqueFactual(datosOperativos) {
 	if (d.saludo?.debeSaludar && d.saludo.pautaInstruccion) {
 		lineas.push(`Saludo del día: ${d.saludo.pautaInstruccion}`);
 		lineas.push(`Franja horaria AR: ${d.saludo.franjaHoraria}`);
+	} else if (d.saludo && d.saludo.debeSaludar === false) {
+		lineas.push('NO incluir saludo de bienvenida: ya saludaste hoy en esta conversación.');
 	}
+	if (d.pacienteIdentificado) {
+		lineas.push('Paciente ya identificado en esta sesión: NO pedir DNI ni repetir confirmación de identidad.');
+	}
+	if (d.pasoBot) lineas.push(`Paso del flujo: ${d.pasoBot}`);
 	if (d.lista) lineas.push(`Listado (copiar ítems exactos):\n${d.lista}`);
 	if (!lineas.length) return '(sin datos adicionales)';
 	return lineas.join('\n');
