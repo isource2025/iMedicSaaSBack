@@ -1637,8 +1637,8 @@ async function intentarRespuestaWizard({
 		if (resConfirm) return resConfirm;
 	}
 
-	// Médico y/o especialidad en lenguaje natural (ej. "turno con De Biasi en traumatología")
-	if (!dniEnMensaje && texto) {
+	// Médico y/o especialidad — solo sin GPT (con GPT lo resuelve el orquestador + herramientas)
+	if (!gptHabilitado() && !dniEnMensaje && texto) {
 		const pedidoProf = await procesarPedidoConProfesional({
 			idConversacion,
 			telefonoWhatsApp,
@@ -1651,8 +1651,8 @@ async function intentarRespuestaWizard({
 		if (pedidoProf) return pedidoProf;
 	}
 
-	// Consulta directa de profesionales (sin depender de GPT inventando nombres)
-	if (!extraerDni(texto) && botAgenda.esConsultaListaProfesionales(texto)) {
+	// Consulta directa de profesionales (sin GPT; con GPT usa herramienta listar_profesionales_especialidad)
+	if (!gptHabilitado() && !extraerDni(texto) && botAgenda.esConsultaListaProfesionales(texto)) {
 		const espCtx =
 			conv?.contextoBot?.especialidadPendiente ||
 			conv?.contextoBot?.especialidadNombre ||

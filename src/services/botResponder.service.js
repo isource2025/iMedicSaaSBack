@@ -8,6 +8,7 @@ const botWizard = require('./botWizard.service');
 const botAgenda = require('./botAgenda.service');
 const botHumanizer = require('./botHumanizer.service');
 const botInterpretacion = require('./botInterpretacion.service');
+const botOrquestador = require('./botOrquestador.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
@@ -312,6 +313,46 @@ async function responderMensajeEntrante({
 	const config = await botConfigService.getBotConfig();
 	const postTurno = await botWizard.esContextoPostTurno(convAct);
 
+	// 2) Orquestador IA + herramientas de agenda (no hardcode de flujos por palabra clave)
+	if (
+		gptHabilitado() &&
+		botOrquestador.debeUsarOrquestador(pasoActual, convAct, textoEntrada)
+	) {
+		const orch = await botOrquestador.procesarMensaje({
+			texto: textoEntrada,
+			conv: convAct,
+			idConversacion,
+			telefonoWhatsApp,
+			historial,
+		});
+		if (orch.handled && orch.accion === 'BUSCAR_TURNO' && orch.buscarTurno) {
+			await enviarTextoBot({ ...enviarOpts, texto: orch.aviso, omitirMarcarRespondido: true });
+			let textoResultado =
+				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
+			let tipoRespuesta = 'SIN_DISPONIBILIDAD';
+			try {
+				const resultado = await botWizard.ejecutarBusquedaTurno(orch.buscarTurno);
+				if (resultado?.texto) textoResultado = resultado.texto;
+				if (resultado?.tipoRespuesta) tipoRespuesta = resultado.tipoRespuesta;
+			} catch (buscarErr) {
+				diag.warn('webhook', 'Búsqueda turno (orquestador) falló', {
+					error: buscarErr.message,
+					idConversacion,
+				});
+			}
+			const convHum = (await botConversacion.obtenerConversacion(idConversacion)) || convAct;
+			const humanizado = await humanizarSalidaWizard(
+				{ texto: textoResultado, tipoRespuesta },
+				convHum,
+				config,
+			);
+			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto, seguimiento: true });
+		}
+		if (orch.handled && orch.texto) {
+			return enviarTextoBot({ ...enviarOpts, texto: orch.texto });
+		}
+	}
+
 	const enPasoIdentificacion =
 		(pasoActual === 'IDENTIFICAR' || pasoActual === 'inicio' || !pasoActual) &&
 		!convAct?.idPaciente &&
@@ -387,43 +428,7 @@ async function responderMensajeEntrante({
 		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
 	}
 
-	// Evitar que GPT invente médicos cuando el wizard dejó pasar una consulta de profesionales
-	if (
-		!dniDetectado &&
-		(botAgenda.esConsultaListaProfesionales(textoEntrada) ||
-			(convAct?.pasoBot === 'ELEGIR_PROFESIONAL' && convAct?.contextoBot?.especialidadPendiente))
-	) {
-		const espCtx = convAct?.contextoBot?.especialidadPendiente;
-		if (espCtx?.valor) {
-			return enviarTextoBot({
-				...enviarOpts,
-				texto: await botAgenda.mensajeProfesionalesDisponibles(espCtx.valor),
-			});
-		}
-		return enviarTextoBot({
-			...enviarOpts,
-			texto:
-				'¿En qué especialidad querés ver los profesionales? Por ejemplo: *Traumatología*, *Cardiología*…',
-		});
-	}
-
-	// 2) GPT para el resto del flujo
-	const messages = mensajesParaOpenAi(historial);
-	if (!messages.length) {
-		return { respondido: false, motivo: 'sin historial' };
-	}
-
-	const system = await buildSystemPrompt(config, flujo, convAct);
-	const texto = await botOpenai.chat({ system, messages });
-
-	return enviarTextoBot({
-		idEmpresa,
-		idConversacion,
-		telefonoWhatsApp,
-		texto,
-		idMensajePaciente: msgId,
-		metaMessageIdEntrante,
-	});
+	return { respondido: false, motivo: 'sin_accion_orquestador' };
 }
 
 module.exports = {
