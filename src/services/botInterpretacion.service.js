@@ -6,6 +6,7 @@
 const botOpenai = require('./botOpenai.service');
 const botConversacion = require('./botConversacion.service');
 const botSesionIa = require('./botSesionIa.service');
+const botGestionTurno = require('./botGestionTurno.service');
 const botAgenda = require('./botAgenda.service');
 const { extraerDniDesdeTexto } = require('../utils/botDni');
 
@@ -87,9 +88,15 @@ function _interpretarRechazoTurno(texto) {
 	const t = _normalizarTexto(texto);
 	if (!t) return null;
 	if (
-		/\b(no puedo|no me sirve|otro dia|otra fecha|otro horario|prefiero otro|buscar otro|siguiente turno)\b/.test(
+		/\b(no puedo|no me sirve|otro dia|otra fecha|otro horario|prefiero otro|buscar otro|siguiente turno|semana que viene|proxima semana)\b/.test(
 			t,
 		)
+	) {
+		return true;
+	}
+	if (
+		/\b(puede ser|podria ser|podes ser|podés ser|preferiria|me vendria bien)\b/.test(t) &&
+		/\b(turno|dia|fecha|semana|horario)\b/.test(t)
 	) {
 		return true;
 	}
@@ -147,6 +154,10 @@ function _promptBase(conv, paso, especialidades) {
 	if (conv?.contextoBot?.especialidadPendiente?.nombre) {
 		ctx.push(`Especialidad pendiente: ${conv.contextoBot.especialidadPendiente.nombre}`);
 	}
+	const gestion = botGestionTurno.obtenerGestionActiva(conv);
+	if (gestion) {
+		ctx.push(`Gestión turno: ${botGestionTurno.resumenParaPrompt(gestion)}`);
+	}
 	const turno = _contextoTurno(conv);
 	if (turno) ctx.push(turno);
 	const sesion = conv?.contextoBot?.sesionInterpretacion;
@@ -200,10 +211,12 @@ function _construirPrompt(conv, paso, especialidades) {
 
 ${_intencionesPorPaso(paso, conv)}
 
-parametros puede incluir: especialidad, profesional (apellido o nombre del médico), preferirDiasSemana[], excluirDiasSemana[], preferirFranja, preferirFechas[], resumen.
+parametros puede incluir: especialidad, profesional (apellido o nombre del médico), preferirDiasSemana[], excluirDiasSemana[], preferirFranja, preferirFechas[], preferirFechaDesde, preferirFechaHasta, resumen.
 
 Reglas:
 - Interpretá significado, no palabras exactas.
+- "semana que viene" / "la próxima semana" → buscar_turno + preferirFechaDesde/preferirFechaHasta (lunes a domingo de la semana siguiente)
+- "¿puede ser para la semana que viene?" → buscar_turno (NO conversacion)
 - Si menciona médico (ej. "De Biasi", "con el doctor Pérez"), incluí parametros.profesional y especialidad si la nombra.
 - "turno con De Biasi" → solicitar_turno + profesional:"De Biasi" (el backend busca en la agenda real).
 - "cancela", "no quiero turno" → cancelar_flujo + salir_flujo true
@@ -365,7 +378,7 @@ async function interpretarMensaje({ texto, conv, idConversacion, pasoBot }) {
 	return normalizada;
 }
 
-/** Persiste frustración y última intención en contextoBot. */
+/** Persiste frustración, última intención y merge opcional en gestionTurno. */
 async function registrarSesion(idConversacion, interpretacion, conv) {
 	if (!interpretacion || !idConversacion) return;
 	const ctx = { ...(conv?.contextoBot || {}) };
@@ -384,6 +397,17 @@ async function registrarSesion(idConversacion, interpretacion, conv) {
 		ultimaIntencion: int,
 		ultimoTono: interpretacion.flags?.tono_sugerido || 'cercano',
 	};
+
+	let gestion =
+		botGestionTurno.obtenerGestionActiva(conv) ||
+		ctx.gestionTurno ||
+		botGestionTurno.ensureGestion(conv);
+	if (interpretacion.parametros && Object.keys(interpretacion.parametros).length) {
+		gestion = botGestionTurno.mergeDesdeInterpretacion(gestion, interpretacion.parametros);
+		ctx.gestionTurno = gestion;
+		botGestionTurno.dbg('merge desde interpretación', botGestionTurno.resumenParaPrompt(gestion));
+	}
+
 	await botConversacion.guardarContextoBot(idConversacion, ctx);
 }
 

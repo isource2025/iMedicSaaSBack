@@ -17,6 +17,7 @@ const TIPOS_HUMANIZAR = new Set([
 	'POST_TURNO',
 	'INICIO_FLUJO',
 	'ACLARACION',
+	'RESUMEN_GESTION',
 	'ERROR_AGENDA',
 	'GENERICO',
 ]);
@@ -39,6 +40,8 @@ const PAUTAS_POR_TIPO = Object.freeze({
 	SIN_DISPONIBILIDAD: 'Informar que no hay turnos y proponer otro día u horario.',
 	POST_TURNO: 'Cierre cordial después de un turno ya confirmado.',
 	INICIO_FLUJO: 'Saludar y pedir el DNI para empezar a gestionar el turno.',
+	RESUMEN_GESTION:
+		'Resumí brevemente lo ya anotado en la gestión (médico, especialidad, preferencia de fecha) y pedí el DNI o el siguiente dato que falte. No repreguntes lo ya confirmado.',
 	ACLARACION: 'Hacer una pregunta corta para desambiguar.',
 	ERROR_AGENDA: 'Explicar un problema de agenda sin tecnicismos.',
 	GENERICO: 'Responder de forma natural según el contexto.',
@@ -71,6 +74,8 @@ function _instruccionesPorTipo(tipo) {
 		SIN_DISPONIBILIDAD: 'Empatía si no hay turnos; invitá a otro día u horario.',
 		POST_TURNO: 'Cierre cordial tras turno confirmado.',
 		INICIO_FLUJO: 'Saludo del día si corresponde y pedí el DNI para arrancar la gestión.',
+		RESUMEN_GESTION:
+			'Confirmá lo que ya quedó anotado (médico, especialidad, mes/fecha preferida) y pedí solo lo que falta (casi siempre el DNI). Tono natural, sin listar pasos del sistema.',
 		ACLARACION: 'Una sola pregunta corta.',
 		ERROR_AGENDA: 'Sin tecnicismos; orientá al siguiente paso.',
 		GENERICO: 'Natural, breve, atención al cliente real.',
@@ -91,6 +96,7 @@ function _bloqueFactual(datosOperativos) {
 	if (d.fuenteIdentidad) lineas.push(`Fuente: ${d.fuenteIdentidad}`);
 	if (d.errorCode) lineas.push(`Código error interno: ${d.errorCode}`);
 	if (d.preferencia) lineas.push(`Preferencia paciente: ${d.preferencia}`);
+	if (d.gestionResumen) lineas.push(`Gestión activa: ${d.gestionResumen}`);
 	if (d.saludo?.debeSaludar && d.saludo.pautaInstruccion) {
 		lineas.push(`Saludo del día: ${d.saludo.pautaInstruccion}`);
 		const franjaHint = {

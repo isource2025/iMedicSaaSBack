@@ -11,6 +11,7 @@ const botHumanizer = require('./botHumanizer.service');
 const diag = require('../utils/diagLog');
 const { extraerDniDesdeTexto } = require('../utils/botDni');
 const botSesionIa = require('./botSesionIa.service');
+const botGestionTurno = require('./botGestionTurno.service');
 
 function gptHabilitado() {
 	return botInterpretacion.gptHabilitado();
@@ -111,9 +112,16 @@ function interpretarRechazoTurno(texto, _sugerencia = null) {
 	if (!t) return null;
 
 	if (
-		/\b(no puedo|no me sirve|no me conviene|otro dia|otra fecha|otro horario|prefiero otro|buscar otro|siguiente turno|otra opcion|imposible ese|ese horario no|a esa hora no)\b/.test(
+		/\b(no puedo|no me sirve|no me conviene|otro dia|otra fecha|otro horario|prefiero otro|buscar otro|siguiente turno|otra opcion|imposible ese|ese horario no|a esa hora no|semana que viene|proxima semana)\b/.test(
 			t,
 		)
+	) {
+		return true;
+	}
+
+	if (
+		/\b(puede ser|podria ser|podes ser|podés ser|preferiria|me vendria bien)\b/.test(t) &&
+		/\b(turno|dia|fecha|semana|horario)\b/.test(t)
 	) {
 		return true;
 	}
@@ -291,9 +299,15 @@ function mensajeSalidaFlujo(config, conv) {
 }
 
 async function cancelarFlujoTurnoActivo(idConversacion) {
-	await botSesionIa.resetearSesionIa(idConversacion);
 	const conv = await botConversacion.obtenerConversacion(idConversacion);
-	const meta = botSesionIa.extraerMetaPersistente(conv?.contextoBot);
+	const gestion = botGestionTurno.obtenerGestionActiva(conv);
+	if (gestion) {
+		botGestionTurno.cerrarGestion(gestion, 'cancelada');
+		await botGestionTurno.persistir(idConversacion, conv, gestion);
+	}
+	await botSesionIa.resetearSesionIa(idConversacion);
+	const conv2 = await botConversacion.obtenerConversacion(idConversacion);
+	const meta = botSesionIa.extraerMetaPersistente(conv2?.contextoBot);
 	await botConversacion.guardarContextoBot(
 		idConversacion,
 		Object.keys(meta).length ? meta : null,
@@ -628,11 +642,12 @@ async function procesarIntencionGptEntrada({
 			const configEsp = await botConfigService.getBotConfig();
 			if (configEsp.reglas.sugerirPrimerTurnoDisponible && conv.idPaciente) {
 				return withInterpretacion(
-					armarRespuestaBuscarTurnoInicial({
+					await armarRespuestaBuscarTurnoInicial({
 						idConversacion,
 						telefonoWhatsApp,
 						flujo,
 						esp: espPend,
+						conv,
 					}),
 					intent,
 				);
@@ -676,8 +691,30 @@ async function detectarEspecialidadEnTexto(texto, conv, idConversacion, pasoBot)
 async function capturarEspecialidadPendienteDesdeMensaje(idConversacion, conv, texto, pasoBot) {
 	const esp = await detectarEspecialidadEnTexto(texto, conv, idConversacion, pasoBot);
 	if (!esp) return null;
-	const ctx = { ...(conv?.contextoBot || {}), especialidadPendiente: esp };
+
+	let gestion = botGestionTurno.ensureGestion(conv);
+	if (!gestion.profesional?.confirmada) {
+		gestion.especialidad = {
+			valor: esp.valor,
+			nombre: esp.nombre,
+			origen: 'paciente',
+			confirmada: true,
+		};
+	} else if (!gestion.especialidad?.valor) {
+		gestion.especialidad = {
+			valor: esp.valor,
+			nombre: esp.nombre,
+			origen: 'inferida_profesional',
+			confirmada: true,
+		};
+	}
+
+	const ctx = botGestionTurno.sincronizarLegacy(conv?.contextoBot, gestion);
 	await botConversacion.guardarContextoBot(idConversacion, ctx);
+	botGestionTurno.dbg('especialidad capturada sin perder profesional', {
+		esp: esp.nombre,
+		prof: gestion.profesional?.nombre,
+	});
 	return esp;
 }
 
@@ -686,6 +723,9 @@ function preservarContextoTurnoPendiente(conv) {
 	const meta = botSesionIa.extraerMetaPersistente(ctx);
 	const out = { ...meta };
 	if (ctx.sesionInterpretacion) out.sesionInterpretacion = ctx.sesionInterpretacion;
+	if (ctx.gestionTurno && !['completada', 'cancelada'].includes(ctx.gestionTurno.estado)) {
+		out.gestionTurno = ctx.gestionTurno;
+	}
 	if (ctx.especialidadPendiente?.valor) out.especialidadPendiente = ctx.especialidadPendiente;
 	if (ctx.profesionalPendiente?.matricula) out.profesionalPendiente = ctx.profesionalPendiente;
 	return out;
@@ -745,7 +785,7 @@ async function procesarEleccionProfesional({
 			const saludo = primerNombre(nombreWhatsApp(convAct));
 			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
 			if (convAct.idPaciente && config.reglas.sugerirPrimerTurnoDisponible) {
-				return armarRespuestaBuscarTurnoInicial({
+				return await armarRespuestaBuscarTurnoInicial({
 					idConversacion,
 					telefonoWhatsApp,
 					flujo,
@@ -753,6 +793,7 @@ async function procesarEleccionProfesional({
 					avisoPrefijo: prefijoSaludo,
 					matricula: elegido.matricula,
 					medico: elegido.nombre,
+					conv: convAct,
 				});
 			}
 		}
@@ -785,7 +826,7 @@ async function procesarEleccionProfesional({
 
 	if (conv.idPaciente) {
 		if (config.reglas.sugerirPrimerTurnoDisponible) {
-			return armarRespuestaBuscarTurnoInicial({
+			return await armarRespuestaBuscarTurnoInicial({
 				idConversacion,
 				telefonoWhatsApp,
 				flujo,
@@ -793,6 +834,7 @@ async function procesarEleccionProfesional({
 				avisoPrefijo: prefijoSaludo,
 				matricula: prof.matricula,
 				medico: prof.nombre,
+				conv,
 			});
 		}
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
@@ -867,15 +909,34 @@ async function procesarPedidoConProfesional({
 	if (analisis.tipo === 'unico') {
 		const esp = analisis.especialidad;
 		const prof = analisis.profesional;
-		await botConversacion.guardarContextoBot(idConversacion, {
-			especialidadPendiente: esp,
-			profesionalPendiente: prof,
-			candidatosProfesionales: null,
-		});
+		let gestion = botGestionTurno.ensureGestion(conv);
+		gestion = botGestionTurno.mergeDesdeHerramientas(gestion, [
+			{ ok: true, nombre: 'buscar_profesional', datos: analisis },
+		]);
+		const prefLocal = botAgenda.interpretarAjusteTurno(texto, null);
+		if (prefLocal.resumen || prefLocal.preferir?.fechaDesde || prefLocal.preferir?.franja) {
+			gestion = botGestionTurno.mergeDesdeHerramientas(gestion, [
+				{
+					ok: true,
+					nombre: 'interpretar_preferencia_horario',
+					datos: {
+						resumen: prefLocal.resumen,
+						fechaDesde: prefLocal.preferir?.fechaDesde || prefLocal.preferir?.fechas?.[0] || null,
+						fechaHasta: prefLocal.preferir?.fechaHasta || null,
+						franja: prefLocal.preferir?.franja || null,
+						diasSemana: prefLocal.preferir?.diasSemana || [],
+					},
+				},
+			]);
+		}
+		const ctx = botGestionTurno.sincronizarLegacy(conv?.contextoBot, gestion);
+		await botConversacion.guardarContextoBot(idConversacion, ctx);
+		botGestionTurno.dbg('pedido con profesional', botGestionTurno.resumenParaPrompt(gestion));
 
 		if (conv.idPaciente && config.reglas.sugerirPrimerTurnoDisponible) {
+			const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 			return withInterpretacion(
-				armarRespuestaBuscarTurnoInicial({
+				await armarRespuestaBuscarTurnoInicial({
 					idConversacion,
 					telefonoWhatsApp,
 					flujo,
@@ -883,6 +944,7 @@ async function procesarPedidoConProfesional({
 					avisoPrefijo: prefijo,
 					matricula: prof.matricula,
 					medico: prof.nombre,
+					conv: convAct,
 				}),
 				interpretacion,
 			);
@@ -935,7 +997,7 @@ async function procesarPedidoConProfesional({
 	return null;
 }
 
-function armarRespuestaBuscarTurnoInicial({
+async function armarRespuestaBuscarTurnoInicial({
 	idConversacion,
 	telefonoWhatsApp,
 	flujo,
@@ -943,22 +1005,37 @@ function armarRespuestaBuscarTurnoInicial({
 	avisoPrefijo = '',
 	matricula = null,
 	medico = null,
+	conv = null,
 }) {
 	const pasoConfirmar = pasoPorId(flujo, 'CONFIRMAR');
+	const buscarTurno = {
+		tipo: 'inicial',
+		idConversacion,
+		telefonoWhatsApp,
+		especialidadValor: esp.valor,
+		especialidadNombre: esp.nombre,
+		matricula: matricula || undefined,
+		medico: medico || undefined,
+		pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
+	};
+	const convUse =
+		conv || (idConversacion ? await botConversacion.obtenerConversacion(idConversacion) : null);
+	if (convUse) {
+		const gestion =
+			botGestionTurno.obtenerGestionActiva(convUse) || botGestionTurno.ensureGestion(convUse);
+		const { excluir, preferir } = botGestionTurno.aPreferenciasBusqueda(gestion);
+		if (preferir.fechaDesde || preferir.fechas?.length || preferir.franja) {
+			buscarTurno.preferir = preferir;
+		}
+		if (excluir.slots?.length || excluir.fechas?.length) {
+			buscarTurno.excluir = excluir;
+		}
+	}
 	return {
 		handled: true,
 		accion: 'BUSCAR_TURNO',
 		avisoPauta: botHumanizer.pautaPorTipo('AVISO_BUSQUEDA'),
-		buscarTurno: {
-			tipo: 'inicial',
-			idConversacion,
-			telefonoWhatsApp,
-			especialidadValor: esp.valor,
-			especialidadNombre: esp.nombre,
-			matricula: matricula || undefined,
-			medico: medico || undefined,
-			pasoConfirmarId: pasoConfirmar?.id || 'CONFIRMAR',
-		},
+		buscarTurno,
 	};
 }
 
@@ -992,6 +1069,15 @@ async function _respuestaIdentificacionOk({
 	if (pasoConfirmarActivo) {
 		const pasoCfg = pasoPorId(flujo, 'CONFIRMAR_IDENTIDAD');
 		const ctxPreservar = preservarContextoTurnoPendiente(conv);
+		let gestion = ctxPreservar.gestionTurno || botGestionTurno.ensureGestion(conv);
+		gestion = botGestionTurno.mergeIdentidadRenaper(gestion, {
+			dni: String(dni),
+			nombre: nombreCompletoRenaper(data.renaper, data.pacienteLocal),
+			fechaNacimiento:
+				data.renaper?.fechaNacimiento || data.pacienteLocal?.fechaNacimiento || null,
+			fuente: data.renaper?.fuente === 'local' ? 'local' : 'renaper',
+		});
+		ctxPreservar.gestionTurno = gestion;
 		if (conv.idPaciente || conv.contextoBot) {
 			await botConversacion.limpiarEstadoWizard(idConversacion);
 			if (Object.keys(ctxPreservar).length) {
@@ -1054,7 +1140,19 @@ async function avanzarTrasIdentidadConfirmada({
 }) {
 	const saludo = primerNombre(nombreWhatsApp(conv));
 	const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
-	const prof = profPend || conv?.contextoBot?.profesionalPendiente || null;
+	const gestion = botGestionTurno.obtenerGestionActiva(conv);
+	const prof =
+		profPend ||
+		conv?.contextoBot?.profesionalPendiente ||
+		(gestion?.profesional?.confirmada ? gestion.profesional : null) ||
+		null;
+	const esp =
+		espPend ||
+		conv?.contextoBot?.especialidadPendiente ||
+		(gestion?.especialidad?.confirmada
+			? { valor: gestion.especialidad.valor, nombre: gestion.especialidad.nombre }
+			: null) ||
+		null;
 
 	if (botAgenda.coberturaPasoHabilitado(flujo, config)) {
 		const pasoCob = pasoPorId(flujo, 'ELEGIR_COBERTURA');
@@ -1070,34 +1168,37 @@ async function avanzarTrasIdentidadConfirmada({
 	}
 
 	if (
-		espPend?.valor &&
+		esp?.valor &&
 		config.reglas.sugerirPrimerTurnoDisponible &&
 		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false &&
 		!prof
 	) {
-		return armarRespuestaBuscarTurnoInicial({
+		return await armarRespuestaBuscarTurnoInicial({
 			idConversacion,
 			telefonoWhatsApp,
 			flujo,
-			esp: espPend,
+			esp,
 			avisoPrefijo: prefijoSaludo,
+			conv,
 		});
 	}
 
-	if (espPend?.valor && prof) {
+	if (esp?.valor && prof) {
 		await botConversacion.guardarContextoBot(idConversacion, {
-			especialidadPendiente: espPend,
+			especialidadPendiente: esp,
 			profesionalPendiente: prof,
+			...(gestion ? { gestionTurno: gestion } : {}),
 		});
 		if (config.reglas.sugerirPrimerTurnoDisponible) {
-			return armarRespuestaBuscarTurnoInicial({
+			return await armarRespuestaBuscarTurnoInicial({
 				idConversacion,
 				telefonoWhatsApp,
 				flujo,
-				esp: espPend,
+				esp,
 				avisoPrefijo: prefijoSaludo,
 				matricula: prof.matricula,
 				medico: prof.nombre,
+				conv,
 			});
 		}
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
@@ -1151,14 +1252,14 @@ async function avanzarTrasCobertura({
 		config.reglas.sugerirPrimerTurnoDisponible &&
 		pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
 	) {
-		const buscar = armarRespuestaBuscarTurnoInicial({
+		return await armarRespuestaBuscarTurnoInicial({
 			idConversacion,
 			telefonoWhatsApp,
 			flujo,
 			esp: espPend,
 			avisoPrefijo: `${prefijoSaludo}${coberturaMsg}`,
+			conv,
 		});
-		return buscar;
 	}
 
 	let siguiente = siguientePasoActivo(flujo, 'ELEGIR_COBERTURA');
@@ -1237,11 +1338,12 @@ async function procesarPasoTurnoCompletado({
 				config.reglas.sugerirPrimerTurnoDisponible &&
 				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
 			) {
-				return armarRespuestaBuscarTurnoInicial({
+				return await armarRespuestaBuscarTurnoInicial({
 					idConversacion,
 					telefonoWhatsApp,
 					flujo,
 					esp: espPend,
+					conv,
 				});
 			}
 			await botConversacion.actualizarContextoPaciente(idConversacion, {
@@ -1542,6 +1644,24 @@ async function procesarPasoConfirmarIdentidad({
 				texto: mensajeErrorAltaPaciente({ code: 'PACIENTE_NO_CREADO' }),
 			};
 		}
+		let gestion = ctxPend.gestionTurno || botGestionTurno.obtenerGestionActiva(conv);
+		if (gestion) {
+			gestion = botGestionTurno.mergeIdentidadRenaper(gestion, {
+				dni: String(conv.dniPaciente),
+				idPaciente: data.idPaciente,
+				nombre:
+					nombreCompletoRenaper(data.renaper, data.pacienteLocal) ||
+					gestion.identidad?.nombreTicket ||
+					null,
+				fechaNacimiento:
+					data.renaper?.fechaNacimiento ||
+					data.pacienteLocal?.fechaNacimiento ||
+					gestion.identidad?.fechaNacimiento ||
+					null,
+				fuente: data.renaper?.fuente === 'local' ? 'local' : 'renaper',
+			});
+			ctxPend.gestionTurno = gestion;
+		}
 		await botConversacion.guardarContextoBot(
 			idConversacion,
 			Object.keys(ctxPend).length ? ctxPend : null,
@@ -1551,12 +1671,13 @@ async function procesarPasoConfirmarIdentidad({
 			dniPaciente: String(conv.dniPaciente),
 		});
 
+		const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 		return avanzarTrasIdentidadConfirmada({
 			idConversacion,
 			telefonoWhatsApp,
 			flujo,
 			config,
-			conv,
+			conv: convAct,
 			espPend,
 			profPend,
 			idPaciente: data.idPaciente,
@@ -1601,12 +1722,15 @@ async function procesarPasoConfirmarIdentidad({
 				config.reglas.sugerirPrimerTurnoDisponible &&
 				pasoPorId(flujo, 'ELEGIR_ESPECIALIDAD')?.activo !== false
 			) {
-				return armarRespuestaBuscarTurnoInicial({
+				const convAct =
+					(await botConversacion.obtenerConversacion(idConversacion)) || conv;
+				return await armarRespuestaBuscarTurnoInicial({
 					idConversacion,
 					telefonoWhatsApp,
 					flujo,
 					esp: espEnTexto,
 					avisoPrefijo: prefijoSaludo,
+					conv: convAct,
 				});
 			}
 		}
@@ -2061,11 +2185,12 @@ async function intentarRespuestaWizard({
 
 		if (sugerirTurno) {
 			return withInterpretacion(
-				armarRespuestaBuscarTurnoInicial({
+				await armarRespuestaBuscarTurnoInicial({
 					idConversacion,
 					telefonoWhatsApp,
 					flujo,
 					esp,
+					conv,
 				}),
 				interpretacion,
 			);
@@ -2214,10 +2339,12 @@ async function intentarRespuestaWizard({
 			(intentGpt.intencion === 'buscar_turno' || intentGpt.intencion === 'rechazar_turno');
 
 		if (conf === false || buscarPorGpt) {
-			const ajuste =
+			const ajusteGpt =
 				buscarPorGpt && intentGpt
 					? botIntencion.intencionAAjusteTurno(intentGpt.intencion, intentGpt.parametros, ctx)
-					: botAgenda.interpretarAjusteTurno(texto, ctx);
+					: null;
+			const ajusteInteligente = await botAgenda.interpretarAjusteTurnoInteligente(texto, ctx);
+			const ajuste = _fusionarAjustesTurno(ajusteGpt, ajusteInteligente);
 			return withInterpretacion(
 				_planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajuste),
 				interpretacion,
@@ -2225,17 +2352,21 @@ async function intentarRespuestaWizard({
 		}
 
 		if (!gptHabilitado()) {
-			const ajusteLocal = botAgenda.interpretarAjusteTurno(texto, ctx);
-			const tienePref =
-				ajusteLocal.preferir.diasSemana.length ||
-				ajusteLocal.preferir.fechas.length ||
-				ajusteLocal.preferir.franja;
-			if (interpretarRechazoTurno(texto, ctx) || tienePref) {
+			const ajusteLocal = await botAgenda.interpretarAjusteTurnoInteligente(texto, ctx);
+			if (interpretarRechazoTurno(texto, ctx) || _ajusteTienePreferencia(ajusteLocal)) {
 				return withInterpretacion(
 					_planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajusteLocal),
 					interpretacion,
 				);
 			}
+		}
+
+		const ajusteFallback = await botAgenda.interpretarAjusteTurnoInteligente(texto, ctx);
+		if (interpretarRechazoTurno(texto, ctx) || _ajusteTienePreferencia(ajusteFallback)) {
+			return withInterpretacion(
+				_planificarBusquedaTurno(idConversacion, ctx, texto, pasoCfg, ajusteFallback),
+				interpretacion,
+			);
 		}
 
 		if (intentGpt?.intencion === 'conversacion' || interpretacion?.flags?.es_saludo) {
@@ -2270,6 +2401,48 @@ async function intentarRespuestaWizard({
 	return { handled: false, motivo: 'wizard no aplica' };
 }
 
+function _ajusteTienePreferencia(ajuste) {
+	if (!ajuste) return false;
+	const p = ajuste.preferir || {};
+	return !!(
+		p.fechas?.length ||
+		p.diasSemana?.length ||
+		p.franja ||
+		p.fechaDesde ||
+		p.fechaHasta ||
+		ajuste.excluir?.fechas?.length ||
+		ajuste.excluir?.diasSemana?.length ||
+		ajuste.resumen
+	);
+}
+
+function _fusionarAjustesTurno(a, b) {
+	if (!a) return b;
+	if (!b) return a;
+	const uniq = (arr) => [...new Set((arr || []).map((x) => String(x)))];
+	return {
+		excluir: {
+			slots: [...(a.excluir?.slots || []), ...(b.excluir?.slots || [])],
+			fechas: uniq([...(a.excluir?.fechas || []), ...(b.excluir?.fechas || [])]),
+			diasSemana: uniq([...(a.excluir?.diasSemana || []), ...(b.excluir?.diasSemana || [])]).map(
+				Number,
+			),
+		},
+		preferir: {
+			fechas: uniq([...(a.preferir?.fechas || []), ...(b.preferir?.fechas || [])]),
+			diasSemana: uniq([...(a.preferir?.diasSemana || []), ...(b.preferir?.diasSemana || [])]).map(
+				Number,
+			),
+			franja: b.preferir?.franja || a.preferir?.franja || null,
+			horaDesde: b.preferir?.horaDesde || a.preferir?.horaDesde || null,
+			horaHasta: b.preferir?.horaHasta || a.preferir?.horaHasta || null,
+			fechaDesde: b.preferir?.fechaDesde || a.preferir?.fechaDesde || null,
+			fechaHasta: b.preferir?.fechaHasta || a.preferir?.fechaHasta || null,
+		},
+		resumen: b.resumen || a.resumen || null,
+	};
+}
+
 function _planificarBusquedaTurno(idConversacion, ctx, textoRechazo, pasoCfg, ajustePrecalculado = null) {
 	const ajuste = ajustePrecalculado || botAgenda.interpretarAjusteTurno(textoRechazo, ctx);
 	return {
@@ -2299,6 +2472,9 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 			if (buscarTurno.matricula != null) {
 				opcionesBusqueda.matricula = buscarTurno.matricula;
 			}
+			if (buscarTurno.preferir) opcionesBusqueda.preferir = buscarTurno.preferir;
+			if (buscarTurno.excluir) opcionesBusqueda.excluir = buscarTurno.excluir;
+
 			let sugerencia = await botAgenda.sugerirPrimerTurnoDisponible(
 				buscarTurno.especialidadValor,
 				opcionesBusqueda,
@@ -2306,8 +2482,24 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 			sugerencia = sugerencia
 				? await botAgenda.validarSugerenciaTurno(sugerencia, buscarTurno.especialidadValor)
 				: null;
+
+			const convAct = await botConversacion.obtenerConversacion(idConversacion);
+			let gestion =
+				botGestionTurno.obtenerGestionActiva(convAct) || botGestionTurno.ensureGestion(convAct);
+			if (sugerencia) {
+				gestion = botGestionTurno.mergeTurnoOfrecido(gestion, {
+					...sugerencia,
+					especialidad: buscarTurno.especialidadValor,
+					especialidadNombre: buscarTurno.especialidadNombre,
+				});
+			}
+			const ctxGuardar = botGestionTurno.sincronizarLegacy(convAct?.contextoBot, gestion);
+			if (!sugerencia) {
+				ctxGuardar.tipo = undefined;
+			}
 			await botConversacion.guardarContextoBot(idConversacion, {
-				tipo: 'turno_sugerido',
+				...ctxGuardar,
+				tipo: sugerencia ? 'turno_sugerido' : ctxGuardar.tipo,
 				especialidadValor: buscarTurno.especialidadValor,
 				especialidadNombre: buscarTurno.especialidadNombre,
 				...(sugerencia || {}),
@@ -2326,24 +2518,59 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 							fechaLegible: sugerencia.fechaLegible,
 							diaSemana: sugerencia.diaSemana,
 							hora: sugerencia.hora,
+							preferencia: gestion.preferenciaHorario?.resumen || null,
 						}
-					: { especialidad: buscarTurno.especialidadNombre },
+					: {
+							especialidad: buscarTurno.especialidadNombre,
+							preferencia: gestion.preferenciaHorario?.resumen || null,
+						},
 			};
 		}
 
 		if (tipo === 'alternativo') {
 			const { ctx, pasoCfg, ajuste: ajusteGuardado } = buscarTurno;
-			const ajuste =
+			const convAlt = await botConversacion.obtenerConversacion(idConversacion);
+			const gestionAlt = botGestionTurno.obtenerGestionActiva(convAlt);
+			let ajuste =
 				ajusteGuardado || botAgenda.interpretarAjusteTurno(buscarTurno.textoRechazo || '', ctx);
-			let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+			if (gestionAlt) {
+				const prefGestion = botGestionTurno.aPreferenciasBusqueda(gestionAlt);
+				ajuste = _fusionarAjustesTurno(ajuste, {
+					preferir: prefGestion.preferir,
+					excluir: prefGestion.excluir,
+					resumen: prefGestion.resumen,
+				});
+			}
+			const opcionesBusqueda = {
 				excluir: ajuste.excluir,
 				preferir: ajuste.preferir,
-			});
+			};
+			if (ctx.matricula != null && Number.isFinite(Number(ctx.matricula))) {
+				opcionesBusqueda.matricula = Number(ctx.matricula);
+			}
+			let siguiente = await botAgenda.sugerirPrimerTurnoDisponible(
+				ctx.especialidadValor,
+				opcionesBusqueda,
+			);
 
 			if (!siguiente && ajuste.preferir?.fechas?.length) {
 				siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
-					excluir: ajuste.excluir,
+					...opcionesBusqueda,
 					preferir: { ...ajuste.preferir, fechas: [] },
+				});
+			}
+
+			if (!siguiente && (ajuste.preferir?.fechaDesde || ajuste.preferir?.fechaHasta)) {
+				siguiente = await botAgenda.sugerirPrimerTurnoDisponible(ctx.especialidadValor, {
+					excluir: ajuste.excluir,
+					preferir: {
+						...ajuste.preferir,
+						fechaDesde: null,
+						fechaHasta: null,
+					},
+					...(opcionesBusqueda.matricula != null
+						? { matricula: opcionesBusqueda.matricula }
+						: {}),
 				});
 			}
 
@@ -2364,7 +2591,16 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 				};
 			}
 
+			let gestionAlt2 =
+				botGestionTurno.obtenerGestionActiva(convAlt) || botGestionTurno.ensureGestion(convAlt);
+			gestionAlt2 = botGestionTurno.mergeTurnoOfrecido(gestionAlt2, {
+				...siguiente,
+				especialidad: ctx.especialidadValor,
+				especialidadNombre: ctx.especialidadNombre,
+			});
+			const ctxGuardar = botGestionTurno.sincronizarLegacy(convAlt?.contextoBot, gestionAlt2);
 			await botConversacion.guardarContextoBot(idConversacion, {
+				...ctxGuardar,
 				tipo: 'turno_sugerido',
 				especialidadValor: ctx.especialidadValor,
 				especialidadNombre: ctx.especialidadNombre,

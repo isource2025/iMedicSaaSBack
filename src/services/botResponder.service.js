@@ -9,6 +9,7 @@ const botAgenda = require('./botAgenda.service');
 const botHumanizer = require('./botHumanizer.service');
 const botInterpretacion = require('./botInterpretacion.service');
 const botOrquestador = require('./botOrquestador.service');
+const botGestionTurno = require('./botGestionTurno.service');
 const botSesionIa = require('./botSesionIa.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
@@ -593,18 +594,29 @@ async function responderMensajeEntrante({
 		if (interp) {
 			await botInterpretacion.registrarSesion(idConversacion, interp, convAct);
 		}
+		const gestion = botGestionTurno.obtenerGestionActiva(convAct);
+		const datosGestion = botGestionTurno.aDatosOperativos(gestion, convAct);
+		const tieneGestion =
+			gestion?.profesional?.nombre || gestion?.preferenciaHorario?.resumen;
 		const humanizado = await humanizarSalidaWizard(
 			{
-				pauta:
-					pasoId?.mensajeUsuario ||
-					botHumanizer.pautaPorTipo(
-						interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
-					),
-				tipoRespuesta: interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
+				pauta: tieneGestion
+					? 'Resumí lo anotado en la gestión y pedí el DNI para continuar.'
+					: pasoId?.mensajeUsuario ||
+						botHumanizer.pautaPorTipo(
+							interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
+						),
+				tipoRespuesta: tieneGestion
+					? 'RESUMEN_GESTION'
+					: interp?.flags?.es_saludo
+						? 'INICIO_FLUJO'
+						: 'PEDIR_DNI',
 				interpretacion: interp,
-				datosOperativos: convAct?.nombreContacto
-					? { nombreSaludo: String(convAct.nombreContacto).trim().split(/\s+/)[0] }
-					: null,
+				datosOperativos: tieneGestion
+					? datosGestion
+					: convAct?.nombreContacto
+						? { nombreSaludo: String(convAct.nombreContacto).trim().split(/\s+/)[0] }
+						: null,
 			},
 			convAct,
 			config,
@@ -623,30 +635,6 @@ async function responderMensajeEntrante({
 			{
 				pauta: botHumanizer.pautaPorTipo('POST_TURNO'),
 				tipoRespuesta: 'POST_TURNO',
-			},
-			convAct,
-			config,
-		);
-		return _enviarBotYMarcaSaludo({
-			enviarOpts,
-			texto: humanizado.texto,
-			idConversacion,
-			conv: convAct,
-			marcarSaludo: humanizado.marcarSaludo,
-		});
-	}
-
-	// Profesional/fecha: el wizard resuelve turnos; GPT no debe listar médicos.
-	if (
-		config.reglas.sugerirPrimerTurnoDisponible &&
-		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA')
-	) {
-		const pasoEsp = (flujo || []).find((p) => p.id === 'ELEGIR_ESPECIALIDAD');
-		const humanizado = await humanizarSalidaWizard(
-			{
-				pauta:
-					pasoEsp?.mensajeUsuario || botHumanizer.pautaPorTipo('PEDIR_ESPECIALIDAD'),
-				tipoRespuesta: 'PEDIR_ESPECIALIDAD',
 			},
 			convAct,
 			config,

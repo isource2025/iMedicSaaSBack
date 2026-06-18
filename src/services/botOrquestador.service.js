@@ -8,6 +8,7 @@ const botConversacion = require('./botConversacion.service');
 const botHumanizer = require('./botHumanizer.service');
 const botConfigService = require('./botConfig.service');
 const botAgenda = require('./botAgenda.service');
+const botGestionTurno = require('./botGestionTurno.service');
 const diag = require('../utils/diagLog');
 const botSesionIa = require('./botSesionIa.service');
 
@@ -29,67 +30,75 @@ function _primerNombre(contacto) {
 	return n ? n.split(/\s+/)[0] : null;
 }
 
-function _construirSystemPrompt(config, conv) {
+function _construirSystemPrompt(config, conv, gestion) {
 	const nombre = _primerNombre(conv?.nombreContacto);
 	const institucion = config?.nombreInstitucion || 'el centro de salud';
+	const resumenGestion = botGestionTurno.resumenParaPrompt(gestion);
 
 	return `Sos el coordinador del asistente de turnos de ${institucion} por WhatsApp.
 Tu trabajo NO es inventar médicos, fechas u horarios: usás HERRAMIENTAS del sistema para obtener datos reales y decidís el siguiente paso operativo.
+
+GESTIÓN EN CURSO (fuente de verdad — no repreguntes lo ya anotado):
+${resumenGestion}
 
 HERRAMIENTAS DISPONIBLES:
 ${botHerramientas.catalogoParaPrompt()}
 
 ACCIONES (campo "siguiente"):
 - pedir_dni — falta identificar al paciente antes de reservar
-- sugerir_turno — ya hay paciente identificado y médico/especialidad definidos (el sistema buscará el turno libre)
-- preguntar — falta un dato o hay ambigüedad (varios médicos, etc.)
+- sugerir_turno — buscar turno con datos ya anotados (profesional/especialidad/preferencia)
+- preguntar — solo si hay ambigüedad real (varios médicos, dato imposible de inferir)
 - cancelar — el paciente quiere abandonar la gestión
 - solo_informar — respondé con datos obtenidos, sin avanzar paso crítico
 - delegar_confirmacion — el paciente confirma/rechaza un turno ya ofrecido (el wizard lo maneja)
 
-REGLAS:
-- Llamá las herramientas que necesites ANTES de decidir (ej. buscar_profesional si nombran un médico).
-- Si buscar_profesional devuelve 1 match → anotá especialidad y médico; si no hay paciente → pedir_dni.
-- Si hay varios matches → preguntar cuál, listando solo los devueltos por la herramienta.
-- No listes todos los médicos de una especialidad salvo que el paciente lo pida o uses listar_profesionales_especialidad.
-- Si mencionan turno con médico en el primer mensaje, buscá el médico primero.
+REGLAS CRÍTICAS:
+- SIEMPRE incluí estado_gestion en herramientas.
+- Si el paciente nombró médico en el mensaje → buscar_profesional + interpretar_preferencia_horario.
+- Si gestión ya tiene profesional ✓ → NO pidas especialidad ni listes otros médicos.
+- Si gestión ya tiene especialidad ✓ inferida del médico → NO preguntes especialidad.
+- Si mencionan mes/fecha ("agosto", "semana que viene") → interpretar_preferencia_horario.
+- Si hay profesional + (paciente identificado o falta DNI) y preferencia → pedir_dni o sugerir_turno según identidad.
+- No uses listar_profesionales_especialidad salvo que el paciente pida ver la lista.
 ${nombre ? `- Tratá al paciente como "${nombre}" (nombre WhatsApp).` : ''}
 
 Respondé ÚNICAMENTE un JSON en una línea:
 {"herramientas":[{"nombre":"...","argumentos":{}}],"siguiente":"pedir_dni|sugerir_turno|preguntar|cancelar|solo_informar|delegar_confirmacion","notas":"breve","pregunta_sugerida":"opcional si siguiente=preguntar"}`;
 }
 
-function _bloqueFactual(resultados) {
-	return JSON.stringify(
-		(resultados || []).map((r) => ({ herramienta: r.nombre, resultado: r.ok ? r.datos : r.error })),
-		null,
-		2,
-	);
+function _tipoHumanizar(siguiente, gestion) {
+	if (siguiente === 'pedir_dni' && gestion?.profesional?.nombre) return 'RESUMEN_GESTION';
+	const map = {
+		pedir_dni: 'PEDIR_DNI',
+		preguntar: 'ACLARACION',
+		cancelar: 'SALIDA_FLUJO',
+		solo_informar: 'GENERICO',
+		sugerir_turno: 'SUGERENCIA_TURNO',
+	};
+	return map[siguiente] || 'GENERICO';
 }
 
-function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
+function _pautaYDatosDesdePlan(plan, resultados, conv, config, gestion) {
 	const buscarProf = (resultados || []).find((r) => r.nombre === 'buscar_profesional' && r.ok);
+	const prefH = (resultados || []).find(
+		(r) => r.nombre === 'interpretar_preferencia_horario' && r.ok,
+	);
 	const d = buscarProf?.datos;
 	const nombre = _primerNombre(conv?.nombreContacto);
+	const datosGestion = botGestionTurno.aDatosOperativos(gestion, conv);
 
 	if (plan.siguiente === 'cancelar') {
 		return {
-			pauta:
-				config?.mensajes?.cancelacionFlujo || botHumanizer.pautaPorTipo('SALIDA_FLUJO'),
+			pauta: config?.mensajes?.cancelacionFlujo || botHumanizer.pautaPorTipo('SALIDA_FLUJO'),
 		};
 	}
 
 	if (plan.siguiente === 'pedir_dni') {
-		if (conv?.idPaciente) {
+		if (gestion?.profesional?.nombre || gestion?.preferenciaHorario?.resumen) {
 			return {
-				pauta: 'El paciente ya está identificado. Confirmá médico/especialidad y seguí con la búsqueda de turno sin pedir DNI.',
-				datosOperativos: {
-					medico: d?.profesional?.nombre || conv?.contextoBot?.profesionalPendiente?.nombre,
-					especialidad:
-						d?.especialidad?.nombre || conv?.contextoBot?.especialidadPendiente?.nombre,
-					nombreSaludo: nombre,
-					pacienteIdentificado: true,
-				},
+				pauta:
+					'Confirmá lo ya anotado en la gestión (médico, especialidad, preferencia de fecha si hay) y pedí el DNI para seguir. No repreguntes especialidad.',
+				datosOperativos: datosGestion,
 			};
 		}
 		if (d?.tipo === 'unico') {
@@ -98,6 +107,7 @@ function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 				datosOperativos: {
 					medico: d.profesional.nombre,
 					especialidad: d.especialidad.nombre,
+					preferencia: prefH?.datos?.resumen || gestion?.preferenciaHorario?.resumen,
 					nombreSaludo: nombre,
 				},
 			};
@@ -113,13 +123,22 @@ function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 		}
 		return {
 			pauta: config?.mensajes?.pedirDni || botHumanizer.pautaPorTipo('PEDIR_DNI'),
-			datosOperativos: nombre ? { nombreSaludo: nombre } : null,
+			datosOperativos: { ...datosGestion, nombreSaludo: nombre },
 		};
 	}
 
 	if (plan.siguiente === 'preguntar') {
+		if (gestion?.profesional?.confirmada && plan.pregunta_sugerida?.match(/especialidad/i)) {
+			return {
+				pauta: 'El profesional ya está definido. Pedí DNI o confirmá preferencia de fecha, no especialidad.',
+				datosOperativos: datosGestion,
+			};
+		}
 		if (plan.pregunta_sugerida) {
-			return { pauta: `Responder o preguntar: ${String(plan.pregunta_sugerida).trim()}` };
+			return {
+				pauta: `Responder o preguntar: ${String(plan.pregunta_sugerida).trim()}`,
+				datosOperativos: datosGestion,
+			};
 		}
 		if (d?.tipo === 'multiples') {
 			return {
@@ -129,12 +148,7 @@ function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 				},
 			};
 		}
-		if (d?.tipo === 'no_encontrado') {
-			return {
-				pauta: 'No se encontró el profesional; pedir apellido completo o especialidad.',
-			};
-		}
-		return { pauta: 'Pedir más detalle para ayudar con el turno.' };
+		return { pauta: 'Pedir más detalle para ayudar con el turno.', datosOperativos: datosGestion };
 	}
 
 	if (plan.siguiente === 'solo_informar') {
@@ -153,22 +167,21 @@ function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 		pauta: plan.pregunta_sugerida
 			? String(plan.pregunta_sugerida).trim()
 			: 'Ofrecer ayuda con el turno.',
+		datosOperativos: datosGestion,
 	};
 }
 
-function _tipoHumanizar(siguiente) {
-	const map = {
-		pedir_dni: 'PEDIR_DNI',
-		preguntar: 'ACLARACION',
-		cancelar: 'SALIDA_FLUJO',
-		solo_informar: 'GENERICO',
-		sugerir_turno: 'SUGERENCIA_TURNO',
-	};
-	return map[siguiente] || 'GENERICO';
+function _inferirPlanDesdeGestion(conv, gestion) {
+	if (botGestionTurno.necesitaIdentidad(conv, gestion)) {
+		if (botGestionTurno.puedeBuscarTurno(conv, gestion)) return 'pedir_dni';
+		return 'preguntar';
+	}
+	if (botGestionTurno.puedeBuscarTurno(conv, gestion)) return 'sugerir_turno';
+	return null;
 }
 
 /**
- * @returns {Promise<{ handled: boolean, motivo?: string, accion?: string, texto?: string, buscarTurno?: object, aviso?: string, tipoRespuesta?: string }>}
+ * @returns {Promise<{ handled: boolean, motivo?: string, accion?: string, texto?: string, buscarTurno?: object }>}
  */
 async function procesarMensaje({
 	texto,
@@ -182,8 +195,10 @@ async function procesarMensaje({
 	}
 
 	const config = await botConfigService.getBotConfig();
-	const estadoInicial = await botHerramientas.ejecutar('estado_sesion', {}, { conv });
-	const system = _construirSystemPrompt(config, conv);
+	let gestion = await botGestionTurno.cargarOAsegurar(idConversacion, conv);
+
+	const estadoInicial = await botHerramientas.ejecutar('estado_gestion', {}, { conv });
+	const system = _construirSystemPrompt(config, conv, gestion);
 
 	const messages = (historial || [])
 		.filter((m) => m.origen === 'PACIENTE' || m.origen === 'BOT')
@@ -194,7 +209,7 @@ async function procesarMensaje({
 		}))
 		.filter((m) => m.content);
 
-	const userContent = `Estado sesión (referencia):\n${JSON.stringify(estadoInicial.datos)}\n\nMensaje del paciente:\n${String(texto || '').trim()}`;
+	const userContent = `Estado gestión:\n${JSON.stringify(estadoInicial.datos)}\n\nMensaje del paciente:\n${String(texto || '').trim()}`;
 	if (!messages.length || messages[messages.length - 1].content !== String(texto || '').trim()) {
 		messages.push({ role: 'user', content: userContent });
 	} else {
@@ -202,23 +217,25 @@ async function procesarMensaje({
 	}
 
 	let raw;
+	let plan;
 	try {
 		raw = await botOpenai.chat({ system, messages });
+		plan = _parsearJson(raw);
 	} catch (e) {
 		diag.warn('orquestador', 'OpenAI falló', { error: e.message });
 		return { handled: false, motivo: 'openai_error' };
 	}
 
-	const plan = _parsearJson(raw);
 	if (!plan?.siguiente) {
 		diag.warn('orquestador', 'JSON inválido', { raw: raw?.slice(0, 200) });
-		return { handled: false, motivo: 'plan_invalido' };
+		plan = { siguiente: _inferirPlanDesdeGestion(conv, gestion) || 'preguntar', herramientas: [] };
 	}
 
 	diag.line('orquestador', 'Plan IA', {
 		siguiente: plan.siguiente,
 		herramientas: (plan.herramientas || []).map((h) => h.nombre),
 		notas: plan.notas,
+		gestion: botGestionTurno.resumenParaPrompt(gestion),
 	});
 
 	if (plan.siguiente === 'delegar_confirmacion') {
@@ -226,8 +243,18 @@ async function procesarMensaje({
 	}
 
 	let llamadas = Array.isArray(plan.herramientas) ? plan.herramientas : [];
-	if (!llamadas.length && /buscar|profesional|medico|doctor|biasi|turno/i.test(texto)) {
-		llamadas = [{ nombre: 'buscar_profesional', argumentos: { texto } }];
+	const tieneEstadoGestion = llamadas.some((h) => h.nombre === 'estado_gestion');
+	if (!tieneEstadoGestion) {
+		llamadas = [{ nombre: 'estado_gestion', argumentos: {} }, ...llamadas];
+	}
+
+	if (!llamadas.some((h) => h.nombre === 'buscar_profesional')) {
+		const sugeridas = botGestionTurno.herramientasSugeridasParaTexto(texto, gestion);
+		for (const s of sugeridas) {
+			if (s.nombre !== 'estado_gestion' && !llamadas.some((l) => l.nombre === s.nombre)) {
+				llamadas.push(s);
+			}
+		}
 	}
 
 	let convAct = conv;
@@ -237,10 +264,10 @@ async function procesarMensaje({
 		convAct,
 		resultados,
 	);
+	gestion = botGestionTurno.obtenerGestionActiva(convAct) || gestion;
 
-	const ctx = convAct?.contextoBot || {};
-	const esp = ctx.especialidadPendiente;
-	const prof = ctx.profesionalPendiente;
+	const esp = gestion.especialidad || convAct?.contextoBot?.especialidadPendiente;
+	const prof = gestion.profesional || convAct?.contextoBot?.profesionalPendiente;
 
 	if (plan.siguiente === 'pedir_dni' && convAct?.idPaciente) {
 		plan.siguiente = prof?.matricula || esp?.valor ? 'sugerir_turno' : 'preguntar';
@@ -251,17 +278,22 @@ async function procesarMensaje({
 	}
 
 	if (
+		plan.siguiente === 'preguntar' &&
+		gestion.profesional?.confirmada &&
+		/\bespecialidad\b/i.test(String(plan.pregunta_sugerida || plan.notas || ''))
+	) {
+		plan.siguiente = convAct?.idPaciente ? 'sugerir_turno' : 'pedir_dni';
+	}
+
+	if (
 		plan.siguiente === 'sugerir_turno' &&
 		convAct?.idPaciente &&
 		(esp?.valor || prof?.matricula)
 	) {
-		const prefijo = _primerNombre(convAct.nombreContacto)
-			? `Perfecto, ${_primerNombre(convAct.nombreContacto)}. `
-			: '';
+		const { excluir, preferir } = botGestionTurno.aPreferenciasBusqueda(gestion);
 		return {
 			handled: true,
 			accion: 'BUSCAR_TURNO',
-			avisoPauta: botHumanizer.pautaPorTipo('AVISO_BUSQUEDA'),
 			buscarTurno: {
 				tipo: 'inicial',
 				idConversacion,
@@ -271,14 +303,27 @@ async function procesarMensaje({
 				matricula: prof?.matricula,
 				medico: prof?.nombre,
 				pasoConfirmarId: 'CONFIRMAR',
+				idGestion: gestion.id,
+				preferir,
+				excluir,
 			},
 			tipoRespuesta: 'SUGERENCIA_TURNO',
 			resultados,
 		};
 	}
 
-	const { pauta, datosOperativos } = _pautaYDatosDesdePlan(plan, resultados, convAct, config);
-	const tipoResp = _tipoHumanizar(plan.siguiente);
+	if (plan.siguiente === 'sugerir_turno' && !convAct?.idPaciente && (esp?.valor || prof?.matricula)) {
+		plan.siguiente = 'pedir_dni';
+	}
+
+	const { pauta, datosOperativos } = _pautaYDatosDesdePlan(
+		plan,
+		resultados,
+		convAct,
+		config,
+		gestion,
+	);
+	const tipoResp = _tipoHumanizar(plan.siguiente, gestion);
 	const saludo = botSesionIa.contextoSaludo(convAct);
 	const datosConSaludo = {
 		...(datosOperativos || {}),
@@ -302,6 +347,8 @@ async function procesarMensaje({
 	}
 
 	if (plan.siguiente === 'cancelar') {
+		botGestionTurno.cerrarGestion(gestion, 'cancelada');
+		await botGestionTurno.persistir(idConversacion, convAct, gestion);
 		await botSesionIa.resetearSesionIa(idConversacion);
 		const convC = await botConversacion.obtenerConversacion(idConversacion);
 		const meta = botSesionIa.extraerMetaPersistente(convC?.contextoBot);
@@ -326,6 +373,10 @@ function debeUsarOrquestador(pasoActual, conv, texto) {
 	if (pasoActual === 'CONFIRMAR_IDENTIDAD') return false;
 	if (pasoActual === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') return false;
 	if (/\b(\d{7,8})\b/.test(String(texto || ''))) return false;
+	const gestion = botGestionTurno.obtenerGestionActiva(conv);
+	if (gestion) return true;
+	if (pasoActual === 'inicio' || pasoActual === 'IDENTIFICAR' || !pasoActual) return true;
+	if (pasoActual === 'ELEGIR_ESPECIALIDAD' || pasoActual === 'ELEGIR_PROFESIONAL') return true;
 	return true;
 }
 

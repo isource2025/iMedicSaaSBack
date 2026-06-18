@@ -932,7 +932,14 @@ async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR')
 /** Tras confirmar un turno: conserva paciente/DNI y pasa a estado post-turno. */
 async function finalizarTrasReservaExitosa(idConversacion) {
 	const botSesionIa = require('./botSesionIa.service');
+	const botGestionTurno = require('./botGestionTurno.service');
 	await checkConversationTables();
+	const convPre = await obtenerConversacion(idConversacion);
+	const gestion = botGestionTurno.obtenerGestionActiva(convPre);
+	if (gestion) {
+		botGestionTurno.cerrarGestion(gestion, 'completada');
+		botGestionTurno.dbg('reserva exitosa — gestión completada', { id: gestion.id });
+	}
 	await botSesionIa.resetearSesionIa(idConversacion);
 	const convTrasReset = await obtenerConversacion(idConversacion);
 	const meta = botSesionIa.extraerMetaPersistente(convTrasReset?.contextoBot);

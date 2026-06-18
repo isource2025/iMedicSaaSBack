@@ -45,6 +45,12 @@ function intencionAAjusteTurno(intencion, parametros = {}, sugerenciaActual = nu
 		franja: normalizarFranja(parametros.preferirFranja),
 		horaDesde: parametros.horaDesde || null,
 		horaHasta: parametros.horaHasta || null,
+		fechaDesde: parametros.preferirFechaDesde
+			? String(parametros.preferirFechaDesde).slice(0, 10)
+			: null,
+		fechaHasta: parametros.preferirFechaHasta
+			? String(parametros.preferirFechaHasta).slice(0, 10)
+			: null,
 	};
 
 	if (sugerenciaActual?.matricula && sugerenciaActual?.fecha && sugerenciaActual?.hora) {
@@ -72,6 +78,7 @@ function intencionAAjusteTurno(intencion, parametros = {}, sugerenciaActual = nu
 
 	const partes = [];
 	if (preferir.fechas?.length === 1) partes.push(preferir.fechas[0]);
+	else if (preferir.fechaDesde && preferir.fechaHasta) partes.push('la semana que viene');
 	else if (preferir.diasSemana?.length) {
 		const nombres = Object.entries(MAP_DIA)
 			.filter(([, n]) => preferir.diasSemana.includes(n))

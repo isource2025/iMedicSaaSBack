@@ -10,9 +10,34 @@
  *   node scripts/simulate_bot_conversations.js --interactive
  *   node scripts/simulate_bot_conversations.js --dni=53547773 --especialidad=oncologia --prof=1
  *
+ *   node scripts/simulate_bot_conversations.js --escenario=biasi-agosto --mock-renaper
+ *
  * Variables: BOT_EMPRESA_ID, SIM_DNI, SIM_TELEFONO, OPENAI_API_KEY, DB y AUTH_DB
  */
 require('dotenv').config();
+
+const ARGS = process.argv.slice(2);
+const FLAG = (name) => ARGS.includes(`--${name}`);
+
+if (FLAG('mock-renaper')) {
+	const renaperService = require('../src/services/renaper.service');
+	const mockHit = async (dni) => ({
+		ok: true,
+		data: {
+			apellido: 'SIM',
+			nombres: 'PACIENTE PRUEBA',
+			nombreCompleto: 'SIM PACIENTE PRUEBA',
+			fechaNacimiento: '2010-01-01',
+			sexo: 'M',
+			numeroDocumento: String(dni),
+		},
+		meta: { signed: false, fuente: 'sim' },
+		sexoDetectado: 'M',
+	});
+	renaperService.searchByDni = mockHit;
+	renaperService.search = async (dni) => mockHit(dni);
+	console.log('[sim] RENAPER mockeado (--mock-renaper)\n');
+}
 
 // No enviar mensajes reales a Meta durante la simulación
 const whatsappMeta = require('../src/services/whatsappMeta.service');
@@ -27,8 +52,6 @@ const botResponder = require('../src/services/botResponder.service');
 const botInterpretacion = require('../src/services/botInterpretacion.service');
 const botOpenai = require('../src/services/botOpenai.service');
 
-const ARGS = process.argv.slice(2);
-const FLAG = (name) => ARGS.includes(`--${name}`);
 const ARG = (name, fallback) => {
 	const hit = ARGS.find((a) => a.startsWith(`--${name}=`));
 	return hit ? hit.split('=').slice(1).join('=') : fallback;
@@ -70,11 +93,19 @@ function sustituirVars(texto) {
 
 function fmtSesion(conv) {
 	const s = conv?.contextoBot?.sesionInterpretacion;
-	if (!s?.ultimaIntencion) return `${C.dim}(sesión sin intención)${C.reset}`;
-	return [
-		`${C.magenta}intención${C.reset}=${s.ultimaIntencion}`,
-		`${C.dim}frustración=${s.frustracion ?? 0} tono=${s.ultimoTono || '—'}${C.reset}`,
-	].join(' | ');
+	const g = conv?.contextoBot?.gestionTurno;
+	const partes = [];
+	if (g && !['completada', 'cancelada'].includes(g.estado)) {
+		partes.push(`${C.cyan}gestión${C.reset}=${g.estado}`);
+		if (g.profesional?.nombre) partes.push(`prof=${g.profesional.nombre}`);
+		if (g.preferenciaHorario?.resumen) partes.push(`pref=${g.preferenciaHorario.resumen}`);
+	}
+	if (s?.ultimaIntencion) {
+		partes.push(`${C.magenta}intención${C.reset}=${s.ultimaIntencion}`);
+		partes.push(`${C.dim}frustración=${s.frustracion ?? 0} tono=${s.ultimoTono || '—'}${C.reset}`);
+	}
+	if (!partes.length) return `${C.dim}(sin sesión/gestión)${C.reset}`;
+	return partes.join(' | ');
 }
 
 function printBloque({ rol, texto, extra }) {
@@ -235,6 +266,17 @@ function escenarios() {
 			nombre: '8. Confirmar turno (⚠️ reserva real)',
 			descripcion: 'Confirma turno → crea reserva en BD. Solo con --allow-booking.',
 			pasos: [...hastaTurno, { texto: 'Sí', skip: true }, { texto: 'Gracias' }],
+		},
+		{
+			id: 'biasi-agosto',
+			nombre: '9. Audio De Biasi + agosto (orquestador)',
+			descripcion:
+				'Pedido con médico y mes → gestión con profesional+preferencia → DNI → turno mismo médico.',
+			pasos: [
+				{ texto: 'turno con de biasi para agosto' },
+				{ texto: '{dni}' },
+				{ texto: 'Sí' },
+			],
 		},
 	];
 }

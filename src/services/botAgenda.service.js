@@ -1366,6 +1366,26 @@ function _mejorMatchPorTokens(texto, lista) {
 	return bestScore >= 55 ? best : null;
 }
 
+function _levenshtein(a, b) {
+	const s = String(a || '');
+	const t = String(b || '');
+	if (s === t) return 0;
+	if (!s.length) return t.length;
+	if (!t.length) return s.length;
+	const row = Array.from({ length: t.length + 1 }, (_, i) => i);
+	for (let i = 1; i <= s.length; i++) {
+		let prev = row[0];
+		row[0] = i;
+		for (let j = 1; j <= t.length; j++) {
+			const tmp = row[j];
+			const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+			row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
+			prev = tmp;
+		}
+	}
+	return row[t.length];
+}
+
 function _nombreCoincideProfesional(nombreNorm, busqueda) {
 	if (!busqueda || busqueda.length < 3) return false;
 	if (nombreNorm === busqueda) return true;
@@ -1373,7 +1393,11 @@ function _nombreCoincideProfesional(nombreNorm, busqueda) {
 	if (tokens.some((t) => t === busqueda || t.startsWith(busqueda) || busqueda.startsWith(t))) {
 		return true;
 	}
-	return busqueda.length >= 4 && nombreNorm.includes(busqueda);
+	if (busqueda.length >= 4 && nombreNorm.includes(busqueda)) return true;
+	return tokens.some((t) => {
+		if (t.length < 4 || busqueda.length < 4) return false;
+		return _levenshtein(t, busqueda) <= 2;
+	});
 }
 
 function _profesionalCoincideBusqueda(nombreProf, busquedaNorm) {
@@ -1399,6 +1423,14 @@ function extraerTextoBusquedaProfesional(texto, especialidadesLista = []) {
 	}
 	raw = raw.replace(
 		/\b(traumatologia|oncologia|ginecologia|cardiologia|pediatria|urologia|dermatologia|oftalmologia|neurologia)\b/gi,
+		' ',
+	);
+	raw = raw.replace(
+		/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/gi,
+		' ',
+	);
+	raw = raw.replace(
+		/\b(semana que viene|proxima semana|manana|pasado manana|otro dia|otra fecha|fin de semana)\b/gi,
 		' ',
 	);
 	raw = raw.replace(/\b(dr|dra|doctor|doctora|profesional|medico|medicos)\b/gi, ' ');
@@ -1454,6 +1486,29 @@ async function buscarProfesionalesPorNombre(texto, especialidadValor = null) {
 	});
 }
 
+async function _buscarProfesionalFlexible(profQuery, textoOriginal, especialidadValor = null) {
+	const candidatos = new Set();
+	const intentos = [profQuery];
+	if (profQuery?.includes(' ')) {
+		for (const tok of profQuery.split(/\s+/).filter((t) => t.length >= 3)) {
+			intentos.push(tok);
+		}
+	}
+	const textoAlt = extraerTextoBusquedaProfesional(textoOriginal, await listarEspecialidadesBot());
+	if (textoAlt && textoAlt !== profQuery) intentos.push(textoAlt);
+
+	for (const q of intentos) {
+		if (!q || q.length < 3) continue;
+		const hits = await buscarProfesionalesPorNombre(q, especialidadValor);
+		for (const h of hits) candidatos.add(h.matricula);
+		if (candidatos.size === 1) break;
+	}
+
+	if (!candidatos.size) return [];
+	const todos = await listarProfesionalesAgendaGlobal();
+	return todos.filter((p) => candidatos.has(p.matricula));
+}
+
 function mensajeListaProfesionalesCoincidencias(matches, max = 8) {
 	const visibles = (matches || []).slice(0, max);
 	if (!visibles.length) {
@@ -1501,7 +1556,7 @@ async function analizarPedidoTurnoConProfesional(texto, opts = {}) {
 		return { tipo: 'sin_datos' };
 	}
 
-	const matches = await buscarProfesionalesPorNombre(profQuery, espValor);
+	const matches = await _buscarProfesionalFlexible(profQuery, texto, espValor);
 	if (matches.length === 1) {
 		const m = matches[0];
 		return {
@@ -1720,6 +1775,8 @@ function _normalizarPreferencias(preferir = {}) {
 		franja: preferir.franja || null,
 		horaDesde: preferir.horaDesde || null,
 		horaHasta: preferir.horaHasta || null,
+		fechaDesde: preferir.fechaDesde ? String(preferir.fechaDesde).slice(0, 10) : null,
+		fechaHasta: preferir.fechaHasta ? String(preferir.fechaHasta).slice(0, 10) : null,
 	};
 }
 
@@ -1760,9 +1817,95 @@ function _esNegacionDia(t, nombreDia) {
 	);
 }
 
+function _isoDesdeDate(d) {
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Rangos relativos: "semana que viene", "mañana", etc. */
+function _detectarRangoFechasRelativo(t) {
+	if (!t) return null;
+
+	if (
+		/\b(semana que viene|proxima semana|la semana proxima|para la semana que viene|otra semana)\b/.test(
+			t,
+		)
+	) {
+		const hoy = new Date();
+		hoy.setHours(12, 0, 0, 0);
+		const day = hoy.getDay();
+		const lunesActual = new Date(hoy);
+		const diffToMonday = day === 0 ? 6 : day - 1;
+		lunesActual.setDate(hoy.getDate() - diffToMonday);
+		const lunesProxima = new Date(lunesActual);
+		lunesProxima.setDate(lunesActual.getDate() + 7);
+		const domingo = new Date(lunesProxima);
+		domingo.setDate(lunesProxima.getDate() + 6);
+		return {
+			fechaDesde: _isoDesdeDate(lunesProxima),
+			fechaHasta: _isoDesdeDate(domingo),
+			resumen: 'la semana que viene',
+		};
+	}
+
+	if (/\b(manana|para manana)\b/.test(t) && !/\b(pasado manana)\b/.test(t)) {
+		const d = _fechaIsoOffset(1);
+		return { fechaDesde: d, fechaHasta: d, resumen: 'mañana' };
+	}
+
+	const MESES = {
+		enero: 0,
+		febrero: 1,
+		marzo: 2,
+		abril: 3,
+		mayo: 4,
+		junio: 5,
+		julio: 6,
+		agosto: 7,
+		septiembre: 8,
+		setiembre: 8,
+		octubre: 9,
+		noviembre: 10,
+		diciembre: 11,
+	};
+	for (const [nombreMes, mesIdx] of Object.entries(MESES)) {
+		if (!new RegExp(`\\b${nombreMes}\\b`).test(t)) continue;
+		const hoy = new Date();
+		hoy.setHours(12, 0, 0, 0);
+		let year = hoy.getFullYear();
+		if (mesIdx < hoy.getMonth()) year += 1;
+		const desde = new Date(year, mesIdx, 1);
+		const hasta = new Date(year, mesIdx + 1, 0);
+		return {
+			fechaDesde: _isoDesdeDate(desde),
+			fechaHasta: _isoDesdeDate(hasta),
+			resumen: `para ${nombreMes}`,
+		};
+	}
+
+	const mFecha = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+	if (mFecha) {
+		const dd = Number(mFecha[1]);
+		const mm = Number(mFecha[2]);
+		let yy = mFecha[3] ? Number(mFecha[3]) : new Date().getFullYear();
+		if (yy < 100) yy += 2000;
+		if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
+			const iso = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+			return { fechaDesde: iso, fechaHasta: iso, resumen: `${dd}/${mm}` };
+		}
+	}
+
+	return null;
+}
+
 function _resumenPreferencia(preferir) {
 	const partes = [];
-	if (preferir.fechas?.length === 1) {
+	if (preferir.fechaDesde && preferir.fechaHasta && preferir.fechaDesde !== preferir.fechaHasta) {
+		partes.push(
+			`${_fechaLegible(preferir.fechaDesde)} al ${_fechaLegible(preferir.fechaHasta)}`,
+		);
+	} else if (preferir.fechaDesde && preferir.fechaHasta) {
+		partes.push(_fechaLegible(preferir.fechaDesde));
+	} else if (preferir.fechas?.length === 1) {
 		partes.push(_fechaLegible(preferir.fechas[0]));
 	} else if (preferir.diasSemana?.length) {
 		const nombres = Object.entries(_MAP_DIA_SEMANA)
@@ -1777,8 +1920,10 @@ function _resumenPreferencia(preferir) {
 }
 
 function _diaCumplePreferencias(fechaIso, preferir) {
-	if (!preferir.fechas.size && !preferir.diasSemana.size) return true;
 	const fecha = String(fechaIso).slice(0, 10);
+	if (preferir.fechaDesde && fecha < preferir.fechaDesde) return false;
+	if (preferir.fechaHasta && fecha > preferir.fechaHasta) return false;
+	if (!preferir.fechas.size && !preferir.diasSemana.size) return true;
 	if (preferir.fechas.size) return preferir.fechas.has(fecha);
 	const diaNum = new Date(`${fecha}T12:00:00`).getDay();
 	return preferir.diasSemana.has(diaNum);
@@ -1885,8 +2030,21 @@ function interpretarAjusteTurno(texto, sugerenciaActual = null) {
 
 	if (sugerenciaActual?.fecha) {
 		const fechaSug = String(sugerenciaActual.fecha).slice(0, 10);
-		if (/\b(ese dia|esta fecha|ese horario|a esa hora|hoy no|mañana no)\b/.test(t)) {
+		if (
+			/\b(ese dia|esta fecha|ese horario|a esa hora|hoy no|manana no|otro dia|otra fecha|otro horario)\b/.test(
+				t,
+			)
+		) {
 			excluir.fechas.push(fechaSug);
+		}
+	}
+
+	const rango = _detectarRangoFechasRelativo(t);
+	if (rango) {
+		preferir.fechaDesde = rango.fechaDesde;
+		preferir.fechaHasta = rango.fechaHasta;
+		if (sugerenciaActual?.fecha) {
+			excluir.fechas.push(String(sugerenciaActual.fecha).slice(0, 10));
 		}
 	}
 
@@ -1895,7 +2053,7 @@ function interpretarAjusteTurno(texto, sugerenciaActual = null) {
 	excluir.diasSemana = [...new Set(excluir.diasSemana)];
 	excluir.fechas = [...new Set(excluir.fechas)];
 
-	const resumen = _resumenPreferencia(preferir);
+	const resumen = _resumenPreferencia(preferir) || (rango?.resumen ?? null);
 	return { excluir, preferir, resumen };
 }
 
@@ -1918,11 +2076,13 @@ async function interpretarAjusteTurnoConGpt(texto, sugerenciaActual = null) {
 ${ctxTurno}
 
 Respondé ÚNICAMENTE JSON en una línea:
-{"excluirDiasSemana":["lunes"],"preferirDiasSemana":["miercoles"],"preferirFranja":"tarde"|"manana"|"noche"|null,"preferirFecha":"YYYY-MM-DD"|null,"excluirFechaActual":true|false}
+{"excluirDiasSemana":["lunes"],"preferirDiasSemana":["miercoles"],"preferirFranja":"tarde"|"manana"|"noche"|null,"preferirFecha":"YYYY-MM-DD"|null,"preferirFechaDesde":"YYYY-MM-DD"|null,"preferirFechaHasta":"YYYY-MM-DD"|null,"excluirFechaActual":true|false}
 
 Reglas:
 - "no tenés para el miércoles a la tarde" → preferir miércoles + tarde (NO excluir miércoles)
 - "el lunes no puedo" → excluir lunes
+- "semana que viene" / "la próxima semana" → preferirFechaDesde = lunes próximo, preferirFechaHasta = domingo de esa semana, excluirFechaActual true
+- "otro día" sin fecha concreta → excluirFechaActual true
 - Si pide tarde y el turno actual es a la mañana del mismo día → preferirFecha = fecha del turno actual
 - Si no hay preferencia clara → preferirDiasSemana [] y preferirFranja null`,
 			messages: [{ role: 'user', content: String(texto || '').trim() }],
@@ -1954,6 +2114,8 @@ Reglas:
 	}
 	if (j.preferirFranja) preferir.franja = j.preferirFranja;
 	if (j.preferirFecha) preferir.fechas.push(String(j.preferirFecha).slice(0, 10));
+	if (j.preferirFechaDesde) preferir.fechaDesde = String(j.preferirFechaDesde).slice(0, 10);
+	if (j.preferirFechaHasta) preferir.fechaHasta = String(j.preferirFechaHasta).slice(0, 10);
 	if (j.excluirFechaActual && sugerenciaActual?.fecha) {
 		excluir.fechas.push(String(sugerenciaActual.fecha).slice(0, 10));
 	}
@@ -1967,13 +2129,22 @@ async function interpretarAjusteTurnoInteligente(texto, sugerenciaActual = null)
 		local.preferir.fechas.length ||
 		local.preferir.diasSemana.length ||
 		local.preferir.franja ||
+		local.preferir.fechaDesde ||
+		local.preferir.fechaHasta ||
 		local.excluir.diasSemana.length ||
 		local.excluir.fechas.length;
 
 	if (tienePreferencia) return local;
 
 	const gpt = await interpretarAjusteTurnoConGpt(texto, sugerenciaActual);
-	if (gpt && (gpt.preferir.fechas.length || gpt.preferir.diasSemana.length || gpt.preferir.franja)) {
+	if (
+		gpt &&
+		(gpt.preferir.fechas.length ||
+			gpt.preferir.diasSemana.length ||
+			gpt.preferir.franja ||
+			gpt.preferir.fechaDesde ||
+			gpt.preferir.fechaHasta)
+	) {
 		return gpt;
 	}
 
@@ -1986,8 +2157,17 @@ function _fechasCandidatasBusqueda(maxDias, excluir, preferir) {
 	}
 
 	const fechas = [];
-	for (let d = 0; d <= maxDias; d++) {
+	let startOffset = 0;
+	if (preferir.fechaDesde) {
+		const hoy = _fechaIsoOffset(0);
+		const d0 = new Date(`${hoy}T12:00:00`);
+		const d1 = new Date(`${preferir.fechaDesde}T12:00:00`);
+		startOffset = Math.max(0, Math.round((d1 - d0) / 86400000));
+	}
+
+	for (let d = startOffset; d <= maxDias; d++) {
 		const fechaIso = _fechaIsoOffset(d);
+		if (preferir.fechaHasta && fechaIso > preferir.fechaHasta) break;
 		if (excluir.fechas.has(fechaIso)) continue;
 		const diaNum = new Date(`${fechaIso}T12:00:00`).getDay();
 		if (excluir.diasSemana.has(diaNum)) continue;
@@ -2011,7 +2191,7 @@ function _busquedaTurnoConcurrencia(reglas) {
 function _maxDiasBusquedaBot(config, preferir) {
 	const cfg = config.reglas.diasMaxAntelacion || 60;
 	const cap = Number(config.reglas.busquedaMaxDias ?? 21);
-	if (preferir.fechas.size || preferir.diasSemana.size) return cfg;
+	if (preferir.fechas.size || preferir.diasSemana.size || preferir.fechaDesde) return cfg;
 	return Math.min(cfg, cap);
 }
 
