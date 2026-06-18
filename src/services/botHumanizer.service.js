@@ -23,8 +23,8 @@ const TIPOS_HUMANIZAR = new Set([
 
 const PAUTAS_POR_TIPO = Object.freeze({
 	SALIDA_FLUJO: 'Cerrar la gestión del turno con empatía; puede volver a escribir cuando quiera.',
-	SUGERENCIA_TURNO:
-		'Ofrecer el turno encontrado y preguntar si lo confirma o prefiere otro día/horario.',
+		SUGERENCIA_TURNO:
+			'Ofrecé el turno encontrado. Cerrá SOLO preguntando si lo confirma o prefiere otro día/horario. No listes otras opciones ni pidas DNI.',
 	CONFIRMACION_TURNO_OK: 'Celebrar brevemente que el turno quedó confirmado (sin comprobante).',
 	ERROR_IDENTIFICACION:
 		'Explicar el problema con el DNI sin tecnicismos; indicar si falló la ficha del centro o RENAPER.',
@@ -54,18 +54,18 @@ function _instruccionesPorTipo(tipo) {
 		SALIDA_FLUJO:
 			'Cerrá con empatía. Dejá claro que puede volver a escribir cuando quiera un turno.',
 		SUGERENCIA_TURNO:
-			'Presentá el turno conversacionalmente. Terminá con una pregunta clara: confirmar, otro horario o cancelar.',
+			'Presentá el turno. Una sola pregunta al final: ¿lo confirmás o preferís otro día/horario? Si el paciente pide otro día u horario, interpretá su pedido (no repitas menú). Fecha sin año si es el año en curso.',
 		CONFIRMACION_TURNO_OK:
 			'Celebrá brevemente. El comprobante oficial va aparte: NO lo incluyas.',
 		ERROR_IDENTIFICACION:
 			'Explicá el problema sin tecnicismos. Preservá si el fallo es ficha local o RENAPER.',
-		AVISO_BUSQUEDA: 'Avisá que estás buscando en la agenda.',
+		AVISO_BUSQUEDA: 'Avisá brevemente que estás buscando en la agenda. NO pidas DNI si pacienteIdentificado es true.',
 		ERROR_RESERVA: 'Explicá por qué no se pudo reservar.',
 		COBERTURA: 'Pedí cobertura de forma amable.',
 		PEDIR_DNI:
 			'Pedí el DNI como lo haría una recepcionista: "necesito tu DNI", "así busco el turno". Nada robótico.',
 		PEDIR_ESPECIALIDAD: 'Preguntá la especialidad de forma conversacional.',
-		CONFIRMAR_IDENTIDAD: 'Mostrá los datos y pedí Sí/No para confirmar identidad.',
+		CONFIRMAR_IDENTIDAD: 'Mostrá solo datos de identidad (nombre, fecha nacimiento) y pedí Sí/No. NO menciones médico ni especialidad.',
 		LISTA_ESPECIALIDADES: 'Listá especialidades de forma clara.',
 		LISTA_PROFESIONALES: 'Listá profesionales de forma clara.',
 		SIN_DISPONIBILIDAD: 'Empatía si no hay turnos; invitá a otro día u horario.',
@@ -93,7 +93,16 @@ function _bloqueFactual(datosOperativos) {
 	if (d.preferencia) lineas.push(`Preferencia paciente: ${d.preferencia}`);
 	if (d.saludo?.debeSaludar && d.saludo.pautaInstruccion) {
 		lineas.push(`Saludo del día: ${d.saludo.pautaInstruccion}`);
+		const franjaHint = {
+			manana: 'usar saludo de mañana (ej. buen día), NUNCA buenas noches',
+			tarde: 'usar saludo de tarde (ej. buenas tardes)',
+			noche: 'usar saludo de noche (ej. buenas noches), NUNCA buen día',
+			madrugada: 'usar saludo nocturno/madrugada (ej. buenas noches)',
+		};
 		lineas.push(`Franja horaria AR: ${d.saludo.franjaHoraria}`);
+		if (franjaHint[d.saludo.franjaHoraria]) {
+			lineas.push(`OBLIGATORIO: ${franjaHint[d.saludo.franjaHoraria]}`);
+		}
 	} else if (d.saludo && d.saludo.debeSaludar === false) {
 		lineas.push('NO incluir saludo de bienvenida: ya saludaste hoy en esta conversación.');
 	}
@@ -101,6 +110,9 @@ function _bloqueFactual(datosOperativos) {
 		lineas.push('Paciente ya identificado en esta sesión: NO pedir DNI ni repetir confirmación de identidad.');
 	}
 	if (d.pasoBot) lineas.push(`Paso del flujo: ${d.pasoBot}`);
+	if (d.fechaLegible || d.fecha) {
+		lineas.push('Fecha del turno: usar formato provisto SIN agregar el año si ya viene sin año.');
+	}
 	if (d.lista) lineas.push(`Listado (copiar ítems exactos):\n${d.lista}`);
 	if (!lineas.length) return '(sin datos adicionales)';
 	return lineas.join('\n');

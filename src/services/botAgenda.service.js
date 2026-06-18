@@ -7,11 +7,11 @@ const agendaService = require('./agenda.service');
 const botConfigService = require('./botConfig.service');
 const botLogService = require('./botLog.service');
 const botOpenai = require('./botOpenai.service');
-const diag = require('../utils/diagLog');
-const { validarDniNumero } = require('../utils/botDni');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion, convertirFechaClarionADate } = require('../utils/dateUtils');
+const diag = require('../utils/diagLog');
+const { validarDniNumero } = require('../utils/botDni');
 
 function _validarSexo(sexo) {
 	const s = String(sexo || '')
@@ -720,6 +720,11 @@ function _diaSemanaLegible(fechaIso) {
 
 function _fechaLegible(fechaIso) {
 	const [y, mo, d] = String(fechaIso).slice(0, 10).split('-');
+	const anioAr = new Intl.DateTimeFormat('en-CA', {
+		timeZone: 'America/Argentina/Buenos_Aires',
+		year: 'numeric',
+	}).format(new Date());
+	if (y === anioAr) return `${d}/${mo}`;
 	return `${d}/${mo}/${y}`;
 }
 
