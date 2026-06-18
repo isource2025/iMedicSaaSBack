@@ -531,6 +531,22 @@ async function procesarIntencionGptEntrada({
 			};
 		}
 
+		const configTurno = await botConfigService.getBotConfig();
+		if (intent.parametros?.profesional || intent.parametros?.medico) {
+			const pedidoProf = await procesarPedidoConProfesional({
+				idConversacion,
+				telefonoWhatsApp,
+				conv,
+				flujo,
+				config: configTurno,
+				texto,
+				interpretacion: intent,
+			});
+			if (pedidoProf) {
+				return { ...pedidoProf, interpretacion: intent };
+			}
+		}
+
 		let espPend = null;
 		const resEsp = await botIntencion.resolverEspecialidadDesdeIntencion(intent);
 		if (resEsp?.tipo === 'especialidad') {
@@ -682,7 +698,43 @@ async function procesarEleccionProfesional({
 	texto,
 }) {
 	const espPend = conv?.contextoBot?.especialidadPendiente;
-	if (!espPend?.valor || !texto || extraerDni(texto)) return null;
+	const candidatos = conv?.contextoBot?.candidatosProfesionales;
+	if (!texto || extraerDni(texto)) return null;
+
+	const numMatch = String(texto || '')
+		.trim()
+		.match(/^(\d{1,2})\.?\s*$/);
+	if (numMatch && Array.isArray(candidatos) && candidatos.length) {
+		const idx = Number(numMatch[1]) - 1;
+		const elegido = candidatos[idx];
+		if (elegido) {
+			await botConversacion.guardarContextoBot(idConversacion, {
+				especialidadPendiente: {
+					valor: elegido.especialidad,
+					nombre: elegido.especialidadNombre,
+				},
+				profesionalPendiente: { matricula: elegido.matricula, nombre: elegido.nombre },
+				candidatosProfesionales: null,
+			});
+			const convAct = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+			const config = await botConfigService.getBotConfig();
+			const saludo = primerNombre(nombreWhatsApp(convAct));
+			const prefijoSaludo = saludo ? `Perfecto, ${saludo}. ` : 'Perfecto. ';
+			if (convAct.idPaciente && config.reglas.sugerirPrimerTurnoDisponible) {
+				return armarRespuestaBuscarTurnoInicial({
+					idConversacion,
+					telefonoWhatsApp,
+					flujo,
+					esp: { valor: elegido.especialidad, nombre: elegido.especialidadNombre },
+					avisoPrefijo: prefijoSaludo,
+					matricula: elegido.matricula,
+					medico: elegido.nombre,
+				});
+			}
+		}
+	}
+
+	if (!espPend?.valor || !texto) return null;
 
 	const pasoActual = conv?.pasoBot;
 	if (pasoActual === 'CONFIRMAR_IDENTIDAD' || esRespuestaConfirmacionBinaria(texto, pasoActual)) {
@@ -747,6 +799,116 @@ function textoPideTurnoExplicito(texto) {
 	return /\b(turno|reserv|reserva|sacar|pedir|agendar|solicit|sacame|sacarle)\b/i.test(
 		String(texto || ''),
 	);
+}
+
+function textoSugierePedidoConProfesional(texto) {
+	if (!texto) return false;
+	if (textoPideTurnoExplicito(texto)) return true;
+	if (/\b(dr|dra|doctor|doctora|profesional|medico|medicos)\b/i.test(texto)) return true;
+	if (/\bcon\s+[a-záéíóúñ]{2,}/i.test(texto)) return true;
+	return false;
+}
+
+async function procesarPedidoConProfesional({
+	idConversacion,
+	telefonoWhatsApp,
+	conv,
+	flujo,
+	config,
+	texto,
+	interpretacion,
+}) {
+	if (!texto || extraerDni(texto)) return null;
+
+	let analisis = null;
+	if (textoSugierePedidoConProfesional(texto)) {
+		analisis = await botAgenda.analizarPedidoTurnoConProfesional(texto, {
+			especialidadCtx: conv?.contextoBot?.especialidadPendiente,
+			interpretacion,
+		});
+	} else {
+		const probe = await botAgenda.buscarProfesionalesPorNombre(texto);
+		if (!probe.length) return null;
+		analisis = await botAgenda.analizarPedidoTurnoConProfesional(texto, {
+			especialidadCtx: conv?.contextoBot?.especialidadPendiente,
+			interpretacion,
+		});
+	}
+
+	if (!analisis || analisis.tipo === 'sin_datos') return null;
+
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	const prefijo = saludo ? `Perfecto, ${saludo}. ` : '';
+
+	if (analisis.tipo === 'unico') {
+		const esp = analisis.especialidad;
+		const prof = analisis.profesional;
+		await botConversacion.guardarContextoBot(idConversacion, {
+			especialidadPendiente: esp,
+			profesionalPendiente: prof,
+			candidatosProfesionales: null,
+		});
+
+		if (conv.idPaciente && config.reglas.sugerirPrimerTurnoDisponible) {
+			return withInterpretacion(
+				armarRespuestaBuscarTurnoInicial({
+					idConversacion,
+					telefonoWhatsApp,
+					flujo,
+					esp,
+					avisoPrefijo: prefijo,
+					matricula: prof.matricula,
+					medico: prof.nombre,
+				}),
+				interpretacion,
+			);
+		}
+
+		const pasoId = pasoPorId(flujo, 'IDENTIFICAR');
+		const msg =
+			pasoId?.mensajeUsuario ||
+			'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).';
+		return withInterpretacion(
+			{
+				handled: true,
+				tipoRespuesta: 'INICIO_FLUJO',
+				texto: `${prefijo}Anoté turno con *${prof.nombre}* en *${esp.nombre}*. ${msg}`,
+			},
+			interpretacion,
+		);
+	}
+
+	if (analisis.tipo === 'multiples') {
+		await botConversacion.guardarContextoBot(idConversacion, {
+			candidatosProfesionales: analisis.matches.slice(0, 8),
+		});
+		await botConversacion.actualizarContextoPaciente(idConversacion, {
+			pasoBot: 'ELEGIR_PROFESIONAL',
+		});
+		return withInterpretacion(
+			{
+				handled: true,
+				tipoRespuesta: 'LISTA_PROFESIONALES',
+				texto: botAgenda.mensajeListaProfesionalesCoincidencias(analisis.matches),
+			},
+			interpretacion,
+		);
+	}
+
+	if (analisis.tipo === 'no_encontrado') {
+		return withInterpretacion(
+			{
+				handled: true,
+				tipoRespuesta: 'ACLARACION',
+				texto: analisis.especialidad
+					? `No encontré un profesional con ese nombre en *${analisis.especialidad.nombre}*. ¿Podés repetir el apellido?`
+					: 'No encontré ese profesional en la agenda. ¿Podés indicar el apellido completo o la especialidad?',
+			},
+			interpretacion,
+		);
+	}
+
+	return null;
 }
 
 function armarRespuestaBuscarTurnoInicial({
@@ -889,6 +1051,17 @@ async function avanzarTrasIdentidadConfirmada({
 			especialidadPendiente: espPend,
 			profesionalPendiente: prof,
 		});
+		if (config.reglas.sugerirPrimerTurnoDisponible) {
+			return armarRespuestaBuscarTurnoInicial({
+				idConversacion,
+				telefonoWhatsApp,
+				flujo,
+				esp: espPend,
+				avisoPrefijo: prefijoSaludo,
+				matricula: prof.matricula,
+				medico: prof.nombre,
+			});
+		}
 		await botConversacion.actualizarContextoPaciente(idConversacion, {
 			idPaciente,
 			pasoBot: 'ELEGIR_FECHA_HORA',
@@ -1462,6 +1635,20 @@ async function intentarRespuestaWizard({
 			pasoConfirmarActivo,
 		});
 		if (resConfirm) return resConfirm;
+	}
+
+	// Médico y/o especialidad en lenguaje natural (ej. "turno con De Biasi en traumatología")
+	if (!dniEnMensaje && texto) {
+		const pedidoProf = await procesarPedidoConProfesional({
+			idConversacion,
+			telefonoWhatsApp,
+			conv,
+			flujo,
+			config,
+			texto,
+			interpretacion,
+		});
+		if (pedidoProf) return pedidoProf;
 	}
 
 	// Consulta directa de profesionales (sin depender de GPT inventando nombres)

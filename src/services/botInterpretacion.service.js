@@ -199,10 +199,12 @@ function _construirPrompt(conv, paso, especialidades) {
 
 ${_intencionesPorPaso(paso, conv)}
 
-parametros puede incluir: especialidad, preferirDiasSemana[], excluirDiasSemana[], preferirFranja, preferirFechas[], resumen.
+parametros puede incluir: especialidad, profesional (apellido o nombre del médico), preferirDiasSemana[], excluirDiasSemana[], preferirFranja, preferirFechas[], resumen.
 
 Reglas:
 - Interpretá significado, no palabras exactas.
+- Si menciona médico (ej. "De Biasi", "con el doctor Pérez"), incluí parametros.profesional y especialidad si la nombra.
+- "turno con De Biasi" → solicitar_turno + profesional:"De Biasi" (el backend busca en la agenda real).
 - "cancela", "no quiero turno" → cancelar_flujo + salir_flujo true
 - Saludo solo ("hola", "buenas") → es_saludo true, conversacion
 - Tras comprobante de turno, "gracias" → agradecimiento (no solicitar_turno)

@@ -1244,6 +1244,150 @@ function _nombreCoincideProfesional(nombreNorm, busqueda) {
 	return busqueda.length >= 4 && nombreNorm.includes(busqueda);
 }
 
+function _profesionalCoincideBusqueda(nombreProf, busquedaNorm) {
+	if (!busquedaNorm || busquedaNorm.length < 3) return false;
+	return _nombreCoincideProfesional(_normalizarTextoBusqueda(nombreProf), busquedaNorm);
+}
+
+function extraerTextoBusquedaProfesional(texto, especialidadesLista = []) {
+	let raw = String(texto || '');
+	raw = raw.replace(/^(hola|buenas|buenos dias|buenas tardes|buenas noches)[,!\s]*/i, '');
+	raw = raw.replace(
+		/\b(quiero|necesito|un|una|el|la|los|las|turno|turnos|sacar|pedir|agendar|solicitar|para|mi|con|en)\b/gi,
+		' ',
+	);
+	for (const esp of especialidadesLista || []) {
+		const nombre = String(esp?.nombre || '').trim();
+		if (!nombre) continue;
+		raw = raw.replace(new RegExp(nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' ');
+		const corto = _normalizarTextoBusqueda(nombre);
+		if (corto.length >= 5) {
+			raw = raw.replace(new RegExp(corto.slice(0, 6), 'gi'), ' ');
+		}
+	}
+	raw = raw.replace(
+		/\b(traumatologia|oncologia|ginecologia|cardiologia|pediatria|urologia|dermatologia|oftalmologia|neurologia)\b/gi,
+		' ',
+	);
+	raw = raw.replace(/\b(dr|dra|doctor|doctora|profesional|medico|medicos)\b/gi, ' ');
+	raw = raw.replace(/\bde\b/gi, ' ');
+	const t = _normalizarTextoBusqueda(raw).replace(/\s+/g, ' ').trim();
+	const tokens = t.split(' ').filter((tok) => tok.length >= 3);
+	return tokens.join(' ') || null;
+}
+
+let _cacheProfesionalesGlobal = null;
+let _cacheProfesionalesGlobalAt = 0;
+
+async function listarProfesionalesAgendaGlobal() {
+	const now = Date.now();
+	if (_cacheProfesionalesGlobal && now - _cacheProfesionalesGlobalAt < 60_000) {
+		return _cacheProfesionalesGlobal;
+	}
+	const rows = await executeQuery(
+		`SELECT DISTINCT p.Matricula, p.ApellidoNombre, p.ValorEspecialidad, e.Descripcion AS EspecialidadNombre
+		 FROM dbo.imPersonal p
+		 INNER JOIN dbo.imPersonalHorarios h ON h.Matricula = p.Matricula
+		 LEFT JOIN dbo.imEspecialidad e ON e.Valor = p.ValorEspecialidad
+		 WHERE p.Matricula > 0
+		   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL`,
+	);
+	_cacheProfesionalesGlobal = rows.map((r) => ({
+		matricula: Number(r.Matricula),
+		nombre: String(r.ApellidoNombre).trim(),
+		especialidad: Number(r.ValorEspecialidad) || null,
+		especialidadNombre: r.EspecialidadNombre ? String(r.EspecialidadNombre).trim() : null,
+	}));
+	_cacheProfesionalesGlobalAt = now;
+	return _cacheProfesionalesGlobal;
+}
+
+async function buscarProfesionalesPorNombre(texto, especialidadValor = null) {
+	const listaEsp = await listarEspecialidadesBot();
+	const busqueda = extraerTextoBusquedaProfesional(texto, listaEsp);
+	if (!busqueda || busqueda.length < 3) return [];
+
+	let todos = await listarProfesionalesAgendaGlobal();
+	if (especialidadValor != null && Number.isFinite(Number(especialidadValor))) {
+		const esp = Number(especialidadValor);
+		todos = todos.filter((p) => p.especialidad === esp);
+	}
+
+	const hits = todos.filter((p) => _profesionalCoincideBusqueda(p.nombre, busqueda));
+	const seen = new Set();
+	return hits.filter((p) => {
+		if (seen.has(p.matricula)) return false;
+		seen.add(p.matricula);
+		return true;
+	});
+}
+
+function mensajeListaProfesionalesCoincidencias(matches, max = 8) {
+	const visibles = (matches || []).slice(0, max);
+	if (!visibles.length) {
+		return 'No encontré profesionales con ese nombre en la agenda.';
+	}
+	const lineas = visibles.map(
+		(p, i) => `${i + 1}. *${p.nombre}* — ${p.especialidadNombre || 'Sin especialidad'}`,
+	);
+	const extra =
+		matches.length > visibles.length
+			? `\n\n(Mostrando ${visibles.length} de ${matches.length} coincidencias.)`
+			: '';
+	return `Encontré estos profesionales:\n\n${lineas.join('\n')}${extra}\n\nIndicá el número o el apellido con el que querés el turno.`;
+}
+
+/**
+ * Analiza mensaje con posible médico y/o especialidad contra la agenda real.
+ * @returns {Promise<{ tipo: string, profesional?: object, especialidad?: object, matches?: array, busqueda?: string }>}
+ */
+async function analizarPedidoTurnoConProfesional(texto, opts = {}) {
+	const listaEsp = await listarEspecialidadesBot();
+	let espValor = opts.especialidadValor ?? opts.especialidadCtx?.valor ?? null;
+	let espNombre = opts.especialidadCtx?.nombre ?? null;
+
+	const espTexto = await resolverEspecialidadDesdeTexto(texto);
+	if (espTexto) {
+		espValor = espTexto.valor;
+		espNombre = espTexto.nombre;
+	}
+
+	const fromInterp = opts.interpretacion?.parametros || {};
+	if (fromInterp.especialidad && !espValor) {
+		const r = await resolverEspecialidadDesdeTexto(String(fromInterp.especialidad));
+		if (r) {
+			espValor = r.valor;
+			espNombre = r.nombre;
+		}
+	}
+
+	const profQuery =
+		String(fromInterp.profesional || fromInterp.medico || '').trim() ||
+		extraerTextoBusquedaProfesional(texto, listaEsp);
+
+	if (!profQuery || profQuery.length < 3) {
+		return { tipo: 'sin_datos' };
+	}
+
+	const matches = await buscarProfesionalesPorNombre(profQuery, espValor);
+	if (matches.length === 1) {
+		const m = matches[0];
+		return {
+			tipo: 'unico',
+			profesional: { matricula: m.matricula, nombre: m.nombre },
+			especialidad: { valor: m.especialidad, nombre: m.especialidadNombre },
+		};
+	}
+	if (matches.length > 1) {
+		return { tipo: 'multiples', matches };
+	}
+	return {
+		tipo: 'no_encontrado',
+		busqueda: profQuery,
+		especialidad: espValor ? { valor: espValor, nombre: espNombre } : null,
+	};
+}
+
 async function resolverProfesionalDesdeTexto(texto, especialidadValor) {
 	const esp = Number(especialidadValor);
 	if (!Number.isFinite(esp) || esp <= 0) return null;
@@ -2084,6 +2228,11 @@ module.exports = {
 	disponibilidadBot,
 	resolverEspecialidadDesdeTexto,
 	resolverProfesionalDesdeTexto,
+	buscarProfesionalesPorNombre,
+	analizarPedidoTurnoConProfesional,
+	mensajeListaProfesionalesCoincidencias,
+	extraerTextoBusquedaProfesional,
+	listarProfesionalesAgendaGlobal,
 	resolverEspecialidadConGpt,
 	resolverEspecialidadInteligente,
 	esConsultaListaEspecialidades,
