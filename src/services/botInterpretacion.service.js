@@ -36,9 +36,18 @@ function _normalizarTexto(texto) {
 		.replace(/[\u0300-\u036f]/g, '');
 }
 
+function _quiereContinuarGestion(texto) {
+	const t = _normalizarTexto(texto);
+	if (!t) return false;
+	return /\b(profesional|profesionales|medico|medicos|doctor|cardiolog|traumatolog|ginecolog|especialidad|elegir|ver los|listar|lista de|otro dia|otra fecha|semana que viene|proxima semana|por la tarde|por la manana|me gustaria|preferiria|puede ser|era un turno|para cardiolog|para traumat)\b/.test(
+		t,
+	);
+}
+
 function _interpretarSalidaFlujo(texto) {
 	const t = _normalizarTexto(texto);
 	if (!t) return false;
+	if (_quiereContinuarGestion(t)) return false;
 	if (
 		/^(cancela|cancelar|cancelalo|cancel|salir|chau|deja|dejalo|olvida|olvidate|basta|alcanza|no gracias)$/.test(
 			t,
@@ -48,7 +57,14 @@ function _interpretarSalidaFlujo(texto) {
 	}
 	if (
 		/\b(no quiero|no necesito|no busco|no voy a sacar|no saco|no reservo)\b/.test(t) &&
-		/\b(ningun|turno|turnos|cita|reserva)\b/.test(t)
+		/\b(ningun|ninguno|nada|salir|abandonar|dejar de)\b/.test(t)
+	) {
+		return true;
+	}
+	if (
+		/\b(no quiero|no necesito)\b/.test(t) &&
+		/\b(ningun|turno|turnos|cita|reserva)\b/.test(t) &&
+		!/\b(ese|esta|este|otro|cardiolog|traumat|profesional|especialidad|era un)\b/.test(t)
 	) {
 		return true;
 	}
@@ -187,11 +203,12 @@ mensaje_sugerido: frase corta opcional que capture el tono emocional (NO incluya
 
 function _intencionesPorPaso(paso, conv) {
 	if (paso === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
-		return `Intenciones: confirmar_turno | buscar_turno | rechazar_turno | cancelar_flujo | cambiar_especialidad | conversacion
+		return `Intenciones: confirmar_turno | buscar_turno | rechazar_turno | listar_profesionales | cancelar_flujo | cambiar_especialidad | conversacion
 - confirmar_turno: acepta el turno ofrecido ("dale", "perfecto", "sí")
-- buscar_turno: pide otro día/horario con preferencia
-- rechazar_turno: no quiere ESE turno pero sigue buscando
-- cancelar_flujo: no quiere ningún turno / abandonar
+- buscar_turno: pide otro día/horario con preferencia ("semana que viene", "por la tarde")
+- rechazar_turno: no quiere ESE turno pero sigue buscando (otro horario, otro médico)
+- listar_profesionales: quiere ver/elegir médico de la especialidad
+- cancelar_flujo: no quiere ningún turno / abandonar por completo
 - cambiar_especialidad: quiere otra área médica`;
 	}
 	if (paso === 'CONFIRMAR_IDENTIDAD') {
@@ -219,7 +236,9 @@ Reglas:
 - "¿puede ser para la semana que viene?" → buscar_turno (NO conversacion)
 - Si menciona médico (ej. "De Biasi", "con el doctor Pérez"), incluí parametros.profesional y especialidad si la nombra.
 - "turno con De Biasi" → solicitar_turno + profesional:"De Biasi" (el backend busca en la agenda real).
-- "cancela", "no quiero turno" → cancelar_flujo + salir_flujo true
+- "cancela", "no quiero ningún turno", "dejá" → cancelar_flujo + salir_flujo true (NO si rechaza un turno concreto o pide otro médico/horario)
+- Si pide ver/elegir profesionales → listar_profesionales
+- Si pregunta si el DNI es suyo o del paciente → conversacion + necesita_aclaracion true + menciona_tercero true
 - Saludo solo ("hola", "buenas") → es_saludo true, conversacion
 - Tras comprobante de turno, "gracias" → agradecimiento (no solicitar_turno)
 - No inventes especialidades fuera de la lista.`;
@@ -235,6 +254,23 @@ async function _historialCorto(idConversacion) {
 	}
 }
 
+function _preguntaDniTercero(texto) {
+	const t = _normalizarTexto(texto);
+	return (
+		/\b(dni|documento)\b/.test(t) &&
+		/\b(mio|mia|mi dni|de la persona|quien se atiende|se va a atender|se atiende|paciente|otra persona)\b/.test(
+			t,
+		)
+	);
+}
+
+function _quiereListarProfesionales(texto) {
+	const t = _normalizarTexto(texto);
+	return /\b(profesional|profesionales|medico|medicos|doctor|doctores|elegir|ver los|lista de|listar)\b/.test(
+		t,
+	);
+}
+
 /** Reglas locales cuando GPT no está o falla. */
 function _interpretacionPorReglas(texto, conv, paso) {
 	const t = String(texto || '').trim();
@@ -243,6 +279,55 @@ function _interpretacionPorReglas(texto, conv, paso) {
 	const flags = { ...FLAGS_DEFAULT };
 	let intencion = 'conversacion';
 	const parametros = { resumen: '' };
+
+	if (_preguntaDniTercero(t)) {
+		return {
+			intencion: 'conversacion',
+			parametros,
+			flags: {
+				...flags,
+				necesita_aclaracion: true,
+				menciona_tercero: true,
+				confianza: 0.92,
+			},
+			mensaje_sugerido: null,
+			paso,
+			fuente: 'reglas',
+		};
+	}
+
+	if (_quiereListarProfesionales(t)) {
+		return {
+			intencion: 'listar_profesionales',
+			parametros,
+			flags: { ...flags, confianza: 0.9 },
+			mensaje_sugerido: null,
+			paso,
+			fuente: 'reglas',
+		};
+	}
+
+	const tn = _normalizarTexto(t);
+	if (
+		(paso === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') &&
+		(/\b(semana que viene|proxima semana|por la tarde|por la manana|otro dia|otra fecha)\b/.test(tn) ||
+			(/\b(puede ser|podria ser|me vendria bien)\b/.test(tn) &&
+				/\b(semana|dia|fecha|horario|tarde|manana)\b/.test(tn)))
+	) {
+		return {
+			intencion: 'buscar_turno',
+			parametros: {
+				...parametros,
+				resumen: t.slice(0, 120),
+				...(tn.includes('tarde') ? { preferirFranja: 'tarde' } : {}),
+				...(tn.includes('manana') ? { preferirFranja: 'manana' } : {}),
+			},
+			flags: { ...flags, confianza: 0.9 },
+			mensaje_sugerido: null,
+			paso,
+			fuente: 'reglas',
+		};
+	}
 
 	if (_interpretarSalidaFlujo(t)) {
 		return {
@@ -282,9 +367,19 @@ function _interpretacionPorReglas(texto, conv, paso) {
 	}
 
 	if (paso === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
+		if (_quiereListarProfesionales(t)) {
+			return {
+				intencion: 'listar_profesionales',
+				parametros,
+				flags: { ...flags, confianza: 0.92 },
+				mensaje_sugerido: null,
+				paso,
+				fuente: 'reglas',
+			};
+		}
 		if (conf === true) intencion = 'confirmar_turno';
-		else if (conf === false) intencion = 'rechazar_turno';
-		else if (_interpretarRechazoTurno(t, conv.contextoBot)) {
+		else if (conf === false && !_quiereContinuarGestion(t)) intencion = 'rechazar_turno';
+		else if (conf === false || _interpretarRechazoTurno(t, conv.contextoBot)) {
 			intencion = 'buscar_turno';
 		} else return null;
 		return {
@@ -359,7 +454,7 @@ async function interpretarMensaje({ texto, conv, idConversacion, pasoBot }) {
 
 	let raw;
 	try {
-		raw = await botOpenai.chat({ system, messages });
+		raw = await botOpenai.chat({ system, messages, capa: 'interpretacion', extra: { paso } });
 	} catch (err) {
 		console.warn('[botInterpretacion] GPT:', err.message);
 		return _interpretacionPorReglas(ultimo, conv, paso);
@@ -371,9 +466,16 @@ async function interpretarMensaje({ texto, conv, idConversacion, pasoBot }) {
 	// Refuerzo: reglas de alta confianza prevalecen sobre GPT
 	const reglas = _interpretacionPorReglas(ultimo, conv, paso);
 	if (reglas?.flags?.salir_flujo) return reglas;
-	if (reglas?.intencion === 'confirmar_turno' || reglas?.intencion === 'confirmar_identidad') {
-		if (reglas.flags.confianza >= 0.85) return reglas;
+	if (
+		reglas &&
+		['confirmar_turno', 'confirmar_identidad', 'listar_profesionales', 'buscar_turno'].includes(
+			reglas.intencion,
+		) &&
+		reglas.flags.confianza >= 0.8
+	) {
+		return reglas;
 	}
+	if (reglas?.flags?.necesita_aclaracion && reglas.flags.confianza >= 0.9) return reglas;
 
 	return normalizada;
 }

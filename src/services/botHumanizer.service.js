@@ -225,6 +225,8 @@ Escribí SOLO el mensaje para WhatsApp.`;
 		const raw = await botOpenai.chat({
 			system,
 			messages: [{ role: 'user', content: user }],
+			capa: 'humanizer',
+			extra: { tipo, pasoBot: conv?.pasoBot },
 		});
 		const out = String(raw || '').trim();
 		if (out.length >= 12) return out;

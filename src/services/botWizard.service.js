@@ -327,7 +327,7 @@ async function procesarSalidaFlujo({
 	interpretacion,
 }) {
 	if (!esPasoReservaActivo(pasoActual, conv)) return null;
-	if (!botInterpretacion.debeSalirFlujo(interpretacion, texto)) return null;
+	if (!botInterpretacion.debeSalirFlujo(interpretacion, texto, conv)) return null;
 
 	await cancelarFlujoTurnoActivo(idConversacion);
 	return {
@@ -2250,7 +2250,27 @@ async function intentarRespuestaWizard({
 			);
 		}
 
-		if (botInterpretacion.debeSalirFlujo(interpretacion, texto)) {
+		if (intentGpt?.intencion === 'listar_profesionales') {
+			const resProf = await botIntencion.resolverProfesionalesDesdeIntencion(intentGpt);
+			const espValor =
+				resProf?.especialidad?.valor ||
+				ctx.especialidadValor ||
+				convAct.contextoBot?.especialidadPendiente?.valor;
+			if (espValor) {
+				await botConversacion.actualizarContextoPaciente(idConversacion, {
+					pasoBot: 'ELEGIR_PROFESIONAL',
+				});
+				return withInterpretacion(
+					{
+						handled: true,
+						texto: await mostrarProfesionalesEspecialidad(idConversacion, espValor),
+					},
+					interpretacion,
+				);
+			}
+		}
+
+		if (botInterpretacion.debeSalirFlujo(interpretacion, texto, convAct)) {
 			await cancelarFlujoTurnoActivo(idConversacion);
 			return withInterpretacion(
 				{

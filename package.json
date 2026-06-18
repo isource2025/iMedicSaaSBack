@@ -15,6 +15,7 @@
 		"auth:mysql:infra-migrate": "node scripts/apply_infra_mysql.js",
 		"debug:whatsapp": "node scripts/debug_whatsapp_console.js",
 		"debug:whatsapp:flow": "node scripts/debug_whatsapp_console.js --send-hola",
+		"debug:ia": "node scripts/debug_conversacion_ia.js",
 		"auth:mysql:reconcile": "node scripts/reconcile_auth_mysql.js",
 		"setup:whatsapp": "node scripts/setup_whatsapp_bot.js",
 		"setup:whatsapp:all": "node scripts/setup_whatsapp_bot.js all",

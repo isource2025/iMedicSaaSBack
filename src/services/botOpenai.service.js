@@ -1,6 +1,8 @@
 /**
  * Cliente OpenAI Chat Completions para respuestas del bot WhatsApp.
  */
+const botIaDebug = require('./botIaDebug.service');
+
 function getApiKey() {
 	return String(process.env.OPENAI_API_KEY || '').trim();
 }
@@ -14,10 +16,10 @@ function isConfigured() {
 }
 
 /**
- * @param {{ system: string, messages: Array<{ role: 'user'|'assistant', content: string }> }} opts
+ * @param {{ system: string, messages: Array<{ role: 'user'|'assistant', content: string }>, capa?: string, extra?: object }} opts
  * @returns {Promise<string>}
  */
-async function chat({ system, messages }) {
+async function chat({ system, messages, capa = 'openai', extra }) {
 	const apiKey = getApiKey();
 	if (!apiKey) {
 		const err = new Error('OPENAI_API_KEY no configurada');
@@ -31,6 +33,10 @@ async function chat({ system, messages }) {
 		temperature: Number(process.env.OPENAI_TEMPERATURE || 0.4),
 		max_tokens: Number(process.env.OPENAI_MAX_TOKENS || 500),
 	};
+
+	if (botIaDebug.enabled()) {
+		botIaDebug.logRequest({ capa, system, messages, extra });
+	}
 
 	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
@@ -55,6 +61,11 @@ async function chat({ system, messages }) {
 		err.statusCode = 502;
 		throw err;
 	}
+
+	if (botIaDebug.enabled()) {
+		botIaDebug.logResponse({ capa, raw: text, extra });
+	}
+
 	return text;
 }
 

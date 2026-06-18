@@ -59,7 +59,9 @@ REGLAS CRÍTICAS:
 - Si gestión ya tiene especialidad ✓ inferida del médico → NO preguntes especialidad.
 - Si mencionan mes/fecha ("agosto", "semana que viene") → interpretar_preferencia_horario.
 - Si hay profesional + (paciente identificado o falta DNI) y preferencia → pedir_dni o sugerir_turno según identidad.
-- No uses listar_profesionales_especialidad salvo que el paciente pida ver la lista.
+- Si el paciente pide ver profesionales o elegir médico → listar_profesionales_especialidad (aunque ya haya un turno sugerido).
+- Si pregunta si el DNI es suyo o del paciente → preguntar aclarando que es del que se atiende.
+- No uses listar_profesionales_especialidad salvo que el paciente pida ver la lista o elegir médico.
 ${nombre ? `- Tratá al paciente como "${nombre}" (nombre WhatsApp).` : ''}
 
 Respondé ÚNICAMENTE un JSON en una línea:
@@ -219,7 +221,12 @@ async function procesarMensaje({
 	let raw;
 	let plan;
 	try {
-		raw = await botOpenai.chat({ system, messages });
+		raw = await botOpenai.chat({
+			system,
+			messages,
+			capa: 'orquestador',
+			extra: { idConversacion, pasoBot: conv?.pasoBot },
+		});
 		plan = _parsearJson(raw);
 	} catch (e) {
 		diag.warn('orquestador', 'OpenAI falló', { error: e.message });

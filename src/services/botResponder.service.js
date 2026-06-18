@@ -594,6 +594,25 @@ async function responderMensajeEntrante({
 		if (interp) {
 			await botInterpretacion.registrarSesion(idConversacion, interp, convAct);
 		}
+		if (interp?.flags?.menciona_tercero && interp?.flags?.necesita_aclaracion) {
+			const humanizado = await humanizarSalidaWizard(
+				{
+					pauta:
+						'El paciente pregunta si necesitás su DNI o el de quien se atiende. Aclará con claridad: el DNI es de la persona que va a tener el turno (puede ser otra distinta del contacto WhatsApp). Pedí ese número de documento.',
+					tipoRespuesta: 'ACLARACION',
+					interpretacion: interp,
+				},
+				convAct,
+				config,
+			);
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convAct,
+				marcarSaludo: humanizado.marcarSaludo,
+			});
+		}
 		const gestion = botGestionTurno.obtenerGestionActiva(convAct);
 		const datosGestion = botGestionTurno.aDatosOperativos(gestion, convAct);
 		const tieneGestion =
