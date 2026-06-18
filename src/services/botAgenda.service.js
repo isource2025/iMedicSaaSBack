@@ -7,6 +7,7 @@ const agendaService = require('./agenda.service');
 const botConfigService = require('./botConfig.service');
 const botLogService = require('./botLog.service');
 const botOpenai = require('./botOpenai.service');
+const diag = require('../utils/diagLog');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion, convertirFechaClarionADate } = require('../utils/dateUtils');
@@ -133,7 +134,60 @@ async function _validarProfesionalBot(matricula, especialidadValor = null) {
 	};
 }
 
-async function _buscarPacienteLocalPorDni(dni) {
+function _esErrorSqlTimeout(err) {
+	return (
+		/timeout|ETIMEOUT/i.test(String(err?.message || '')) ||
+		err?.code === 'ETIMEOUT' ||
+		err?.originalError?.code === 'ETIMEOUT' ||
+		err?.name === 'ConnectionError'
+	);
+}
+
+function _envolverErrorSql(err, fuente = 'ficha_local') {
+	const e = new Error(err?.message || 'Error de base de datos');
+	e.fuente = fuente;
+	e.code = _esErrorSqlTimeout(err) ? 'FICHA_LOCAL_TIMEOUT' : 'FICHA_LOCAL_DB_ERROR';
+	e.cause = err;
+	return e;
+}
+
+function mensajeErrorIdentificacion(err, errLocal = null) {
+	const renaper = err && String(err.fuente || '') !== 'ficha_local' ? err : null;
+	const local = errLocal || (err?.fuente === 'ficha_local' ? err : null);
+
+	diag.warn('identificacion', 'Resumen error DNI al paciente', {
+		renaperCode: renaper?.code || null,
+		localCode: local?.code || null,
+		renaperMsg: renaper?.message || null,
+		localMsg: local?.message || null,
+	});
+
+	if (local?.code === 'FICHA_LOCAL_TIMEOUT') {
+		return 'No pudimos consultar la ficha en la base del centro (demora en la conexión). Intentá de nuevo en unos segundos.';
+	}
+	if (local?.code === 'FICHA_LOCAL_DB_ERROR') {
+		return 'No pudimos consultar la ficha en la base del centro. Intentá de nuevo o contactá admisión.';
+	}
+	if (renaper?.code === 'RENAPER_TIMEOUT') {
+		return 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo en unos segundos.';
+	}
+	if (renaper?.code === 'RENAPER_NO_ENCONTRADO') {
+		return 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.';
+	}
+	if (renaper?.code === 'RENAPER_UNAVAILABLE' || renaper?.code === 'RENAPER_HTTP') {
+		return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
+	}
+	if (err?.code === 'DNI_INVALIDO') {
+		return 'El DNI indicado no es válido. Enviá solo números, sin puntos ni espacios.';
+	}
+	if (local && renaper) {
+		return 'No pudimos validar el DNI ni en la ficha local ni en RENAPER. Intentá de nuevo en unos segundos.';
+	}
+	return 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
+}
+
+async function _buscarPacienteLocalPorDni(dni, opts = {}) {
+	const strict = opts.strict === true;
 	const dniStr = String(dni).trim();
 	try {
 		const rows = await executeQuery(
@@ -154,6 +208,14 @@ async function _buscarPacienteLocalPorDni(dni) {
 		);
 		return rows[0] || null;
 	} catch (err) {
+		diag.warn('identificacion', '[ficha_local] SQL falló', {
+			dni: dniStr,
+			error: err.message,
+			code: err.code,
+		});
+		if (strict) {
+			throw _envolverErrorSql(err, 'ficha_local');
+		}
 		console.warn('[botAgenda] Búsqueda paciente local falló:', err.message);
 		return null;
 	}
@@ -277,19 +339,52 @@ async function identificarPaciente({
 	let sexoDetectado = null;
 	let renaperError = null;
 
-	const localRow = await _buscarPacienteLocalPorDni(dni);
-	let pacienteLocal = localRow ? _mapPacienteRow(localRow) : null;
+	let pacienteLocal = null;
+
+	if (!soloRenaper) {
+		diag.line('identificacion', '[ficha_local] Consulta BD imPacientes', {
+			dni,
+			idConversacion,
+			fase,
+		});
+		const localRow = await _buscarPacienteLocalPorDni(dni, { strict: soloLocal });
+		pacienteLocal = localRow ? _mapPacienteRow(localRow) : null;
+		diag.line('identificacion', '[ficha_local] Resultado', {
+			dni,
+			existe: !!pacienteLocal,
+			idPaciente: pacienteLocal?.idPaciente ?? null,
+			nombre: pacienteLocal?.nombre || null,
+		});
+	}
+
+	if (soloLocal) {
+		return {
+			renaper: pacienteLocal
+				? {
+						encontrado: true,
+						fuente: 'local',
+						..._renaperDataDesdePacienteLocal(pacienteLocal, dni),
+					}
+				: { encontrado: false },
+			pacienteLocal: pacienteLocal ? { existe: true, ...pacienteLocal } : { existe: false },
+			idPaciente: pacienteLocal?.idPaciente ?? null,
+			pacienteCreado: false,
+			accionSugerida: pacienteLocal ? 'USAR_PACIENTE_EXISTENTE' : 'DATOS_MANUALES',
+			siguientePaso: null,
+		};
+	}
 
 	// Ficha local existente: no bloquear el flujo esperando RENAPER (LE/DNI legacy, timeouts MSAL).
 	if (pacienteLocal) {
 		renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
 		renaperOk = true;
 		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
-	} else if (!soloLocal && config.reglas.requiereRenaper !== false) {
+	} else if (config.reglas.requiereRenaper !== false) {
 		const renaperOpts = {
 			debug: false,
 			timeoutMs: Number(process.env.BOT_RENAPER_TIMEOUT_MS || 35_000),
 		};
+		diag.line('identificacion', '[renaper] Consulta MSAL/proxy', { dni, idConversacion, fase });
 		try {
 			const renaperResult = sexoHint
 				? await renaperService.search(dni, sexoHint, renaperOpts)
@@ -308,10 +403,25 @@ async function identificarPaciente({
 					sexoDetectado,
 					renaperSigned,
 				);
+				diag.line('identificacion', '[renaper] OK', {
+					dni,
+					nombre: renaperData?.nombreCompleto || null,
+					sexo: sexoDetectado,
+				});
+			} else {
+				diag.line('identificacion', '[renaper] Sin datos', { dni });
 			}
 		} catch (err) {
 			renaperError = err;
-			console.warn('[botAgenda] RENAPER error:', err.message, err.code || '');
+			err.fuente = 'renaper';
+			if (!err.code) {
+				err.code = _esErrorSqlTimeout(err) ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+			}
+			diag.warn('identificacion', '[renaper] Error', {
+				dni,
+				code: err.code,
+				error: err.message,
+			});
 		}
 	}
 
@@ -319,30 +429,53 @@ async function identificarPaciente({
 		renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
 		renaperOk = true;
 		sexoDetectado = pacienteLocal.sexo || sexoDetectado;
-	} else if (!renaperOk && !soloLocal && config.reglas.requiereRenaper === true) {
+	} else if (!renaperOk && !soloRenaper && config.reglas.requiereRenaper === true) {
 		// Último intento: ficha local (p. ej. NumeroDocumento como texto)
 		if (!pacienteLocal) {
-			const retryRow = await _buscarPacienteLocalPorDni(dni);
+			diag.line('identificacion', '[ficha_local] Reintento tras RENAPER vacío', { dni });
+			const retryRow = await _buscarPacienteLocalPorDni(dni, { strict: false });
 			if (retryRow) {
 				pacienteLocal = _mapPacienteRow(retryRow);
 				renaperData = _renaperDataDesdePacienteLocal(pacienteLocal, dni);
 				renaperOk = true;
 				sexoDetectado = pacienteLocal.sexo || sexoDetectado;
+				diag.line('identificacion', '[ficha_local] Encontrado en reintento', {
+					dni,
+					idPaciente: pacienteLocal?.idPaciente,
+				});
 			}
 		}
 		if (!renaperOk) {
 			if (renaperError) {
-				const e = new Error('Servicio RENAPER no disponible desde el servidor');
+				const e = new Error(renaperError.message || 'Servicio RENAPER no disponible desde el servidor');
 				e.statusCode = 503;
+				e.fuente = 'renaper';
 				e.code =
 					renaperError.code === 'RENAPER_TIMEOUT' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
 				throw e;
 			}
 			const e = new Error('No se encontraron datos en RENAPER');
 			e.statusCode = 404;
+			e.fuente = 'renaper';
 			e.code = 'RENAPER_NO_ENCONTRADO';
 			throw e;
 		}
+	}
+
+	if (soloRenaper && !renaperOk) {
+		if (renaperError) {
+			const e = new Error(renaperError.message || 'Servicio RENAPER no disponible desde el servidor');
+			e.statusCode = 503;
+			e.fuente = 'renaper';
+			e.code =
+				renaperError.code === 'RENAPER_TIMEOUT' ? 'RENAPER_TIMEOUT' : 'RENAPER_UNAVAILABLE';
+			throw e;
+		}
+		const e = new Error('No se encontraron datos en RENAPER');
+		e.statusCode = 404;
+		e.fuente = 'renaper';
+		e.code = 'RENAPER_NO_ENCONTRADO';
+		throw e;
 	}
 
 	let idPaciente = pacienteLocal?.idPaciente ?? null;
@@ -2214,6 +2347,7 @@ async function obtenerConfigCompleta() {
 
 module.exports = {
 	identificarPaciente,
+	mensajeErrorIdentificacion,
 	crearPacienteBot,
 	buscarPaciente,
 	listarEspecialidadesBot,

@@ -1251,8 +1251,10 @@ async function procesarIdentificacionDni({
 		conv = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 	}
 
+	let errLocal = null;
+
 	try {
-		diag.line('wizard', 'Buscando ficha local por DNI', { dni, idConversacion });
+		diag.line('wizard', '[ficha_local] Buscando por DNI', { dni, idConversacion });
 		const dataLocal = await botAgenda.identificarPaciente({
 			numeroDocumento: dni,
 			telefonoWhatsApp,
@@ -1261,7 +1263,7 @@ async function procesarIdentificacionDni({
 			omitirAvancePaso: pasoConfirmarActivo,
 			fase: 'local',
 		});
-		diag.line('wizard', 'Ficha local', {
+		diag.line('wizard', '[ficha_local] Resultado', {
 			dni,
 			existe: !!dataLocal.pacienteLocal?.existe,
 			nombre: dataLocal.pacienteLocal?.nombre || null,
@@ -1276,8 +1278,18 @@ async function procesarIdentificacionDni({
 			pasoConfirmarActivo,
 		});
 		if (respLocal) return respLocal;
+	} catch (err) {
+		errLocal = err;
+		diag.warn('wizard', '[ficha_local] Error', {
+			dni,
+			code: err.code,
+			fuente: err.fuente,
+			error: err.message,
+		});
+	}
 
-		diag.line('wizard', 'Sin ficha local, consultando RENAPER', { dni, idConversacion });
+	try {
+		diag.line('wizard', '[renaper] Consultando', { dni, idConversacion });
 		const dataRenaper = await withTimeout(
 			botAgenda.identificarPaciente({
 				numeroDocumento: dni,
@@ -1290,7 +1302,7 @@ async function procesarIdentificacionDni({
 			RENAPER_TIMEOUT_MS,
 			'RENAPER',
 		);
-		diag.line('wizard', 'RENAPER respondió', {
+		diag.line('wizard', '[renaper] Resultado', {
 			dni,
 			encontrado: !!dataRenaper.renaper?.encontrado,
 			nombre: dataRenaper.renaper?.nombreCompleto || null,
@@ -1306,43 +1318,98 @@ async function procesarIdentificacionDni({
 		});
 		if (respRenaper) return respRenaper;
 
+		if (errLocal) {
+			return {
+				handled: true,
+				texto: botAgenda.mensajeErrorIdentificacion(
+					{ code: 'RENAPER_NO_ENCONTRADO', fuente: 'renaper' },
+					errLocal,
+				),
+			};
+		}
 		return {
 			handled: true,
 			texto: 'No encontramos ese DNI en el sistema. Verificá el número e intentá de nuevo.',
 		};
-	} catch (err) {
-		diag.warn('wizard', 'Error identificando DNI', {
-			dni,
-			error: err.message,
-			code: err.code,
-		});
-		try {
-			const fallback = await botAgenda.identificarPaciente({
-				numeroDocumento: dni,
-				telefonoWhatsApp,
-				crearSiNoExiste: false,
-				idConversacion,
-				omitirAvancePaso: pasoConfirmarActivo,
-				fase: 'local',
-			});
-			const resp = await _respuestaIdentificacionOk({
-				data: fallback,
-				dni,
-				conv,
-				flujo,
-				idConversacion,
-				pasoConfirmarActivo,
-			});
-			if (resp) return resp;
-		} catch {
-			/* ignore */
+	} catch (errRenaper) {
+		if (errRenaper?.message?.includes('timeout') && !errRenaper.code) {
+			errRenaper.code = 'RENAPER_TIMEOUT';
+			errRenaper.fuente = 'renaper';
 		}
-		return { handled: true, texto: mensajeErrorRenaper(err) };
+		diag.warn('wizard', '[renaper] Error', {
+			dni,
+			code: errRenaper.code,
+			fuente: errRenaper.fuente,
+			error: errRenaper.message,
+		});
+		if (!errLocal) {
+			try {
+				diag.line('wizard', '[ficha_local] Reintento tras fallo RENAPER', { dni });
+				const fallback = await botAgenda.identificarPaciente({
+					numeroDocumento: dni,
+					telefonoWhatsApp,
+					crearSiNoExiste: false,
+					idConversacion,
+					omitirAvancePaso: pasoConfirmarActivo,
+					fase: 'local',
+				});
+				const resp = await _respuestaIdentificacionOk({
+					data: fallback,
+					dni,
+					conv,
+					flujo,
+					idConversacion,
+					pasoConfirmarActivo,
+				});
+				if (resp) return resp;
+			} catch (errRetry) {
+				errLocal = errRetry;
+				diag.warn('wizard', '[ficha_local] Reintento falló', {
+					dni,
+					code: errRetry.code,
+					error: errRetry.message,
+				});
+			}
+		}
+		return {
+			handled: true,
+			texto: botAgenda.mensajeErrorIdentificacion(errRenaper, errLocal),
+		};
 	}
 }
 
 async function reconsultarRenaperParaConfirmacion(conv, telefonoWhatsApp, idConversacion, pasoCfg) {
+	let errLocal = null;
 	try {
+		diag.line('wizard', '[ficha_local] Reconsulta confirmación', {
+			dni: conv.dniPaciente,
+			idConversacion,
+		});
+		const dataLocal = await botAgenda.identificarPaciente({
+			numeroDocumento: conv.dniPaciente,
+			telefonoWhatsApp,
+			crearSiNoExiste: false,
+			idConversacion,
+			omitirAvancePaso: true,
+			fase: 'local',
+		});
+		if (dataLocal.pacienteLocal?.existe) {
+			const detalle = formatearPersonaRenaper(dataLocal.renaper, conv.dniPaciente, dataLocal.pacienteLocal);
+			return `Datos registrados:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
+		}
+	} catch (err) {
+		errLocal = err;
+		diag.warn('wizard', '[ficha_local] Reconsulta confirmación falló', {
+			code: err.code,
+			error: err.message,
+		});
+	}
+
+	try {
+		diag.line('wizard', '[renaper] Reconsulta confirmación', {
+			dni: conv.dniPaciente,
+			idConversacion,
+		});
 		const data = await withTimeout(
 			botAgenda.identificarPaciente({
 				numeroDocumento: conv.dniPaciente,
@@ -1350,6 +1417,7 @@ async function reconsultarRenaperParaConfirmacion(conv, telefonoWhatsApp, idConv
 				crearSiNoExiste: false,
 				idConversacion,
 				omitirAvancePaso: true,
+				fase: 'renaper',
 			}),
 			RENAPER_TIMEOUT_MS,
 			'RENAPER',
@@ -1367,8 +1435,11 @@ async function reconsultarRenaperParaConfirmacion(conv, telefonoWhatsApp, idConv
 		const detalle = formatearPersonaRenaper(null, conv.dniPaciente, data.pacienteLocal);
 		return `Datos registrados:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
 	} catch (err) {
-		diag.warn('wizard', 'Error reconsultando RENAPER', { error: err.message, code: err.code });
-		return mensajeErrorRenaper(err);
+		diag.warn('wizard', '[renaper] Reconsulta confirmación falló', {
+			error: err.message,
+			code: err.code,
+		});
+		return botAgenda.mensajeErrorIdentificacion(err, errLocal);
 	}
 }
 

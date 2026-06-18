@@ -286,16 +286,13 @@ async function responderMensajeEntrante({
 			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto });
 		}
 	} catch (wizardErr) {
-		diag.warn('webhook', 'Wizard error', { error: wizardErr.message, code: wizardErr.code });
+		diag.warn('webhook', 'Wizard error', {
+			error: wizardErr.message,
+			code: wizardErr.code,
+			fuente: wizardErr.fuente,
+		});
 		if (dniDetectado || conv?.pasoBot === 'CONFIRMAR_IDENTIDAD') {
-			const texto =
-				wizardErr.code === 'RENAPER_NO_ENCONTRADO'
-					? 'No encontramos ese DNI en RENAPER. Verificá el número e intentá de nuevo.'
-					: wizardErr.code === 'RENAPER_TIMEOUT'
-						? 'La consulta a RENAPER tardó demasiado. Intentá enviar tu DNI de nuevo.'
-						: wizardErr.code === 'DNI_INVALIDO'
-							? 'El DNI indicado no es válido. Enviá solo números, sin puntos.'
-							: 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
+			const texto = botAgenda.mensajeErrorIdentificacion(wizardErr);
 			return enviarTextoBot({ ...enviarOpts, texto });
 		}
 		if (conv?.pasoBot === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
