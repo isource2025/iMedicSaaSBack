@@ -5,7 +5,9 @@
  */
 const botOpenai = require('./botOpenai.service');
 const botConversacion = require('./botConversacion.service');
+const botSesionIa = require('./botSesionIa.service');
 const botAgenda = require('./botAgenda.service');
+const { extraerDniDesdeTexto } = require('../utils/botDni');
 
 const FLAGS_DEFAULT = Object.freeze({
 	salir_flujo: false,
@@ -62,8 +64,7 @@ function _esSaludoSimple(texto) {
 }
 
 function _extraerDni(texto) {
-	const m = String(texto || '').match(/\b(\d{7,8})\b/);
-	return m ? m[1] : null;
+	return extraerDniDesdeTexto(texto);
 }
 
 function _interpretarConfirmacion(texto) {
@@ -214,15 +215,8 @@ Reglas:
 async function _historialCorto(idConversacion) {
 	if (!idConversacion) return [];
 	try {
-		const msgs = await botConversacion.listarMensajes(idConversacion, { limit: 10 });
-		return (msgs || [])
-			.slice(-8)
-			.filter((m) => m.origen === 'PACIENTE' || m.origen === 'BOT')
-			.map((m) => ({
-				role: m.origen === 'BOT' ? 'assistant' : 'user',
-				content: String(m.contenido || '').trim(),
-			}))
-			.filter((m) => m.content);
+		const msgs = await botSesionIa.listarMensajesParaIa(idConversacion, { limit: 10 });
+		return botSesionIa.mensajesParaOpenAi(msgs).slice(-8);
 	} catch {
 		return [];
 	}

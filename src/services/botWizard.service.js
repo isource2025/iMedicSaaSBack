@@ -7,7 +7,10 @@ const botConfigService = require('./botConfig.service');
 const botConversacion = require('./botConversacion.service');
 const botIntencion = require('./botIntencion.service');
 const botInterpretacion = require('./botInterpretacion.service');
+const botHumanizer = require('./botHumanizer.service');
 const diag = require('../utils/diagLog');
+const { extraerDniDesdeTexto } = require('../utils/botDni');
+const botSesionIa = require('./botSesionIa.service');
 
 function gptHabilitado() {
 	return botInterpretacion.gptHabilitado();
@@ -49,8 +52,7 @@ function pasoInicial(flujo) {
 }
 
 function extraerDni(texto) {
-	const m = String(texto || '').match(/\b(\d{7,8})\b/);
-	return m ? m[1] : null;
+	return extraerDniDesdeTexto(texto);
 }
 
 function interpretarConfirmacion(texto) {
@@ -205,18 +207,27 @@ function aplicarPlantillaMensaje(template, conv) {
 	return msg;
 }
 
-function mensajePasoFlujo(flujo, pasoId, conv, fallback = '') {
+function pautaPasoFlujo(flujo, pasoId, fallbackPauta = '') {
 	const pasoCfg = pasoPorId(flujo, pasoId);
-	return aplicarPlantillaMensaje(pasoCfg?.mensajeUsuario || fallback, conv);
+	return (
+		pasoCfg?.mensajeUsuario ||
+		fallbackPauta ||
+		botHumanizer.pautaPorTipo('GENERICO')
+	);
+}
+
+/** @deprecated Usar pautaPasoFlujo; el texto al paciente lo genera la IA. */
+function mensajePasoFlujo(flujo, pasoId, conv, fallback = '') {
+	return pautaPasoFlujo(flujo, pasoId, fallback);
 }
 
 function resolverMensajePostTurno(flujo, config, conv) {
 	const pasoCfg = pasoPorId(flujo, 'TURNO_COMPLETADO');
-	const raw =
+	return (
 		pasoCfg?.mensajeUsuario ||
 		config?.mensajes?.agradecimiento ||
-		'¡De nada! Si necesitás otro turno, escribinos cuando quieras.';
-	return aplicarPlantillaMensaje(raw, conv);
+		botHumanizer.pautaPorTipo('POST_TURNO')
+	);
 }
 
 function normalizarTextoBot(texto) {
@@ -274,14 +285,16 @@ function esPasoReservaActivo(pasoActual, conv) {
 }
 
 function mensajeSalidaFlujo(config, conv) {
-	const raw =
-		config?.mensajes?.cancelacionFlujo ||
-		'Entendido, cancelamos la búsqueda de turno. Cuando quieras solicitar uno, escribinos.';
-	return aplicarPlantillaMensaje(raw, conv);
+	return (
+		config?.mensajes?.cancelacionFlujo || botHumanizer.pautaPorTipo('SALIDA_FLUJO')
+	);
 }
 
 async function cancelarFlujoTurnoActivo(idConversacion) {
-	await botConversacion.guardarContextoBot(idConversacion, null);
+	await botSesionIa.resetearSesionIa(idConversacion);
+	const conv = await botConversacion.obtenerConversacion(idConversacion);
+	const meta = botSesionIa.extraerMetaPersistente(conv?.contextoBot);
+	await botConversacion.guardarContextoBot(idConversacion, Object.keys(meta).length ? meta : null);
 	await botConversacion.actualizarContextoPaciente(idConversacion, {
 		pasoBot: 'inicio',
 	});
@@ -302,7 +315,7 @@ async function procesarSalidaFlujo({
 	return {
 		handled: true,
 		tipoRespuesta: 'SALIDA_FLUJO',
-		texto: mensajeSalidaFlujo(config, conv),
+		pauta: mensajeSalidaFlujo(config, conv),
 		interpretacion,
 	};
 }
@@ -361,10 +374,21 @@ async function sincronizarPasoTurnoCompletado(idConversacion, conv) {
 	return (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 }
 
-function mensajeConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
+function datosConfirmacionRenaper({ renaper, dni, pacienteLocal, pasoCfg }) {
 	const fuente = renaper?.fuente === 'local' ? 'ficha local' : 'RENAPER';
 	const detalle = formatearPersonaRenaper(renaper, dni, pacienteLocal);
-	return `Encontramos en *${fuente}*:\n${detalle}\n\n${pasoCfg?.mensajeUsuario || '¿Sos vos? Respondé Sí o No.'}`;
+	return {
+		fuenteIdentidad: fuente,
+		detalleIdentidad: `Encontramos en *${fuente}*:\n${detalle}`,
+		pauta:
+			pasoCfg?.mensajeUsuario || botHumanizer.pautaPorTipo('CONFIRMAR_IDENTIDAD'),
+	};
+}
+
+/** @deprecated Usar datosConfirmacionRenaper + generación IA */
+function mensajeConfirmacionRenaper(opts) {
+	const d = datosConfirmacionRenaper(opts);
+	return `${d.detalleIdentidad}\n\n${d.pauta}`;
 }
 
 function mensajeErrorAltaPaciente(err) {
@@ -456,19 +480,25 @@ async function iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend = n
 	if (espPend) {
 		await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
 	}
-	const msg =
-		pasoIdentificar?.mensajeUsuario ||
-		'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
-	if (!conSaludo) return msg;
-	const saludo = primerNombre(nombreWhatsApp(conv));
-	return saludo ? `Hola, ${saludo}. ${msg}` : msg;
+	const saludo = conSaludo ? primerNombre(nombreWhatsApp(conv)) : null;
+	const tipo = conSaludo ? 'INICIO_FLUJO' : 'PEDIR_DNI';
+	return {
+		tipoRespuesta: tipo,
+		pauta:
+			pasoIdentificar?.mensajeUsuario || botHumanizer.pautaPorTipo(tipo),
+		datosOperativos: saludo ? { nombreSaludo: saludo } : null,
+	};
 }
 
 async function responderListaEspecialidades() {
+	const lista = await botAgenda.listarEspecialidadesBot();
 	return {
 		handled: true,
 		tipoRespuesta: 'LISTA_ESPECIALIDADES',
-		texto: botAgenda.mensajeEspecialidadesDisponibles(await botAgenda.listarEspecialidadesBot()),
+		pauta: botHumanizer.pautaPorTipo('LISTA_ESPECIALIDADES'),
+		datosOperativos: {
+			lista: (lista || []).map((e) => `• ${e.nombre}`).join('\n'),
+		},
 	};
 }
 
@@ -491,7 +521,7 @@ async function procesarIntencionGptEntrada({
 		return {
 			handled: true,
 			tipoRespuesta: 'POST_TURNO',
-			texto: resolverMensajePostTurno(flujo, await botConfigService.getBotConfig(), conv),
+			pauta: resolverMensajePostTurno(flujo, await botConfigService.getBotConfig(), conv),
 		};
 	}
 
@@ -523,7 +553,8 @@ async function procesarIntencionGptEntrada({
 			await sincronizarPasoTurnoCompletado(idConversacion, conv);
 			return {
 				handled: true,
-				texto: resolverMensajePostTurno(
+				tipoRespuesta: 'POST_TURNO',
+				pauta: resolverMensajePostTurno(
 					flujo,
 					await botConfigService.getBotConfig(),
 					conv,
@@ -552,11 +583,11 @@ async function procesarIntencionGptEntrada({
 		if (resEsp?.tipo === 'especialidad') {
 			espPend = { valor: resEsp.especialidad.valor, nombre: resEsp.especialidad.nombre };
 		}
+		const inicio = await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend });
 		return {
 			handled: true,
-			tipoRespuesta: 'INICIO_FLUJO',
-			texto: await iniciarFlujoNuevoTurno({ idConversacion, conv, flujo, espPend }),
 			interpretacion: intent,
+			...inicio,
 		};
 	}
 
@@ -566,7 +597,7 @@ async function procesarIntencionGptEntrada({
 		return {
 			handled: true,
 			tipoRespuesta: 'POST_TURNO',
-			texto: resolverMensajePostTurno(flujo, config, conv),
+			pauta: resolverMensajePostTurno(flujo, config, conv),
 			interpretacion: intent,
 		};
 	}
@@ -620,16 +651,14 @@ async function procesarIntencionGptEntrada({
 				};
 			}
 			if (botIntencion.esPasoIdentificacionLibre(pasoActual, conv)) {
-				return {
-					handled: true,
-					texto: await iniciarFlujoNuevoTurno({
-						idConversacion,
-						conv,
-						flujo,
-						espPend,
-						conSaludo: false,
-					}),
-				};
+				const inicio = await iniciarFlujoNuevoTurno({
+					idConversacion,
+					conv,
+					flujo,
+					espPend,
+					conSaludo: false,
+				});
+				return { handled: true, ...inicio };
 			}
 			return null;
 		}
@@ -788,7 +817,7 @@ async function procesarEleccionProfesional({
 	const pasoId = pasoPorId(flujo, 'IDENTIFICAR');
 	const msg =
 		pasoId?.mensajeUsuario ||
-		'Indicá el DNI de la persona que va a atenderse (sin puntos).';
+		'Indicá el DNI de la persona que va a atenderse.';
 	return {
 		handled: true,
 		texto: `${prefijoSaludo}Elegiste *${prof.nombre}*. ${msg}`,
@@ -867,7 +896,7 @@ async function procesarPedidoConProfesional({
 		const pasoId = pasoPorId(flujo, 'IDENTIFICAR');
 		const msg =
 			pasoId?.mensajeUsuario ||
-			'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).';
+			'Para continuar, indicá el DNI de la persona que va a atenderse.';
 		return withInterpretacion(
 			{
 				handled: true,
@@ -924,7 +953,7 @@ function armarRespuestaBuscarTurnoInicial({
 	return {
 		handled: true,
 		accion: 'BUSCAR_TURNO',
-		aviso: `${avisoPrefijo}${botAgenda.mensajeAvisoBusquedaDisponibilidad()}`,
+		avisoPauta: botHumanizer.pautaPorTipo('AVISO_BUSQUEDA'),
 		buscarTurno: {
 			tipo: 'inicial',
 			idConversacion,
@@ -949,7 +978,7 @@ function mensajeErrorRenaper(err) {
 		return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 	}
 	if (err?.code === 'DNI_INVALIDO') {
-		return 'El DNI indicado no es válido. Enviá solo números, sin puntos ni espacios.';
+		return 'El DNI indicado no es válido. Verificá el número e intentá de nuevo.';
 	}
 	return 'No pudimos validar tu DNI en este momento. Intentá de nuevo en unos segundos.';
 }
@@ -984,24 +1013,38 @@ async function _respuestaIdentificacionOk({
 			pasoBot: 'CONFIRMAR_IDENTIDAD',
 			idPaciente: null,
 		});
+		const conf = datosConfirmacionRenaper({
+			renaper: data.renaper,
+			dni,
+			pacienteLocal: data.pacienteLocal,
+			pasoCfg,
+		});
 		return {
 			handled: true,
 			tipoRespuesta: 'CONFIRMAR_IDENTIDAD',
-			texto: mensajeConfirmacionRenaper({
-				renaper: data.renaper,
-				dni,
-				pacienteLocal: data.pacienteLocal,
-				pasoCfg,
-			}),
+			pauta: conf.pauta,
+			datosOperativos: {
+				fuenteIdentidad: conf.fuenteIdentidad,
+				detalleIdentidad: conf.detalleIdentidad,
+			},
 		};
 	}
 
 	const siguiente = siguientePasoActivo(flujo, 'IDENTIFICAR');
 	const pasoCfg = pasoPorId(flujo, siguiente);
+	const tipoSig =
+		siguiente === 'ELEGIR_ESPECIALIDAD' ? 'PEDIR_ESPECIALIDAD' : 'GENERICO';
 	return {
 		handled: true,
-		texto: pasoCfg?.mensajeUsuario || 'Gracias. ¿Qué especialidad necesitás?',
+		tipoRespuesta: tipoSig,
+		pauta: pasoCfg?.mensajeUsuario || botHumanizer.pautaPorTipo(tipoSig),
+		datosOperativos: saludoIdentidad(conv),
 	};
+}
+
+function saludoIdentidad(conv) {
+	const saludo = primerNombre(nombreWhatsApp(conv));
+	return saludo ? { nombreSaludo: saludo } : null;
 }
 
 async function avanzarTrasIdentidadConfirmada({
@@ -1211,27 +1254,25 @@ async function procesarPasoTurnoCompletado({
 			});
 			return {
 				handled: true,
-				texto: mensajePasoFlujo(
-					flujo,
-					'ELEGIR_ESPECIALIDAD',
-					conv,
-					'¿Qué especialidad necesitás?',
-				),
+				tipoRespuesta: 'PEDIR_ESPECIALIDAD',
+				pauta: pautaPasoFlujo(flujo, 'ELEGIR_ESPECIALIDAD'),
 			};
 		}
 
-		return {
-			handled: true,
-			texto: await iniciarFlujoNuevoTurno({
-				idConversacion,
-				conv,
-				flujo,
-				espPend,
-			}),
-		};
+		const inicio = await iniciarFlujoNuevoTurno({
+			idConversacion,
+			conv,
+			flujo,
+			espPend,
+		});
+		return { handled: true, ...inicio };
 	}
 
-	return { handled: true, texto: resolverMensajePostTurno(flujo, config, conv) };
+	return {
+		handled: true,
+		tipoRespuesta: 'POST_TURNO',
+		pauta: resolverMensajePostTurno(flujo, config, conv),
+	};
 }
 
 async function procesarIdentificacionDni({
@@ -1537,7 +1578,7 @@ async function procesarPasoConfirmarIdentidad({
 			handled: true,
 			texto:
 				pasoId?.mensajeUsuario ||
-				'Entendido. Por favor indicá nuevamente tu DNI (sin puntos).',
+				'Entendido. Por favor indicá nuevamente tu DNI.',
 		};
 	}
 
@@ -2140,13 +2181,15 @@ async function intentarRespuestaWizard({
 					{
 						handled: true,
 						tipoRespuesta: 'CONFIRMACION_TURNO_OK',
-						texto: saludo ? `Perfecto, ${saludo}.\n\n${ticket}` : ticket,
+						pauta: botHumanizer.pautaPorTipo('CONFIRMACION_TURNO_OK'),
+						ticketEstatico: ticket,
 						datosOperativos: {
 							medico: ctx.medico,
 							especialidad: ctx.especialidadNombre,
 							fechaLegible: ctx.fechaLegible,
+							diaSemana: ctx.diaSemana,
 							hora: ctx.hora,
-							comprobante: ticket,
+							nombreSaludo: saludo || null,
 						},
 					},
 					interpretacion,
@@ -2278,7 +2321,8 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 				pasoBot: sugerencia ? 'CONFIRMAR' : 'ELEGIR_ESPECIALIDAD',
 			});
 			return {
-				texto: botAgenda.mensajeSugerenciaTurno(sugerencia, pasoConfirmar),
+				texto: null,
+				pauta: botHumanizer.pautaPorTipo(sugerencia ? 'SUGERENCIA_TURNO' : 'SIN_DISPONIBILIDAD'),
 				tipoRespuesta: sugerencia ? 'SUGERENCIA_TURNO' : 'SIN_DISPONIBILIDAD',
 				datosOperativos: sugerencia
 					? {
@@ -2310,16 +2354,18 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 
 			if (!siguiente) {
 				await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
-				const pref = ajuste.resumen ? ` *${ajuste.resumen}*` : '';
 				return {
-					texto: `No encontré turno disponible${pref} en los próximos días. Decime otro día u horario que te sirva.`,
+					pauta: botHumanizer.pautaPorTipo('SIN_DISPONIBILIDAD'),
+					tipoRespuesta: 'SIN_DISPONIBILIDAD',
+					datosOperativos: ajuste.resumen ? { preferencia: ajuste.resumen } : null,
 				};
 			}
 
 			siguiente = await botAgenda.validarSugerenciaTurno(siguiente, ctx.especialidadValor);
 			if (!siguiente) {
 				return {
-					texto: 'No hay turnos con profesionales habilitados en la agenda. Contactá al centro o probá otra especialidad.',
+					pauta: botHumanizer.pautaPorTipo('SIN_DISPONIBILIDAD'),
+					tipoRespuesta: 'SIN_DISPONIBILIDAD',
 				};
 			}
 
@@ -2331,10 +2377,7 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 			});
 			await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'CONFIRMAR' });
 			return {
-				texto: botAgenda.mensajeSugerenciaTurno(siguiente, pasoCfg, {
-					alternativa: true,
-					preferencia: ajuste.resumen,
-				}),
+				pauta: botHumanizer.pautaPorTipo('SUGERENCIA_TURNO'),
 				tipoRespuesta: 'SUGERENCIA_TURNO',
 				datosOperativos: {
 					medico: siguiente.medico,
@@ -2342,18 +2385,22 @@ async function ejecutarBusquedaTurno(buscarTurno) {
 					fechaLegible: siguiente.fechaLegible,
 					diaSemana: siguiente.diaSemana,
 					hora: siguiente.hora,
+					preferencia: ajuste.resumen || null,
 				},
 			};
 		}
 	} catch (err) {
 		diag.warn('wizard', 'Error ejecutando búsqueda de turno', { error: err.message, tipo });
 		return {
-			texto:
-				'Hubo un problema al consultar la agenda. ¿Podés repetir qué día y horario te conviene?',
+			pauta: botHumanizer.pautaPorTipo('ERROR_AGENDA'),
+			tipoRespuesta: 'ERROR_AGENDA',
 		};
 	}
 
-	return { texto: 'No pude completar la búsqueda de turnos. Intentá de nuevo.' };
+	return {
+		pauta: botHumanizer.pautaPorTipo('ERROR_AGENDA'),
+		tipoRespuesta: 'ERROR_AGENDA',
+	};
 }
 
 module.exports = {

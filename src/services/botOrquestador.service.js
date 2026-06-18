@@ -9,6 +9,7 @@ const botHumanizer = require('./botHumanizer.service');
 const botConfigService = require('./botConfig.service');
 const botAgenda = require('./botAgenda.service');
 const diag = require('../utils/diagLog');
+const botSesionIa = require('./botSesionIa.service');
 
 function _parsearJson(raw) {
 	const s = String(raw || '')
@@ -66,54 +67,81 @@ function _bloqueFactual(resultados) {
 	);
 }
 
-function _textoBaseDesdePlan(plan, resultados, conv, config) {
-	const nombre = _primerNombre(conv?.nombreContacto);
-	const saludo = nombre ? `${nombre}, ` : '';
-
+function _pautaYDatosDesdePlan(plan, resultados, conv, config) {
 	const buscarProf = (resultados || []).find((r) => r.nombre === 'buscar_profesional' && r.ok);
 	const d = buscarProf?.datos;
-	const pasoId =
-		config?.mensajes?.pedirDni ||
-		'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).';
+	const nombre = _primerNombre(conv?.nombreContacto);
 
 	if (plan.siguiente === 'cancelar') {
-		return (
-			config?.mensajes?.cancelacionFlujo ||
-			'Entendido, cancelamos la gestión. Cuando quieras un turno, escribinos.'
-		);
+		return {
+			pauta:
+				config?.mensajes?.cancelacionFlujo || botHumanizer.pautaPorTipo('SALIDA_FLUJO'),
+		};
 	}
 
 	if (plan.siguiente === 'pedir_dni') {
 		if (d?.tipo === 'unico') {
-			return `Perfecto, ${saludo}anoté turno con *${d.profesional.nombre}* en *${d.especialidad.nombre}*. ${pasoId}`;
+			return {
+				pauta: 'Confirmar el médico elegido y pedir el DNI para buscar el turno.',
+				datosOperativos: {
+					medico: d.profesional.nombre,
+					especialidad: d.especialidad.nombre,
+					nombreSaludo: nombre,
+				},
+			};
 		}
 		if (d?.tipo === 'multiples') {
-			return `${botAgenda.mensajeListaProfesionalesCoincidencias(d.matches)}\n\nLuego indicá el DNI para continuar.`;
+			return {
+				pauta: 'Mostrar profesionales encontrados y pedir el DNI para continuar.',
+				datosOperativos: {
+					lista: botAgenda.mensajeListaProfesionalesCoincidencias(d.matches),
+					nombreSaludo: nombre,
+				},
+			};
 		}
-		return pasoId;
+		return {
+			pauta: config?.mensajes?.pedirDni || botHumanizer.pautaPorTipo('PEDIR_DNI'),
+			datosOperativos: nombre ? { nombreSaludo: nombre } : null,
+		};
 	}
 
 	if (plan.siguiente === 'preguntar') {
-		if (plan.pregunta_sugerida) return String(plan.pregunta_sugerida).trim();
+		if (plan.pregunta_sugerida) {
+			return { pauta: `Responder o preguntar: ${String(plan.pregunta_sugerida).trim()}` };
+		}
 		if (d?.tipo === 'multiples') {
-			return botAgenda.mensajeListaProfesionalesCoincidencias(d.matches);
+			return {
+				pauta: 'Pedir que aclare con qué profesional quiere el turno.',
+				datosOperativos: {
+					lista: botAgenda.mensajeListaProfesionalesCoincidencias(d.matches),
+				},
+			};
 		}
 		if (d?.tipo === 'no_encontrado') {
-			return 'No encontré ese profesional en la agenda. ¿Podés repetir el apellido o indicar la especialidad?';
+			return {
+				pauta: 'No se encontró el profesional; pedir apellido completo o especialidad.',
+			};
 		}
-		return '¿Podés contarme un poco más para ayudarte con el turno?';
+		return { pauta: 'Pedir más detalle para ayudar con el turno.' };
 	}
 
 	if (plan.siguiente === 'solo_informar') {
 		const lista = (resultados || []).find((r) => r.nombre === 'listar_especialidades');
 		if (lista?.datos?.especialidades?.length) {
-			return botAgenda.mensajeEspecialidadesDisponibles(
-				lista.datos.especialidades.map((n) => ({ nombre: n })),
-			);
+			return {
+				pauta: botHumanizer.pautaPorTipo('LISTA_ESPECIALIDADES'),
+				datosOperativos: {
+					lista: lista.datos.especialidades.map((n) => `• ${n}`).join('\n'),
+				},
+			};
 		}
 	}
 
-	return plan.pregunta_sugerida || '¿En qué puedo ayudarte con tu turno?';
+	return {
+		pauta: plan.pregunta_sugerida
+			? String(plan.pregunta_sugerida).trim()
+			: 'Ofrecer ayuda con el turno.',
+	};
 }
 
 function _tipoHumanizar(siguiente) {
@@ -209,7 +237,7 @@ async function procesarMensaje({
 		return {
 			handled: true,
 			accion: 'BUSCAR_TURNO',
-			aviso: `${prefijo}${botAgenda.mensajeAvisoBusquedaDisponibilidad()}`,
+			avisoPauta: botHumanizer.pautaPorTipo('AVISO_BUSQUEDA'),
 			buscarTurno: {
 				tipo: 'inicial',
 				idConversacion,
@@ -229,31 +257,41 @@ async function procesarMensaje({
 		plan.siguiente = 'pedir_dni';
 	}
 
-	const textoBase = _textoBaseDesdePlan(plan, resultados, convAct, config);
-	const factual = _bloqueFactual(resultados);
+	const { pauta, datosOperativos } = _pautaYDatosDesdePlan(plan, resultados, convAct, config);
+	const tipoResp = _tipoHumanizar(plan.siguiente);
+	const saludo = botSesionIa.contextoSaludo(convAct);
+	const datosConSaludo = { ...(datosOperativos || {}), saludo };
 
-	let textoFinal = textoBase;
+	let textoFinal = '';
 	try {
-		textoFinal = await botHumanizer.humanizar({
+		textoFinal = await botHumanizer.generarMensaje({
 			conv: convAct,
 			config,
-			tipoRespuesta: _tipoHumanizar(plan.siguiente),
-			textoBase,
-			datosOperativos: { lista: factual },
+			tipoRespuesta: tipoResp,
+			pauta,
+			datosOperativos: datosConSaludo,
+			intencion: plan.intencion || plan.siguiente,
 		});
 	} catch {
-		textoFinal = textoBase;
+		textoFinal = pauta;
 	}
 
 	if (plan.siguiente === 'cancelar') {
-		await botConversacion.guardarContextoBot(idConversacion, null);
+		await botSesionIa.resetearSesionIa(idConversacion);
+		const convC = await botConversacion.obtenerConversacion(idConversacion);
+		const meta = botSesionIa.extraerMetaPersistente(convC?.contextoBot);
+		await botConversacion.guardarContextoBot(
+			idConversacion,
+			Object.keys(meta).length ? meta : null,
+		);
 		await botConversacion.actualizarContextoPaciente(idConversacion, { pasoBot: 'inicio' });
 	}
 
 	return {
 		handled: true,
 		texto: textoFinal,
-		tipoRespuesta: _tipoHumanizar(plan.siguiente),
+		marcarSaludo: saludo.debeSaludar,
+		tipoRespuesta: tipoResp,
 		resultados,
 	};
 }

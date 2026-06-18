@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const botChatStorage = require('./botChatStorage.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
+const botSesionIa = require('./botSesionIa.service');
 
 /** @typedef {'BOT'|'HUMANO'|'PAUSADO'} ModoControl */
 /** @typedef {'IN'|'OUT'} Direccion */
@@ -914,17 +915,23 @@ async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR')
 /** Tras confirmar un turno: conserva paciente/DNI y pasa a estado post-turno. */
 async function finalizarTrasReservaExitosa(idConversacion) {
 	await checkConversationTables();
+	await botSesionIa.resetearSesionIa(idConversacion);
+	const convTrasReset = await obtenerConversacion(idConversacion);
+	const meta = botSesionIa.extraerMetaPersistente(convTrasReset?.contextoBot);
 	if (useMemory) {
 		const conv = memConversaciones.get(idConversacion);
 		if (conv) {
-			conv.contextoBot = null;
+			conv.contextoBot = Object.keys(meta).length ? meta : null;
 			conv.pasoBot = 'TURNO_COMPLETADO';
 			memConversaciones.set(idConversacion, conv);
 		}
 		return obtenerConversacion(idConversacion);
 	}
 	if (useBotChat) {
-		await botChatStorage.guardarContextoBot(idConversacion, null);
+		await botChatStorage.guardarContextoBot(
+			idConversacion,
+			Object.keys(meta).length ? meta : null,
+		);
 		await botChatStorage.actualizarSesion(
 			idConversacion,
 			['PasoBot = @p1'],
@@ -936,10 +943,16 @@ async function finalizarTrasReservaExitosa(idConversacion) {
 		return obtenerConversacion(idConversacion);
 	}
 	const hasCol = await ensureContextoBotColumn();
-	const ctxSql = hasCol ? ', ContextoBotJson = NULL' : '';
+	const ctxSql = hasCol
+		? `, ContextoBotJson = ${Object.keys(meta).length ? '@p1' : 'NULL'}`
+		: '';
+	const params = [{ value: idConversacion, type: 'VarChar' }];
+	if (hasCol && Object.keys(meta).length) {
+		params.push({ value: JSON.stringify(meta).slice(0, 8000), type: 'NVarChar' });
+	}
 	await executeQuery(
 		`UPDATE dbo.imBotConversacion SET PasoBot = 'TURNO_COMPLETADO'${ctxSql} WHERE IdConversacion = @p0`,
-		[{ value: idConversacion, type: 'VarChar' }],
+		params,
 	);
 	return obtenerConversacion(idConversacion);
 }

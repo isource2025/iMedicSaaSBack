@@ -81,7 +81,7 @@ async function getBotConfig() {
 			bienvenida:
 				db.mensaje_bienvenida ||
 				process.env.BOT_MENSAJE_BIENVENIDA ||
-				'Hola, soy el asistente de turnos. Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+				'Hola, soy el asistente de turnos. Para comenzar, indicá el DNI de la persona que va a atenderse.',
 			confirmacion:
 				db.mensaje_confirmacion ||
 				process.env.BOT_MENSAJE_CONFIRMACION ||
@@ -89,7 +89,7 @@ async function getBotConfig() {
 			pedirDni:
 				db.mensaje_pedir_dni ||
 				process.env.BOT_MENSAJE_PEDIR_DNI ||
-				'Para continuar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+				'Pedir DNI para identificar y buscar turno.',
 			agradecimiento:
 				db.mensaje_agradecimiento ||
 				process.env.BOT_MENSAJE_AGRADECIMIENTO ||
@@ -146,8 +146,7 @@ function defaultFlujoPasos() {
 			paso: 1,
 			id: 'IDENTIFICAR',
 			titulo: 'Identificación',
-			mensajeUsuario:
-				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+			mensajeUsuario: 'Pedir DNI para identificar al paciente y buscar turno.',
 			descripcion: 'Validación RENAPER y ficha local del paciente',
 			activo: true,
 		},
@@ -155,7 +154,7 @@ function defaultFlujoPasos() {
 			paso: 2,
 			id: 'CONFIRMAR_IDENTIDAD',
 			titulo: 'Confirmar identidad',
-			mensajeUsuario: '¿Confirmás que sos esta persona? Respondé Sí o No.',
+			mensajeUsuario: 'Confirmar identidad con los datos mostrados (Sí/No).',
 			descripcion: 'Muestra datos RENAPER y espera confirmación antes de continuar',
 			activo: true,
 		},
@@ -164,7 +163,7 @@ function defaultFlujoPasos() {
 			id: 'ELEGIR_COBERTURA',
 			titulo: 'Obra social / cobertura',
 			mensajeUsuario:
-				'Indicá tu obra social o cobertura médica (por ejemplo: PAMI, OSDE, IOMA). Si no tenés, escribí *Particular*.',
+				'Pedir obra social o cobertura (o Particular).',
 			descripcion: 'Actualiza NumeroCuenta en imPacientes según imClientes',
 			activo: false,
 		},
@@ -172,8 +171,7 @@ function defaultFlujoPasos() {
 			paso: 4,
 			id: 'ELEGIR_ESPECIALIDAD',
 			titulo: 'Especialidad',
-			mensajeUsuario:
-				'Perfecto, {nombre}. ¿Qué especialidad necesitás?\nO te muestro las disponibles.',
+			mensajeUsuario: 'Preguntar especialidad o ofrecer listar las disponibles.',
 			descripcion: 'Listado de especialidades con agenda. Variable: {nombre}',
 			activo: true,
 		},
@@ -181,7 +179,7 @@ function defaultFlujoPasos() {
 			paso: 5,
 			id: 'ELEGIR_PROFESIONAL',
 			titulo: 'Profesional',
-			mensajeUsuario: 'Elegí el profesional de la especialidad seleccionada.',
+			mensajeUsuario: 'Pedir que elija profesional de la especialidad.',
 			descripcion: 'Profesionales con turnos disponibles',
 			activo: true,
 		},

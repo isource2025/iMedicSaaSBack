@@ -9,6 +9,7 @@ const botAgenda = require('./botAgenda.service');
 const botHumanizer = require('./botHumanizer.service');
 const botInterpretacion = require('./botInterpretacion.service');
 const botOrquestador = require('./botOrquestador.service');
+const botSesionIa = require('./botSesionIa.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
@@ -175,17 +176,127 @@ async function enviarTextoBot({
 	return { respondido: true, texto, metaMessageId: meta.messageId };
 }
 
+function _extraerListaDesdeTexto(texto) {
+	const lineas = String(texto || '')
+		.split('\n')
+		.map((l) => l.trim())
+		.filter((l) => /^[•\d]/.test(l) || l.startsWith('•'));
+	return lineas.length ? lineas.join('\n') : null;
+}
+
+function _prepararGeneracionWizard(wizard, conv) {
+	const tipo = wizard.tipoRespuesta || 'GENERICO';
+	const datos = { ...(wizard.datosOperativos || {}) };
+	let pauta = wizard.pauta || wizard.avisoPauta;
+	const saludo = botSesionIa.contextoSaludo(conv);
+	datos.saludo = saludo;
+
+	if (!pauta && wizard.aviso) {
+		pauta = botHumanizer.pautaPorTipo('AVISO_BUSQUEDA');
+	}
+
+	if (!pauta) {
+		pauta = botHumanizer.pautaPorTipo(tipo);
+	}
+
+	if (wizard.texto && !wizard.ticketEstatico) {
+		if (
+			(tipo === 'LISTA_ESPECIALIDADES' || tipo === 'LISTA_PROFESIONALES') &&
+			!datos.lista
+		) {
+			const lista = _extraerListaDesdeTexto(wizard.texto);
+			if (lista) datos.lista = lista;
+		}
+		if (tipo === 'CONFIRMAR_IDENTIDAD' && !datos.detalleIdentidad) {
+			const det = String(wizard.texto)
+				.replace(/Respondé Sí o No.*/i, '')
+				.replace(/¿Sos vos\?.*/i, '')
+				.trim();
+			if (det) datos.detalleIdentidad = det;
+		}
+	}
+
+	return {
+		tipo,
+		pauta,
+		datos,
+		intencion: wizard.interpretacion?.intencion || wizard.intencion,
+		marcarSaludo: saludo.debeSaludar,
+	};
+}
+
+async function _enviarBotYMarcaSaludo({ enviarOpts, texto, idConversacion, conv, marcarSaludo, seguimiento, omitirMarcarRespondido }) {
+	const res = await enviarTextoBot({
+		...enviarOpts,
+		texto,
+		seguimiento,
+		omitirMarcarRespondido,
+	});
+	if (res.respondido && marcarSaludo) {
+		await botSesionIa.marcarSaludoEnviado(idConversacion, conv);
+	}
+	return res;
+}
+
 async function humanizarSalidaWizard(wizard, conv, config) {
-	if (!wizard?.texto) return wizard;
-	const texto = await botHumanizer.humanizar({
+	if (!wizard?.texto && !wizard?.pauta && !wizard?.ticketEstatico && !wizard?.aviso && !wizard?.avisoPauta) {
+		return wizard;
+	}
+
+	if (wizard.ticketEstatico) {
+		const { tipo, pauta, datos, intencion, marcarSaludo } = _prepararGeneracionWizard(
+			{
+				...wizard,
+				tipoRespuesta: 'CONFIRMACION_TURNO_OK',
+				pauta:
+					wizard.pauta ||
+					'Confirmar que el turno quedó reservado (mensaje breve antes del comprobante).',
+			},
+			conv,
+		);
+		const intro = await botHumanizer.generarMensaje({
+			conv,
+			config,
+			tipoRespuesta: tipo,
+			pauta,
+			interpretacion: wizard.interpretacion,
+			datosOperativos: datos,
+			soloIntro: true,
+			intencion,
+		});
+		return { ...wizard, texto: `${intro}\n\n${wizard.ticketEstatico}`, marcarSaludo };
+	}
+
+	const avisoPayload = wizard.aviso || wizard.avisoPauta;
+	if (avisoPayload && !wizard.texto && wizard.accion === 'BUSCAR_TURNO') {
+		const gen = _prepararGeneracionWizard(
+			{
+				tipoRespuesta: 'AVISO_BUSQUEDA',
+				pauta: wizard.avisoPauta || botHumanizer.pautaPorTipo('AVISO_BUSQUEDA'),
+				interpretacion: wizard.interpretacion,
+			},
+			conv,
+		);
+		const texto = await botHumanizer.generarMensaje({
+			conv,
+			config,
+			...gen,
+			interpretacion: wizard.interpretacion,
+		});
+		return { ...wizard, texto, marcarSaludo: gen.marcarSaludo };
+	}
+
+	const { tipo, pauta, datos, intencion, marcarSaludo } = _prepararGeneracionWizard(wizard, conv);
+	const texto = await botHumanizer.generarMensaje({
 		conv,
 		config,
-		tipoRespuesta: wizard.tipoRespuesta || 'GENERICO',
-		textoBase: wizard.texto,
+		tipoRespuesta: tipo,
+		pauta,
 		interpretacion: wizard.interpretacion,
-		datosOperativos: wizard.datosOperativos,
+		datosOperativos: datos,
+		intencion,
 	});
-	return { ...wizard, texto };
+	return { ...wizard, texto, marcarSaludo };
 }
 
 /**
@@ -205,7 +316,7 @@ async function responderMensajeEntrante({
 	}
 
 	const conv = await botConversacion.obtenerConversacion(idConversacion);
-	const historial = await botConversacion.listarMensajes(idConversacion, { limit: 24 });
+	const historial = await botSesionIa.listarMensajesParaIa(idConversacion, { limit: 24 });
 	const ultimo = historial[historial.length - 1];
 	if (!ultimo || ultimo.origen !== 'PACIENTE') {
 		return { respondido: false, motivo: 'sin mensaje nuevo del paciente' };
@@ -252,14 +363,36 @@ async function responderMensajeEntrante({
 		const configBot = await botConfigService.getBotConfig();
 		const convHum = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
 
-		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.aviso && wizard.buscarTurno) {
-			await enviarTextoBot({ ...enviarOpts, texto: wizard.aviso, omitirMarcarRespondido: true });
+		if (wizard.handled && wizard.accion === 'BUSCAR_TURNO' && wizard.buscarTurno) {
+			if (wizard.aviso || wizard.avisoPauta) {
+				const avisoHum = await humanizarSalidaWizard(
+					{
+						accion: 'BUSCAR_TURNO',
+						aviso: wizard.aviso,
+						avisoPauta: wizard.avisoPauta,
+						tipoRespuesta: 'AVISO_BUSQUEDA',
+						interpretacion: wizard.interpretacion,
+					},
+					convHum,
+					configBot,
+				);
+				await _enviarBotYMarcaSaludo({
+					enviarOpts,
+					texto: avisoHum.texto,
+					idConversacion,
+					conv: convHum,
+					marcarSaludo: avisoHum.marcarSaludo,
+					omitirMarcarRespondido: true,
+				});
+			}
 			let textoResultado =
 				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
+			let pautaResultado = botHumanizer.pautaPorTipo('SIN_DISPONIBILIDAD');
 			let tipoRespuesta = 'SIN_DISPONIBILIDAD';
 			let datosOperativos = wizard.datosOperativos;
 			try {
 				const resultado = await botWizard.ejecutarBusquedaTurno(wizard.buscarTurno);
+				if (resultado?.pauta) pautaResultado = resultado.pauta;
 				if (resultado?.texto) textoResultado = resultado.texto;
 				if (resultado?.tipoRespuesta) tipoRespuesta = resultado.tipoRespuesta;
 				if (resultado?.datosOperativos) datosOperativos = resultado.datosOperativos;
@@ -271,6 +404,7 @@ async function responderMensajeEntrante({
 			}
 			const humanizado = await humanizarSalidaWizard(
 				{
+					pauta: pautaResultado,
 					texto: textoResultado,
 					tipoRespuesta,
 					datosOperativos,
@@ -279,11 +413,34 @@ async function responderMensajeEntrante({
 				convHum,
 				configBot,
 			);
-			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto, seguimiento: true });
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convHum,
+				marcarSaludo: humanizado.marcarSaludo,
+				seguimiento: true,
+			});
 		}
 		if (wizard.handled && wizard.texto) {
 			const humanizado = await humanizarSalidaWizard(wizard, convHum, configBot);
-			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto });
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convHum,
+				marcarSaludo: humanizado.marcarSaludo,
+			});
+		}
+		if (wizard.handled && wizard.pauta) {
+			const humanizado = await humanizarSalidaWizard(wizard, convHum, configBot);
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convHum,
+				marcarSaludo: humanizado.marcarSaludo,
+			});
 		}
 	} catch (wizardErr) {
 		diag.warn('webhook', 'Wizard error', {
@@ -292,14 +449,45 @@ async function responderMensajeEntrante({
 			fuente: wizardErr.fuente,
 		});
 		if (dniDetectado || conv?.pasoBot === 'CONFIRMAR_IDENTIDAD') {
-			const texto = botAgenda.mensajeErrorIdentificacion(wizardErr);
-			return enviarTextoBot({ ...enviarOpts, texto });
+			const configErr = await botConfigService.getBotConfig();
+			const convErr = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+			const humanizado = await humanizarSalidaWizard(
+				{
+					pauta: botAgenda.mensajeErrorIdentificacion(wizardErr),
+					tipoRespuesta: 'ERROR_IDENTIFICACION',
+					datosOperativos: {
+						errorCode: wizardErr.code,
+						fuente: wizardErr.fuente,
+					},
+				},
+				convErr,
+				configErr,
+			);
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convErr,
+				marcarSaludo: humanizado.marcarSaludo,
+			});
 		}
 		if (conv?.pasoBot === 'CONFIRMAR' && conv?.contextoBot?.tipo === 'turno_sugerido') {
-			return enviarTextoBot({
-				...enviarOpts,
-				texto:
-					'No pude buscar otro turno ahora. Decime de nuevo qué día y horario te conviene (por ejemplo: jueves a la tarde).',
+			const configErr = await botConfigService.getBotConfig();
+			const convErr = (await botConversacion.obtenerConversacion(idConversacion)) || conv;
+			const humanizado = await humanizarSalidaWizard(
+				{
+					pauta: botHumanizer.pautaPorTipo('ERROR_RESERVA'),
+					tipoRespuesta: 'ERROR_RESERVA',
+				},
+				convErr,
+				configErr,
+			);
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convErr,
+				marcarSaludo: humanizado.marcarSaludo,
 			});
 		}
 	}
@@ -323,14 +511,34 @@ async function responderMensajeEntrante({
 			historial,
 		});
 		if (orch.handled && orch.accion === 'BUSCAR_TURNO' && orch.buscarTurno) {
-			await enviarTextoBot({ ...enviarOpts, texto: orch.aviso, omitirMarcarRespondido: true });
-			let textoResultado =
-				'No pude completar la búsqueda a tiempo. Intentá de nuevo o indicá un día u horario más específico.';
+			if (orch.aviso || orch.avisoPauta) {
+				const avisoHum = await humanizarSalidaWizard(
+					{
+						accion: 'BUSCAR_TURNO',
+						aviso: orch.aviso,
+						avisoPauta: orch.avisoPauta,
+						tipoRespuesta: 'AVISO_BUSQUEDA',
+					},
+					convAct,
+					config,
+				);
+				await _enviarBotYMarcaSaludo({
+					enviarOpts,
+					texto: avisoHum.texto,
+					idConversacion,
+					conv: convAct,
+					marcarSaludo: avisoHum.marcarSaludo,
+					omitirMarcarRespondido: true,
+				});
+			}
+			let pautaResultado = botHumanizer.pautaPorTipo('SIN_DISPONIBILIDAD');
 			let tipoRespuesta = 'SIN_DISPONIBILIDAD';
+			let datosOperativos = null;
 			try {
 				const resultado = await botWizard.ejecutarBusquedaTurno(orch.buscarTurno);
-				if (resultado?.texto) textoResultado = resultado.texto;
+				if (resultado?.pauta) pautaResultado = resultado.pauta;
 				if (resultado?.tipoRespuesta) tipoRespuesta = resultado.tipoRespuesta;
+				if (resultado?.datosOperativos) datosOperativos = resultado.datosOperativos;
 			} catch (buscarErr) {
 				diag.warn('webhook', 'Búsqueda turno (orquestador) falló', {
 					error: buscarErr.message,
@@ -339,14 +547,27 @@ async function responderMensajeEntrante({
 			}
 			const convHum = (await botConversacion.obtenerConversacion(idConversacion)) || convAct;
 			const humanizado = await humanizarSalidaWizard(
-				{ texto: textoResultado, tipoRespuesta },
+				{ pauta: pautaResultado, tipoRespuesta, datosOperativos },
 				convHum,
 				config,
 			);
-			return enviarTextoBot({ ...enviarOpts, texto: humanizado.texto, seguimiento: true });
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: humanizado.texto,
+				idConversacion,
+				conv: convHum,
+				marcarSaludo: humanizado.marcarSaludo,
+				seguimiento: true,
+			});
 		}
 		if (orch.handled && orch.texto) {
-			return enviarTextoBot({ ...enviarOpts, texto: orch.texto });
+			return _enviarBotYMarcaSaludo({
+				enviarOpts,
+				texto: orch.texto,
+				idConversacion,
+				conv: convAct,
+				marcarSaludo: orch.marcarSaludo,
+			});
 		}
 	}
 
@@ -369,18 +590,26 @@ async function responderMensajeEntrante({
 			idConversacion,
 			idPaciente: convAct?.idPaciente || null,
 		});
-		return enviarTextoBot({
-			...enviarOpts,
-			texto: 'Recibimos tu DNI. Si no ves los datos de RENAPER, enviá el número de nuevo.',
+		const humanizado = await humanizarSalidaWizard(
+			{
+				pauta: 'El DNI llegó pero no se pudo completar la identificación; pedir que lo reenvíe.',
+				tipoRespuesta: 'ERROR_IDENTIFICACION',
+			},
+			convAct,
+			config,
+		);
+		return _enviarBotYMarcaSaludo({
+			enviarOpts,
+			texto: humanizado.texto,
+			idConversacion,
+			conv: convAct,
+			marcarSaludo: humanizado.marcarSaludo,
 		});
 	}
 
 	// Identificación: pedir DNI solo si aún no hay paciente ni turno reciente confirmado.
 	if (enPasoIdentificacion) {
 		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
-		const textoBase =
-			pasoId?.mensajeUsuario ||
-			'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
 		const interp = await botInterpretacion.interpretarMensaje({
 			texto: textoEntrada,
 			conv: convAct,
@@ -390,20 +619,46 @@ async function responderMensajeEntrante({
 		if (interp) {
 			await botInterpretacion.registrarSesion(idConversacion, interp, convAct);
 		}
-		const textoHum = await botHumanizer.humanizar({
-			conv: convAct,
+		const humanizado = await humanizarSalidaWizard(
+			{
+				pauta:
+					pasoId?.mensajeUsuario ||
+					botHumanizer.pautaPorTipo(
+						interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
+					),
+				tipoRespuesta: interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
+				interpretacion: interp,
+				datosOperativos: convAct?.nombreContacto
+					? { nombreSaludo: String(convAct.nombreContacto).trim().split(/\s+/)[0] }
+					: null,
+			},
+			convAct,
 			config,
-			tipoRespuesta: interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
-			textoBase,
-			interpretacion: interp,
+		);
+		return _enviarBotYMarcaSaludo({
+			enviarOpts,
+			texto: humanizado.texto,
+			idConversacion,
+			conv: convAct,
+			marcarSaludo: humanizado.marcarSaludo,
 		});
-		return enviarTextoBot({ ...enviarOpts, texto: textoHum });
 	}
 
 	if (postTurno && botWizard.esCierreCordial(textoEntrada)) {
-		return enviarTextoBot({
-			...enviarOpts,
-			texto: botWizard.resolverMensajePostTurno(flujo, config, convAct),
+		const humanizado = await humanizarSalidaWizard(
+			{
+				pauta: botHumanizer.pautaPorTipo('POST_TURNO'),
+				tipoRespuesta: 'POST_TURNO',
+			},
+			convAct,
+			config,
+		);
+		return _enviarBotYMarcaSaludo({
+			enviarOpts,
+			texto: humanizado.texto,
+			idConversacion,
+			conv: convAct,
+			marcarSaludo: humanizado.marcarSaludo,
 		});
 	}
 
@@ -413,11 +668,21 @@ async function responderMensajeEntrante({
 		(pasoActual === 'ELEGIR_PROFESIONAL' || pasoActual === 'ELEGIR_FECHA_HORA')
 	) {
 		const pasoEsp = (flujo || []).find((p) => p.id === 'ELEGIR_ESPECIALIDAD');
-		return enviarTextoBot({
-			...enviarOpts,
-			texto:
-				pasoEsp?.mensajeUsuario ||
-				'¿Qué especialidad necesitás? Te propongo el turno libre más cercano.',
+		const humanizado = await humanizarSalidaWizard(
+			{
+				pauta:
+					pasoEsp?.mensajeUsuario || botHumanizer.pautaPorTipo('PEDIR_ESPECIALIDAD'),
+				tipoRespuesta: 'PEDIR_ESPECIALIDAD',
+			},
+			convAct,
+			config,
+		);
+		return _enviarBotYMarcaSaludo({
+			enviarOpts,
+			texto: humanizado.texto,
+			idConversacion,
+			conv: convAct,
+			marcarSaludo: humanizado.marcarSaludo,
 		});
 	}
 

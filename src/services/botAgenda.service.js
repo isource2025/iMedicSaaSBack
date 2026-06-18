@@ -8,6 +8,7 @@ const botConfigService = require('./botConfig.service');
 const botLogService = require('./botLog.service');
 const botOpenai = require('./botOpenai.service');
 const diag = require('../utils/diagLog');
+const { validarDniNumero } = require('../utils/botDni');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion, convertirFechaClarionADate } = require('../utils/dateUtils');
@@ -26,14 +27,7 @@ function _validarSexo(sexo) {
 }
 
 function _validarDni(dni) {
-	const n = Number(String(dni).trim());
-	if (!Number.isFinite(n) || n <= 0) {
-		const e = new Error('Número de documento inválido');
-		e.statusCode = 400;
-		e.code = 'DNI_INVALIDO';
-		throw e;
-	}
-	return n;
+	return validarDniNumero(dni);
 }
 
 function _sexoRenaperToLocal(sexoRenaper) {
@@ -178,7 +172,7 @@ function mensajeErrorIdentificacion(err, errLocal = null) {
 		return 'No pudimos consultar RENAPER en este momento. Intentá de nuevo en unos segundos.';
 	}
 	if (err?.code === 'DNI_INVALIDO') {
-		return 'El DNI indicado no es válido. Enviá solo números, sin puntos ni espacios.';
+		return 'El DNI indicado no es válido. Verificá el número e intentá de nuevo.';
 	}
 	if (local && renaper) {
 		return 'No pudimos validar el DNI ni en la ficha local ni en RENAPER. Intentá de nuevo en unos segundos.';
