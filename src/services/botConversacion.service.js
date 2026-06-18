@@ -1,7 +1,6 @@
 const { executeQuery } = require('../models/db');
 const botChatStorage = require('./botChatStorage.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
-const botSesionIa = require('./botSesionIa.service');
 
 /** @typedef {'BOT'|'HUMANO'|'PAUSADO'} ModoControl */
 /** @typedef {'IN'|'OUT'} Direccion */
@@ -914,6 +913,7 @@ async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR')
 
 /** Tras confirmar un turno: conserva paciente/DNI y pasa a estado post-turno. */
 async function finalizarTrasReservaExitosa(idConversacion) {
+	const botSesionIa = require('./botSesionIa.service');
 	await checkConversationTables();
 	await botSesionIa.resetearSesionIa(idConversacion);
 	const convTrasReset = await obtenerConversacion(idConversacion);

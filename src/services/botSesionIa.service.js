@@ -2,7 +2,9 @@
  * Sesión de contexto para IA: historial acotado a la gestión en curso y saludo diario (AR).
  * El historial completo permanece en BD; solo se filtra lo enviado a los modelos.
  */
-const botConversacion = require('./botConversacion.service');
+function _botConversacion() {
+	return require('./botConversacion.service');
+}
 
 const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires';
 
@@ -66,6 +68,7 @@ function contextoSaludo(conv) {
 }
 
 async function marcarSaludoEnviado(idConversacion, conv) {
+	const botConversacion = _botConversacion();
 	const hoy = fechaArgentinaHoy();
 	const convAct = conv || (await botConversacion.obtenerConversacion(idConversacion));
 	const ctx = { ...(convAct?.contextoBot || {}), saludoDia: hoy };
@@ -77,6 +80,7 @@ async function marcarSaludoEnviado(idConversacion, conv) {
  * Los mensajes siguen en BD; el próximo mensaje arranca contexto limpio.
  */
 async function resetearSesionIa(idConversacion) {
+	const botConversacion = _botConversacion();
 	const msgs = await botConversacion.listarMensajes(idConversacion, { limit: 200 });
 	const lastId = msgs.length ? Number(msgs[msgs.length - 1].idMensaje) : 0;
 	const conv = await botConversacion.obtenerConversacion(idConversacion);
@@ -92,6 +96,7 @@ async function resetearSesionIa(idConversacion) {
  * Mensajes visibles para modelos (solo gestión en curso).
  */
 async function listarMensajesParaIa(idConversacion, { limit = 24 } = {}) {
+	const botConversacion = _botConversacion();
 	const lim = Math.min(50, Math.max(1, Number(limit) || 24));
 	const conv = await botConversacion.obtenerConversacion(idConversacion);
 	const desdeId = obtenerMarcadorHistorialIa(conv);
