@@ -7,16 +7,14 @@ const botOpenai = require('./botOpenai.service');
 const botWizard = require('./botWizard.service');
 const botAgenda = require('./botAgenda.service');
 const botHumanizer = require('./botHumanizer.service');
+const botInterpretacion = require('./botInterpretacion.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
 const diag = require('../utils/diagLog');
 
 function gptHabilitado() {
-	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
-		return false;
-	}
-	return botOpenai.isConfigured();
+	return botInterpretacion.gptHabilitado();
 }
 
 function mensajesParaOpenAi(mensajes) {
@@ -342,12 +340,26 @@ async function responderMensajeEntrante({
 	// Identificación: pedir DNI solo si aún no hay paciente ni turno reciente confirmado.
 	if (enPasoIdentificacion) {
 		const pasoId = (flujo || []).find((p) => p.id === 'IDENTIFICAR');
-		return enviarTextoBot({
-			...enviarOpts,
-			texto:
-				pasoId?.mensajeUsuario ||
-				'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).',
+		const textoBase =
+			pasoId?.mensajeUsuario ||
+			'Para comenzar, indicá el DNI de la persona que va a atenderse (sin puntos).';
+		const interp = await botInterpretacion.interpretarMensaje({
+			texto: textoEntrada,
+			conv: convAct,
+			idConversacion,
+			pasoBot: pasoActual,
 		});
+		if (interp) {
+			await botInterpretacion.registrarSesion(idConversacion, interp, convAct);
+		}
+		const textoHum = await botHumanizer.humanizar({
+			conv: convAct,
+			config,
+			tipoRespuesta: interp?.flags?.es_saludo ? 'INICIO_FLUJO' : 'PEDIR_DNI',
+			textoBase,
+			interpretacion: interp,
+		});
+		return enviarTextoBot({ ...enviarOpts, texto: textoHum });
 	}
 
 	if (postTurno && botWizard.esCierreCordial(textoEntrada)) {

@@ -249,7 +249,7 @@ async function sendHolaFlow() {
 async function checkGptLocal() {
 	console.log('\n── 8. GPT / OpenAI (config local .env) ──');
 	const botOpenai = require('../src/services/botOpenai.service');
-	line(process.env.BOT_GPT_ENABLED !== '0', 'BOT_GPT_ENABLED', process.env.BOT_GPT_ENABLED || '(default on)');
+	line(botOpenai.isConfigured(), 'OpenAI (GPT + humanizer)', botOpenai.isConfigured() ? 'activo' : 'falta OPENAI_API_KEY');
 	line(botOpenai.isConfigured(), 'OpenAI API key', botOpenai.isConfigured() ? 'set' : 'MISSING');
 	const groq = Boolean(process.env.GROQ_API_KEY?.trim());
 	line(groq, 'GROQ_API_KEY (audio)', groq ? 'set' : 'MISSING');

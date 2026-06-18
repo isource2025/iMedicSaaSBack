@@ -18,16 +18,10 @@ const FLAGS_DEFAULT = Object.freeze({
 });
 
 function gptHabilitado() {
-	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
-		return false;
-	}
 	return botOpenai.isConfigured();
 }
 
 function humanizarHabilitado() {
-	if (process.env.BOT_HUMANIZE_ENABLED === '0' || process.env.BOT_HUMANIZE_ENABLED === 'false') {
-		return false;
-	}
 	return gptHabilitado();
 }
 
@@ -292,6 +286,19 @@ function _interpretacionPorReglas(texto, conv, paso) {
 			paso,
 			fuente: 'reglas',
 		};
+	}
+
+	if (paso === 'ELEGIR_PROFESIONAL') {
+		if (conf === false || _interpretarRechazoTurno(t)) {
+			return {
+				intencion: 'cambiar_especialidad',
+				parametros,
+				flags: { ...flags, confianza: 0.85 },
+				mensaje_sugerido: null,
+				paso,
+				fuente: 'reglas',
+			};
+		}
 	}
 
 	if (_extraerDni(t)) {

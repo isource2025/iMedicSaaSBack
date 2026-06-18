@@ -56,7 +56,7 @@ function envSummary() {
 		WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN?.trim() ? 'set' : 'MISSING',
 		BOT_EMPRESA_ID: process.env.BOT_EMPRESA_ID || '1',
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY?.trim() ? 'set' : 'MISSING',
-		BOT_GPT_ENABLED: process.env.BOT_GPT_ENABLED ?? '(default on if OpenAI set)',
+		OPENAI_API_KEY: process.env.OPENAI_API_KEY ? '(set)' : '(missing)',
 		BOT_API_KEY: process.env.BOT_API_KEY?.trim() ? 'set' : 'MISSING',
 		GROQ_API_KEY: process.env.GROQ_API_KEY?.trim() ? 'set' : 'MISSING (audios no se transcriben)',
 		RAILWAY_PUBLIC_DOMAIN: process.env.RAILWAY_PUBLIC_DOMAIN || '(unset)',

@@ -1279,20 +1279,40 @@ async function resolverProfesionalDesdeTexto(texto, especialidadValor) {
 	return match || null;
 }
 
+function _esTextoAmbiguoParaEspecialidad(texto) {
+	const t = _normalizarTextoBusqueda(texto);
+	if (!t) return true;
+	if (t.length <= 3) return true;
+	if (/^(no|si|s|n|ok|dale|hola|buenas?|buen dia|buenos dias|buenas tardes|buenas noches)$/.test(t)) {
+		return true;
+	}
+	if (/^(no|si|sí)\b/.test(t) && t.length <= 24) return true;
+	if (
+		/\b(no puedo|no me sirve|otro dia|otra fecha|prefiero otro|el lunes|el martes|el miercoles|el jueves|el viernes)\b/.test(
+			t,
+		)
+	) {
+		return true;
+	}
+	return false;
+}
+
 async function resolverEspecialidadDesdeTexto(texto) {
 	const lista = await listarEspecialidadesBot();
 	const t = _normalizarTextoBusqueda(texto);
-	if (!t) return null;
+	if (!t || _esTextoAmbiguoParaEspecialidad(texto)) return null;
 
 	let match = lista.find((e) => _normalizarTextoBusqueda(e.nombre) === t);
 	if (match) return match;
 
-	match = lista.find(
-		(e) =>
-			_normalizarTextoBusqueda(e.nombre).includes(t) ||
-			t.includes(_normalizarTextoBusqueda(e.nombre)),
-	);
-	if (match) return match;
+	if (t.length >= 4) {
+		match = lista.find(
+			(e) =>
+				_normalizarTextoBusqueda(e.nombre).includes(t) ||
+				t.includes(_normalizarTextoBusqueda(e.nombre)),
+		);
+		if (match) return match;
+	}
 
 	match = _mejorMatchPorTokens(texto, lista);
 	if (match) return match;
@@ -1318,9 +1338,6 @@ function _parsearJsonGpt(raw) {
 
 async function resolverEspecialidadConGpt(texto) {
 	if (!botOpenai.isConfigured()) return null;
-	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
-		return null;
-	}
 
 	const lista = await listarEspecialidadesBot();
 	const nombres = lista.map((e) => `- ${e.nombre}`).join('\n');
@@ -1613,9 +1630,6 @@ function construirExclusionesRechazo(texto, sugerenciaActual = null) {
 
 async function interpretarAjusteTurnoConGpt(texto, sugerenciaActual = null) {
 	if (!botOpenai.isConfigured()) return null;
-	if (process.env.BOT_GPT_ENABLED === '0' || process.env.BOT_GPT_ENABLED === 'false') {
-		return null;
-	}
 
 	const ctxTurno = sugerenciaActual
 		? `Turno sugerido actual: ${sugerenciaActual.diaSemana || ''} ${sugerenciaActual.fecha || ''} ${sugerenciaActual.hora || ''} con ${sugerenciaActual.medico || ''}.`

@@ -585,6 +585,18 @@ async function procesarIntencionGptEntrada({
 		if (resEsp?.tipo === 'especialidad') {
 			const espPend = { valor: resEsp.especialidad.valor, nombre: resEsp.especialidad.nombre };
 			await botConversacion.guardarContextoBot(idConversacion, { especialidadPendiente: espPend });
+			const configEsp = await botConfigService.getBotConfig();
+			if (configEsp.reglas.sugerirPrimerTurnoDisponible && conv.idPaciente) {
+				return withInterpretacion(
+					armarRespuestaBuscarTurnoInicial({
+						idConversacion,
+						telefonoWhatsApp,
+						flujo,
+						esp: espPend,
+					}),
+					intent,
+				);
+			}
 			if (pasoPorId(flujo, 'ELEGIR_PROFESIONAL')?.activo !== false) {
 				return {
 					handled: true,
@@ -1335,7 +1347,7 @@ async function intentarRespuestaWizard({
 	telefonoWhatsApp,
 	contenido,
 }) {
-	const conv = await botConversacion.obtenerConversacion(idConversacion);
+	let conv = await botConversacion.obtenerConversacion(idConversacion);
 	if (!conv) return { handled: false, motivo: 'sin conversación' };
 
 	const flujo = await botConfigService.getFlujoPasos();
@@ -1480,8 +1492,56 @@ async function intentarRespuestaWizard({
 		};
 	}
 
-	// Especialidad mencionada sin pedir turno (ej. "En traumato") → listado real desde agenda
-	if (!dniEnMensaje && texto && !textoPideTurnoExplicito(texto) && !esSeleccionNumerada(texto)) {
+	// Rechazo o preferencia de horario en lista de profesionales (evita confundir "No" con especialidad)
+	if (
+		pasoActual === 'ELEGIR_PROFESIONAL' &&
+		conv.idPaciente &&
+		texto &&
+		!dniEnMensaje &&
+		!esSeleccionNumerada(texto)
+	) {
+		const confBin = interpretarConfirmacion(texto);
+		const rechazo =
+			confBin === false ||
+			/\b(no puedo|no me sirve|otro dia|otra fecha|prefiero otro|el lunes|el martes|el miercoles|el jueves|el viernes)\b/i.test(
+				texto,
+			);
+		if (rechazo) {
+			const espPend = conv.contextoBot?.especialidadPendiente;
+			if (config.reglas.sugerirPrimerTurnoDisponible && espPend?.valor) {
+				return withInterpretacion(
+					{
+						handled: true,
+						tipoRespuesta: 'ACLARACION',
+						texto: `Entiendo. ¿Querés que busque otro turno en *${espPend.nombre}* con otro horario, o preferís otra especialidad? También podés escribir *cancelar*.`,
+					},
+					interpretacion,
+				);
+			}
+			return withInterpretacion(
+				{
+					handled: true,
+					tipoRespuesta: 'ACLARACION',
+					texto:
+						'¿Querés elegir otro profesional de la lista o cambiar de especialidad? Escribí el número, el nombre del médico u otra especialidad.',
+				},
+				interpretacion,
+			);
+		}
+	}
+
+	// Especialidad mencionada sin pedir turno → listado de profesionales (solo si NO sugerimos turno automático)
+	const saltarListaPorSugerirTurno =
+		config.reglas.sugerirPrimerTurnoDisponible &&
+		conv.idPaciente &&
+		(pasoActual === 'ELEGIR_ESPECIALIDAD' || pasoActual === 'ELEGIR_PROFESIONAL');
+	if (
+		!saltarListaPorSugerirTurno &&
+		!dniEnMensaje &&
+		texto &&
+		!textoPideTurnoExplicito(texto) &&
+		!esSeleccionNumerada(texto)
+	) {
 		const pasoListaProf =
 			!conv.idPaciente ||
 			pasoActual === 'ELEGIR_PROFESIONAL' ||
