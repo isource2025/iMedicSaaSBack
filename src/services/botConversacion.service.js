@@ -929,56 +929,33 @@ async function reiniciarFlujoNuevoTurno(idConversacion, pasoBot = 'IDENTIFICAR')
 	return obtenerConversacion(idConversacion);
 }
 
-/** Tras confirmar un turno: conserva paciente/DNI y pasa a estado post-turno. */
+/**
+ * Tras confirmar un turno (ticket entregado): reinicia la gestión por completo.
+ * Resetea la sesión IA (ventana de historial), limpia el estado del agente y
+ * BORRA la identidad (idPaciente/DNI), porque el próximo turno puede ser para
+ * otra persona. El siguiente mensaje arranca una gestión nueva (re-identifica),
+ * manejada por el agente IA.
+ */
 async function finalizarTrasReservaExitosa(idConversacion) {
 	const botSesionIa = require('./botSesionIa.service');
-	const botGestionTurno = require('./botGestionTurno.service');
+	const botAgente = require('./botAgente.service');
 	await checkConversationTables();
-	const convPre = await obtenerConversacion(idConversacion);
-	const gestion = botGestionTurno.obtenerGestionActiva(convPre);
-	if (gestion) {
-		botGestionTurno.cerrarGestion(gestion, 'completada');
-		botGestionTurno.dbg('reserva exitosa — gestión completada', { id: gestion.id });
-	}
 	await botSesionIa.resetearSesionIa(idConversacion);
 	const convTrasReset = await obtenerConversacion(idConversacion);
 	const meta = botSesionIa.extraerMetaPersistente(convTrasReset?.contextoBot);
-	if (useMemory) {
-		const conv = memConversaciones.get(idConversacion);
-		if (conv) {
-			conv.contextoBot = Object.keys(meta).length ? meta : null;
-			conv.pasoBot = 'TURNO_COMPLETADO';
-			memConversaciones.set(idConversacion, conv);
-		}
-		return obtenerConversacion(idConversacion);
-	}
-	if (useBotChat) {
-		await botChatStorage.guardarContextoBot(
-			idConversacion,
-			Object.keys(meta).length ? meta : null,
-		);
-		await botChatStorage.actualizarSesion(
-			idConversacion,
-			['PasoBot = @p1'],
-			[
-				{ value: idConversacion, type: 'VarChar' },
-				{ value: 'TURNO_COMPLETADO', type: 'VarChar' },
-			],
-		);
-		return obtenerConversacion(idConversacion);
-	}
-	const hasCol = await ensureContextoBotColumn();
-	const ctxSql = hasCol
-		? `, ContextoBotJson = ${Object.keys(meta).length ? '@p1' : 'NULL'}`
-		: '';
-	const params = [{ value: idConversacion, type: 'VarChar' }];
-	if (hasCol && Object.keys(meta).length) {
-		params.push({ value: JSON.stringify(meta).slice(0, 8000), type: 'NVarChar' });
-	}
-	await executeQuery(
-		`UPDATE dbo.imBotConversacion SET PasoBot = 'TURNO_COMPLETADO'${ctxSql} WHERE IdConversacion = @p0`,
-		params,
+	await guardarContextoBot(
+		idConversacion,
+		{
+			...(Object.keys(meta).length ? meta : {}),
+			agente: botAgente.estadoInicial(),
+		},
+		{ reemplazar: true },
 	);
+	await actualizarContextoPaciente(idConversacion, {
+		idPaciente: null,
+		dniPaciente: null,
+		pasoBot: 'inicio',
+	});
 	return obtenerConversacion(idConversacion);
 }
 
