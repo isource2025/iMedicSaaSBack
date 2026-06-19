@@ -14,6 +14,24 @@ async function listarPorVisita(req, res) {
 	}
 }
 
+async function obtenerPorId(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const origen = req.query.origen === 'WEB' ? 'WEB' : 'LEGACY';
+		if (!Number.isFinite(id) || id <= 0) {
+			return res.status(400).json({ success: false, mensaje: 'id inválido' });
+		}
+		const data = await interconsultasService.obtenerPorId(id, origen);
+		if (!data) {
+			return res.status(404).json({ success: false, mensaje: 'Interconsulta no encontrada' });
+		}
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[interconsultas] obtener:', err.message);
+		return res.status(500).json({ success: false, mensaje: err.message });
+	}
+}
+
 async function crear(req, res) {
 	try {
 		const body = req.body || {};
@@ -31,4 +49,4 @@ async function crear(req, res) {
 	}
 }
 
-module.exports = { listarPorVisita, crear };
+module.exports = { listarPorVisita, obtenerPorId, crear };
