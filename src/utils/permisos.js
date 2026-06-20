@@ -92,7 +92,7 @@ const MODULOS = Object.freeze([
 			{ id: 'DIETA',                label: 'Dietas',                   acciones: [...CRUD] },
 			{ id: 'BALANCE_HIDRICO',      label: 'Balance hídrico',          acciones: [...CRUD] },
 			{ id: 'INSUMOS',              label: 'Insumos',                  acciones: [...CRUD] },
-			{ id: 'ESTUDIOS',             label: 'Estudios / laboratorios',  acciones: [...CRUD] },
+			{ id: 'ESTUDIOS',             label: 'Pedidos de estudios (complementarios)',  acciones: [...CRUD] },
 			{ id: 'PROTOCOLOS',           label: 'Protocolos',               acciones: [...CRUD] },
 			{ id: 'PROCEDIMIENTOS',       label: 'Procedimientos',           acciones: [...CRUD] },
 			{ id: 'MOVIMIENTOS',          label: 'Movimientos / traslados',  acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
