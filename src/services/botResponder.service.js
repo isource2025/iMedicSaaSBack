@@ -1,16 +1,14 @@
 /**
  * Respuesta automática del bot: agente IA conversacional + envío WhatsApp Meta.
- *
- * Este módulo solo se encarga de la "tubería": deduplicación, obtención del
- * último mensaje, invocación del agente IA (botAgente) y envío por Meta.
- * Toda la inteligencia conversacional vive en botAgente.service.js.
  */
 const botConversacion = require('./botConversacion.service');
 const botAgente = require('./botAgente.service');
 const botSesionIa = require('./botSesionIa.service');
+const botMensajeCola = require('./botMensajeCola.service');
 const audioTranscripcion = require('./audioTranscripcion.service');
 const whatsappEmpresa = require('./whatsappEmpresa.service');
 const whatsappMeta = require('./whatsappMeta.service');
+const agenteTrace = require('../utils/botAgenteTrace');
 const diag = require('../utils/diagLog');
 
 function gptHabilitado() {
@@ -83,16 +81,27 @@ async function enviarTextoBot({
 	return { respondido: true, texto, metaMessageId: meta.messageId };
 }
 
+async function marcarMensajesRespondidos(idConversacion, msgIds) {
+	for (const id of msgIds || []) {
+		if (id) await botConversacion.marcarEntranteRespondido(idConversacion, id);
+	}
+}
+
 /**
- * @returns {Promise<{ respondido: boolean, texto?: string, metaMessageId?: string, motivo?: string }>}
+ * Procesa uno o más mensajes (posible merge por cola) y responde una sola vez.
  */
-async function responderMensajeEntrante({
+async function procesarMensajeEntrante({
 	idEmpresa,
 	telefonoWhatsApp,
 	idConversacion,
 	contenidoUltimo = null,
+	textoEntrada = null,
 	idMensajePaciente = null,
 	metaMessageIdEntrante = null,
+	_merged = false,
+	_mergeCount = 1,
+	_textos = null,
+	_msgIds = null,
 }) {
 	const estado = await botConversacion.puedeResponderBot(idConversacion);
 	if (!estado.puedeResponderBot) {
@@ -107,6 +116,7 @@ async function responderMensajeEntrante({
 	}
 
 	const msgId = idMensajePaciente || ultimo.idMensaje;
+	const msgIds = _msgIds?.length ? _msgIds : [msgId];
 
 	if (
 		metaMessageIdEntrante &&
@@ -122,7 +132,13 @@ async function responderMensajeEntrante({
 		return { respondido: false, motivo: 'GPT deshabilitado o sin OPENAI_API_KEY' };
 	}
 
-	const textoEntrada = audioTranscripcion.quitarMarcadorAudio(contenidoUltimo || ultimo.contenido);
+	const texto =
+		textoEntrada ||
+		audioTranscripcion.quitarMarcadorAudio(contenidoUltimo || ultimo.contenido);
+
+	if (_merged && _mergeCount > 1) {
+		agenteTrace.logNota(`Cola: ${_mergeCount} mensajes fusionados`, { textos: _textos });
+	}
 
 	const enviarOpts = {
 		idEmpresa,
@@ -139,7 +155,7 @@ async function responderMensajeEntrante({
 			conv,
 			telefonoWhatsApp,
 			historial,
-			textoEntrada,
+			textoEntrada: texto,
 		});
 	} catch (err) {
 		diag.warn('webhook', 'Agente IA error', { error: err.message, idConversacion });
@@ -150,19 +166,16 @@ async function responderMensajeEntrante({
 		return { respondido: false, motivo: agente?.motivo || 'sin_respuesta_agente' };
 	}
 
-	// Mensaje principal del bot.
 	const res = await enviarTextoBot({
 		...enviarOpts,
 		texto: agente.texto,
-		// Si hay comprobante, no marcamos respondido aún (va un segundo mensaje).
-		omitirMarcarRespondido: Boolean(agente.ticket),
+		omitirMarcarRespondido: Boolean(agente.ticket) || msgIds.length > 1,
 	});
 
 	if (res.respondido && agente.marcarSaludo) {
 		await botSesionIa.marcarSaludoEnviado(idConversacion, conv);
 	}
 
-	// Segundo mensaje: comprobante del turno (si se reservó).
 	if (res.respondido && agente.ticket) {
 		await enviarTextoBot({
 			...enviarOpts,
@@ -171,7 +184,10 @@ async function responderMensajeEntrante({
 		});
 	}
 
-	// Tras reservar, reiniciar la gestión (el próximo turno puede ser para otra persona).
+	if (res.respondido && msgIds.length > 1) {
+		await marcarMensajesRespondidos(idConversacion, msgIds);
+	}
+
 	if (res.respondido && agente.finalizar) {
 		try {
 			await botConversacion.finalizarTrasReservaExitosa(idConversacion);
@@ -180,10 +196,30 @@ async function responderMensajeEntrante({
 		}
 	}
 
-	return res;
+	return { ...res, merged: _merged, mergeCount: _mergeCount };
+}
+
+async function responderMensajeEntrante(opts) {
+	const item = {
+		...opts,
+		textoEntrada: audioTranscripcion.quitarMarcadorAudio(
+			opts.contenidoUltimo || opts.textoEntrada || '',
+		),
+	};
+
+	return botMensajeCola.encolar(opts.idConversacion, item, async (merged) => {
+		const msgIds = (merged._textos || []).map((_, i) => merged._msgIds?.[i]).filter(Boolean);
+		if (!msgIds.length && merged.idMensajePaciente) msgIds.push(merged.idMensajePaciente);
+
+		return procesarMensajeEntrante({
+			...merged,
+			_msgIds: msgIds.length ? msgIds : [merged.idMensajePaciente].filter(Boolean),
+		});
+	});
 }
 
 module.exports = {
 	gptHabilitado,
 	responderMensajeEntrante,
+	procesarMensajeEntrante,
 };

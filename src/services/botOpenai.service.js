@@ -1,6 +1,8 @@
 /**
  * Cliente OpenAI Chat Completions para respuestas del bot WhatsApp.
  */
+const agenteTrace = require('../utils/botAgenteTrace');
+
 function getApiKey() {
 	return String(process.env.OPENAI_API_KEY || '').trim();
 }
@@ -92,6 +94,14 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 		payload.tool_choice = toolChoice;
 	}
 
+	agenteTrace.logOpenAiRequest({
+		capa: 'chatConHerramientas',
+		messages: payload.messages,
+		tools: payload.tools,
+		toolChoice,
+		extra: { model: payload.model, temperature: payload.temperature },
+	});
+
 	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
 		headers: {
@@ -111,12 +121,21 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 
 	const choice = data.choices?.[0] || {};
 	const msg = choice.message || {};
-	return {
+	const out = {
 		content: msg.content ? String(msg.content).trim() : null,
 		toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
 		finishReason: choice.finish_reason || null,
 		rawMessage: msg,
 	};
+
+	agenteTrace.logOpenAiResponse({
+		capa: 'chatConHerramientas',
+		content: out.content,
+		toolCalls: out.toolCalls,
+		finishReason: out.finishReason,
+	});
+
+	return out;
 }
 
 /**

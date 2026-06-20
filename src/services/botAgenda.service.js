@@ -1628,10 +1628,38 @@ function _esTextoAmbiguoParaEspecialidad(texto) {
 	return false;
 }
 
+const SINONIMOS_ESPECIALIDAD = {
+	'medicina general': 'CLINICA MEDICA',
+	'medico general': 'CLINICA MEDICA',
+	'medica general': 'CLINICA MEDICA',
+	'clinica medica': 'CLINICA MEDICA',
+	clinica: 'CLINICA MEDICA',
+	'medico de cabecera': 'CLINICA MEDICA',
+	'atencion general': 'CLINICA MEDICA',
+	cardiologia: 'CARDIOLOGIA',
+	corazon: 'CARDIOLOGIA',
+};
+
+function _resolverSinonimoEspecialidad(texto) {
+	const t = _normalizarTextoBusqueda(texto);
+	if (!t) return null;
+	if (SINONIMOS_ESPECIALIDAD[t]) return SINONIMOS_ESPECIALIDAD[t];
+	for (const [k, v] of Object.entries(SINONIMOS_ESPECIALIDAD)) {
+		if (t.includes(k)) return v;
+	}
+	return null;
+}
+
 async function resolverEspecialidadDesdeTexto(texto) {
 	const lista = await listarEspecialidadesBot();
 	const t = _normalizarTextoBusqueda(texto);
 	if (!t || _esTextoAmbiguoParaEspecialidad(texto)) return null;
+
+	const sinonimo = _resolverSinonimoEspecialidad(texto);
+	if (sinonimo) {
+		const hit = lista.find((e) => _normalizarTextoBusqueda(e.nombre) === _normalizarTextoBusqueda(sinonimo));
+		if (hit) return hit;
+	}
 
 	let match = lista.find((e) => _normalizarTextoBusqueda(e.nombre) === t);
 	if (match) return match;
