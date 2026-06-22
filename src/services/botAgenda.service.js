@@ -1769,19 +1769,6 @@ function _fechaIsoOffset(dias) {
 	return fechaIsoOffsetArgentina(dias);
 }
 
-/** Excluye estudios/salas (ELECTROCADIOGRAMA, ECODOPLER agenda, etc.) de búsqueda de turnos médicos. */
-function _esProfesionalHumano(nombre) {
-	const n = String(nombre || '')
-		.trim()
-		.toUpperCase();
-	if (!n || n.length < 3) return false;
-	if (/^(ELECTRO|EKG|ECG|LABORATORIO|LAB\b|RADIO|TOMO|ECOGRAF|MAPA|HOLTER|RESONANCIA|PLACA)/.test(n)) {
-		return false;
-	}
-	if (/^(CONSULTORIO|SALA|BOX|SECTOR)\b/.test(n)) return false;
-	return true;
-}
-
 function _slotDateTime(fechaIso, hora) {
 	const [y, mo, d] = String(fechaIso).slice(0, 10).split('-').map(Number);
 	const [hh, mm] = String(hora || '00:00').split(':').map(Number);
@@ -2285,7 +2272,6 @@ async function _elegirMejorTurnoValido(candidatos, esp) {
 	if (!candidatos.length) return null;
 	const ordenados = [...candidatos]
 		.filter(Boolean)
-		.filter((c) => _esProfesionalHumano(c.medico))
 		.sort((a, b) => {
 			const diff = a.dt - b.dt;
 			if (diff !== 0) return diff;
@@ -2367,7 +2353,6 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 
 	const maxDias = _maxDiasBusquedaBot(config, preferir);
 	const ordenados = [...profesionales]
-		.filter((p) => _esProfesionalHumano(p.nombre))
 		.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
 		.slice(0, _maxProfesionalesBusqueda(config.reglas));
 	const matriculaFiltro =

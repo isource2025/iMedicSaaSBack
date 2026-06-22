@@ -67,18 +67,6 @@ async function guardarEstado(idConversacion, estado) {
 	await botConversacion.guardarContextoBot(idConversacion, { agente: estado });
 }
 
-function esProfesionalHumano(nombre) {
-	const n = String(nombre || '')
-		.trim()
-		.toUpperCase();
-	if (!n || n.length < 3) return false;
-	if (/^(ELECTRO|EKG|ECG|LABORATORIO|LAB\b|RADIO|TOMO|ECOGRAF|MAPA|HOLTER|RESONANCIA|PLACA)/.test(n)) {
-		return false;
-	}
-	if (/^(CONSULTORIO|SALA|BOX|SECTOR)\b/.test(n)) return false;
-	return true;
-}
-
 function ultimaReservaVigente(estado) {
 	const u = estado.ultimaReserva;
 	if (!u?.reservadoEn) return null;
@@ -152,28 +140,9 @@ async function ejecutarBuscarTurno(args, estado) {
 
 	const intentos = [];
 	const probar = async (opts) => {
-		const excluirBase = opts.excluir || estado.preferencia?._excluir || {};
-		const slotsExcluidos = [...(excluirBase.slots || [])];
-		for (let n = 0; n < 6; n++) {
-			const busqueda = {
-				...opts,
-				excluir: slotsExcluidos.length ? { ...excluirBase, slots: slotsExcluidos } : excluirBase,
-			};
-			let turno = await botAgenda.sugerirPrimerTurnoDisponible(espValor, busqueda);
-			turno = turno ? await botAgenda.validarSugerenciaTurno(turno, espValor) : null;
-			if (!turno) return null;
-			if (!esProfesionalHumano(turno.medico)) {
-				intentos.push({ descartado: turno.medico, motivo: 'no_es_medico_humano' });
-				slotsExcluidos.push({
-					matricula: turno.matricula,
-					fecha: String(turno.fecha).slice(0, 10),
-					hora: String(turno.hora).slice(0, 5),
-				});
-				continue;
-			}
-			return turno;
-		}
-		return null;
+		let turno = await botAgenda.sugerirPrimerTurnoDisponible(espValor, opts);
+		turno = turno ? await botAgenda.validarSugerenciaTurno(turno, espValor) : null;
+		return turno;
 	};
 
 	let turno = await probar(opciones);
@@ -281,7 +250,7 @@ const TOOLS = [
 		function: {
 			name: 'listar_profesionales_de_especialidad',
 			description:
-				'Lista médicos humanos con agenda en una especialidad. Efecto: setea especialidad y candidatosProfesionales.',
+				'Lista profesionales con agenda en una especialidad. Efecto: setea especialidad y candidatosProfesionales.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -475,10 +444,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 				break;
 			}
 			if (analisis.tipo === 'multiples') {
-				estado.candidatosProfesionales = analisis.matches
-					.filter((m) => esProfesionalHumano(m.nombre))
-					.slice(0, 8)
-					.map((m) => ({
+				estado.candidatosProfesionales = analisis.matches.slice(0, 8).map((m) => ({
 						matricula: m.matricula,
 						nombre: m.nombre,
 						especialidadNombre: m.especialidadNombre || null,
@@ -528,10 +494,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 				break;
 			}
 			const { profesionales } = await botAgenda.listarProfesionalesBot(esp.valor);
-			estado.candidatosProfesionales = profesionales
-				.filter((p) => esProfesionalHumano(p.nombre))
-				.slice(0, 12)
-				.map((p) => ({
+			estado.candidatosProfesionales = profesionales.slice(0, 12).map((p) => ({
 					matricula: p.matricula,
 					nombre: p.nombre,
 					especialidadNombre: esp.nombre,
@@ -640,12 +603,6 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 			}
 			if (!estado.turnoOfrecido?.matricula) {
 				resultado = { error: 'No hay turno ofrecido. Usá buscar_turno primero.' };
-				break;
-			}
-			if (!esProfesionalHumano(estado.turnoOfrecido.medico)) {
-				resultado = {
-					error: 'El turno ofrecido no tiene un médico válido. Buscá con listar_profesionales_de_especialidad.',
-				};
 				break;
 			}
 			try {
