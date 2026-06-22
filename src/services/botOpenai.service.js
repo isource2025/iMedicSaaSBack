@@ -3,12 +3,21 @@
  */
 const agenteTrace = require('../utils/botAgenteTrace');
 
+const OPENAI_TIMEOUT_MS = 90000;
+
 function getApiKey() {
 	return String(process.env.OPENAI_API_KEY || '').trim();
 }
 
 function getModel() {
 	return String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
+}
+
+function openAiFetch(url, options) {
+	return fetch(url, {
+		...options,
+		signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+	});
 }
 
 function isConfigured() {
@@ -34,7 +43,7 @@ async function chat({ system, messages }) {
 		max_tokens: Number(process.env.OPENAI_MAX_TOKENS || 500),
 	};
 
-	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+	const resp = await openAiFetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -106,7 +115,7 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 		},
 	});
 
-	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+	const resp = await openAiFetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -165,7 +174,7 @@ async function chatJson({ system, messages, temperature, maxTokens }) {
 		response_format: { type: 'json_object' },
 	};
 
-	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+	const resp = await openAiFetch('https://api.openai.com/v1/chat/completions', {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${apiKey}`,

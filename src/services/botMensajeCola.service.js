@@ -71,9 +71,11 @@ async function flush(key, processor) {
 
 	const items = cola.items.splice(0);
 	const waiters = cola.waiters.splice(0);
-	cola.processing = false;
 
-	if (!items.length) return;
+	if (!items.length) {
+		cola.processing = false;
+		return;
+	}
 
 	const textos = items
 		.map((it) => String(it.textoEntrada || it.contenidoUltimo || '').trim())
@@ -107,7 +109,10 @@ async function flush(key, processor) {
 	} catch (err) {
 		for (const w of waiters) w.reject(err);
 	} finally {
-		if (!cola.items.length && !cola.waiters.length) {
+		cola.processing = false;
+		if (cola.items.length > 0) {
+			cola.timer = setTimeout(() => void flush(key, processor), debounceMs());
+		} else if (!cola.waiters.length) {
 			colas.delete(key);
 		}
 	}

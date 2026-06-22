@@ -837,7 +837,7 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 	}
 
 	agenteTrace.logSystemPrompt(messages[0].content);
-	agenteTrace.logHistorialMensajes(messages.slice(1), { label: 'HISTORIAL + MENSAJE ACTUAL' });
+	agenteTrace.logHistorialMensajes(messages.slice(1));
 
 	let textoFinal = null;
 

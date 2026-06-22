@@ -162,10 +162,12 @@ async function procesarMensajeEntrante({
 		});
 	} catch (err) {
 		diag.warn('webhook', 'Agente IA error', { error: err.message, idConversacion });
+		agenteTrace.logNota('Agente excepción', { error: err.message });
 		return { respondido: false, motivo: `agente: ${err.message}` };
 	}
 
 	if (!agente?.respondido || !agente.texto) {
+		agenteTrace.logNota('Agente sin respuesta', { motivo: agente?.motivo });
 		return { respondido: false, motivo: agente?.motivo || 'sin_respuesta_agente' };
 	}
 
@@ -174,6 +176,11 @@ async function procesarMensajeEntrante({
 		texto: agente.texto,
 		omitirMarcarRespondido: Boolean(agente.ticket) || msgIds.length > 1,
 	});
+
+	agenteTrace.logNota(
+		res.respondido ? 'WhatsApp enviado OK' : `WhatsApp NO enviado: ${res.motivo || '?'}`,
+		{ textoLen: agente.texto?.length, metaMessageId: res.metaMessageId },
+	);
 
 	if (res.respondido && agente.marcarSaludo) {
 		await botSesionIa.marcarSaludoEnviado(idConversacion, conv);

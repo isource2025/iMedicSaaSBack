@@ -1,16 +1,15 @@
 /**
- * Traza detallada del agente IA — siempre activa.
- * Buscar en logs: [agente-trace]
- * Al final de cada turno hay un bloque "REPORTE COPIABLE" para pegar en debug.
+ * Traza compacta del agente IA — siempre activa.
+ * Buscar: [agente-trace]
+ * Al final de cada turno: un JSON "REPORTE" para copiar/pegar en debug.
  */
 const { AsyncLocalStorage } = require('async_hooks');
 
 const turnStore = new AsyncLocalStorage();
 let turnCounter = 0;
+let logChain = Promise.resolve();
 
 const MARK = '[agente-trace]';
-const MAX_JSON = 8000;
-const MAX_TEXT = 4000;
 
 function enabled() {
 	return true;
@@ -20,29 +19,24 @@ function getTurn() {
 	return turnStore.getStore() || null;
 }
 
-function line(...parts) {
-	console.log(MARK, ...parts);
+/** Evita que líneas de dos turnos se intercalen en Railway. */
+function emit(text) {
+	logChain = logChain.then(() => {
+		console.log(text);
+	});
 }
 
-function block(title, body) {
-	line('');
-	line(`━━━ ${title} ━━━`);
-	const text = String(body ?? '').trim();
-	if (!text) {
-		line('(vacío)');
-	} else {
-		for (const row of text.split('\n')) {
-			console.log(`${MARK}   ${row}`);
-		}
-	}
+function emitBlock(lines) {
+	const body = Array.isArray(lines) ? lines.join('\n') : String(lines);
+	emit(`${MARK} ${body.replace(/\n/g, `\n${MARK} `)}`);
 }
 
-function trunc(s, max = MAX_TEXT) {
+function trunc(s, max = 600) {
 	const t = String(s ?? '');
-	return t.length > max ? `${t.slice(0, max)}\n… [truncado, ${t.length} chars total]` : t;
+	return t.length > max ? `${t.slice(0, max)}…[+${t.length - max}]` : t;
 }
 
-function prettyJson(obj, max = MAX_JSON) {
+function prettyJson(obj, max = 4000) {
 	try {
 		return trunc(JSON.stringify(obj, null, 2), max);
 	} catch {
@@ -54,10 +48,6 @@ function nowIso() {
 	return new Date().toISOString();
 }
 
-/**
- * @param {object} meta
- * @param {() => Promise<any>} fn
- */
 async function runTurn(meta, fn) {
 	if (!enabled()) return fn();
 
@@ -83,35 +73,25 @@ async function runTurn(meta, fn) {
 	const pushEvent = (tipo, detalle) => {
 		ctx.events.push({ t: Date.now() - ctx.startMs, tipo, detalle });
 	};
-
 	ctx._push = pushEvent;
 
-	line('');
-	line('════════════════════════════════════════════════════════════════════');
-	line(`TURNO #${turnId}  |  ${nowIso()}`);
-	line(`conversacion: ${meta.idConversacion || '?'}`);
-	if (meta.telefonoWhatsApp) line(`telefono: ${meta.telefonoWhatsApp}`);
-	if (ctx.merged && ctx.mergeCount > 1) {
-		line(`cola: ${ctx.mergeCount} mensajes fusionados`);
-		block('TEXTOS FUSIONADOS', (ctx.textosMerged || []).map((t, i) => `${i + 1}. ${t}`).join('\n'));
-	}
-	block('PACIENTE', meta.textoEntrada);
-	if (meta.estadoInicial) {
-		block('ESTADO INICIAL', prettyJson(meta.estadoInicial, 3000));
-	}
-	line(`historial previo: ${ctx.historialCount} mensajes`);
-	line('────────────────────────────────────────────────────────────────────');
+	emitBlock([
+		`════ TURNO #${turnId} | ${nowIso()} | conv=${meta.idConversacion || '?'}`,
+		`PACIENTE: ${trunc(meta.textoEntrada, 400)}`,
+		meta.merged && meta.mergeCount > 1
+			? `COLA: ${meta.mergeCount} msgs → ${trunc(meta.textosMerged?.join(' | '), 300)}`
+			: null,
+		`ESTADO_INICIAL: ${trunc(JSON.stringify(meta.estadoInicial), 500)}`,
+		`historial=${ctx.historialCount} msgs`,
+	].filter(Boolean));
 
 	try {
 		const result = await turnStore.run(ctx, fn);
-		endTurn(result);
+		await endTurn(result);
 		return result;
 	} catch (err) {
-		line('');
-		line('ERROR EN TURNO:', err.message);
-		if (err.stack) block('STACK', err.stack);
-		printCopiableReport(ctx, { error: err.message });
-		line('════════════════════════════════════════════════════════════════════');
+		emitBlock([`ERROR: ${err.message}`, trunc(err.stack, 800)]);
+		await printReport(ctx, { error: err.message });
 		throw err;
 	}
 }
@@ -120,129 +100,106 @@ function logIteracion(n, max) {
 	const t = getTurn();
 	if (t) {
 		t.iteraciones = n;
-		t._push?.('iteracion', `${n}/${max}`);
+		t._push?.('iter', `${n}/${max}`);
 	}
-	line('');
-	line(`── iteración IA ${n}/${max} ──`);
+	emit(`${MARK} ── iter ${n}/${max} ──`);
 }
 
 function logSystemPrompt(content) {
 	const t = getTurn();
-	t?._push?.('system_prompt', `${String(content || '').length} chars`);
-	block('SYSTEM PROMPT (completo enviado a OpenAI)', trunc(content, MAX_JSON));
+	const len = String(content || '').length;
+	t?._push?.('prompt', `${len} chars`);
+	// Resumen, no dump completo (evita miles de líneas y lentitud).
+	const lines = String(content || '').split('\n');
+	const preview = [
+		lines[0],
+		lines.find((l) => l.includes('INTEGRIDAD')) || '',
+		lines.find((l) => l.includes('candidatosProfesionales')) || '',
+	].filter(Boolean);
+	emit(`${MARK} PROMPT (${len} chars): ${preview.map((l) => trunc(l, 120)).join(' | ')}`);
 }
 
-function logHistorialMensajes(messages, { label = 'MENSAJES A OPENAI' } = {}) {
+function logHistorialMensajes(messages) {
 	const t = getTurn();
-	const list = messages || [];
-	t?._push?.('mensajes', list.length);
-	const rows = list.map((m, i) => {
-		const role = m.role || '?';
+	const list = (messages || []).filter((m) => m.role !== 'system');
+	t?._push?.('historial', list.length);
+	const tail = list.slice(-6).map((m, i) => {
 		let body = m.content;
 		if (m.tool_calls?.length) {
-			const names = m.tool_calls.map((c) => c.function?.name).join(', ');
-			body = `[tool_calls → ${names}]`;
-			if (m.content) body += ` ${m.content}`;
+			body = `[tools: ${m.tool_calls.map((c) => c.function?.name).join(',')}]`;
 		}
-		if (role === 'tool' && m.tool_call_id) {
-			body = `[tool_call_id=${m.tool_call_id}] ${trunc(m.content, 1500)}`;
-		}
-		return `${i + 1}. [${role}] ${trunc(body, 2000)}`;
+		if (m.role === 'tool') body = trunc(m.content, 200);
+		return `${m.role}: ${trunc(body, 150)}`;
 	});
-	block(label, rows.join('\n\n'));
+	emit(`${MARK} HISTORIAL (${list.length}): ${tail.join(' → ')}`);
 }
 
-function logOpenAiRequest({ capa, messages, tools, toolChoice, extra }) {
+function logOpenAiRequest({ capa, messages, tools, extra }) {
 	const t = getTurn();
 	if (t) t.openAiCalls += 1;
 	const n = t?.openAiCalls ?? '?';
-
-	line('');
-	line(`→ OPENAI llamada #${n}  (${capa || 'chat'})`);
-	if (extra) block('PARAMETROS', prettyJson(extra, 500));
-
-	const sys = (messages || []).find((m) => m.role === 'system');
-	if (sys?.content) {
-		block('SYSTEM (en esta llamada)', trunc(sys.content, MAX_JSON));
-	}
-
-	logHistorialMensajes(
-		(messages || []).filter((m) => m.role !== 'system'),
-		{ label: 'HISTORIAL (sin system)' },
+	const hist = (messages || []).filter((m) => m.role !== 'system').length;
+	emit(
+		`${MARK} → OpenAI #${n} ${capa || ''} model=${extra?.model || '?'} msgs=${hist} tools=${tools?.length || 0}`,
 	);
-
-	if (tools?.length) {
-		line(`tools disponibles (${tools.length}): ${tools.map((x) => x.function?.name).filter(Boolean).join(', ')}`);
-	}
-	if (toolChoice && toolChoice !== 'auto') {
-		line(`tool_choice: ${JSON.stringify(toolChoice)}`);
-	}
-
-	t?._push?.('openai_req', `#${n} ${capa}`);
+	t?._push?.('openai→', `#${n}`);
 }
 
-function logOpenAiResponse({ capa, content, toolCalls, finishReason, extra, usage }) {
+function logOpenAiResponse({ content, toolCalls, finishReason, usage }) {
 	const t = getTurn();
-	line('');
-	line(`← OPENAI respuesta  (${capa || ''})  finish_reason=${finishReason || '?'}`);
-	if (usage) block('USAGE', prettyJson(usage, 300));
-	if (content) block('TEXTO ASISTENTE', content);
+	const names = (toolCalls || []).map((c) => c.function?.name).join(',') || '-';
+	emit(
+		`${MARK} ← OpenAI finish=${finishReason || '?'} tools=[${names}] texto=${content ? trunc(content, 120) : '(vacío)'} tokens=${usage?.total_tokens || '?'}`,
+	);
 	if (toolCalls?.length) {
-		const rows = toolCalls.map((tc, i) => {
+		for (const tc of toolCalls) {
 			let args = tc.function?.arguments;
 			try {
-				args = JSON.stringify(JSON.parse(args || '{}'), null, 2);
+				args = JSON.stringify(JSON.parse(args || '{}'));
 			} catch {
 				/* raw */
 			}
-			return `${i + 1}. ${tc.function?.name}\n   id=${tc.id}\n   args=${args}`;
-		});
-		block('TOOL_CALLS', rows.join('\n\n'));
+			emit(`${MARK}   ⚡ ${tc.function?.name}(${trunc(args, 150)})`);
+		}
 	}
-	if (extra) block('EXTRA', prettyJson(extra, 500));
-
-	const names = (toolCalls || []).map((c) => c.function?.name).join(', ') || '(ninguna)';
-	t?._push?.('openai_res', `${finishReason} tools=[${names}] texto=${content ? 'sí' : 'no'}`);
+	t?._push?.('openai←', `${finishReason} [${names}]`);
 }
 
-function logToolResult({ nombre, args, resultado, ms, estadoSnapshot, estadoAntes }) {
+function logToolResult({ nombre, args, resultado, ms, estadoSnapshot }) {
 	const t = getTurn();
 	const ok = !resultado?.error;
 	if (t) t.tools.push({ nombre, args, ok, ms, resultado });
-
-	line('');
-	line(`${ok ? '✓' : '✗'} TOOL ${nombre}  (${ms}ms)`);
-	block('ARGS', prettyJson(args || {}, 1500));
-	block('RESULTADO', prettyJson(resultado || {}, 3000));
-	if (estadoAntes) block('ESTADO ANTES', prettyJson(estadoAntes, 2000));
-	if (estadoSnapshot) block('ESTADO DESPUÉS', prettyJson(estadoSnapshot, 2000));
-
-	t?._push?.('tool', `${nombre} ${ok ? 'OK' : 'FAIL'} ${ms}ms`);
+	const resumen = ok
+		? trunc(JSON.stringify(resultado), 250)
+		: `ERROR: ${resultado?.error || '?'}`;
+	emit(`${MARK} ${ok ? '✓' : '✗'} TOOL ${nombre} (${ms}ms) args=${trunc(JSON.stringify(args), 100)} → ${resumen}`);
+	if (estadoSnapshot) {
+		emit(`${MARK}   estado: ${trunc(JSON.stringify(estadoSnapshot), 200)}`);
+	}
+	t?._push?.('tool', `${nombre} ${ok ? 'OK' : 'FAIL'}`);
 }
 
 function logNota(msg, extra) {
-	line(`ℹ ${msg}`);
-	if (extra != null) block('DETALLE', prettyJson(extra, 1500));
+	emit(`${MARK} ℹ ${msg}${extra != null ? ` ${trunc(JSON.stringify(extra), 200)}` : ''}`);
 	getTurn()?._push?.('nota', msg);
 }
 
 function logIntegridad({ textoFinal, toolsInvocadas }) {
 	const tools = toolsInvocadas || [];
-	const llamoBuscar = tools.includes('buscar_turno');
-	const texto = String(textoFinal || '').toLowerCase();
-	const hablaDisponibilidad =
-		/no hay|sin turno|sin disponibilidad|no encontr|lamentablemente/i.test(texto) ||
-		/te ofrezco|te agend|turno para el|disponible el/i.test(texto) ||
-		/\d{1,2}\/\d{1,2}|\d{1,2}:\d{2}/.test(texto);
-
-	if (hablaDisponibilidad && !llamoBuscar) {
-		line('');
-		line('⚠ ALERTA INTEGRIDAD: la respuesta habla de disponibilidad/fecha pero NO se llamó buscar_turno en este turno');
-		getTurn()?._push?.('alerta', 'disponibilidad_sin_buscar_turno');
+	if (!tools.includes('buscar_turno')) {
+		const texto = String(textoFinal || '').toLowerCase();
+		const habla =
+			/no hay|sin turno|sin disponibilidad|lamentablemente/i.test(texto) ||
+			/te ofrezco|disponible|turno para/i.test(texto) ||
+			/\d{1,2}\/\d{1,2}/.test(texto);
+		if (habla) {
+			emit(`${MARK} ⚠ ALERTA: habla de cupo/fecha pero NO llamó buscar_turno`);
+			getTurn()?._push?.('alerta', 'sin_buscar_turno');
+		}
 	}
 }
 
-function printCopiableReport(ctx, result) {
+async function printReport(ctx, result) {
 	const tools = ctx?.tools || [];
 	const report = {
 		turno: ctx?.turnId,
@@ -250,12 +207,11 @@ function printCopiableReport(ctx, result) {
 		conversacion: ctx?.idConversacion,
 		telefono: ctx?.telefonoWhatsApp,
 		paciente: ctx?.textoEntrada,
-		merged: ctx?.merged ? ctx.mergeCount : 1,
 		ms: ctx ? Date.now() - ctx.startMs : 0,
-		openai_llamadas: ctx?.openAiCalls,
+		openai: ctx?.openAiCalls,
 		iteraciones: ctx?.iteraciones,
-		tools_ejecutadas: tools.map((x) => ({
-			nombre: x.nombre,
+		tools: tools.map((x) => ({
+			n: x.nombre,
 			ok: x.ok,
 			ms: x.ms,
 			args: x.args,
@@ -263,22 +219,20 @@ function printCopiableReport(ctx, result) {
 		})),
 		estado_inicial: ctx?.estadoInicial,
 		estado_final: ctx?.estadoFinal,
-		bot_texto: result?.texto || null,
-		bot_ticket: result?.ticket ? '(comprobante enviado)' : null,
+		bot: result?.texto ? trunc(result.texto, 500) : null,
+		ticket: result?.ticket ? 'sí' : 'no',
 		finalizar: Boolean(result?.finalizar),
-		motivo: result?.motivo || null,
+		motivo: result?.motivo || result?.error || null,
 		eventos: ctx?.events,
 	};
 
-	line('');
-	line('╔════════════════════════════════════════════════════════════════════╗');
-	line('║  REPORTE COPIABLE — pegar en chat de debug                         ║');
-	line('╚════════════════════════════════════════════════════════════════════╝');
-	console.log(prettyJson(report, 12000));
-	line('════════════════════════════════════════════════════════════════════');
+	emit(`${MARK} ═══ REPORTE COPIABLE ═══`);
+	emit(`${MARK} ${prettyJson(report, 8000)}`);
+	emit(`${MARK} ═══════════════════════`);
+	await logChain;
 }
 
-function endTurn(result) {
+async function endTurn(result) {
 	if (!enabled()) return;
 	const t = getTurn();
 	if (result?.estadoFinal) t.estadoFinal = result.estadoFinal;
@@ -288,23 +242,15 @@ function endTurn(result) {
 		toolsInvocadas: (t?.tools || []).map((x) => x.nombre),
 	});
 
-	line('');
-	line('── RESULTADO TURNO ──');
-	if (result?.texto) block('BOT RESPONDE', result.texto);
-	if (result?.ticket) block('COMPROBANTE', result.ticket);
-	if (result?.motivo && !result?.respondido) line(`motivo fallo: ${result.motivo}`);
-
-	if (t?.estadoFinal) {
-		block('ESTADO FINAL', prettyJson(t.estadoFinal, 3000));
-	}
-
 	const ms = t ? Date.now() - t.startMs : 0;
-	const cadenaTools = (t?.tools || []).map((x) => `${x.nombre}${x.ok ? '' : '!'}`).join(' → ') || '(ninguna)';
-	line(
-		`resumen: ${ms}ms | openai=${t?.openAiCalls ?? 0} | iter=${t?.iteraciones ?? 0} | tools: ${cadenaTools} | finalizar=${Boolean(result?.finalizar)}`,
-	);
+	const cadena = (t?.tools || []).map((x) => `${x.nombre}${x.ok ? '' : '!'}`).join('→') || '-';
+	emitBlock([
+		`RESULTADO (${ms}ms) openai=${t?.openAiCalls ?? 0} tools=${cadena} finalizar=${Boolean(result?.finalizar)}`,
+		result?.texto ? `BOT: ${trunc(result.texto, 500)}` : `SIN_TEXTO motivo=${result?.motivo || '?'}`,
+		result?.estadoFinal ? `ESTADO_FINAL: ${trunc(JSON.stringify(result.estadoFinal), 400)}` : null,
+	].filter(Boolean));
 
-	printCopiableReport(t, result);
+	await printReport(t, result);
 }
 
 module.exports = {
