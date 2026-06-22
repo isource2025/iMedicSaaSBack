@@ -1,40 +1,48 @@
 /**
- * Traza en consola del ida y vuelta con la IA del agente de turnos.
- *
- * Activar (default ON salvo BOT_AGENTE_TRACE=0):
- *   BOT_AGENTE_TRACE=1  node scripts/bot_consola.js
- *   BOT_AGENTE_TRACE=1  npm run dev
- *
- * Filtro en logs: [agente-trace]
+ * Traza detallada del agente IA — siempre activa.
+ * Buscar en logs: [agente-trace]
+ * Al final de cada turno hay un bloque "REPORTE COPIABLE" para pegar en debug.
  */
 const { AsyncLocalStorage } = require('async_hooks');
 
 const turnStore = new AsyncLocalStorage();
 let turnCounter = 0;
 
-const C = {
-	reset: '\x1b[0m',
-	dim: '\x1b[2m',
-	bold: '\x1b[1m',
-	cyan: '\x1b[36m',
-	green: '\x1b[32m',
-	yellow: '\x1b[33m',
-	blue: '\x1b[34m',
-	magenta: '\x1b[35m',
-	red: '\x1b[31m',
-	gray: '\x1b[90m',
-};
+const MARK = '[agente-trace]';
+const MAX_JSON = 8000;
+const MAX_TEXT = 4000;
 
 function enabled() {
-	return process.env.BOT_AGENTE_TRACE !== '0';
+	return true;
 }
 
-function trunc(s, max = 900) {
+function getTurn() {
+	return turnStore.getStore() || null;
+}
+
+function line(...parts) {
+	console.log(MARK, ...parts);
+}
+
+function block(title, body) {
+	line('');
+	line(`━━━ ${title} ━━━`);
+	const text = String(body ?? '').trim();
+	if (!text) {
+		line('(vacío)');
+	} else {
+		for (const row of text.split('\n')) {
+			console.log(`${MARK}   ${row}`);
+		}
+	}
+}
+
+function trunc(s, max = MAX_TEXT) {
 	const t = String(s ?? '');
-	return t.length > max ? `${t.slice(0, max)}… (${t.length} chars)` : t;
+	return t.length > max ? `${t.slice(0, max)}\n… [truncado, ${t.length} chars total]` : t;
 }
 
-function prettyJson(obj, max = 1200) {
+function prettyJson(obj, max = MAX_JSON) {
 	try {
 		return trunc(JSON.stringify(obj, null, 2), max);
 	} catch {
@@ -42,20 +50,13 @@ function prettyJson(obj, max = 1200) {
 	}
 }
 
-function hr(char = '─', width = 76) {
-	return C.gray + char.repeat(width) + C.reset;
-}
-
-function nowLabel() {
-	return new Date().toLocaleTimeString('es-AR', { hour12: false });
-}
-
-function getTurn() {
-	return turnStore.getStore() || null;
+function nowIso() {
+	return new Date().toISOString();
 }
 
 /**
- * Ejecuta un turno del agente con contexto de traza (AsyncLocalStorage).
+ * @param {object} meta
+ * @param {() => Promise<any>} fn
  */
 async function runTurn(meta, fn) {
 	if (!enabled()) return fn();
@@ -64,145 +65,259 @@ async function runTurn(meta, fn) {
 	const ctx = {
 		turnId,
 		idConversacion: meta.idConversacion,
+		telefonoWhatsApp: meta.telefonoWhatsApp || null,
 		textoEntrada: meta.textoEntrada,
 		estadoInicial: meta.estadoInicial,
+		estadoFinal: null,
 		openAiCalls: 0,
+		iteraciones: 0,
 		tools: [],
+		historialCount: meta.historialCount ?? 0,
+		merged: meta.merged ?? false,
+		mergeCount: meta.mergeCount ?? 1,
+		textosMerged: meta.textosMerged || null,
 		startMs: Date.now(),
+		events: [],
 	};
 
-	console.log('');
-	console.log(hr('═'));
-	console.log(
-		`${C.bold}${C.cyan}[agente-trace]${C.reset} ${C.bold}TURNO #${turnId}${C.reset} ${C.dim}${nowLabel()}${C.reset}`,
-	);
-	console.log(`${C.dim}conv:${C.reset} ${meta.idConversacion || '?'}`);
-	console.log(`${C.green}👤 PACIENTE:${C.reset} ${trunc(meta.textoEntrada, 500)}`);
-	if (meta.estadoInicial) {
-		console.log(`${C.dim}ESTADO INICIAL:${C.reset}`);
-		console.log(C.gray + prettyJson(meta.estadoInicial, 800) + C.reset);
+	const pushEvent = (tipo, detalle) => {
+		ctx.events.push({ t: Date.now() - ctx.startMs, tipo, detalle });
+	};
+
+	ctx._push = pushEvent;
+
+	line('');
+	line('════════════════════════════════════════════════════════════════════');
+	line(`TURNO #${turnId}  |  ${nowIso()}`);
+	line(`conversacion: ${meta.idConversacion || '?'}`);
+	if (meta.telefonoWhatsApp) line(`telefono: ${meta.telefonoWhatsApp}`);
+	if (ctx.merged && ctx.mergeCount > 1) {
+		line(`cola: ${ctx.mergeCount} mensajes fusionados`);
+		block('TEXTOS FUSIONADOS', (ctx.textosMerged || []).map((t, i) => `${i + 1}. ${t}`).join('\n'));
 	}
-	console.log(hr());
+	block('PACIENTE', meta.textoEntrada);
+	if (meta.estadoInicial) {
+		block('ESTADO INICIAL', prettyJson(meta.estadoInicial, 3000));
+	}
+	line(`historial previo: ${ctx.historialCount} mensajes`);
+	line('────────────────────────────────────────────────────────────────────');
 
 	try {
 		const result = await turnStore.run(ctx, fn);
 		endTurn(result);
 		return result;
 	} catch (err) {
-		console.log(`${C.red}✗ ERROR TURNO:${C.reset} ${err.message}`);
-		console.log(hr('═'));
+		line('');
+		line('ERROR EN TURNO:', err.message);
+		if (err.stack) block('STACK', err.stack);
+		printCopiableReport(ctx, { error: err.message });
+		line('════════════════════════════════════════════════════════════════════');
 		throw err;
 	}
 }
 
+function logIteracion(n, max) {
+	const t = getTurn();
+	if (t) {
+		t.iteraciones = n;
+		t._push?.('iteracion', `${n}/${max}`);
+	}
+	line('');
+	line(`── iteración IA ${n}/${max} ──`);
+}
+
+function logSystemPrompt(content) {
+	const t = getTurn();
+	t?._push?.('system_prompt', `${String(content || '').length} chars`);
+	block('SYSTEM PROMPT (completo enviado a OpenAI)', trunc(content, MAX_JSON));
+}
+
+function logHistorialMensajes(messages, { label = 'MENSAJES A OPENAI' } = {}) {
+	const t = getTurn();
+	const list = messages || [];
+	t?._push?.('mensajes', list.length);
+	const rows = list.map((m, i) => {
+		const role = m.role || '?';
+		let body = m.content;
+		if (m.tool_calls?.length) {
+			const names = m.tool_calls.map((c) => c.function?.name).join(', ');
+			body = `[tool_calls → ${names}]`;
+			if (m.content) body += ` ${m.content}`;
+		}
+		if (role === 'tool' && m.tool_call_id) {
+			body = `[tool_call_id=${m.tool_call_id}] ${trunc(m.content, 1500)}`;
+		}
+		return `${i + 1}. [${role}] ${trunc(body, 2000)}`;
+	});
+	block(label, rows.join('\n\n'));
+}
+
 function logOpenAiRequest({ capa, messages, tools, toolChoice, extra }) {
-	if (!enabled()) return;
 	const t = getTurn();
 	if (t) t.openAiCalls += 1;
 	const n = t?.openAiCalls ?? '?';
 
-	console.log(`${C.blue}→ OpenAI #${n}${C.reset} ${C.bold}${capa || 'chat'}${C.reset}`);
-	if (extra) console.log(C.dim + prettyJson(extra, 400) + C.reset);
+	line('');
+	line(`→ OPENAI llamada #${n}  (${capa || 'chat'})`);
+	if (extra) block('PARAMETROS', prettyJson(extra, 500));
 
 	const sys = (messages || []).find((m) => m.role === 'system');
 	if (sys?.content) {
-		console.log(`${C.dim}  system:${C.reset} ${trunc(sys.content, 600)}`);
+		block('SYSTEM (en esta llamada)', trunc(sys.content, MAX_JSON));
 	}
-	const tail = (messages || []).filter((m) => m.role !== 'system').slice(-4);
-	for (const m of tail) {
-		const role =
-			m.role === 'user'
-				? `${C.green}user${C.reset}`
-				: m.role === 'assistant'
-					? `${C.magenta}assistant${C.reset}`
-					: m.role === 'tool'
-						? `${C.yellow}tool${C.reset}`
-						: m.role;
-		let body = m.content;
-		if (m.tool_calls?.length) {
-			body = `[tool_calls: ${m.tool_calls.map((c) => c.function?.name).join(', ')}]`;
-		}
-		console.log(`  ${role}: ${trunc(body, 350)}`);
-	}
+
+	logHistorialMensajes(
+		(messages || []).filter((m) => m.role !== 'system'),
+		{ label: 'HISTORIAL (sin system)' },
+	);
+
 	if (tools?.length) {
-		console.log(
-			`${C.dim}  tools:${C.reset} ${tools.map((t) => t.function?.name).filter(Boolean).join(', ')}`,
-		);
+		line(`tools disponibles (${tools.length}): ${tools.map((x) => x.function?.name).filter(Boolean).join(', ')}`);
 	}
 	if (toolChoice && toolChoice !== 'auto') {
-		console.log(`${C.dim}  tool_choice:${C.reset} ${JSON.stringify(toolChoice)}`);
+		line(`tool_choice: ${JSON.stringify(toolChoice)}`);
 	}
+
+	t?._push?.('openai_req', `#${n} ${capa}`);
 }
 
-function logOpenAiResponse({ capa, content, toolCalls, finishReason, extra }) {
-	if (!enabled()) return;
-	console.log(`${C.magenta}← OpenAI${C.reset} ${capa || ''} finish=${finishReason || '?'}`);
-	if (content) console.log(`  ${C.bold}texto:${C.reset} ${trunc(content, 500)}`);
+function logOpenAiResponse({ capa, content, toolCalls, finishReason, extra, usage }) {
+	const t = getTurn();
+	line('');
+	line(`← OPENAI respuesta  (${capa || ''})  finish_reason=${finishReason || '?'}`);
+	if (usage) block('USAGE', prettyJson(usage, 300));
+	if (content) block('TEXTO ASISTENTE', content);
 	if (toolCalls?.length) {
-		for (const tc of toolCalls) {
+		const rows = toolCalls.map((tc, i) => {
 			let args = tc.function?.arguments;
 			try {
-				args = JSON.stringify(JSON.parse(args || '{}'), null, 0);
+				args = JSON.stringify(JSON.parse(args || '{}'), null, 2);
 			} catch {
-				/* keep raw */
+				/* raw */
 			}
-			console.log(`  ${C.yellow}⚡ tool_call:${C.reset} ${tc.function?.name}(${trunc(args, 200)})`);
-		}
+			return `${i + 1}. ${tc.function?.name}\n   id=${tc.id}\n   args=${args}`;
+		});
+		block('TOOL_CALLS', rows.join('\n\n'));
 	}
-	if (extra) console.log(C.dim + prettyJson(extra, 300) + C.reset);
+	if (extra) block('EXTRA', prettyJson(extra, 500));
+
+	const names = (toolCalls || []).map((c) => c.function?.name).join(', ') || '(ninguna)';
+	t?._push?.('openai_res', `${finishReason} tools=[${names}] texto=${content ? 'sí' : 'no'}`);
 }
 
-function logToolResult({ nombre, args, resultado, ms, estadoSnapshot }) {
-	if (!enabled()) return;
+function logToolResult({ nombre, args, resultado, ms, estadoSnapshot, estadoAntes }) {
 	const t = getTurn();
-	if (t) t.tools.push({ nombre, args, ok: !resultado?.error, ms });
-
 	const ok = !resultado?.error;
-	const icon = ok ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`;
-	console.log(`${icon} ${C.yellow}TOOL${C.reset} ${C.bold}${nombre}${C.reset} ${C.dim}(${ms}ms)${C.reset}`);
-	console.log(`  ${C.dim}args:${C.reset} ${trunc(JSON.stringify(args || {}), 300)}`);
-	console.log(`  ${C.dim}result:${C.reset} ${trunc(JSON.stringify(resultado || {}), 500)}`);
-	if (estadoSnapshot) {
-		console.log(`  ${C.dim}estado:${C.reset} ${trunc(JSON.stringify(estadoSnapshot), 400)}`);
-	}
+	if (t) t.tools.push({ nombre, args, ok, ms, resultado });
+
+	line('');
+	line(`${ok ? '✓' : '✗'} TOOL ${nombre}  (${ms}ms)`);
+	block('ARGS', prettyJson(args || {}, 1500));
+	block('RESULTADO', prettyJson(resultado || {}, 3000));
+	if (estadoAntes) block('ESTADO ANTES', prettyJson(estadoAntes, 2000));
+	if (estadoSnapshot) block('ESTADO DESPUÉS', prettyJson(estadoSnapshot, 2000));
+
+	t?._push?.('tool', `${nombre} ${ok ? 'OK' : 'FAIL'} ${ms}ms`);
 }
 
 function logNota(msg, extra) {
-	if (!enabled()) return;
-	console.log(`${C.cyan}ℹ${C.reset} ${msg}`, extra != null ? prettyJson(extra, 200) : '');
+	line(`ℹ ${msg}`);
+	if (extra != null) block('DETALLE', prettyJson(extra, 1500));
+	getTurn()?._push?.('nota', msg);
+}
+
+function logIntegridad({ textoFinal, toolsInvocadas }) {
+	const tools = toolsInvocadas || [];
+	const llamoBuscar = tools.includes('buscar_turno');
+	const texto = String(textoFinal || '').toLowerCase();
+	const hablaDisponibilidad =
+		/no hay|sin turno|sin disponibilidad|no encontr|lamentablemente/i.test(texto) ||
+		/te ofrezco|te agend|turno para el|disponible el/i.test(texto) ||
+		/\d{1,2}\/\d{1,2}|\d{1,2}:\d{2}/.test(texto);
+
+	if (hablaDisponibilidad && !llamoBuscar) {
+		line('');
+		line('⚠ ALERTA INTEGRIDAD: la respuesta habla de disponibilidad/fecha pero NO se llamó buscar_turno en este turno');
+		getTurn()?._push?.('alerta', 'disponibilidad_sin_buscar_turno');
+	}
+}
+
+function printCopiableReport(ctx, result) {
+	const tools = ctx?.tools || [];
+	const report = {
+		turno: ctx?.turnId,
+		iso: nowIso(),
+		conversacion: ctx?.idConversacion,
+		telefono: ctx?.telefonoWhatsApp,
+		paciente: ctx?.textoEntrada,
+		merged: ctx?.merged ? ctx.mergeCount : 1,
+		ms: ctx ? Date.now() - ctx.startMs : 0,
+		openai_llamadas: ctx?.openAiCalls,
+		iteraciones: ctx?.iteraciones,
+		tools_ejecutadas: tools.map((x) => ({
+			nombre: x.nombre,
+			ok: x.ok,
+			ms: x.ms,
+			args: x.args,
+			resultado: x.resultado,
+		})),
+		estado_inicial: ctx?.estadoInicial,
+		estado_final: ctx?.estadoFinal,
+		bot_texto: result?.texto || null,
+		bot_ticket: result?.ticket ? '(comprobante enviado)' : null,
+		finalizar: Boolean(result?.finalizar),
+		motivo: result?.motivo || null,
+		eventos: ctx?.events,
+	};
+
+	line('');
+	line('╔════════════════════════════════════════════════════════════════════╗');
+	line('║  REPORTE COPIABLE — pegar en chat de debug                         ║');
+	line('╚════════════════════════════════════════════════════════════════════╝');
+	console.log(prettyJson(report, 12000));
+	line('════════════════════════════════════════════════════════════════════');
 }
 
 function endTurn(result) {
 	if (!enabled()) return;
 	const t = getTurn();
-	const ms = t ? Date.now() - t.startMs : 0;
+	if (result?.estadoFinal) t.estadoFinal = result.estadoFinal;
 
-	console.log(hr());
-	if (result?.texto) {
-		console.log(`${C.green}📤 BOT:${C.reset} ${trunc(result.texto, 800)}`);
+	logIntegridad({
+		textoFinal: result?.texto,
+		toolsInvocadas: (t?.tools || []).map((x) => x.nombre),
+	});
+
+	line('');
+	line('── RESULTADO TURNO ──');
+	if (result?.texto) block('BOT RESPONDE', result.texto);
+	if (result?.ticket) block('COMPROBANTE', result.ticket);
+	if (result?.motivo && !result?.respondido) line(`motivo fallo: ${result.motivo}`);
+
+	if (t?.estadoFinal) {
+		block('ESTADO FINAL', prettyJson(t.estadoFinal, 3000));
 	}
-	if (result?.ticket) {
-		console.log(`${C.green}🎫 COMPROBANTE:${C.reset} ${trunc(result.ticket, 400)}`);
-	}
-	console.log(
-		`${C.dim}resumen:${C.reset} ${ms}ms | openai=${t?.openAiCalls ?? 0} | tools=${t?.tools?.length ?? 0} | finalizar=${Boolean(result?.finalizar)}`,
+
+	const ms = t ? Date.now() - t.startMs : 0;
+	const cadenaTools = (t?.tools || []).map((x) => `${x.nombre}${x.ok ? '' : '!'}`).join(' → ') || '(ninguna)';
+	line(
+		`resumen: ${ms}ms | openai=${t?.openAiCalls ?? 0} | iter=${t?.iteraciones ?? 0} | tools: ${cadenaTools} | finalizar=${Boolean(result?.finalizar)}`,
 	);
-	if (t?.tools?.length) {
-		console.log(
-			`${C.dim}tools usadas:${C.reset} ${t.tools.map((x) => `${x.nombre}${x.ok ? '' : '!'}`).join(' → ')}`,
-		);
-	}
-	console.log(hr('═'));
-	console.log('');
+
+	printCopiableReport(t, result);
 }
 
 module.exports = {
 	enabled,
 	runTurn,
 	getTurn,
+	logIteracion,
+	logSystemPrompt,
+	logHistorialMensajes,
 	logOpenAiRequest,
 	logOpenAiResponse,
 	logToolResult,
 	logNota,
+	logIntegridad,
 	endTurn,
 };

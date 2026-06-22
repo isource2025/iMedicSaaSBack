@@ -3,21 +3,10 @@
  *
  *   npm run bot:consola
  *
- * Variables útiles (.env):
- *   BOT_AGENTE_TRACE=1     traza detallada (default ON)
- *   BOT_EMPRESA_ID=1       tenant SQL
- *   BOT_CONSOLA_TEL=549... teléfono simulado
- *   BOT_MSG_DEBOUNCE=0     sin cola (respuesta inmediata en consola)
- *
- * Comandos en el chat:
- *   /estado   — muestra JSON del estado del agente
- *   /reset    — limpia conversación
- *   /salir    — termina
+ * Comandos: /estado /reset /salir
  */
 require('dotenv').config();
 
-process.env.BOT_AGENTE_TRACE = process.env.BOT_AGENTE_TRACE ?? '1';
-process.env.BOT_MSG_DEBOUNCE = process.env.BOT_MSG_DEBOUNCE ?? '0';
 process.env.BOT_CONVERSACIONES_MEMORIA = process.env.BOT_CONVERSACIONES_MEMORIA ?? '1';
 
 const readline = require('readline');
@@ -25,7 +14,6 @@ const { runWithTenant } = require('../src/context/tenantContext');
 const botConversacion = require('../src/services/botConversacion.service');
 const botSesionIa = require('../src/services/botSesionIa.service');
 const botAgente = require('../src/services/botAgente.service');
-const botMensajeCola = require('../src/services/botMensajeCola.service');
 
 const EMPRESA = Number(process.env.BOT_EMPRESA_ID || 1);
 const TELEFONO = process.env.BOT_CONSOLA_TEL || '5493790000999';
@@ -36,7 +24,7 @@ function banner() {
 	console.log('║  iMedic — Consola interactiva del agente de turnos (WhatsApp)   ║');
 	console.log('╚══════════════════════════════════════════════════════════════════╝');
 	console.log(`  Empresa: ${EMPRESA}  |  Tel simulado: ${TELEFONO}`);
-	console.log(`  Traza IA: ${process.env.BOT_AGENTE_TRACE !== '0' ? 'ON' : 'OFF'}  |  Cola msgs: ${botMensajeCola.enabled() ? botMensajeCola.debounceMs() + 'ms' : 'OFF'}`);
+	console.log('  Traza IA: siempre ON ([agente-trace])  |  Sin cola (respuesta inmediata)');
 	console.log('  Escribí como paciente. Comandos: /estado /reset /salir');
 	console.log('');
 }
@@ -49,28 +37,15 @@ async function enviarTurno(idConversacion, linea) {
 		nombreContacto: 'Consola Test',
 	});
 
-	let conv = await botConversacion.obtenerConversacion(idConversacion);
-	const historial = await botSesionIa.listarMensajesParaIa(idConversacion, { limit: 24 });
-
-	const procesar = async (payload) => {
-		const convAct = await botConversacion.obtenerConversacion(idConversacion);
-		const hist = await botSesionIa.listarMensajesParaIa(idConversacion, { limit: 24 });
-		return botAgente.responder({
-			idConversacion,
-			conv: convAct,
-			telefonoWhatsApp: TELEFONO,
-			historial: hist,
-			textoEntrada: payload.textoEntrada || linea,
-		});
-	};
-
-	const r = botMensajeCola.enabled()
-		? await botMensajeCola.encolar(
-				idConversacion,
-				{ textoEntrada: linea, idMensajePaciente: `consola-${Date.now()}` },
-				procesar,
-			)
-		: await procesar({ textoEntrada: linea });
+	const convAct = await botConversacion.obtenerConversacion(idConversacion);
+	const hist = await botSesionIa.listarMensajesParaIa(idConversacion, { limit: 24 });
+	const r = await botAgente.responder({
+		idConversacion,
+		conv: convAct,
+		telefonoWhatsApp: TELEFONO,
+		historial: hist,
+		textoEntrada: linea,
+	});
 
 	if (r.respondido && r.texto) {
 		await botConversacion.registrarMensajeSaliente({

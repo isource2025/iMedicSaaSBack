@@ -99,7 +99,11 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 		messages: payload.messages,
 		tools: payload.tools,
 		toolChoice,
-		extra: { model: payload.model, temperature: payload.temperature },
+		extra: {
+			model: payload.model,
+			temperature: payload.temperature,
+			max_tokens: payload.max_tokens,
+		},
 	});
 
 	const resp = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -133,6 +137,7 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 		content: out.content,
 		toolCalls: out.toolCalls,
 		finishReason: out.finishReason,
+		usage: data.usage || null,
 	});
 
 	return out;

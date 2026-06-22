@@ -156,6 +156,9 @@ async function procesarMensajeEntrante({
 			telefonoWhatsApp,
 			historial,
 			textoEntrada: texto,
+			_merged: _merged,
+			_mergeCount: _mergeCount,
+			_textos: _textos,
 		});
 	} catch (err) {
 		diag.warn('webhook', 'Agente IA error', { error: err.message, idConversacion });

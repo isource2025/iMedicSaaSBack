@@ -1,23 +1,21 @@
 /**
  * Agrupa mensajes consecutivos del mismo paciente antes de invocar al agente.
- * Evita doble respuesta cuando mandan "martes" + DNI en ráfaga.
- *
- * BOT_MSG_DEBOUNCE_MS=6000  (default 6000, rango sugerido 5000–7000)
- * BOT_MSG_DEBOUNCE=0        desactiva
+ * Ventana fija en código (6 s) — evita doble respuesta cuando mandan texto en ráfaga.
  */
 const diag = require('../utils/diagLog');
+const agenteTrace = require('../utils/botAgenteTrace');
 
 /** @type {Map<string, { items: object[], timer: NodeJS.Timeout|null, processing: boolean, waiters: Array<{resolve:Function,reject:Function}> }>} */
 const colas = new Map();
 
+const DEBOUNCE_MS = 6000;
+
 function debounceMs() {
-	if (process.env.BOT_MSG_DEBOUNCE === '0') return 0;
-	const n = Number(process.env.BOT_MSG_DEBOUNCE_MS || 6000);
-	return Number.isFinite(n) && n >= 0 ? n : 6000;
+	return DEBOUNCE_MS;
 }
 
 function enabled() {
-	return debounceMs() > 0;
+	return DEBOUNCE_MS > 0;
 }
 
 function clave(idConversacion) {
@@ -97,6 +95,10 @@ async function flush(key, processor) {
 		idConversacion: key,
 		count: items.length,
 		textoLen: mergedTexto.length,
+	});
+	agenteTrace.logNota(`Cola: fusionando ${items.length} mensaje(s) del paciente`, {
+		textos,
+		merged: mergedTexto,
 	});
 
 	try {

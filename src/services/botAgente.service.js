@@ -277,25 +277,26 @@ const TOOLS = [
 			},
 		},
 	},
-	{
-		type: 'function',
-		function: {
-			name: 'buscar_turno',
-			description:
-				'Busca el turno libre más cercano según estado. Parámetro liberar_profesional=true busca en TODA la especialidad (otro médico). Efecto: setea turnoOfrecido.',
-			parameters: {
-				type: 'object',
-				properties: {
-					especialidad: { type: 'string' },
-					profesional_matricula: { type: 'number' },
-					liberar_profesional: {
-						type: 'boolean',
-						description: 'true = no filtrar por médico elegido; buscar el más cercano en la especialidad.',
+		{
+			type: 'function',
+			function: {
+				name: 'buscar_turno',
+				description:
+					'Consulta la agenda real y devuelve el turno libre más cercano. OBLIGATORIO antes de decir al paciente que hay o no hay cupo, o de mencionar fecha/hora concreta. Si el paciente dice "cualquiera", "da igual", "el primero", "con quien sea", "no me importa el médico" → llamá con liberar_profesional=true (no hace falta confirmar uno de candidatosProfesionales). Si rechaza el turno ofrecido o pide "antes"/"más cercano" → registrar_preferencia_horario y volver a llamar (liberar_profesional si pide otro médico). Efecto: setea turnoOfrecido.',
+				parameters: {
+					type: 'object',
+					properties: {
+						especialidad: { type: 'string', description: 'Solo si especialidad aún no está en ESTADO.' },
+						profesional_matricula: { type: 'number', description: 'Solo si el paciente eligió un médico concreto.' },
+						liberar_profesional: {
+							type: 'boolean',
+							description:
+								'true = buscar el turno más cercano en la especialidad sin filtrar por médico (usar cuando dice cualquiera/da igual/el primero o cuando un médico elegido no tiene cupo).',
+						},
 					},
 				},
 			},
 		},
-	},
 	{
 		type: 'function',
 		function: {
@@ -377,6 +378,7 @@ const TOOLS = [
 async function ejecutarHerramienta(nombre, args, ctx) {
 	const { estado, telefonoWhatsApp, idConversacion } = ctx;
 	const t0 = Date.now();
+	const estadoAntes = snapshotEstado(estado);
 
 	let resultado;
 	switch (nombre) {
@@ -720,6 +722,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 		args,
 		resultado,
 		ms: Date.now() - t0,
+		estadoAntes,
 		estadoSnapshot: snapshotEstado(estado),
 	});
 
@@ -741,6 +744,10 @@ function construirSystemPrompt({ config, conv, estado }) {
 	const hoy = botSesionIa.fechaArgentinaHoy();
 	const nombreContacto = conv?.nombreContacto ? String(conv.nombreContacto).trim() : null;
 	const u = ultimaReservaVigente(estado);
+
+	const tieneCandidatosPendientes = Boolean(
+		estado.candidatosProfesionales?.length && !estado.profesional?.matricula,
+	);
 
 	const estadoCompleto = {
 		paciente: estado.paciente,
@@ -767,17 +774,26 @@ function construirSystemPrompt({ config, conv, estado }) {
 		'INFRAESTRUCTURA (usala como una recepcionista usa el sistema — no inventes turnos ni identidad):',
 		catalogoToolsParaPrompt(),
 		'',
-		'INTEGRIDAD (mínimo indispensable):',
-		'- Antes de decir que hay o no hay turno, llamá buscar_turno.',
-		'- Antes de reservar, llamá reservar_turno (solo con paciente confirmado).',
-		'- No afirmes datos de agenda o identidad sin haber llamado la herramienta.',
+		'INTEGRIDAD — esto no es negociable:',
+		'- NUNCA digas "hay turno", "no hay turno", "no hay disponibilidad", ni menciones fecha/hora de un turno sin haber llamado buscar_turno en ESTE mismo intercambio y recibido su resultado.',
+		'- Si buscar_turno devuelve encontrado:false, recién ahí podés decir que no hay (y ofrecé alternativas: otro médico con liberar_profesional, otra fecha).',
+		'- Antes de reservar, llamá reservar_turno (paciente confirmado + turnoOfrecido en ESTADO).',
+		'- No afirmes identidad ni comprobante sin la herramienta correspondiente.',
+		'',
+		'DELEGACIÓN DE ELECCIÓN (muy frecuente por audio):',
+		'- Si listaste candidatosProfesionales y el paciente dice "cualquiera", "da igual", "el primero", "con quien sea", "está bien así", "no me importa" → NO vuelvas a pedir que elija: llamá buscar_turno con liberar_profesional=true.',
+		'- No hace falta confirmar_profesional_elegido cuando delega la elección a vos.',
+		'- Si ya hay especialidad en ESTADO y delega, buscá directo; no repreguntes por el médico.',
 		'',
 		'COMPORTAMIENTO natural:',
 		'- Si habla en primera persona de síntomas ("me duele la cabeza"), asumí que el turno es para quien escribe.',
 		'- Solo pedí DNI explícito si menciona a otra persona o necesitás validar identidad para reservar.',
-		'- Si rechaza un turno, pide "antes" o "más cercano", usá registrar_preferencia_horario y buscar_turno con liberar_profesional=true si hace falta otro médico.',
+		'- Si rechaza un turno o pide "antes"/"más cercano"/"otro día": registrar_preferencia_horario y buscar_turno de nuevo (liberar_profesional=true si hace falta otro médico de la misma especialidad).',
 		'- Si pide otro turno justo después de confirmar uno, usá reutilizar_paciente_reciente si ultimaReserva es reciente.',
 		'- Podés sobreescribir especialidad, profesional o preferencia cuando el paciente corrige.',
+		tieneCandidatosPendientes
+			? '⚠️ CONTEXTO AHORA: Hay candidatosProfesionales sin confirmar. Si el último mensaje delega elección ("cualquiera", etc.) → buscar_turno(liberar_profesional=true). Si nombra uno → confirmar_profesional_elegido.'
+			: '',
 		nombreContacto ? `- Quien escribe se llama ${nombreContacto} (WhatsApp); eso no es identidad clínica.` : '',
 		saludo.pautaInstruccion ? `Saludo: ${saludo.pautaInstruccion}` : '',
 	]
@@ -820,9 +836,13 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 		messages.push({ role: 'user', content: texto });
 	}
 
+	agenteTrace.logSystemPrompt(messages[0].content);
+	agenteTrace.logHistorialMensajes(messages.slice(1), { label: 'HISTORIAL + MENSAJE ACTUAL' });
+
 	let textoFinal = null;
 
 	for (let i = 0; i < MAX_ITERACIONES_TOOLS; i++) {
+		agenteTrace.logIteracion(i + 1, MAX_ITERACIONES_TOOLS);
 		let salida;
 		try {
 			salida = await botOpenai.chatConHerramientas({ messages, tools: TOOLS });
@@ -862,6 +882,7 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 				role: 'system',
 				content: construirSystemPrompt({ config, conv, estado }),
 			};
+			agenteTrace.logNota('System prompt actualizado tras tools');
 			continue;
 		}
 
@@ -870,6 +891,7 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 	}
 
 	if (!textoFinal) {
+		agenteTrace.logNota('Sin texto tras iteraciones — cierre forzado sin tools');
 		try {
 			const cierre = await botOpenai.chatConHerramientas({
 				messages: [
@@ -902,6 +924,7 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 		finalizar: Boolean(ctx.reservaOk),
 		marcarSaludo: botSesionIa.contextoSaludo(conv).debeSaludar,
 		_tools: ctx.toolsInvocadas,
+		estadoFinal: snapshotEstado(estado),
 	};
 }
 
@@ -909,17 +932,19 @@ async function responder(opts) {
 	const { idConversacion, conv, textoEntrada } = opts;
 	const estado = leerEstado(conv);
 
-	if (agenteTrace.enabled()) {
-		return agenteTrace.runTurn(
-			{
-				idConversacion,
-				textoEntrada,
-				estadoInicial: snapshotEstado(estado),
-			},
-			() => _responderCore(opts),
-		);
-	}
-	return _responderCore(opts);
+	return agenteTrace.runTurn(
+		{
+			idConversacion,
+			telefonoWhatsApp: opts.telefonoWhatsApp,
+			textoEntrada,
+			estadoInicial: snapshotEstado(estado),
+			historialCount: (opts.historial || []).length,
+			merged: Boolean(opts._merged),
+			mergeCount: opts._mergeCount || 1,
+			textosMerged: opts._textos || null,
+		},
+		() => _responderCore(opts),
+	);
 }
 
 module.exports = {
