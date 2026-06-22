@@ -156,6 +156,21 @@ function convertirHoraClarionAString(horaClarion) {
 	}
 }
 
+const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires';
+
+/** Fecha calendario YYYY-MM-DD en Argentina (independiente del TZ del servidor). */
+function fechaCalendarioArgentina(ref = new Date()) {
+	return ref.toLocaleDateString('en-CA', { timeZone: TZ_ARGENTINA });
+}
+
+/** Suma días al calendario argentino y devuelve YYYY-MM-DD. */
+function fechaIsoOffsetArgentina(diasDesdeHoy = 0) {
+	const hoy = fechaCalendarioArgentina();
+	const [y, mo, d] = hoy.split('-').map(Number);
+	const date = new Date(y, mo - 1, d + diasDesdeHoy, 12, 0, 0);
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -163,4 +178,7 @@ module.exports = {
 	convertirHoraDesdeFormatoClarion,
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
+	fechaCalendarioArgentina,
+	fechaIsoOffsetArgentina,
+	TZ_ARGENTINA,
 };

@@ -9,7 +9,12 @@ const botLogService = require('./botLog.service');
 const botOpenai = require('./botOpenai.service');
 const { STATUS_CANCELADO } = require('../utils/agendaCatalogos');
 const { executeQuery } = require('../models/db');
-const { convertirFechaAClarion, convertirFechaClarionADate } = require('../utils/dateUtils');
+const {
+	convertirFechaAClarion,
+	convertirFechaClarionADate,
+	fechaCalendarioArgentina,
+	fechaIsoOffsetArgentina,
+} = require('../utils/dateUtils');
 const diag = require('../utils/diagLog');
 const { validarDniNumero } = require('../utils/botDni');
 
@@ -1761,10 +1766,20 @@ function _slotCumpleAnticipacion(fechaIso, hora, config) {
 }
 
 function _fechaIsoOffset(dias) {
-	const d = new Date();
-	d.setHours(12, 0, 0, 0);
-	d.setDate(d.getDate() + dias);
-	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+	return fechaIsoOffsetArgentina(dias);
+}
+
+/** Excluye estudios/salas (ELECTROCADIOGRAMA, ECODOPLER agenda, etc.) de búsqueda de turnos médicos. */
+function _esProfesionalHumano(nombre) {
+	const n = String(nombre || '')
+		.trim()
+		.toUpperCase();
+	if (!n || n.length < 3) return false;
+	if (/^(ELECTRO|EKG|ECG|LABORATORIO|LAB\b|RADIO|TOMO|ECOGRAF|MAPA|HOLTER|RESONANCIA|PLACA)/.test(n)) {
+		return false;
+	}
+	if (/^(CONSULTORIO|SALA|BOX|SECTOR)\b/.test(n)) return false;
+	return true;
 }
 
 function _slotDateTime(fechaIso, hora) {
@@ -1858,8 +1873,9 @@ function _detectarRangoFechasRelativo(t) {
 			t,
 		)
 	) {
-		const hoy = new Date();
-		hoy.setHours(12, 0, 0, 0);
+		const hoyStr = fechaCalendarioArgentina();
+		const [yy, mm, dd] = hoyStr.split('-').map(Number);
+		const hoy = new Date(yy, mm - 1, dd, 12, 0, 0);
 		const day = hoy.getDay();
 		const lunesActual = new Date(hoy);
 		const diffToMonday = day === 0 ? 6 : day - 1;
@@ -2269,6 +2285,7 @@ async function _elegirMejorTurnoValido(candidatos, esp) {
 	if (!candidatos.length) return null;
 	const ordenados = [...candidatos]
 		.filter(Boolean)
+		.filter((c) => _esProfesionalHumano(c.medico))
 		.sort((a, b) => {
 			const diff = a.dt - b.dt;
 			if (diff !== 0) return diff;
@@ -2350,6 +2367,7 @@ async function sugerirPrimerTurnoDisponible(especialidadValor, opciones = {}) {
 
 	const maxDias = _maxDiasBusquedaBot(config, preferir);
 	const ordenados = [...profesionales]
+		.filter((p) => _esProfesionalHumano(p.nombre))
 		.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'))
 		.slice(0, _maxProfesionalesBusqueda(config.reglas));
 	const matriculaFiltro =

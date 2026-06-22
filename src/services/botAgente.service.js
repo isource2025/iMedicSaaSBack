@@ -152,23 +152,52 @@ async function ejecutarBuscarTurno(args, estado) {
 
 	const intentos = [];
 	const probar = async (opts) => {
-		let turno = await botAgenda.sugerirPrimerTurnoDisponible(espValor, opts);
-		turno = turno ? await botAgenda.validarSugerenciaTurno(turno, espValor) : null;
-		if (turno && !esProfesionalHumano(turno.medico)) {
-			intentos.push({ descartado: turno.medico, motivo: 'no_es_medico_humano' });
-			return null;
+		const excluirBase = opts.excluir || estado.preferencia?._excluir || {};
+		const slotsExcluidos = [...(excluirBase.slots || [])];
+		for (let n = 0; n < 6; n++) {
+			const busqueda = {
+				...opts,
+				excluir: slotsExcluidos.length ? { ...excluirBase, slots: slotsExcluidos } : excluirBase,
+			};
+			let turno = await botAgenda.sugerirPrimerTurnoDisponible(espValor, busqueda);
+			turno = turno ? await botAgenda.validarSugerenciaTurno(turno, espValor) : null;
+			if (!turno) return null;
+			if (!esProfesionalHumano(turno.medico)) {
+				intentos.push({ descartado: turno.medico, motivo: 'no_es_medico_humano' });
+				slotsExcluidos.push({
+					matricula: turno.matricula,
+					fecha: String(turno.fecha).slice(0, 10),
+					hora: String(turno.hora).slice(0, 5),
+				});
+				continue;
+			}
+			return turno;
 		}
-		return turno;
+		return null;
 	};
 
 	let turno = await probar(opciones);
 
-	if (!turno && (opciones.preferir?.fechaDesde || opciones.preferir?.fechas?.length)) {
+	const tieneFiltroFecha =
+		opciones.preferir?.fechaDesde ||
+		opciones.preferir?.fechaHasta ||
+		(opciones.preferir?.fechas || []).length ||
+		(opciones.preferir?.diasSemana || []).length;
+	if (!turno && tieneFiltroFecha) {
 		const sinFecha = {
 			...opciones,
-			preferir: { ...opciones.preferir, fechaDesde: null, fechaHasta: null, fechas: [] },
+			preferir: {
+				franja: opciones.preferir?.franja || null,
+				horaDesde: opciones.preferir?.horaDesde || null,
+				horaHasta: opciones.preferir?.horaHasta || null,
+				fechas: [],
+				diasSemana: [],
+				fechaDesde: null,
+				fechaHasta: null,
+			},
 		};
 		turno = await probar(sinFecha);
+		if (turno) intentos.push({ fallback: 'sin_filtro_fecha' });
 	}
 
 	if (!turno && matricula) {
