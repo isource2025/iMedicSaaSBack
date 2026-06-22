@@ -86,9 +86,11 @@ async function runTurn(meta, fn) {
 	].filter(Boolean));
 
 	try {
-		const result = await turnStore.run(ctx, fn);
-		await endTurn(result);
-		return result;
+		return await turnStore.run(ctx, async () => {
+			const result = await fn();
+			await endTurn(ctx, result);
+			return result;
+		});
 	} catch (err) {
 		emitBlock([`ERROR: ${err.message}`, trunc(err.stack, 800)]);
 		await printReport(ctx, { error: err.message });
@@ -232,10 +234,10 @@ async function printReport(ctx, result) {
 	await logChain;
 }
 
-async function endTurn(result) {
+async function endTurn(ctx, result) {
 	if (!enabled()) return;
-	const t = getTurn();
-	if (result?.estadoFinal) t.estadoFinal = result.estadoFinal;
+	const t = ctx || getTurn();
+	if (result?.estadoFinal && t) t.estadoFinal = result.estadoFinal;
 
 	logIntegridad({
 		textoFinal: result?.texto,
