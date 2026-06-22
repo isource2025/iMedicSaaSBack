@@ -198,9 +198,10 @@ async function procesarMensajeEntrante({
 		await marcarMensajesRespondidos(idConversacion, msgIds);
 	}
 
-	if (res.respondido && agente.finalizar) {
+	if (res.respondido && (agente.ticket || agente.finalizar)) {
 		try {
 			await botConversacion.finalizarTrasReservaExitosa(idConversacion);
+			agenteTrace.logNota('Estado limpiado tras comprobante');
 		} catch (err) {
 			diag.warn('webhook', 'finalizarTrasReservaExitosa falló', { error: err.message });
 		}

@@ -14,7 +14,6 @@ const diag = require('../utils/diagLog');
 const agenteTrace = require('../utils/botAgenteTrace');
 
 const MAX_ITERACIONES_TOOLS = 10;
-const ULTIMA_RESERVA_VIGENTE_MS = 45 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Estado editable (borrador de la gestión)
@@ -28,49 +27,8 @@ function estadoInicial() {
 		turnoOfrecido: null,
 		candidatosProfesionales: [],
 		turnosConsultados: [],
-		ultimaReserva: null,
 		notas: null,
-		turnoParaTercero: false,
 	};
-}
-
-/** El turno es para otra persona (tía, hijo, etc.) — no reutilizar identidad previa. */
-function detectarTurnoParaTercero(texto) {
-	const t = String(texto || '')
-		.toLowerCase()
-		.normalize('NFD')
-		.replace(/\p{M}/gu, '');
-	if (/\bno es para mi\b/.test(t)) return true;
-	if (/\b(turno|para)\s+(otra|otro)\s+(persona|paciente)\b/.test(t)) return true;
-	if (
-		/\b(mi|para mi|de mi|a mi|la|el)\s+(tia|tio|mama|papa|padre|madre|hermano|hermana|hijo|hija|esposo|esposa|marido|mujer|novio|novia|abuela|abuelo|sobrino|sobrina|nene|nena|bebe)\b/.test(
-			t,
-		)
-	) {
-		return true;
-	}
-	if (/\bturno para (la|el|mi|su)\s+(tia|tio|mama|papa|padre|madre|hermano|hermana)\b/.test(t)) {
-		return true;
-	}
-	return false;
-}
-
-async function marcarTurnoParaTercero(estado, idConversacion, textoReferencia = '') {
-	estado.turnoParaTercero = true;
-	if (estado.paciente) {
-		estado.paciente = null;
-		estado.turnosConsultados = [];
-		await botConversacion.actualizarContextoPaciente(idConversacion, {
-			idPaciente: null,
-			dniPaciente: null,
-		});
-	}
-	if (textoReferencia) {
-		const nota = `Turno para otra persona (no quien escribe)`;
-		if (!String(estado.notas || '').includes(nota)) {
-			estado.notas = [estado.notas, nota].filter(Boolean).join(' | ');
-		}
-	}
 }
 
 function leerEstado(conv) {
@@ -90,30 +48,18 @@ function snapshotEstado(estado) {
 			? `${estado.turnoOfrecido.medico} ${estado.turnoOfrecido.fechaLegible} ${estado.turnoOfrecido.hora}`
 			: null,
 		candidatos: estado.candidatosProfesionales?.length || 0,
-		ultimaReserva: estado.ultimaReserva?.especialidad || null,
 		notas: estado.notas || null,
-		turnoParaTercero: Boolean(estado.turnoParaTercero),
 	};
 }
 
-function reiniciarEstadoAgente(estado, { conservarUltimaReserva = true } = {}) {
-	const ultima = conservarUltimaReserva ? estado.ultimaReserva : null;
+function reiniciarEstadoAgente(estado) {
 	const limpio = estadoInicial();
 	for (const k of Object.keys(estado)) delete estado[k];
 	Object.assign(estado, limpio);
-	if (ultima) estado.ultimaReserva = ultima;
 }
 
 async function guardarEstado(idConversacion, estado) {
 	await botConversacion.guardarContextoBot(idConversacion, { agente: estado });
-}
-
-function ultimaReservaVigente(estado) {
-	const u = estado.ultimaReserva;
-	if (!u?.reservadoEn) return null;
-	const t = Date.parse(u.reservadoEn);
-	if (!Number.isFinite(t) || Date.now() - t > ULTIMA_RESERVA_VIGENTE_MS) return null;
-	return u;
 }
 
 async function aplicarProfesionalElegido(estado, candidato) {
@@ -339,24 +285,6 @@ const TOOLS = [
 	{
 		type: 'function',
 		function: {
-			name: 'limpiar_identidad_paciente',
-			description:
-				'Borra paciente/DNI del estado cuando el turno es para otra persona (tía, mamá, hijo, etc.). Efecto: paciente=null, turnoParaTercero=true. Usar antes de identificar_paciente si cambió el beneficiario.',
-			parameters: { type: 'object', properties: {} },
-		},
-	},
-	{
-		type: 'function',
-		function: {
-			name: 'reutilizar_paciente_reciente',
-			description:
-				'Solo si ultimaReserva es reciente Y el paciente pide otro turno para LA MISMA persona (no tía/otro familiar). Carga identidad confirmada sin pedir DNI otra vez.',
-			parameters: { type: 'object', properties: {} },
-		},
-	},
-	{
-		type: 'function',
-		function: {
 			name: 'identificar_paciente',
 			description: 'Valida DNI en RENAPER/ficha. Efecto: setea paciente (confirmado=false).',
 			parameters: {
@@ -382,7 +310,8 @@ const TOOLS = [
 		type: 'function',
 		function: {
 			name: 'reservar_turno',
-			description: 'Reserva turnoOfrecido para paciente confirmado. Efecto: reinicia gestión conservando ultimaReserva.',
+			description:
+				'Reserva turnoOfrecido para paciente confirmado. Tras el comprobante el sistema limpia el estado para la próxima gestión.',
 			parameters: { type: 'object', properties: {} },
 		},
 	},
@@ -439,35 +368,6 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 		case 'actualizar_notas': {
 			estado.notas = String(args.texto || '').trim() || null;
 			resultado = { ok: true, notas: estado.notas };
-			break;
-		}
-
-		case 'reutilizar_paciente_reciente': {
-			if (estado.turnoParaTercero) {
-				resultado = {
-					error:
-						'El turno es para otra persona. Pedí el DNI de quien se atiende con identificar_paciente.',
-				};
-				break;
-			}
-			const u = ultimaReservaVigente(estado);
-			if (!u?.dni) {
-				resultado = { error: 'No hay reserva reciente para reutilizar identidad.' };
-				break;
-			}
-			estado.paciente = {
-				dni: u.dni,
-				idPaciente: u.idPaciente,
-				nombre: u.nombre,
-				confirmado: true,
-			};
-			if (u.idPaciente) {
-				await botConversacion.actualizarContextoPaciente(idConversacion, {
-					idPaciente: u.idPaciente,
-					dniPaciente: u.dni,
-				});
-			}
-			resultado = { reutilizado: true, nombre: u.nombre, dni: u.dni };
 			break;
 		}
 
@@ -592,12 +492,6 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 			resultado = await ejecutarBuscarTurno(args, estado);
 			break;
 
-		case 'limpiar_identidad_paciente': {
-			await marcarTurnoParaTercero(estado, idConversacion);
-			resultado = { ok: true, paciente: null, turnoParaTercero: true };
-			break;
-		}
-
 		case 'identificar_paciente': {
 			const dni = extraerDniDesdeTexto(String(args.dni || '')) || String(args.dni || '').replace(/\D/g, '');
 			if (!dni) {
@@ -649,7 +543,6 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 				break;
 			}
 			estado.paciente.confirmado = true;
-			estado.turnoParaTercero = false;
 			if (estado.paciente.idPaciente) {
 				await botConversacion.actualizarContextoPaciente(idConversacion, {
 					idPaciente: estado.paciente.idPaciente,
@@ -661,13 +554,6 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 		}
 
 		case 'reservar_turno': {
-			if (estado.turnoParaTercero) {
-				resultado = {
-					error:
-						'El turno es para otra persona. Pedí el DNI, identificá con identificar_paciente y confirmá antes de reservar.',
-				};
-				break;
-			}
 			if (!estado.paciente?.confirmado || !estado.paciente?.idPaciente) {
 				resultado = { error: 'Falta identificar y confirmar al paciente.' };
 				break;
@@ -678,6 +564,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 			}
 			try {
 				const t = estado.turnoOfrecido;
+				const nombrePaciente = estado.paciente.nombre;
 				const reserva = await botAgenda.reservarTurno({
 					matricula: t.matricula,
 					idPaciente: estado.paciente.idPaciente,
@@ -690,16 +577,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 				});
 				ctx.ticket = reserva?.ticket?.mensajeWhatsApp || null;
 				ctx.reservaOk = true;
-				const ultimaReserva = {
-					dni: estado.paciente.dni,
-					idPaciente: estado.paciente.idPaciente,
-					nombre: estado.paciente.nombre,
-					especialidad: estado.especialidad?.nombre || t.especialidadNombre,
-					medico: reserva?.medico || t.medico,
-					reservadoEn: new Date().toISOString(),
-				};
-				reiniciarEstadoAgente(estado, { conservarUltimaReserva: false });
-				estado.ultimaReserva = ultimaReserva;
+				reiniciarEstadoAgente(estado);
 				await botConversacion.actualizarContextoPaciente(idConversacion, {
 					idPaciente: null,
 					dniPaciente: null,
@@ -707,7 +585,7 @@ async function ejecutarHerramienta(nombre, args, ctx) {
 				resultado = {
 					reservado: true,
 					comprobante: reserva?.ticket?.codigo || null,
-					ultimaReserva,
+					paciente: reserva?.paciente?.nombre || nombrePaciente,
 				};
 			} catch (err) {
 				diag.warn('agente', 'reservar_turno falló', { error: err.message });
@@ -800,7 +678,6 @@ function construirSystemPrompt({ config, conv, estado }) {
 	const saludo = botSesionIa.contextoSaludo(conv);
 	const hoy = botSesionIa.fechaArgentinaHoy();
 	const nombreContacto = conv?.nombreContacto ? String(conv.nombreContacto).trim() : null;
-	const u = ultimaReservaVigente(estado);
 
 	const tieneCandidatosPendientes = Boolean(
 		estado.candidatosProfesionales?.length && !estado.profesional?.matricula,
@@ -808,14 +685,12 @@ function construirSystemPrompt({ config, conv, estado }) {
 
 	const estadoCompleto = {
 		paciente: estado.paciente,
-		turnoParaTercero: Boolean(estado.turnoParaTercero),
 		especialidad: estado.especialidad,
 		profesional: estado.profesional,
 		preferencia: estado.preferencia,
 		turnoOfrecido: estado.turnoOfrecido,
 		candidatosProfesionales: estado.candidatosProfesionales,
 		turnosConsultados: estado.turnosConsultados,
-		ultimaReserva: u,
 		notas: estado.notas,
 	};
 
@@ -845,16 +720,12 @@ function construirSystemPrompt({ config, conv, estado }) {
 		'',
 		'COMPORTAMIENTO natural:',
 		'- Si habla en primera persona de síntomas ("me duele la cabeza"), asumí que el turno es para quien escribe.',
-		'- Si el turno es para OTRA persona (tía, mamá, papá, hijo, hermano, "para otra persona", etc.): llamá limpiar_identidad_paciente (o ya está turnoParaTercero en ESTADO), pedí el DNI de QUIEN SE ATIENDE con identificar_paciente + confirmar_paciente. NUNCA uses reutilizar_paciente_reciente ni el DNI de ultimaReserva en ese caso.',
-		'- Solo pedí DNI explícito si menciona a otra persona o necesitás validar identidad para reservar.',
+		'- Si el turno es para otra persona (tía, mamá, hijo, etc.), pedí el DNI de quien se atiende e identificá con identificar_paciente + confirmar_paciente.',
+		'- Tras cada comprobante enviado, el sistema reinicia identidad y estado: un turno nuevo requiere identificar de nuevo.',
 		'- Si rechaza un turno o pide "antes"/"más cercano"/"otro día": registrar_preferencia_horario y buscar_turno de nuevo (liberar_profesional=true si hace falta otro médico de la misma especialidad).',
-		'- Si pide otro turno justo después de confirmar uno PARA LA MISMA PERSONA, usá reutilizar_paciente_reciente si ultimaReserva es reciente.',
 		'- Podés sobreescribir especialidad, profesional o preferencia cuando el paciente corrige.',
 		tieneCandidatosPendientes
 			? '⚠️ CONTEXTO AHORA: Hay candidatosProfesionales sin confirmar. Si el último mensaje delega elección ("cualquiera", etc.) → buscar_turno(liberar_profesional=true). Si nombra uno → confirmar_profesional_elegido.'
-			: '',
-		estado.turnoParaTercero
-			? '⚠️ CONTEXTO AHORA: Turno para OTRA persona — identidad previa invalidada. Pedí DNI de quien se atiende antes de reservar_turno.'
 			: '',
 		nombreContacto ? `- Quien escribe se llama ${nombreContacto} (WhatsApp); eso no es identidad clínica.` : '',
 		saludo.pautaInstruccion ? `Saludo: ${saludo.pautaInstruccion}` : '',
@@ -878,12 +749,6 @@ async function _responderCore({ idConversacion, conv, telefonoWhatsApp, historia
 	const config = await botConfigService.getBotConfig();
 	const estado = leerEstado(conv);
 	const texto = String(textoEntrada || '').trim();
-
-	if (detectarTurnoParaTercero(texto)) {
-		await marcarTurnoParaTercero(estado, idConversacion, texto);
-		await guardarEstado(idConversacion, estado);
-		agenteTrace.logNota('Turno para otra persona — identidad previa limpiada');
-	}
 
 	const ctx = {
 		estado,

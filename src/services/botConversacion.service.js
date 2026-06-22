@@ -940,18 +940,14 @@ async function finalizarTrasReservaExitosa(idConversacion) {
 	const botSesionIa = require('./botSesionIa.service');
 	const botAgente = require('./botAgente.service');
 	await checkConversationTables();
-	const convPre = await obtenerConversacion(idConversacion);
-	const ultimaReserva = botAgente.leerEstado(convPre).ultimaReserva || null;
 	await botSesionIa.resetearSesionIa(idConversacion);
 	const convTrasReset = await obtenerConversacion(idConversacion);
 	const meta = botSesionIa.extraerMetaPersistente(convTrasReset?.contextoBot);
-	const agente = botAgente.estadoInicial();
-	if (ultimaReserva) agente.ultimaReserva = ultimaReserva;
 	await guardarContextoBot(
 		idConversacion,
 		{
 			...(Object.keys(meta).length ? meta : {}),
-			agente,
+			agente: botAgente.estadoInicial(),
 		},
 		{ reemplazar: true },
 	);
