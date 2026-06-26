@@ -64,6 +64,8 @@ function contentTypeForAdjuntoFileName(fileName) {
     '.jpeg': 'image/jpeg',
     '.png': 'image/png',
     '.gif': 'image/gif',
+    '.dcm': 'application/dicom',
+    '.dicom': 'application/dicom',
     '.doc': 'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   };
@@ -106,14 +108,16 @@ const upload = multer({
       'image/jpg',
       'image/png',
       'image/gif',
+      'application/dicom',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ];
     
-    if (allowedTypes.includes(file.mimetype)) {
+    const isDicom = file.mimetype === 'application/dicom' || /\.dcm$/i.test(file.originalname || '');
+    if (allowedTypes.includes(file.mimetype) || isDicom) {
       cb(null, true);
     } else {
-      cb(new Error('Tipo de archivo no permitido. Solo PDF, imágenes (JPG, PNG, GIF) y documentos Word.'));
+      cb(new Error('Tipo de archivo no permitido. Solo PDF, imágenes (JPG, PNG, GIF), DICOM (.dcm) y documentos Word.'));
     }
   }
 });

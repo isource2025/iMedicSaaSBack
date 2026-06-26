@@ -96,6 +96,8 @@ class AdjuntosService {
       gif: 'image/gif',
       doc: 'application/msword',
       docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      dcm: 'application/dicom',
+      dicom: 'application/dicom',
     };
     return tipos[ext] || 'application/octet-stream';
   }
