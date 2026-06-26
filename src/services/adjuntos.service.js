@@ -98,6 +98,8 @@ class AdjuntosService {
       docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       dcm: 'application/dicom',
       dicom: 'application/dicom',
+      webm: 'video/webm',
+      mp4: 'video/mp4',
     };
     return tipos[ext] || 'application/octet-stream';
   }

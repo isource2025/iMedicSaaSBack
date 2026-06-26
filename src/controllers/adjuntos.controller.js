@@ -66,6 +66,8 @@ function contentTypeForAdjuntoFileName(fileName) {
     '.gif': 'image/gif',
     '.dcm': 'application/dicom',
     '.dicom': 'application/dicom',
+    '.webm': 'video/webm',
+    '.mp4': 'video/mp4',
     '.doc': 'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   };
@@ -99,7 +101,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB
+    fileSize: 100 * 1024 * 1024 // 100MB (videos DICOM)
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
@@ -109,15 +111,18 @@ const upload = multer({
       'image/png',
       'image/gif',
       'application/dicom',
+      'video/webm',
+      'video/mp4',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ];
     
     const isDicom = file.mimetype === 'application/dicom' || /\.dcm$/i.test(file.originalname || '');
-    if (allowedTypes.includes(file.mimetype) || isDicom) {
+    const isVideo = file.mimetype.startsWith('video/') || /\.(webm|mp4)$/i.test(file.originalname || '');
+    if (allowedTypes.includes(file.mimetype) || isDicom || isVideo) {
       cb(null, true);
     } else {
-      cb(new Error('Tipo de archivo no permitido. Solo PDF, imágenes (JPG, PNG, GIF), DICOM (.dcm) y documentos Word.'));
+      cb(new Error('Tipo de archivo no permitido. PDF, imágenes, DICOM (.dcm), video (WebM/MP4) y Word.'));
     }
   }
 });

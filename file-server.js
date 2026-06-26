@@ -77,6 +77,8 @@ app.get('/file', (req, res) => {
       '.gif': 'image/gif',
       '.dcm': 'application/dicom',
       '.dicom': 'application/dicom',
+      '.webm': 'video/webm',
+      '.mp4': 'video/mp4',
       '.doc': 'application/msword',
       '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     };
