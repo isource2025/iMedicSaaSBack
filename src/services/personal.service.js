@@ -427,7 +427,7 @@ async function crear(data) {
 						ApellidoNombre: input.ApellidoNombre,
 						NumeroDocumento: input.Numero != null ? String(input.Numero) : '',
 						Legajo: String(matriculaFinal),
-						CodOperador: truncStr(data.CodOperador, 20),
+						CodOperador: String(matriculaFinal),
 					});
 				} catch (userErr) {
 					await executeQuery(
@@ -1053,7 +1053,7 @@ async function crearCuentaPersonal(id, data) {
 	const usuario = await usersService.crearImPasswordParaPersonal(id, {
 		NombreRed: data.nombreRed,
 		Password: data.password,
-		CodOperador: data.codOperador,
+		CodOperador: _codOperadorDesdePersonal(personal),
 		ApellidoNombre: personal.ApellidoNombre,
 		NumeroDocumento: personal.NumeroDocumento != null ? String(personal.NumeroDocumento) : '',
 		Legajo:
@@ -1065,7 +1065,17 @@ async function crearCuentaPersonal(id, data) {
 }
 
 /**
- * Actualiza datos de acceso (NombreRed, CodOperador) sincronizados con imPersonal.
+ * Código operador en imPassword: deriva de la matrícula provincial del personal (no editable).
+ */
+function _codOperadorDesdePersonal(personal) {
+	if (personal.MatriculaProvincial != null && Number.isFinite(Number(personal.MatriculaProvincial))) {
+		return String(personal.MatriculaProvincial);
+	}
+	return String(personal.Valor);
+}
+
+/**
+ * Actualiza datos de acceso (solo NombreRed). El código operador no se modifica desde aquí.
  */
 async function actualizarCuentaPersonal(id, data) {
 	const personal = await obtenerPorId(id);
@@ -1088,7 +1098,7 @@ async function actualizarCuentaPersonal(id, data) {
 	}
 	const { apellido, nombres } = _splitApellidoNombre(personal.ApellidoNombre);
 	const usuario = await usersService.actualizarUsuario(id, {
-		codOperador: data.codOperador != null ? String(data.codOperador) : cuenta.CodOperador || '',
+		codOperador: cuenta.CodOperador || _codOperadorDesdePersonal(personal),
 		apellido,
 		nombres,
 		nombreRed,
