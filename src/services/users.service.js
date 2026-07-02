@@ -220,9 +220,42 @@ async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, 
   return id;
 }
 
-async function insertImPasswordManualId(fechaTipo, omitCodOperador, baseParamsSinCod, codOperadorVal, fechaClarionHoy) {
-  const maxIdResult = await executeQuery(`SELECT MAX(ValorPersonal) as maxId FROM imPassword`);
-  const nuevoValorPersonal = (maxIdResult[0].maxId || 0) + 1;
+function splitApellidoNombre(apellidoNombre) {
+  const s = String(apellidoNombre || '').trim();
+  if (!s) return { apellido: '', nombres: '' };
+  const comma = s.indexOf(',');
+  if (comma >= 0) {
+    return {
+      apellido: s.slice(0, comma).trim(),
+      nombres: s.slice(comma + 1).trim(),
+    };
+  }
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return { apellido: parts[0] || '', nombres: '' };
+  return { apellido: parts[0], nombres: parts.slice(1).join(' ') };
+}
+
+async function existeImPasswordPorValorPersonal(valorPersonal) {
+  const rows = await executeQuery(
+    `SELECT TOP 1 ValorPersonal FROM dbo.imPassword WHERE ValorPersonal = @p0`,
+    [{ value: valorPersonal, type: 'Int' }],
+  );
+  return rows.length > 0;
+}
+
+async function insertImPasswordManualId(
+  fechaTipo,
+  omitCodOperador,
+  baseParamsSinCod,
+  codOperadorVal,
+  fechaClarionHoy,
+  valorPersonalFijo = null,
+) {
+  let nuevoValorPersonal = valorPersonalFijo;
+  if (nuevoValorPersonal == null) {
+    const maxIdResult = await executeQuery(`SELECT MAX(ValorPersonal) as maxId FROM imPassword`);
+    nuevoValorPersonal = (maxIdResult[0].maxId || 0) + 1;
+  }
 
   const consulta =
     fechaTipo === 'int'
@@ -647,10 +680,126 @@ const actualizarUsuario = async (valorPersonal, userData) => {
   }
 };
 
+/**
+ * Crea registro en imPassword vinculado al Valor de imPersonal (mismo ValorPersonal).
+ * Usado al dar de alta personal con usuario de acceso.
+ */
+async function crearImPasswordParaPersonal(valorPersonal, data) {
+  if (valorPersonal == null || !Number.isFinite(Number(valorPersonal))) {
+    const e = new Error('ValorPersonal inválido para crear usuario');
+    e.statusCode = 400;
+    throw e;
+  }
+  const vp = Number(valorPersonal);
+  if (await existeImPasswordPorValorPersonal(vp)) {
+    const e = new Error('Este personal ya tiene un usuario de acceso configurado');
+    e.statusCode = 409;
+    throw e;
+  }
+
+  const nombreRed = String(data.NombreRed || data.nombreRed || '').trim();
+  const password = String(data.Password || data.password || '').trim();
+  if (!nombreRed) {
+    const e = new Error('El nombre de usuario (NombreRed) es obligatorio');
+    e.statusCode = 400;
+    throw e;
+  }
+  if (!password || password.length < 4) {
+    const e = new Error('La contraseña debe tener al menos 4 caracteres');
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const { apellido, nombres } = splitApellidoNombre(data.ApellidoNombre || data.apellidoNombre);
+  const fechaTipo = await getImPasswordFechaActualTipo();
+  const hoy = new Date();
+  const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+  const fechaClarionHoy = convertirFechaAClarion(fechaLocalStr);
+
+  const baseParamsSinCod = [
+    { value: data.apellido || apellido, type: 'VarChar' },
+    { value: data.nombres || nombres, type: 'VarChar' },
+    { value: nombreRed, type: 'VarChar' },
+    { value: password, type: 'VarChar' },
+    {
+      value:
+        data.numeroDocumento != null
+          ? String(data.numeroDocumento)
+          : data.NumeroDocumento != null
+            ? String(data.NumeroDocumento)
+            : '',
+      type: 'VarChar',
+    },
+    {
+      value:
+        data.legajo != null
+          ? String(data.legajo)
+          : data.Legajo != null
+            ? String(data.Legajo)
+            : String(vp),
+      type: 'VarChar',
+    },
+  ];
+
+  const omitCodOperador = await getImPasswordCodOperadorIsIdentity();
+  const usarIdentity = await getImPasswordValorPersonalIsIdentity();
+
+  if (usarIdentity) {
+    const e = new Error(
+      'La base tiene ValorPersonal autonumérico en imPassword; no se puede vincular al ID del personal. Cree el usuario desde Administración > Usuarios.',
+    );
+    e.statusCode = 422;
+    throw e;
+  }
+
+  try {
+    await insertImPasswordManualId(
+      fechaTipo,
+      omitCodOperador,
+      baseParamsSinCod,
+      data.CodOperador || data.codOperador || '',
+      fechaClarionHoy,
+      vp,
+    );
+  } catch (err) {
+    const dup = mapDuplicateKeyErrorToHttp(err);
+    if (dup) {
+      const e = new Error(dup.message);
+      e.statusCode = dup.statusCode;
+      throw e;
+    }
+    if (isSqlIdentityInsertError(err)) {
+      const e = new Error(
+        'No se pudo vincular el usuario al personal (conflicto de ID en imPassword).',
+      );
+      e.statusCode = 422;
+      throw e;
+    }
+    throw err;
+  }
+
+  await afterUserMutation(vp);
+  return obtenerUsuarioPorId(vp);
+}
+
+/**
+ * Cuenta de acceso vinculada a un personal (sin exponer la contraseña).
+ * @param {number} valorPersonal
+ * @returns {Promise<Object|null>}
+ */
+async function obtenerCuentaPorPersonal(valorPersonal) {
+  const usuario = await obtenerUsuarioPorId(valorPersonal);
+  if (!usuario) return null;
+  const { Password: _pw, ...sinPassword } = usuario;
+  return { tieneCuenta: true, ...sinPassword };
+}
+
 module.exports = {
   obtenerTodosLosUsuarios,
   obtenerUsuarioPorId,
+  obtenerCuentaPorPersonal,
   crearUsuario,
+  crearImPasswordParaPersonal,
   cambiarPassword,
   asignarSector,
   quitarSector,

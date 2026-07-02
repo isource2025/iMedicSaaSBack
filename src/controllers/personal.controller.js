@@ -448,6 +448,93 @@ const actualizarAdicionalesPersonal = async (req, res) => {
 	}
 };
 
+const obtenerCuentaPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const data = await personalService.obtenerCuentaPersonal(id);
+		if (!data) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.obtenerCuentaPersonal] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al obtener la cuenta de acceso' });
+	}
+};
+
+const crearCuentaPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	const { nombreRed, password, codOperador } = req.body || {};
+	if (!String(nombreRed || '').trim()) {
+		return res.status(400).json({ success: false, mensaje: 'El nombre de usuario es obligatorio' });
+	}
+	if (!String(password || '').trim() || String(password).trim().length < 4) {
+		return res.status(400).json({
+			success: false,
+			mensaje: 'La contraseña debe tener al menos 4 caracteres',
+		});
+	}
+	try {
+		const data = await personalService.crearCuentaPersonal(id, {
+			nombreRed,
+			password,
+			codOperador,
+		});
+		res.status(201).json({
+			success: true,
+			mensaje: 'Cuenta de acceso creada correctamente',
+			data,
+		});
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.crearCuentaPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al crear la cuenta de acceso',
+		});
+	}
+};
+
+const actualizarCuentaPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const data = await personalService.actualizarCuentaPersonal(id, req.body || {});
+		res.json({
+			success: true,
+			mensaje: 'Cuenta de acceso actualizada',
+			data,
+		});
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.actualizarCuentaPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al actualizar la cuenta de acceso',
+		});
+	}
+};
+
+const cambiarPasswordCuentaPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	const { password } = req.body || {};
+	if (!password) {
+		return res.status(400).json({ success: false, mensaje: 'La contraseña es requerida' });
+	}
+	try {
+		await personalService.cambiarPasswordCuentaPersonal(id, password);
+		res.json({ success: true, mensaje: 'Contraseña actualizada correctamente' });
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.cambiarPasswordCuentaPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al cambiar la contraseña',
+		});
+	}
+};
+
 module.exports = {
 	listar,
 	obtenerPorId,
@@ -477,4 +564,8 @@ module.exports = {
 	actualizarCodigoFacturacionPersonal,
 	eliminarCodigoFacturacionPersonal,
 	actualizarAdicionalesPersonal,
+	obtenerCuentaPersonal,
+	crearCuentaPersonal,
+	actualizarCuentaPersonal,
+	cambiarPasswordCuentaPersonal,
 };

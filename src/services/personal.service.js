@@ -17,6 +17,7 @@ const {
 	convertirFechaClarionADate,
 } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const usersService = require('./users.service');
 
 const ADMIN_VALOR_THRESHOLD = 900000; // Valor >= 900000 se considera "reservado" (admin/sistema)
 
@@ -343,6 +344,27 @@ async function crear(data) {
 		throw e;
 	}
 
+	const crearUsuario =
+		data.CrearUsuario === true ||
+		data.CrearUsuario === 1 ||
+		data.CrearUsuario === 'true' ||
+		data.CrearUsuario === '1';
+	const nombreRedUsuario = truncStr(data.NombreRed, 50);
+	const passwordUsuario = strOrNull(data.Password);
+
+	if (crearUsuario) {
+		if (!nombreRedUsuario) {
+			const e = new Error('El nombre de usuario es obligatorio para crear acceso al sistema');
+			e.statusCode = 400;
+			throw e;
+		}
+		if (!passwordUsuario || passwordUsuario.length < 4) {
+			const e = new Error('La contraseña debe tener al menos 4 caracteres');
+			e.statusCode = 400;
+			throw e;
+		}
+	}
+
 	// Intentar hasta 5 veces por si hay carrera en MAX+1
 	let lastErr = null;
 	for (let intento = 0; intento < 5; intento++) {
@@ -397,6 +419,24 @@ async function crear(data) {
 					{ value: 1, type: 'TinyInt' },
 				],
 			);
+			if (crearUsuario) {
+				try {
+					await usersService.crearImPasswordParaPersonal(nuevoValor, {
+						NombreRed: nombreRedUsuario,
+						Password: passwordUsuario,
+						ApellidoNombre: input.ApellidoNombre,
+						NumeroDocumento: input.Numero != null ? String(input.Numero) : '',
+						Legajo: String(matriculaFinal),
+						CodOperador: truncStr(data.CodOperador, 20),
+					});
+				} catch (userErr) {
+					await executeQuery(
+						`DELETE FROM dbo.imPersonal WHERE Valor = @p0`,
+						[{ value: nuevoValor, type: 'Int' }],
+					).catch(() => {});
+					throw userErr;
+				}
+			}
 			const tenantId = resolveTenantEmpresaId();
 			if (tenantId != null) {
 				await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
@@ -966,6 +1006,125 @@ async function actualizarAdicionalesPersonal(valor, body) {
 	return obtenerPorId(valor);
 }
 
+function _sanitizeCuenta(usuario) {
+	if (!usuario) return null;
+	const { Password: _pw, ...rest } = usuario;
+	return { tieneCuenta: true, ...rest };
+}
+
+function _splitApellidoNombre(apellidoNombre) {
+	const s = String(apellidoNombre || '').trim();
+	if (!s) return { apellido: '', nombres: '' };
+	const comma = s.indexOf(',');
+	if (comma >= 0) {
+		return {
+			apellido: s.slice(0, comma).trim(),
+			nombres: s.slice(comma + 1).trim(),
+		};
+	}
+	const parts = s.split(/\s+/).filter(Boolean);
+	if (parts.length <= 1) return { apellido: parts[0] || '', nombres: '' };
+	return { apellido: parts[0], nombres: parts.slice(1).join(' ') };
+}
+
+/**
+ * Estado de la cuenta de acceso (imPassword) vinculada al personal.
+ */
+async function obtenerCuentaPersonal(id) {
+	const personal = await obtenerPorId(id);
+	if (!personal) return null;
+	const cuenta = await usersService.obtenerCuentaPorPersonal(id);
+	return {
+		tieneCuenta: !!cuenta,
+		cuenta: cuenta || null,
+	};
+}
+
+/**
+ * Crea cuenta de acceso para personal existente (mismo ValorPersonal).
+ */
+async function crearCuentaPersonal(id, data) {
+	const personal = await obtenerPorId(id);
+	if (!personal) {
+		const e = new Error('Personal no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+	const usuario = await usersService.crearImPasswordParaPersonal(id, {
+		NombreRed: data.nombreRed,
+		Password: data.password,
+		CodOperador: data.codOperador,
+		ApellidoNombre: personal.ApellidoNombre,
+		NumeroDocumento: personal.NumeroDocumento != null ? String(personal.NumeroDocumento) : '',
+		Legajo:
+			personal.MatriculaProvincial != null
+				? String(personal.MatriculaProvincial)
+				: String(id),
+	});
+	return _sanitizeCuenta(usuario);
+}
+
+/**
+ * Actualiza datos de acceso (NombreRed, CodOperador) sincronizados con imPersonal.
+ */
+async function actualizarCuentaPersonal(id, data) {
+	const personal = await obtenerPorId(id);
+	if (!personal) {
+		const e = new Error('Personal no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+	const cuenta = await usersService.obtenerCuentaPorPersonal(id);
+	if (!cuenta) {
+		const e = new Error('Este personal no tiene cuenta de acceso configurada');
+		e.statusCode = 404;
+		throw e;
+	}
+	const nombreRed = String(data.nombreRed || '').trim();
+	if (!nombreRed) {
+		const e = new Error('El nombre de usuario (NombreRed) es obligatorio');
+		e.statusCode = 400;
+		throw e;
+	}
+	const { apellido, nombres } = _splitApellidoNombre(personal.ApellidoNombre);
+	const usuario = await usersService.actualizarUsuario(id, {
+		codOperador: data.codOperador != null ? String(data.codOperador) : cuenta.CodOperador || '',
+		apellido,
+		nombres,
+		nombreRed,
+		numeroDocumento:
+			personal.NumeroDocumento != null ? String(personal.NumeroDocumento) : '',
+		legajo: cuenta.Legajo || String(id),
+	});
+	return _sanitizeCuenta(usuario);
+}
+
+/**
+ * Cambia la contraseña de la cuenta vinculada al personal.
+ */
+async function cambiarPasswordCuentaPersonal(id, nuevaPassword) {
+	const personal = await obtenerPorId(id);
+	if (!personal) {
+		const e = new Error('Personal no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+	const cuenta = await usersService.obtenerCuentaPorPersonal(id);
+	if (!cuenta) {
+		const e = new Error('Este personal no tiene cuenta de acceso configurada');
+		e.statusCode = 404;
+		throw e;
+	}
+	const password = String(nuevaPassword || '').trim();
+	if (!password || password.length < 4) {
+		const e = new Error('La contraseña debe tener al menos 4 caracteres');
+		e.statusCode = 400;
+		throw e;
+	}
+	await usersService.cambiarPassword(id, password);
+	return true;
+}
+
 module.exports = {
 	listar,
 	obtenerPorId,
@@ -995,4 +1154,8 @@ module.exports = {
 	actualizarCodigoFacturacionPersonal,
 	eliminarCodigoFacturacionPersonal,
 	actualizarAdicionalesPersonal,
+	obtenerCuentaPersonal,
+	crearCuentaPersonal,
+	actualizarCuentaPersonal,
+	cambiarPasswordCuentaPersonal,
 };

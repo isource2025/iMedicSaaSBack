@@ -49,6 +49,11 @@ router.delete('/:id/codigos-facturacion', requirePermiso('CONFIGURACION.PERSONAL
 
 router.patch('/:id/adicionales', requirePermiso('CONFIGURACION.PERSONAL.EDITAR'), personalController.actualizarAdicionalesPersonal);
 
+router.get('/:id/cuenta', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerCuentaPersonal);
+router.post('/:id/cuenta', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.crearCuentaPersonal);
+router.put('/:id/cuenta', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.actualizarCuentaPersonal);
+router.put('/:id/cuenta/password', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.cambiarPasswordCuentaPersonal);
+
 router.get('/', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listar);
 router.get('/:id', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerPorId);
 router.post('/', requirePermiso('CONFIGURACION.PERSONAL.CREAR'), personalController.crear);
