@@ -1,6 +1,7 @@
 // src/services/bedsService.ts
 
 const { executeQuery } = require('../models/db');
+const { enrichControlesWithIMC } = require('../utils/antropometria');
 
 /**
  * Obtener todas las camas desde imHabitacionCamas
@@ -318,6 +319,9 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') =
       icf.Rectal,
       icf.Saturometria,
       icf.HGT,
+      icf.Peso,
+      icf.Talla,
+      icf.IMC,
       icf.Observaciones,
       icf.Profesional
     FROM 
@@ -330,7 +334,8 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') =
 
 	const parametros = [{ value: numeroVisita }];
 	try {
-		return await executeQuery(consulta, parametros);
+		const rows = await executeQuery(consulta, parametros);
+		return enrichControlesWithIMC(rows);
 	} catch (error) {
 		console.error('Error al obtener controles frecuentes por visita:', error);
 		console.error('Parámetros:', JSON.stringify(parametros));

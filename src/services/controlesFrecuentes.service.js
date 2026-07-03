@@ -1,6 +1,7 @@
 const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion, convertirHoraAClarion } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -55,6 +56,7 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
       cf.Saturometria,
       cf.Peso,
       cf.Talla,
+      cf.IMC,
       cf.IdTurno,
       cf.IdHci
     FROM dbo.imInterCtrlFrecuente AS cf
@@ -79,7 +81,7 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
             length: resultado?.length,
             firstRecord: resultado?.[0]
         });
-        return resultado;
+        return enrichControlesWithIMC(resultado);
     } catch (error) {
         console.error("Error al obtener controles frecuentes por visita y fecha:", error);
         console.error("Parámetros:", JSON.stringify(parametros));
@@ -124,6 +126,7 @@ const obtenerControlPorId = async (valor) => {
       cf.Saturometria,
       cf.Peso,
       cf.Talla,
+      cf.IMC,
       cf.IdTurno,
       cf.IdHci
     FROM dbo.imInterCtrlFrecuente AS cf
@@ -134,7 +137,7 @@ const obtenerControlPorId = async (valor) => {
     const parametros = [{ value: valor }];
     try {
         const resultado = await executeQuery(consulta, parametros);
-        return Array.isArray(resultado) && resultado.length > 0 ? resultado[0] : null;
+        return Array.isArray(resultado) && resultado.length > 0 ? enrichControlWithIMC(resultado[0]) : null;
     } catch (error) {
         console.error("Error al obtener control frecuente por ID:", error);
         console.error("Parámetros:", JSON.stringify(parametros));
@@ -198,6 +201,10 @@ const crearControl = async (data) => {
     const fechaControlClarion = convertirFechaAClarion(data.fechaControl);
     const horaControlClarion = convertirHoraAClarion(data.horaControl + ':00');
 
+    const peso = data.peso || 0;
+    const talla = data.talla || 0;
+    const imc = calcularIMC(peso, talla);
+
     // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para numéricos, "" para strings
     const sql = `
         INSERT INTO dbo.imInterCtrlFrecuente (
@@ -205,7 +212,7 @@ const crearControl = async (data) => {
             FechaControl, HoraControl,
             Pulso, Maximo, Minimo, FrecuenciaRespiratoria,
             Axilar, Rectal, Hgt, PAMedia, Saturometria,
-            Peso, Talla, IdSector, IdTurno, Nroindicacion,
+            Peso, Talla, IMC, IdSector, IdTurno, Nroindicacion,
             Observaciones, IdHci
         )
         OUTPUT INSERTED.Valor
@@ -214,8 +221,8 @@ const crearControl = async (data) => {
             @param5, @param6,
             @param7, @param8, @param9, @param10,
             @param11, @param12, @param13, @param14, @param15,
-            @param16, @param17, @param18, @param19, @param20,
-            @param21, @param22
+            @param16, @param17, @param18, @param19, @param20, @param21,
+            @param22, @param23
         )
     `;
 
@@ -236,13 +243,14 @@ const crearControl = async (data) => {
         { value: data.glucemia ? String(data.glucemia) : '0' },             // @param13 (Hgt es varchar)
         { value: data.presionMedia || 0 },                                  // @param14
         { value: data.saturacion || 0 },                                    // @param15
-        { value: data.peso || 0 },                                          // @param16 Peso
-        { value: data.talla || 0 },                                         // @param17 Talla
-        { value: data.idSector || '' },                                     // @param18
-        { value: data.idTurno || 0 },                                       // @param19 IdTurno
-        { value: 0 },                                                       // @param20 Nroindicacion
-        { value: normalizarTextoParaClarionAnsi(data.observaciones || '') }, // @param21
-        { value: data.idHci || 0 },                                         // @param22 IdHci (0 = no viene de HC)
+        { value: peso },                                                    // @param16 Peso
+        { value: talla },                                                   // @param17 Talla
+        { value: imc },                                                     // @param18 IMC
+        { value: data.idSector || '' },                                     // @param19
+        { value: data.idTurno || 0 },                                       // @param20 IdTurno
+        { value: 0 },                                                       // @param21 Nroindicacion
+        { value: normalizarTextoParaClarionAnsi(data.observaciones || '') }, // @param22
+        { value: data.idHci || 0 },                                         // @param23 IdHci (0 = no viene de HC)
     ];
 
     try {

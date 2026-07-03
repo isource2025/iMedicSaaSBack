@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const hciService = require('./hci.service');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { calcularIMC } = require('../utils/antropometria');
 
 /**
  * Servicio integrado para Signos Vitales
@@ -109,6 +110,8 @@ class SignosVitalesService {
       if (antropometricos.estadoNutricional) datosHCI.SV_ESTADONUTRICIONAL = antropometricos.estadoNutricional;
       if (antropometricos.perimetroAbdominal) datosHCI.A_PERIMETRO = String(antropometricos.perimetroAbdominal);
       if (antropometricos.impresionGeneral) datosHCI.SV_IMPRESIONGENERAL = antropometricos.impresionGeneral;
+      const imc = calcularIMC(antropometricos.pesoActual, antropometricos.talla);
+      if (imc > 0) datosHCI.IMC = String(imc);
     }
     
     return datosHCI;
@@ -162,6 +165,8 @@ class SignosVitalesService {
       if (medibles.glucemia) datosControl.Hgt = medibles.glucemia;
       if (medibles.peso) datosControl.Peso = medibles.peso;
       if (medibles.talla) datosControl.Talla = medibles.talla;
+      const imc = calcularIMC(medibles.peso ?? datosControl.Peso, medibles.talla ?? datosControl.Talla);
+      if (imc > 0) datosControl.IMC = imc;
       if (medibles.observaciones) datosControl.Observaciones = medibles.observaciones;
     }
     
@@ -287,6 +292,7 @@ class SignosVitalesService {
       'Rectal': 'Real',
       'Peso': 'Decimal',
       'Talla': 'Decimal',
+      'IMC': 'Decimal',
       'IdSector': 'VarChar',
       'Observaciones': 'VarChar'
     };

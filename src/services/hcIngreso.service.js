@@ -4,6 +4,7 @@ const {
     convertirHoraAClarion,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { calcularIMC } = require("../utils/antropometria");
 
 /** Texto libre / memos hacia imHCI (ANSI Clarion). */
 function valorTextoHci(v) {
@@ -142,10 +143,11 @@ const guardarSignosVitalesEnControles = async (data) => {
         const axilar = data.SV_TAX ? parseFloat(data.SV_TAX) || 0 : 0;
         const peso = data.SV_PESOACTUAL ? parseFloat(data.SV_PESOACTUAL) || 0 : 0;
         const talla = data.SV_TALLA ? parseFloat(data.SV_TALLA) || 0 : 0;
+        const imc = calcularIMC(peso, talla);
         const glucemia = data.SV_GLUCEMIA ? parseInt(data.SV_GLUCEMIA) || 0 : 0;
         
         // Verificar si hay al menos un signo vital para guardar
-        const haySignosVitales = maximo || minimo || pulso || frecResp || axilar || glucemia || peso || talla;
+        const haySignosVitales = maximo || minimo || pulso || frecResp || axilar || glucemia || peso || talla || imc;
         
         if (!haySignosVitales) {
             console.log('No hay signos vitales para guardar en controles frecuentes');
@@ -158,7 +160,7 @@ const guardarSignosVitalesEnControles = async (data) => {
                 FechaCarga, HoraCarga, OperadorCarga, Profesional,
                 FechaControl, HoraControl,
                 Pulso, Maximo, Minimo, FrecuenciaRespiratoria,
-                Axilar, Rectal, Hgt, Peso, Talla,
+                Axilar, Rectal, Hgt, Peso, Talla, IMC,
                 Saturometria, PAMedia,
                 IdSector, IdTurno, Nroindicacion,
                 Observaciones, IdHci
@@ -169,10 +171,10 @@ const guardarSignosVitalesEnControles = async (data) => {
                 @param1, @param2, @param3, @param4,
                 @param5, @param6,
                 @param7, @param8, @param9, @param10,
-                @param11, @param12, @param13, @param14, @param15,
-                @param16, @param17,
-                @param18, @param19, @param20,
-                @param21, @param22
+                @param11, @param12, @param13, @param14, @param15, @param16,
+                @param17, @param18,
+                @param19, @param20, @param21,
+                @param22, @param23
             );
         `;
         
@@ -195,6 +197,7 @@ const guardarSignosVitalesEnControles = async (data) => {
             { value: glucemia },          // Hgt
             { value: peso },
             { value: talla },
+            { value: imc },
             { value: 0 },                 // Saturometria
             { value: 0 },                 // PAMedia
             { value: normalizarIdSector(data.IdSector) }, // IdSector
@@ -393,7 +396,7 @@ const buildDynamicFields = (data) => {
     });
     
     // Campos especiales sin prefijo que también son parte de la HC
-    ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO'].forEach(campo => {
+    ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO', 'IMC'].forEach(campo => {
         if (data[campo] !== undefined && data[campo] !== null) {
             columns.push(`[${campo}]`);
             values.push(`@param${paramIndex}`);
@@ -501,7 +504,7 @@ const actualizarHCIngreso = async (idHCIngreso, data, auth = null) => {
         });
         
         // Campos especiales sin prefijo
-        ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO'].forEach(campo => {
+        ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO', 'IMC'].forEach(campo => {
             if (dataConAutor[campo] !== undefined) {
                 setClauses.push(`[${campo}] = @param${paramIndex}`);
                 params.push({ value: dataConAutor[campo] !== null ? valorTextoHci(dataConAutor[campo]) : '' });

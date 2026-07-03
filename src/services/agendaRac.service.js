@@ -57,7 +57,7 @@ const SELECT_CONTROL = `
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(cf.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
   cf.Pulso, cf.Maximo, cf.Minimo, cf.FrecuenciaRespiratoria,
   cf.Axilar, cf.Rectal, cf.Hgt, cf.PAMedia, cf.Saturometria,
-  cf.Peso, cf.Talla, cf.Observaciones, cf.IdTurno, cf.IdHci,
+  cf.Peso, cf.Talla, cf.IMC, cf.Observaciones, cf.IdTurno, cf.IdHci,
   pw1.Apellido AS OperadorApellido, pw1.Nombres AS OperadorNombres
 `;
 

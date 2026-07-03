@@ -153,6 +153,8 @@ const crearControl = async (req, res) => {
             temperaturaRectal,
             glucemia,
             saturacion,
+            peso,
+            talla,
             observaciones,
             idSector
         } = req.body;
@@ -189,6 +191,8 @@ const crearControl = async (req, res) => {
             temperaturaRectal: temperaturaRectal ? parseFloat(temperaturaRectal) : 0,
             glucemia: glucemia ? parseInt(glucemia) : 0,
             saturacion: saturacion ? parseInt(saturacion) : 0,
+            peso: peso ? parseFloat(peso) : 0,
+            talla: talla ? parseFloat(talla) : 0,
             observaciones: observaciones || '',
             idSector: idSector || '',
         });
