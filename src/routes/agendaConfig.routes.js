@@ -6,6 +6,7 @@ const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const ctrl = require('../controllers/agendaConfig.controller');
 const agendaCtrl = require('../controllers/agenda.controller');
 const racCtrl = require('../controllers/agendaRac.controller');
+const agendaAdjCtrl = require('../controllers/agendaAdjuntos.controller');
 
 router.use(requireAuth, requireTenant);
 
@@ -27,6 +28,11 @@ router.get(
 );
 
 // RAC de enfermería por turno
+router.get(
+	'/turnos/:idTurno/detalle',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.obtenerDetalleAtencion,
+);
 router.get(
 	'/turnos/:idTurno/rac',
 	requirePermiso('TURNOS.AGENDA.VER'),
@@ -58,6 +64,19 @@ router.patch(
 	racCtrl.actualizarTriage,
 );
 
+// Adjuntos por turno (agenda, pre-cierre)
+router.get(
+	'/turnos/:idTurno/adjuntos',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaAdjCtrl.listarAdjuntosTurno,
+);
+router.post(
+	'/turnos/:idTurno/adjuntos',
+	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	agendaAdjCtrl.uploadMiddleware,
+	agendaAdjCtrl.subirAdjuntoTurno,
+);
+
 // Búsqueda CIE-10 (para cierre de turno)
 router.get(
 	'/diagnosticos/buscar',
@@ -70,6 +89,20 @@ router.get(
 	'/clientes/buscar',
 	requirePermiso('TURNOS.AGENDA.VER'),
 	agendaCtrl.buscarClientes,
+);
+
+// Búsqueda tipos pedidos/estudios (procedimientos y solicitudes)
+router.get(
+	'/tipos-pedidos-estudios/buscar',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.buscarTiposPedidosEstudios,
+);
+
+// Sectores/servicios receptores para pedidos de estudios
+router.get(
+	'/sectores-receptor-estudios',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.listarSectoresReceptorEstudios,
 );
 
 // Turnos históricos de un paciente (búsqueda en agenda)
@@ -148,6 +181,16 @@ router.patch(
 	'/:matricula/turnos/:idTurno/cancelar',
 	requirePermiso('TURNOS.AGENDA.EDITAR'),
 	agendaCtrl.cancelarTurno,
+);
+router.patch(
+	'/:matricula/turnos/:idTurno/llegada',
+	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	agendaCtrl.marcarLlegada,
+);
+router.patch(
+	'/:matricula/turnos/:idTurno/ingreso',
+	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	agendaCtrl.marcarIngreso,
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/cerrar',

@@ -18,6 +18,12 @@ let empresasColumnsCache = null;
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
 const REQUEST_MS = Number(process.env.TENANT_REQUEST_TIMEOUT_MS) || 120000;
 
+function isLocalDevOnly() {
+	return ['1', 'true', 'yes', 'on'].includes(
+		String(process.env.LOCAL_DEV_ONLY || '').trim().toLowerCase(),
+	);
+}
+
 /** Misma estrategia que database.js: IP + puerto (sin instanceName salvo que esté en la fila Empresas). */
 function envDefaultConfig() {
 	return {
@@ -39,6 +45,10 @@ function envDefaultConfig() {
 
 function rowToSqlConfig(row) {
 	const empresa = normalizeEmpresaRow(row);
+	if (isLocalDevOnly() && isPlatformSqlConfigured()) {
+		console.log('[tenantDb] LOCAL_DEV_ONLY=1 → conexión tenant desde .env DB_* (ignora DbServer remoto en Empresas)');
+		return envDefaultConfig();
+	}
 	if (!empresaRowHasSqlConnection(empresa)) {
 		if (isPlatformSqlConfigured()) {
 			return envDefaultConfig();

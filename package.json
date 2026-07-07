@@ -6,10 +6,12 @@
 	"scripts": {
 		"start": "node src/server.js",
 		"dev": "nodemon src/server.js",
+		"dev:lan": "nodemon src/server.js",
 		"file-server": "node file-server.js",
 		"dev:file-server": "nodemon file-server.js",
 		"db:impassword": "node scripts/diagnostico_impassword.js",
 		"db:super-admin": "node scripts/setup_super_admin.js",
+		"db:super-admin:mysql": "node scripts/crear_super_admin_mysql.js",
 		"auth:mysql:sync": "node scripts/sync_login_auth_mysql.js",
 		"auth:mysql:platform-migrate": "node scripts/apply_platform_mysql.js",
 		"auth:mysql:infra-migrate": "node scripts/apply_infra_mysql.js",
@@ -24,7 +26,9 @@
 		"test:http:bot": "node scripts/test_http_bot.js",
 		"test:simulate:railway": "node scripts/simulate_railway_whatsapp_flow.js",
 		"test:simulate:railway:prod": "node scripts/simulate_railway_whatsapp_flow.js https://imedicwsback-production.up.railway.app",
-		"diag:crypto": "node scripts/diag_crypto_env.js"
+		"diag:crypto": "node scripts/diag_crypto_env.js",
+		"diag:railway": "node scripts/diag_railway_conexiones.js",
+		"diag:railway:probe": "node scripts/diag_railway_conexiones.js --probe"
 	},
 	"dependencies": {
 		"axios": "^1.13.6",

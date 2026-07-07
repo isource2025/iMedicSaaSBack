@@ -8,26 +8,46 @@ const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
+let idTurnoColumnReady = false;
+
+async function ensureIdTurnoColumn() {
+  if (idTurnoColumnReady) return;
+  const cols = await executeQuery(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_NAME = 'imPedidosEstudiosAdjuntos' AND COLUMN_NAME = 'IdTurno'`,
+  );
+  if (!cols?.length) {
+    await executeQuery(`ALTER TABLE dbo.imPedidosEstudiosAdjuntos ADD IdTurno INT NULL`);
+    console.log('[adjuntos] Columna IdTurno agregada a imPedidosEstudiosAdjuntos');
+  }
+  idTurnoColumnReady = true;
+}
+
 class AdjuntosService {
   /**
-   * Subir archivo adjunto para una visita
+   * Subir archivo adjunto para una visita y/o turno de agenda (pre-cierre).
    */
   async subirAdjunto(data, file, cargadoPor, patchServidor) {
     try {
+      await ensureIdTurnoColumn();
       const rutaArchivo = patchServidor || file.path;
       const idTipo =
         data.idTipoImagen != null && String(data.idTipoImagen).trim() !== ''
           ? String(data.idTipoImagen).trim()
           : null;
+      const numeroVisita = Number(data.numeroVisita) > 0 ? Number(data.numeroVisita) : 0;
+      const idTurno = Number(data.idTurno) > 0 ? Number(data.idTurno) : null;
 
       const rows = await executeQuery(
         `
-          INSERT INTO imPedidosEstudiosAdjuntos (NumeroVisita, Descripcion, Patch, PatchServidor, Fecha, IdOperador, idtipoimagen)
+          INSERT INTO imPedidosEstudiosAdjuntos
+            (NumeroVisita, IdTurno, Descripcion, Patch, PatchServidor, Fecha, IdOperador, idtipoimagen)
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6)
+          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)
         `,
         [
-          { value: data.numeroVisita, type: 'Int' },
+          { value: numeroVisita, type: 'Int' },
+          { value: idTurno, type: 'Int' },
           {
             value: normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }),
             type: 'NVarChar',
@@ -42,7 +62,8 @@ class AdjuntosService {
 
       const idAdjunto = rows[0]?.IdAdjunto;
 
-      console.log(`✅ Adjunto subido para visita ${data.numeroVisita}: ${idAdjunto} - ${file.originalname}`);
+      const ref = idTurno ? `turno ${idTurno}` : `visita ${numeroVisita}`;
+      console.log(`✅ Adjunto subido para ${ref}: ${idAdjunto} - ${file.originalname}`);
       console.log(`📁 Ruta en servidor: ${rutaArchivo}`);
 
       return {
@@ -219,6 +240,77 @@ class AdjuntosService {
       console.error('❌ Error al obtener adjuntos por visita:', error);
       throw error;
     }
+  }
+
+  /**
+   * Adjuntos vinculados a un turno (pre-cierre) o ya migrados a su visita.
+   */
+  async getAdjuntosPorTurno(idTurno) {
+    try {
+      await ensureIdTurnoColumn();
+      const id = Number(idTurno);
+      const rows = await executeQuery(
+        `
+          SELECT
+            a.IdAdjunto,
+            a.NumeroVisita,
+            a.IdTurno,
+            a.Descripcion,
+            a.PatchServidor,
+            a.idtipoimagen,
+            LTRIM(RTRIM(t.desctipoimagen)) AS TipoImagenNombre,
+            a.Fecha,
+            a.IdOperador,
+            LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
+          FROM imPedidosEstudiosAdjuntos a
+          LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
+          LEFT JOIN hctiposimagenes t ON a.idtipoimagen = t.tipoimagen
+          WHERE a.IdTurno = @p0
+             OR a.NumeroVisita IN (
+               SELECT t.NumeroVisita FROM dbo.imTurnos t
+               WHERE t.IdTurno = @p0 AND t.NumeroVisita > 0
+             )
+          ORDER BY a.Fecha DESC
+        `,
+        [{ value: id, type: 'Int' }],
+      );
+      return (rows || []).map((adj) => this.mapAdjuntoRow(adj));
+    } catch (error) {
+      console.error('❌ Error al obtener adjuntos por turno:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Al cerrar turno: asigna NumeroVisita a adjuntos cargados con IdTurno.
+   */
+  async vincularAdjuntosTurnoAVisita(idTurno, numeroVisita) {
+    await ensureIdTurnoColumn();
+    const id = Number(idTurno);
+    const nv = Number(numeroVisita);
+    if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(nv) || nv <= 0) return { updated: 0 };
+    const result = await executeQuery(
+      `UPDATE dbo.imPedidosEstudiosAdjuntos
+       SET NumeroVisita = @p0
+       WHERE IdTurno = @p1 AND (NumeroVisita IS NULL OR NumeroVisita = 0)`,
+      [
+        { value: nv, type: 'Int' },
+        { value: id, type: 'Int' },
+      ],
+    );
+    return { updated: result?.rowsAffected?.[0] ?? 0 };
+  }
+
+  async getNombrePacientePorTurno(idTurno) {
+    const rows = await executeQuery(
+      `SELECT TOP 1 p.ApellidoyNombre
+       FROM dbo.imTurnos t
+       INNER JOIN dbo.imPacientes p ON p.IDPaciente = t.IDPaciente
+       WHERE t.IdTurno = @p0`,
+      [{ value: Number(idTurno), type: 'Int' }],
+    );
+    const nombre = rows?.[0]?.ApellidoyNombre;
+    return nombre ? String(nombre).trim() : `TURNO_${idTurno}`;
   }
 
   /**

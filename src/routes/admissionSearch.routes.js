@@ -8,6 +8,11 @@ const router = express.Router();
 router.use(requireTenant);
 
 router.get('/', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.buscar);
+router.get(
+	'/paciente/:idPaciente/turnos-activos',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.turnosActivosPaciente,
+);
 router.get('/:numeroVisita/detail', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.detalle);
 router.post(
 	'/:numeroVisita/export-selective',

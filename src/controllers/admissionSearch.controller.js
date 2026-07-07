@@ -1,4 +1,5 @@
 const admissionSearchService = require('../services/admissionSearch.service');
+const agendaService = require('../services/agenda.service');
 const { buildSelectiveExportPdf } = require('../services/admissionSearchExportPdf');
 
 function parseEvolucionSectorIds(body) {
@@ -175,8 +176,29 @@ async function exportSelectivo(req, res) {
   }
 }
 
+async function turnosActivosPaciente(req, res) {
+  try {
+    const idPaciente = Number(req.params.idPaciente);
+    if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'idPaciente inválido',
+      });
+    }
+    const data = await agendaService.buscarTurnosPorPaciente(idPaciente, { soloActivos: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error al listar turnos activos del paciente:', error);
+    res.status(error?.statusCode || 500).json({
+      success: false,
+      message: error?.message || 'Error al cargar turnos activos',
+    });
+  }
+}
+
 module.exports = {
   buscar,
   detalle,
   exportSelectivo,
+  turnosActivosPaciente,
 };

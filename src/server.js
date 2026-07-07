@@ -9,6 +9,24 @@ const { logAuthDbEnvStatus, isAuthCentralEnabled } = require('./config/authCentr
 const app = require('./app');
 
 const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+function logLanAccessUrls(port) {
+	const os = require('os');
+	const urls = new Set();
+	if (process.env.LAN_IP?.trim()) {
+		urls.add(`http://${process.env.LAN_IP.trim()}:${port}`);
+	}
+	for (const ifaces of Object.values(os.networkInterfaces())) {
+		for (const iface of ifaces || []) {
+			if (iface.family !== 'IPv4' || iface.internal) continue;
+			urls.add(`http://${iface.address}:${port}`);
+		}
+	}
+	if (urls.size === 0) return;
+	console.log('→ Red local (API):');
+	for (const u of urls) console.log(`   ${u}/api`);
+}
 
 const authOk = logAuthDbEnvStatus();
 logPlatformDbEnvStatus();
@@ -24,13 +42,17 @@ if (authOk && !isPlatformSqlConfigured()) {
     '→ Modo Railway: login vía imPassword + imPersonalEmpresas (MySQL); SQL clínico por Empresas.Db*',
   );
 } else if (!isAuthCentralEnabled() && isPlatformSqlConfigured()) {
-  console.log('→ Modo Render/legacy: login y catálogo en SQL Server plataforma (.env DB_*)');
+  console.log('→ Modo local/SQL plataforma: login y catálogo en SQL Server (.env DB_*)');
+  if (process.env.LOCAL_DEV_ONLY && ['1', 'true', 'yes'].includes(String(process.env.LOCAL_DEV_ONLY).toLowerCase())) {
+    console.log('→ LOCAL_DEV_ONLY=1: sin MySQL Railway; tenant clínico forzado a DB_* local');
+  }
 } else if (!authOk && !isPlatformSqlConfigured()) {
   console.error('→ Sin MySQL auth ni DB_*: configurá AUTH_DB_* o vinculá MySQL en Railway');
 }
 
-app.listen(PORT, () => {
-  console.log(`Servidor ejecutándose en el puerto ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Servidor ejecutándose en http://${HOST === '0.0.0.0' ? '0.0.0.0' : HOST}:${PORT}`);
+  if (HOST === '0.0.0.0') logLanAccessUrls(PORT);
 
   const diag = require('./utils/diagLog');
   diag.logStartupEnv();

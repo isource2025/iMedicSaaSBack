@@ -1,5 +1,10 @@
 const service = require('../services/agenda.service');
 
+function _codOperadorSesion(req) {
+	const cod = req.auth?.usuario?.codOperador;
+	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+}
+
 function _enforceAlcance(req, res, matriculaParam) {
 	const m = Number(matriculaParam);
 	if (!Number.isFinite(m) || m <= 0) {
@@ -134,7 +139,7 @@ async function asignarTurno(req, res) {
 			observaciones: body.observaciones || '',
 			tipoTurno: body.tipoTurno != null ? Number(body.tipoTurno) : 0,
 			especialidad: body.especialidad != null ? Number(body.especialidad) : 0,
-			codOperador: req.valorPersonal != null ? Number(req.valorPersonal) : 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		res.json({ success: true, data });
 	} catch (e) {
@@ -199,11 +204,47 @@ async function cerrarTurno(req, res) {
 		const data = await service.cerrarTurno({
 			matricula: m,
 			idTurno,
-			codOperador: req.valorPersonal != null ? Number(req.valorPersonal) : 0,
+			codOperador: _codOperadorSesion(req),
 			diagnostico: body.diagnostico,
 			contrato: body.contrato,
 			hci: body.hci || null,
+			procedimientos: body.procedimientos || null,
+			pedidosEstudios: body.pedidosEstudios || null,
 			porIdTurno: req.rolNombre !== 'MEDICO',
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function marcarLlegada(req, res) {
+	try {
+		const m = _enforceAlcance(req, res, req.params.matricula);
+		if (m == null) return;
+		const idTurno = Number(req.params.idTurno);
+		const data = await service.marcarLlegada({
+			matricula: m,
+			idTurno,
+			porIdTurno: req.rolNombre !== 'MEDICO',
+			codOperador: _codOperadorSesion(req),
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function marcarIngreso(req, res) {
+	try {
+		const m = _enforceAlcance(req, res, req.params.matricula);
+		if (m == null) return;
+		const idTurno = Number(req.params.idTurno);
+		const data = await service.marcarIngreso({
+			matricula: m,
+			idTurno,
+			porIdTurno: req.rolNombre !== 'MEDICO',
+			codOperador: _codOperadorSesion(req),
 		});
 		res.json({ success: true, data });
 	} catch (e) {
@@ -235,6 +276,27 @@ async function buscarClientes(req, res) {
 	}
 }
 
+async function buscarTiposPedidosEstudios(req, res) {
+	try {
+		const data = await service.buscarTiposPedidosEstudios({
+			q: req.query.q ? String(req.query.q) : '',
+			limit: req.query.limit ? Number(req.query.limit) : 30,
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function listarSectoresReceptorEstudios(req, res) {
+	try {
+		const data = await service.listarSectoresReceptorEstudios();
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
 async function buscarTurnosPorPaciente(req, res) {
 	try {
 		const idPaciente = Number(req.query.idPaciente);
@@ -246,8 +308,13 @@ async function buscarTurnosPorPaciente(req, res) {
 		}
 		const matriculaMedico =
 			req.rolNombre === 'MEDICO' && req.matricula ? Number(req.matricula) : null;
+		const soloActivos =
+			req.query.soloActivos === '1' ||
+			req.query.soloActivos === 'true' ||
+			req.query.soloActivos === true;
 		const data = await service.buscarTurnosPorPaciente(idPaciente, {
 			matriculaMedico: Number.isFinite(matriculaMedico) ? matriculaMedico : null,
+			soloActivos,
 		});
 		res.json({ success: true, data });
 	} catch (e) {
@@ -272,6 +339,16 @@ async function listarProfesionales(req, res) {
 	}
 }
 
+async function obtenerDetalleAtencion(req, res) {
+	try {
+		const id = Number(req.params.idTurno);
+		const data = await service.obtenerDetalleAtencionTurno(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
 module.exports = {
 	obtenerSlots,
 	obtenerDiasConAgenda,
@@ -284,7 +361,12 @@ module.exports = {
 	actualizarTurno,
 	cancelarTurno,
 	borrarTurno,
+	marcarLlegada,
+	marcarIngreso,
 	cerrarTurno,
 	buscarDiagnosticos,
 	buscarClientes,
+	buscarTiposPedidosEstudios,
+	listarSectoresReceptorEstudios,
+	obtenerDetalleAtencion,
 };

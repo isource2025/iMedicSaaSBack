@@ -1,5 +1,48 @@
 const renaperService = require('../services/renaper.service');
 
+/** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER. */
+function normalizePersonaForClient(raw) {
+	if (!raw || typeof raw !== 'object') return raw;
+	const apellido = String(raw.apellido ?? raw.Apellido ?? '').trim();
+	const nombres = String(
+		raw.nombres ?? raw.Nombres ?? raw.nombre ?? raw.Nombre ?? '',
+	).trim();
+	const idSexo = raw.idSexo ?? raw.IdSexo;
+	let sexo = raw.sexo ?? raw.Sexo;
+	if (!sexo && idSexo != null) {
+		const n = Number(idSexo);
+		if (n === 1) sexo = 'F';
+		else if (n === 2) sexo = 'M';
+	}
+	const calle = String(raw.calle ?? raw.Calle ?? '').trim();
+	const numero = String(raw.numero ?? raw.Numero ?? '').trim();
+	const piso = String(raw.piso ?? raw.Piso ?? '').trim();
+	const depto = String(raw.departamento ?? raw.Departamento ?? raw.depto ?? '').trim();
+	let domicilio = `${calle} ${numero}`.trim();
+	if (piso) domicilio += domicilio ? ` Piso ${piso}` : `Piso ${piso}`;
+	if (depto) domicilio += domicilio ? ` Dpto ${depto}` : `Dpto ${depto}`;
+
+	return {
+		...raw,
+		numeroDocumento: raw.numeroDocumento ?? raw.NumeroDocumento ?? null,
+		apellido,
+		nombres,
+		calle,
+		numero,
+		piso,
+		departamento: depto,
+		domicilio: domicilio.slice(0, 120) || null,
+		fechaNacimiento: raw.fechaNacimiento ?? raw.FechaNacimiento ?? null,
+		sexo: sexo ? String(sexo).toUpperCase().slice(0, 1) : null,
+		idSexo: idSexo ?? null,
+		ciudad: raw.ciudad ?? raw.Ciudad ?? raw.localidad ?? raw.Localidad ?? null,
+		provincia: raw.provincia ?? raw.Provincia ?? null,
+		codigoPostal: raw.codigoPostal ?? raw.CodigoPostal ?? null,
+		cuil: raw.cuil ?? raw.CUIL ?? raw.cuit ?? raw.CUIT ?? null,
+		pais: raw.pais ?? raw.Pais ?? null,
+	};
+}
+
 const getToken = async (req, res) => {
 	try {
 		const token = await renaperService.getToken();
@@ -51,8 +94,7 @@ const search = async (req, res) => {
 			});
 		}
 
-		// Datos válidos
-		const persona = result.data;
+		const persona = normalizePersonaForClient(result.data);
 
 		return res.json({
 			success: true,

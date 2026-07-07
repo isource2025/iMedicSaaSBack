@@ -29,6 +29,48 @@ function assertMysql() {
 	}
 }
 
+const NUMERIC_MYSQL_TYPES = new Set([
+	'int',
+	'bigint',
+	'smallint',
+	'tinyint',
+	'mediumint',
+	'decimal',
+	'numeric',
+	'float',
+	'double',
+]);
+
+let empresasNumericColsCache = null;
+
+/** Columnas numéricas reales de Empresas (para no mandar '' a un INT). */
+async function getEmpresasNumericCols() {
+	if (empresasNumericColsCache) return empresasNumericColsCache;
+	const rows = await mysqlQuery(
+		`SELECT COLUMN_NAME AS col, DATA_TYPE AS tipo
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Empresas'`,
+	);
+	empresasNumericColsCache = new Set(
+		rows
+			.filter((r) => NUMERIC_MYSQL_TYPES.has(String(r.tipo).toLowerCase()))
+			.map((r) => String(r.col).toLowerCase()),
+	);
+	return empresasNumericColsCache;
+}
+
+/**
+ * Ajusta un valor según el tipo real de la columna:
+ * '' / null en columna numérica → null; numérico → Number.
+ */
+function coerceValor(col, valor, numericCols) {
+	const esNumerica = numericCols.has(String(col).toLowerCase());
+	if (!esNumerica) return valor;
+	if (valor == null || valor === '') return null;
+	const n = Number(valor);
+	return Number.isFinite(n) ? n : null;
+}
+
 function mapEmpresaRow(r) {
 	return {
 		IDEMPRESA: r.IDEMPRESA,
@@ -99,6 +141,8 @@ async function crearEmpresaRow(data) {
 	assertMysql();
 	const nuevoId = await siguienteIdEmpresa();
 	const desc = String(data.descripcion || '').trim();
+	const numericCols = await getEmpresasNumericCols();
+	const val = (col, v) => coerceValor(col, v, numericCols);
 	await mysqlExec(
 		`
     INSERT INTO ${q('Empresas')}
@@ -108,13 +152,13 @@ async function crearEmpresaRow(data) {
 		[
 			nuevoId,
 			desc,
-			data.calle || '',
-			data.calle_nro || '',
-			data.localidad || '',
-			data.provincia != null && data.provincia !== '' ? Number(data.provincia) : null,
-			data.cuit || '',
-			data.email || '',
-			data.telefono || '',
+			val('calle', data.calle || ''),
+			val('calle_nro', data.calle_nro),
+			val('localidad', data.localidad || ''),
+			val('Provincia', data.provincia),
+			val('Nro_CUIT', data.cuit || ''),
+			val('Email', data.email || ''),
+			val('TEEmpresa', data.telefono || ''),
 		],
 	);
 	return nuevoId;
@@ -122,6 +166,8 @@ async function crearEmpresaRow(data) {
 
 async function actualizarEmpresaRow(idEmpresa, data) {
 	assertMysql();
+	const numericCols = await getEmpresasNumericCols();
+	const val = (col, v) => coerceValor(col, v, numericCols);
 	await mysqlExec(
 		`
     UPDATE ${q('Empresas')} SET
@@ -131,13 +177,13 @@ async function actualizarEmpresaRow(idEmpresa, data) {
     `,
 		[
 			String(data.descripcion || '').trim(),
-			data.calle || '',
-			data.calle_nro || '',
-			data.localidad || '',
-			data.provincia != null && data.provincia !== '' ? Number(data.provincia) : null,
-			data.cuit || '',
-			data.email || '',
-			data.telefono || '',
+			val('calle', data.calle || ''),
+			val('calle_nro', data.calle_nro),
+			val('localidad', data.localidad || ''),
+			val('Provincia', data.provincia),
+			val('Nro_CUIT', data.cuit || ''),
+			val('Email', data.email || ''),
+			val('TEEmpresa', data.telefono || ''),
 			Number(idEmpresa),
 		],
 	);
@@ -428,10 +474,16 @@ async function aplicarMigracionPlataforma() {
 	const path = require('path');
 	const sqlPath = path.join(__dirname, '../../scripts/sql/setup_platform_mysql.sql');
 	const raw = fs.readFileSync(sqlPath, 'utf8');
-	const statements = raw
+	// Quitar líneas de comentario antes de separar por ';' para no descartar
+	// sentencias cuyo bloque arranca con comentarios (ej. CREATE EmpresasOnboarding).
+	const sinComentarios = raw
+		.split(/\r?\n/)
+		.filter((linea) => !linea.trim().startsWith('--'))
+		.join('\n');
+	const statements = sinComentarios
 		.split(';')
 		.map((s) => s.trim())
-		.filter((s) => s && !s.startsWith('--'));
+		.filter(Boolean);
 	for (const stmt of statements) {
 		await mysqlExec(stmt);
 	}

@@ -1,4 +1,5 @@
 const service = require('../services/agendaConfig.service');
+const personalService = require('../services/personal.service');
 const {
 	DIAS_SEMANA,
 	MOTIVOS_NO_HORARIO,
@@ -34,16 +35,27 @@ function _err(res, e) {
 
 // ───── Catálogos ─────
 async function obtenerCatalogos(req, res) {
-	res.json({
-		success: true,
-		data: {
-			dias: DIAS_SEMANA,
-			motivosNoHorario: MOTIVOS_NO_HORARIO,
-			statusTurno: STATUS_TURNO,
-			tipoTurno: TIPO_TURNO,
-			intervalosSugeridos: INTERVALOS_SUGERIDOS,
-		},
-	});
+	try {
+		let especialidades = [];
+		try {
+			especialidades = await personalService.listarEspecialidades();
+		} catch (e) {
+			console.warn('[agendaConfig] especialidades no disponibles:', e?.message);
+		}
+		res.json({
+			success: true,
+			data: {
+				dias: DIAS_SEMANA,
+				motivosNoHorario: MOTIVOS_NO_HORARIO,
+				statusTurno: STATUS_TURNO,
+				tipoTurno: TIPO_TURNO,
+				intervalosSugeridos: INTERVALOS_SUGERIDOS,
+				especialidades,
+			},
+		});
+	} catch (e) {
+		_err(res, e);
+	}
 }
 
 // ───── Horarios ─────

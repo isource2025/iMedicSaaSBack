@@ -9,6 +9,10 @@ function isTruthy(value) {
 	return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+function isLocalDevOnly() {
+	return isTruthy(process.env.LOCAL_DEV_ONLY);
+}
+
 /** Variables AUTH_DB_* o las que inyecta Railway al vincular MySQL (MYSQLHOST, …). */
 function resolveAuthDbEnv() {
 	return {
@@ -47,6 +51,7 @@ function isAuthCentralConfigured() {
 }
 
 function isAuthCentralEnabled() {
+	if (isLocalDevOnly()) return false;
 	if (process.env.AUTH_DB_ENABLED != null && String(process.env.AUTH_DB_ENABLED).trim() !== '') {
 		return isTruthy(process.env.AUTH_DB_ENABLED);
 	}
@@ -96,6 +101,10 @@ async function testAuthCentralConnection() {
 }
 
 function logAuthDbEnvStatus() {
+	if (isLocalDevOnly()) {
+		console.log('ℹ AUTH MySQL: omitido (LOCAL_DEV_ONLY=1 — solo SQL Server local)');
+		return false;
+	}
 	if (
 		process.env.AUTH_DB_ENABLED != null &&
 		String(process.env.AUTH_DB_ENABLED).trim() !== '' &&
@@ -124,6 +133,7 @@ module.exports = {
 	resolveAuthDbEnv,
 	isAuthCentralConfigured,
 	isAuthCentralEnabled,
+	isLocalDevOnly,
 	validateAuthDbEnv,
 	logAuthDbEnvStatus,
 	testAuthCentralConnection,

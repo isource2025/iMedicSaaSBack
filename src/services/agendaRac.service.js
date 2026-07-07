@@ -72,23 +72,37 @@ const SELECT_MEDICACION = `
 async function obtenerRac(idTurno) {
 	const id = _validarIdTurno(idTurno);
 	const turno = await _obtenerTurno(id);
+	const nv = Number(turno.numeroVisita) || 0;
+
+	const racWhere =
+		nv > 0 ? 'WHERE cf.IdTurno = @p0 OR cf.NumeroVisita = @p1' : 'WHERE cf.IdTurno = @p0';
+	const racParams =
+		nv > 0
+			? [
+					{ value: id, type: 'Int' },
+					{ value: nv, type: 'Int' },
+				]
+			: [{ value: id, type: 'Int' }];
 
 	const controles = await executeQuery(
 		`SELECT ${SELECT_CONTROL}
 		 FROM dbo.imInterCtrlFrecuente cf
 		 LEFT JOIN dbo.imPassword pw1 ON pw1.CodOperador = cf.OperadorCarga
-		 WHERE cf.IdTurno = @p0
+		 ${racWhere}
 		 ORDER BY cf.FechaControl DESC, cf.HoraControl DESC, cf.Valor DESC`,
-		[{ value: id, type: 'Int' }],
+		racParams,
 	);
+
+	const medWhere =
+		nv > 0 ? 'WHERE mc.IdTurno = @p0 OR mc.NumeroVisita = @p1' : 'WHERE mc.IdTurno = @p0';
 
 	const medicacion = await executeQuery(
 		`SELECT ${SELECT_MEDICACION}
 		 FROM dbo.imInterCtrlMedicamento mc
 		 LEFT JOIN dbo.imVademecum v ON v.Troquel = mc.Troquel
-		 WHERE mc.IdTurno = @p0
+		 ${medWhere}
 		 ORDER BY mc.FechaControl DESC, mc.HoraControl DESC, mc.IDCtrlMedica DESC`,
-		[{ value: id, type: 'Int' }],
+		racParams,
 	);
 
 	return { turno, controles, medicacion };

@@ -2,6 +2,8 @@
  * Service: Agenda operativa (slots + turnos en imTurnos).
  */
 const { executeQuery } = require('../models/db');
+const adjuntosService = require('./adjuntos.service');
+const agendaRacService = require('./agendaRac.service');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -54,6 +56,19 @@ function _hhmm(clarion) {
 	return s ? s.slice(0, 5) : null;
 }
 
+/** Nombre del operador (imPassword) por CodOperador o Valor personal. */
+async function _nombreOperador(cod) {
+	const n = Number(cod);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	const rows = await executeQuery(
+		`SELECT TOP 1 Apellido, Nombres FROM dbo.imPassword
+		 WHERE CodOperador = @p0 OR ValorPersonal = @p0`,
+		[{ value: n, type: 'Int' }],
+	);
+	if (!rows[0]) return null;
+	return `${rows[0].Apellido || ''} ${rows[0].Nombres || ''}`.trim() || null;
+}
+
 function _calcularEdad(fechaIso) {
 	if (!fechaIso) return null;
 	const born = new Date(`${String(fechaIso).slice(0, 10)}T12:00:00`);
@@ -76,12 +91,14 @@ function _fechaNacimientoIso(turno) {
 
 /** Campos de paciente, triage y horas de atención desde fila de turno + join. */
 function _slotExtrasFromTurno(turno) {
-	if (!turno) {
+		if (!turno) {
 		return {
 			idClasificacionTriage: null,
 			horaLlegada: null,
+			horaIngreso: null,
 			horaAtencion: null,
 			horaSalida: null,
+			numeroVisita: 0,
 			sexo: null,
 			fechaNacimiento: null,
 			edad: null,
@@ -91,15 +108,18 @@ function _slotExtrasFromTurno(turno) {
 		};
 	}
 	const hl = Number(turno.Horallegada) || 0;
+	const hi = Number(turno.HoraIngreso) || 0;
 	const hs = Number(turno.HoraSalida) || 0;
 	const fechaNac = _fechaNacimientoIso(turno);
 	return {
 		idClasificacionTriage:
 			turno.IdClasificacionTriage != null ? Number(turno.IdClasificacionTriage) : null,
 		horaLlegada: hl > 0 ? _hhmm(hl) : null,
-		/** Hora de cierre/atención: solo imTurnos.HoraSalida (> 0 = atendido). */
-		horaAtencion: hs > 0 ? _hhmm(hs) : null,
+		horaIngreso: hi > 0 ? _hhmm(hi) : null,
 		horaSalida: hs > 0 ? _hhmm(hs) : null,
+		numeroVisita: Number(turno.NumeroVisita) || 0,
+		/** Compat: atendido = HoraSalida registrada */
+		horaAtencion: hs > 0 ? _hhmm(hs) : null,
 		sexo: turno.Sexo ? String(turno.Sexo).trim() : null,
 		fechaNacimiento: fechaNac,
 		edad: _calcularEdad(fechaNac),
@@ -434,7 +454,7 @@ async function _cargarTurnos(matricula, desdeClarion, hastaClarion) {
 	const rows = await executeQuery(
 		`SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional, t.Sector,
 		        t.Observaciones, t.Status, t.TipoTurno, t.NumeroDocumento, t.MotivoCancelacion,
-		        t.Horallegada, t.HoraIngreso, t.HoraSalida, t.IdClasificacionTriage,
+		        t.Horallegada, t.HoraIngreso, t.HoraSalida, t.IdClasificacionTriage, t.NumeroVisita,
 		        ${SQL_PACIENTE_COLS}
 		 FROM dbo.imTurnos t
 		 ${SQL_PACIENTE_JOIN}
@@ -563,7 +583,7 @@ async function _resolverHoraSobreturno(matricula, fechaClarion, baseHoraClarion)
 		],
 	);
 	const usadas = new Set(rows.map((r) => Number(r.HoraAsignada)));
-	for (let delta = 0; delta <= HORA_TURNO_TOLERANCIA; delta++) {
+	for (let delta = 0; delta <= 50; delta++) {
 		const candidatos =
 			delta === 0
 				? [base]
@@ -623,12 +643,22 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 		}
 
 		if (!diaCfg?.rangos?.length) {
+			const slotsSinHorario = [];
+			if (!ligero) {
+				_agregarSobreturnosEnSlots(
+					slotsSinHorario,
+					fechaIso,
+					turnosData.rows,
+					sectorPersonalMed,
+					[],
+				);
+			}
 			diasOut.push({
 				fecha: fechaIso,
 				dia: diaNombre,
-				bloqueado: true,
+				bloqueado: false,
 				motivo: 'sin_horario',
-				slots: [],
+				slots: slotsSinHorario,
 			});
 			cursor.setDate(cursor.getDate() + 1);
 			continue;
@@ -773,7 +803,7 @@ async function listarTurnos(matricula, desdeIso, hastaIso) {
 		`SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional,
 		        t.Sector, t.Observaciones, t.Status, t.TipoTurno, t.NumeroDocumento,
 		        t.MotivoCancelacion, t.Horallegada, t.HoraIngreso, t.HoraSalida,
-		        t.IdClasificacionTriage,
+		        t.IdClasificacionTriage, t.NumeroVisita,
 		        ${SQL_PACIENTE_COLS}
 		 FROM dbo.imTurnos t
 		 ${SQL_PACIENTE_JOIN}
@@ -1041,6 +1071,9 @@ async function asignarTurno({
 		throw e;
 	}
 
+	const esSobreturno = Number(tipoTurno) === TIPO_TURNO_SOBRETURNO;
+	const tt = esSobreturno ? TIPO_TURNO_SOBRETURNO : TIPO_TURNO_GRILLA;
+
 	const profPre = await _datosProfesionalParaTurno(m, fecha, horaClarion);
 	if (!profPre?.nombre) {
 		const e = new Error('Profesional no encontrado en la nómina activa');
@@ -1059,15 +1092,18 @@ async function asignarTurno({
 	// Validar slot contra horarios configurados / no-horarios
 	const grilla = await generarSlots(m, fecha, fecha);
 	const dia = grilla.dias[0];
-	if (!dia || dia.bloqueado) {
+	if (!esSobreturno && (!dia || dia.bloqueado)) {
 		const e = new Error('La fecha está bloqueada para este profesional');
 		e.statusCode = 409;
 		throw e;
 	}
-	const esSobreturno = Number(tipoTurno) === TIPO_TURNO_SOBRETURNO;
-	const tt = esSobreturno ? TIPO_TURNO_SOBRETURNO : TIPO_TURNO_GRILLA;
+	if (esSobreturno && !dia) {
+		const e = new Error('Fecha inválida para sobreturno');
+		e.statusCode = 400;
+		throw e;
+	}
 
-	const slot = dia.slots.find(
+	const slot = (dia?.slots ?? []).find(
 		(s) =>
 			!s.esSobreturno &&
 			(horasTurnoEquivalentes(s.horaClarion, horaClarion) ||
@@ -1094,7 +1130,9 @@ async function asignarTurno({
 		const base =
 			slot?.horaClarion != null && Number(slot.horaClarion) > 0
 				? Number(slot.horaClarion)
-				: horaClarion;
+				: horaClarion > 0
+					? horaClarion
+					: convertirHoraAClarion('08:00');
 		horaPersistir = await _resolverHoraSobreturno(m, fechaClarion, base);
 	}
 
@@ -1108,9 +1146,24 @@ async function asignarTurno({
 	}
 	const sec =
 		(prof.sector && String(prof.sector).trim().slice(0, 4)) ||
-		String(slot.sector || sector || '')
+		String(slot?.sector || sector || '')
 			.trim()
 			.slice(0, 4);
+	let secFinal = sec && sec !== '0000' ? sec : '';
+	if (!secFinal) {
+		secFinal = (await _sectorPersonalAsignado(m)) || '';
+	}
+	if (!secFinal && prof.valorServicio != null) {
+		secFinal = String(prof.valorServicio).trim().slice(0, 4);
+	}
+	if (!secFinal) {
+		secFinal = String(sector || '').trim().slice(0, 4);
+	}
+	if (!secFinal) {
+		const e = new Error('No se pudo determinar el sector del profesional');
+		e.statusCode = 409;
+		throw e;
+	}
 	const esp = Number(prof.especialidad) || 0;
 
 	// Datos del paciente
@@ -1150,7 +1203,7 @@ async function asignarTurno({
 			    FechaCarga, HoraCarga, CodOperador, Status, TipoTurno, NumeroVisita,
 			    NumeroDocumento, MotivoCancelacion)
 			 VALUES (@p0, @p1, @p2, @p3, @p4, @p5,
-			         @p2, 0, 0, @p6, @p7,
+			         0, 0, 0, @p6, @p7,
 			         @p8, @p9, @p10, @p11, @p12, 0,
 			         @p13, NULL);
 			 SELECT CAST(SCOPE_IDENTITY() AS INT) AS IdTurno;`,
@@ -1160,7 +1213,7 @@ async function asignarTurno({
 				{ value: horaPersistir, type: 'Int' },
 				{ value: idPac, type: 'Int' },
 				{ value: m, type: 'Int' },
-				{ value: sec, type: 'VarChar' },
+				{ value: secFinal, type: 'VarChar' },
 				{ value: esp, type: 'Int' },
 				{ value: obs, type: 'VarChar' },
 				{ value: fechaCargaClarion, type: 'Int' },
@@ -1215,11 +1268,13 @@ async function asignarTurno({
 			     MotivoCancelacion = NULL,
 			     Dia = @p5,
 			     Sector = @p6,
-			     Horallegada = @p7,
-			     FechaCarga = @p8,
-			     HoraCarga = @p9,
-			     CodOperador = @p10
-			 WHERE IdTurno = @p11`,
+			     Horallegada = 0,
+			     HoraIngreso = 0,
+			     HoraSalida = 0,
+			     FechaCarga = @p7,
+			     HoraCarga = @p8,
+			     CodOperador = @p9
+			 WHERE IdTurno = @p10`,
 			[
 				{ value: idPac, type: 'Int' },
 				{ value: numDoc, type: 'Int' },
@@ -1227,8 +1282,7 @@ async function asignarTurno({
 				{ value: tt, type: 'TinyInt' },
 				{ value: esp, type: 'Int' },
 				{ value: diaNombre, type: 'VarChar' },
-				{ value: sec, type: 'VarChar' },
-				{ value: horaPersistida, type: 'Int' },
+				{ value: secFinal, type: 'VarChar' },
 				{ value: fechaCargaClarion, type: 'Int' },
 				{ value: horaCargaClarion, type: 'Int' },
 				{ value: cod, type: 'Int' },
@@ -1238,7 +1292,7 @@ async function asignarTurno({
 		return { idTurno, accion: 'updated' };
 	}
 
-	// INSERT (IdTurno es IDENTITY) — Horallegada = HoraAsignada como legacy
+	// INSERT (IdTurno es IDENTITY) — Horallegada/HoraIngreso se marcan al llegar/ingresar
 	const ins = await executeQuery(
 		`INSERT INTO dbo.imTurnos
 		   (Dia, FechaAsignada, HoraAsignada, IDPaciente, Profesional, Sector,
@@ -1246,7 +1300,7 @@ async function asignarTurno({
 		    FechaCarga, HoraCarga, CodOperador, Status, TipoTurno, NumeroVisita,
 		    NumeroDocumento, MotivoCancelacion)
 		 VALUES (@p0, @p1, @p2, @p3, @p4, @p5,
-		         @p2, 0, 0, @p6, @p7,
+		         0, 0, 0, @p6, @p7,
 		         @p8, @p9, @p10, 0, @p11, 0,
 		         @p12, NULL);
 		 SELECT CAST(SCOPE_IDENTITY() AS INT) AS IdTurno;`,
@@ -1256,7 +1310,7 @@ async function asignarTurno({
 			{ value: horaPersistir, type: 'Int' },
 			{ value: idPac, type: 'Int' },
 			{ value: m, type: 'Int' },
-			{ value: sec, type: 'VarChar' },
+			{ value: secFinal, type: 'VarChar' },
 			{ value: esp, type: 'Int' },
 			{ value: obs, type: 'VarChar' },
 			{ value: fechaCargaClarion, type: 'Int' },
@@ -1272,7 +1326,7 @@ async function asignarTurno({
 
 async function _obtenerTurnoProfesional(matricula, idTurno) {
 	const rows = await executeQuery(
-		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida
+		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida, Horallegada
 		 FROM dbo.imTurnos
 		 WHERE IdTurno = @p0 AND Profesional = @p1`,
 		[
@@ -1291,7 +1345,7 @@ async function _obtenerTurnoProfesional(matricula, idTurno) {
 /** Administrativo: localiza el turno solo por IdTurno (sin exigir matrícula en la URL). */
 async function _obtenerTurnoPorId(idTurno) {
 	const rows = await executeQuery(
-		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida
+		`SELECT TOP 1 IdTurno, IDPaciente, Status, TipoTurno, FechaAsignada, HoraAsignada, Profesional, HoraSalida, Horallegada
 		 FROM dbo.imTurnos
 		 WHERE IdTurno = @p0`,
 		[{ value: idTurno, type: 'Int' }],
@@ -1302,6 +1356,105 @@ async function _obtenerTurnoPorId(idTurno) {
 		throw e;
 	}
 	return rows[0];
+}
+
+function _horaClarionAhora() {
+	const now = new Date();
+	const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+	return convertirHoraAClarion(horaStr);
+}
+
+function _validarTurnoHorario(row) {
+	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
+	const idP = Number(row.IDPaciente) || 0;
+	if (idP <= 0) {
+		const e = new Error('No hay paciente asignado en este turno');
+		e.statusCode = 409;
+		throw e;
+	}
+	if (st === STATUS_CANCELADO) {
+		const e = new Error('El turno está cancelado');
+		e.statusCode = 409;
+		throw e;
+	}
+	const hs = Number(row.HoraSalida) || 0;
+	if (st === STATUS_ATENDIDO || hs > 0) {
+		const e = new Error('El turno ya fue cerrado');
+		e.statusCode = 409;
+		throw e;
+	}
+}
+
+/**
+ * Marca Horallegada con la hora actual (paciente presente en recepción).
+ */
+async function marcarLlegada({ matricula, idTurno, porIdTurno, codOperador }) {
+	const m = _validarMatricula(matricula);
+	const id = Number(idTurno);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTurno inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
+	_validarTurnoHorario(row);
+	const horaClarion = _horaClarionAhora();
+	const cod = Number(codOperador) || 0;
+	if (cod > 0) {
+		await executeQuery(
+			`UPDATE dbo.imTurnos SET Horallegada = @p0, OperadorLlegada = @p2 WHERE IdTurno = @p1`,
+			[
+				{ value: horaClarion, type: 'Int' },
+				{ value: id, type: 'Int' },
+				{ value: cod, type: 'Int' },
+			],
+		);
+	} else {
+		await executeQuery(`UPDATE dbo.imTurnos SET Horallegada = @p0 WHERE IdTurno = @p1`, [
+			{ value: horaClarion, type: 'Int' },
+			{ value: id, type: 'Int' },
+		]);
+	}
+	return { idTurno: id, horaLlegada: _hhmm(horaClarion) };
+}
+
+/**
+ * Marca HoraIngreso con la hora actual (paciente ingresó a consultorio).
+ */
+async function marcarIngreso({ matricula, idTurno, porIdTurno, codOperador }) {
+	const m = _validarMatricula(matricula);
+	const id = Number(idTurno);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTurno inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
+	_validarTurnoHorario(row);
+	const hl = Number(row.Horallegada) || 0;
+	if (hl <= 0) {
+		const e = new Error('Primero debe marcarse la llegada del paciente');
+		e.statusCode = 409;
+		throw e;
+	}
+	const horaClarion = _horaClarionAhora();
+	const cod = Number(codOperador) || 0;
+	if (cod > 0) {
+		await executeQuery(
+			`UPDATE dbo.imTurnos SET HoraIngreso = @p0, OperadorIngreso = @p2 WHERE IdTurno = @p1`,
+			[
+				{ value: horaClarion, type: 'Int' },
+				{ value: id, type: 'Int' },
+				{ value: cod, type: 'Int' },
+			],
+		);
+	} else {
+		await executeQuery(`UPDATE dbo.imTurnos SET HoraIngreso = @p0 WHERE IdTurno = @p1`, [
+			{ value: horaClarion, type: 'Int' },
+			{ value: id, type: 'Int' },
+		]);
+	}
+	return { idTurno: id, horaIngreso: _hhmm(horaClarion) };
 }
 
 /**
@@ -1487,6 +1640,100 @@ function _s(v, max) {
 	return max != null ? s.slice(0, max) : s;
 }
 
+/** Sector receptor/solicitante para pedidos (4 chars, legacy). */
+function _padSectorPedido(v) {
+	return String(v || '').trim().padEnd(4, ' ').slice(0, 4);
+}
+
+/** Resuelve un tipo de pedido/estudio desde imTiposPedidosEstudios. */
+async function _resolverTipoPedidoEstudio(idTipoPedido) {
+	const id = Number(idTipoPedido);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTipoPedido inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+	const rows = await executeQuery(
+		`SELECT TOP 1 IdTipoPedido, DescPractica, IdPractica
+		 FROM dbo.imTiposPedidosEstudios WHERE IdTipoPedido = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+	if (!rows.length) {
+		const e = new Error(`Tipo de pedido/estudio ${id} inexistente`);
+		e.statusCode = 404;
+		throw e;
+	}
+	return rows[0];
+}
+
+/** Inserta imFacPracticas + imFacProfesionales (titular, funcion=1). */
+async function _insertarFacPracticaConProfesional({
+	numeroVisita,
+	idPaciente,
+	codPractica,
+	sector,
+	codOp,
+	matriculaMedico,
+	fechaClarion,
+	horaClarion,
+}) {
+	const practicaRows = await executeQuery(
+		`INSERT INTO dbo.imFacPracticas (
+			Numero, NumeroVisita, TipoPractica, Practica,
+			CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
+			ValorSector, FechaPrograma, HoraPrograma, CodOperador,
+			FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
+			NroInforme, NroAutorizacion, IdPaciente
+		) VALUES (
+			0, @p0, 'NO', @p1,
+			1, @p2, @p3, 0,
+			@p4, @p2, @p3, @p5,
+			@p2, @p3, 0, 2, 2, 0,
+			0, '', @p6
+		);
+		SELECT SCOPE_IDENTITY() AS Valor`,
+		[
+			{ value: numeroVisita, type: 'Int' },
+			{ value: codPractica, type: 'Int' },
+			{ value: fechaClarion, type: 'Int' },
+			{ value: horaClarion, type: 'Int' },
+			{ value: sector, type: 'VarChar' },
+			{ value: codOp, type: 'Int' },
+			{ value: idPaciente, type: 'Int' },
+		],
+	);
+	const valorPractica = Number(practicaRows[0]?.Valor) || 0;
+	if (valorPractica <= 0) {
+		const e = new Error('No se pudo registrar la práctica');
+		e.statusCode = 500;
+		throw e;
+	}
+	const profRows = await executeQuery(
+		`INSERT INTO dbo.imFacProfesionales (
+			Valor, Matricula, Funcion, CodOperador,
+			FachaGraba, HoraGraba, Factura, Status
+		) VALUES (
+			@p0, @p1, 1, @p2,
+			@p3, @p4, 0, 0
+		);
+		SELECT SCOPE_IDENTITY() AS IDFacProfesional`,
+		[
+			{ value: valorPractica, type: 'Int' },
+			{ value: matriculaMedico, type: 'Int' },
+			{ value: codOp, type: 'Int' },
+			{ value: fechaClarion, type: 'Int' },
+			{ value: horaClarion, type: 'Int' },
+		],
+	);
+	const idFacProf = Number(profRows[0]?.IDFacProfesional) || 0;
+	if (idFacProf <= 0) {
+		const e = new Error('No se pudo registrar el profesional de la práctica');
+		e.statusCode = 500;
+		throw e;
+	}
+	return { valorPractica, idFacProf };
+}
+
 /**
  * Cierra el turno con flujo completo:
  *  - Inserta imVisita (clasePaciente='A')
@@ -1502,8 +1749,20 @@ function _s(v, max) {
  * @param {string} [args.diagnostico] - código CIE-10 (ej. "R100")
  * @param {number} [args.contrato] - Valor de imClientes (cobertura)
  * @param {Object} [args.hci] - campos de imHCI a guardar
+ * @param {Array<{idTipoPedido:number}>} [args.procedimientos] - procedimientos realizados en consultorio
+ * @param {Array<{idTipoPedido:number,notas?:string,estadoUrgencia?:string}>} [args.pedidosEstudios] - pedidos de estudios
  */
-async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contrato, hci, porIdTurno }) {
+async function cerrarTurno({
+	matricula,
+	idTurno,
+	codOperador,
+	diagnostico,
+	contrato,
+	hci,
+	porIdTurno,
+	procedimientos,
+	pedidosEstudios,
+}) {
 	const m = _validarMatricula(matricula);
 	const id = Number(idTurno);
 	if (!Number.isFinite(id) || id <= 0) {
@@ -1574,7 +1833,19 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 	const contratoId = Number(contrato) > 0 ? Number(contrato) : contratoDesdePaciente;
 
 	// Para rollback parcial si algo falla luego del INSERT visita
-	const creados = { visita: null, hci: null, practica: null, profesional: null };
+	const creados = {
+		visita: null,
+		hci: null,
+		practica: null,
+		profesional: null,
+		practicasExtra: [],
+		profesionalesExtra: [],
+		pedidosEstudios: [],
+	};
+
+	const listaProcedimientos = Array.isArray(procedimientos) ? procedimientos : [];
+	const listaPedidosEstudios = Array.isArray(pedidosEstudios) ? pedidosEstudios : [];
+	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
 
 	try {
 		if (!yaTieneVisita) {
@@ -1673,64 +1944,92 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 
 		// 3) imFacPracticas (consulta; Valor es IDENTITY)
 		const codConsulta = await _getCodPracticaConsulta();
-		const practicaRows = await executeQuery(
-			`INSERT INTO dbo.imFacPracticas (
-				Numero, NumeroVisita, TipoPractica, Practica,
-				CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
-				ValorSector, FechaPrograma, HoraPrograma, CodOperador,
-				FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
-				NroInforme, NroAutorizacion, IdPaciente
-			) VALUES (
-				0, @p0, 'NO', @p1,
-				1, @p2, @p3, 0,
-				@p4, @p2, @p3, @p5,
-				@p2, @p3, 0, 2, 2, 0,
-				0, '', @p6
-			);
-			SELECT SCOPE_IDENTITY() AS Valor`,
-			[
-				{ value: numeroVisita, type: 'Int' },
-				{ value: codConsulta, type: 'Int' },
-				{ value: fechaClarion, type: 'Int' },
-				{ value: horaClarion, type: 'Int' },
-				{ value: sector, type: 'VarChar' },
-				{ value: codOp, type: 'Int' },
-				{ value: idP, type: 'Int' },
-			],
-		);
-		const valorPractica = Number(practicaRows[0]?.Valor) || 0;
-		if (valorPractica <= 0) {
-			const e = new Error('No se pudo registrar la práctica de consulta');
-			e.statusCode = 500;
-			throw e;
-		}
+		const consultaIns = await _insertarFacPracticaConProfesional({
+			numeroVisita,
+			idPaciente: idP,
+			codPractica: codConsulta,
+			sector,
+			codOp,
+			matriculaMedico,
+			fechaClarion,
+			horaClarion,
+		});
+		const valorPractica = consultaIns.valorPractica;
+		const idFacProf = consultaIns.idFacProf;
 		creados.practica = valorPractica;
-
-		// 4) imFacProfesionales (titular; IDFacProfesional es IDENTITY)
-		const profRows = await executeQuery(
-			`INSERT INTO dbo.imFacProfesionales (
-				Valor, Matricula, Funcion, CodOperador,
-				FachaGraba, HoraGraba, Factura, Status
-			) VALUES (
-				@p0, @p1, 1, @p2,
-				@p3, @p4, 0, 0
-			);
-			SELECT SCOPE_IDENTITY() AS IDFacProfesional`,
-			[
-				{ value: valorPractica, type: 'Int' },
-				{ value: matriculaMedico, type: 'Int' },
-				{ value: codOp, type: 'Int' },
-				{ value: fechaClarion, type: 'Int' },
-				{ value: horaClarion, type: 'Int' },
-			],
-		);
-		const idFacProf = Number(profRows[0]?.IDFacProfesional) || 0;
-		if (idFacProf <= 0) {
-			const e = new Error('No se pudo registrar el profesional de la práctica');
-			e.statusCode = 500;
-			throw e;
-		}
 		creados.profesional = idFacProf;
+
+		// 4) Procedimientos realizados en consultorio (uno o N)
+		for (const item of listaProcedimientos) {
+			const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
+			const codPractica = Number(tipo.IdPractica) || 0;
+			if (codPractica <= 0) {
+				const e = new Error(`Práctica inválida para tipo ${tipo.IdTipoPedido}`);
+				e.statusCode = 400;
+				throw e;
+			}
+			const extra = await _insertarFacPracticaConProfesional({
+				numeroVisita,
+				idPaciente: idP,
+				codPractica,
+				sector,
+				codOp,
+				matriculaMedico,
+				fechaClarion,
+				horaClarion,
+			});
+			creados.practicasExtra.push(extra.valorPractica);
+			creados.profesionalesExtra.push(extra.idFacProf);
+		}
+
+		// 5) Pedidos de estudios (solicitudes para realizar en otro sector)
+		for (const item of listaPedidosEstudios) {
+			const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
+			const codPractica = Number(tipo.IdPractica) || 0;
+			if (codPractica <= 0) {
+				const e = new Error(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
+				e.statusCode = 400;
+				throw e;
+			}
+			const urgRaw = String(item?.estadoUrgencia || 'Normal').trim();
+			const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
+			const sectorReceptor = _padSectorPedido(item?.idSectorReceptor);
+			if (!String(item?.idSectorReceptor || '').trim()) {
+				const e = new Error(
+					`El sector receptor es obligatorio para el pedido "${String(tipo.DescPractica || '').trim()}"`,
+				);
+				e.statusCode = 400;
+				throw e;
+			}
+			const pedRows = await executeQuery(
+				`INSERT INTO dbo.imPedidosEstudios (
+					FechaPedido, NotasObservacion, ValorProfesional, IdVisita, IdPractica,
+					IdProtocolo, EstadoUrgencia, IdSectorSolicitante, IdSectorReceptor, IdTipoPedido
+				) VALUES (
+					@p0, @p1, @p2, @p3, @p4,
+					0, @p5, @p6, @p7, @p8
+				);
+				SELECT SCOPE_IDENTITY() AS IdPedido`,
+				[
+					{ value: now, type: 'DateTime' },
+					{ value: _s(item?.notas, 5000), type: 'VarChar' },
+					{ value: matriculaMedico, type: 'Int' },
+					{ value: numeroVisita, type: 'Int' },
+					{ value: codPractica, type: 'Int' },
+					{ value: urgencia, type: 'VarChar' },
+					{ value: _padSectorPedido(sectorSolicitante), type: 'VarChar' },
+					{ value: sectorReceptor, type: 'VarChar' },
+					{ value: Number(tipo.IdTipoPedido), type: 'Int' },
+				],
+			);
+			const idPedido = Number(pedRows[0]?.IdPedido) || 0;
+			if (idPedido <= 0) {
+				const e = new Error('No se pudo registrar el pedido de estudio');
+				e.statusCode = 500;
+				throw e;
+			}
+			creados.pedidosEstudios.push(idPedido);
+		}
 
 		// 5) UPDATE imInterCtrlFrecuente (controles RAC del turno)
 		await executeQuery(
@@ -1749,6 +2048,9 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 				{ value: id, type: 'Int' },
 			],
 		);
+
+		// 6b) Adjuntos cargados por IdTurno → NumeroVisita
+		await adjuntosService.vincularAdjuntosTurnoAVisita(id, numeroVisita);
 
 		// 7) UPDATE imTurnos (cerrar + NumeroVisita)
 		await executeQuery(
@@ -1771,10 +2073,28 @@ async function cerrarTurno({ matricula, idTurno, codOperador, diagnostico, contr
 			idHci: creados.hci,
 			valorPractica: creados.practica,
 			idFacProfesional: creados.profesional,
+			valoresPracticasProcedimientos: creados.practicasExtra,
+			procedimientosRegistrados: creados.practicasExtra.length,
+			pedidosEstudiosRegistrados: creados.pedidosEstudios.length,
 		};
 	} catch (err) {
 		// Rollback best-effort en orden inverso
 		try {
+			for (const idPed of creados.pedidosEstudios.slice().reverse()) {
+				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
+					{ value: idPed, type: 'Int' },
+				]);
+			}
+			for (let i = creados.profesionalesExtra.length - 1; i >= 0; i--) {
+				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
+					{ value: creados.profesionalesExtra[i], type: 'Int' },
+				]);
+			}
+			for (const val of creados.practicasExtra.slice().reverse()) {
+				await executeQuery(`DELETE FROM dbo.imFacPracticas WHERE Valor = @p0`, [
+					{ value: val, type: 'Int' },
+				]);
+			}
 			if (creados.profesional)
 				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
 					{ value: creados.profesional, type: 'Int' },
@@ -1815,12 +2135,21 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 		opciones.matriculaMedico != null && Number.isFinite(Number(opciones.matriculaMedico))
 			? Number(opciones.matriculaMedico)
 			: null;
+	const soloActivos = !!opciones.soloActivos;
+	const hoyClarion = convertirFechaAClarion(_isoDate(new Date()));
 
 	const params = [{ value: id, type: 'Int' }];
 	let medFilter = '';
 	if (med != null && med > 0) {
 		medFilter = ' AND t.Profesional = @p1';
 		params.push({ value: med, type: 'Int' });
+	}
+	let activosFilter = '';
+	if (soloActivos) {
+		const idx = params.length;
+		activosFilter = ` AND (t.Status IS NULL OR t.Status = ${STATUS_OCUPADO})
+		 AND t.FechaAsignada >= @p${idx}`;
+		params.push({ value: hoyClarion, type: 'Int' });
 	}
 
 	const rows = await executeQuery(
@@ -1835,6 +2164,7 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 		 WHERE t.IDPaciente = @p0
 		   AND t.IDPaciente > 0
 		   ${medFilter}
+		   ${activosFilter}
 		 ORDER BY t.FechaAsignada DESC, t.HoraAsignada DESC`,
 		params,
 	);
@@ -1857,6 +2187,54 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 		esSobreturno: (Number(t.TipoTurno) || 0) === TIPO_TURNO_SOBRETURNO,
 		numeroDocumento: t.NumeroDocumento,
 		motivoCancelacion: t.MotivoCancelacion,
+	}));
+}
+
+/**
+ * Catálogo de sectores/servicios receptores para pedidos de estudios (imServicios).
+ */
+async function listarSectoresReceptorEstudios() {
+	const rows = await executeQuery(
+		`SELECT RTRIM(LTRIM(Valor)) AS valor, RTRIM(LTRIM(Descripcion)) AS descripcion,
+		        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
+		 FROM dbo.imServicios
+		 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
+		 ORDER BY Descripcion`,
+	);
+	return rows.map((r) => ({
+		valor: String(r.valor || '').trim(),
+		descripcion: String(r.descripcion || '').trim(),
+		prefijos: String(r.prefijosPractica || '')
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean),
+	}));
+}
+
+/**
+ * Búsqueda de tipos de pedidos/estudios en imTiposPedidosEstudios.
+ */
+async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
+	const term = String(q || '').trim();
+	const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
+	if (term.length < 2) return [];
+	const like = `%${term}%`;
+	const rows = await executeQuery(
+		`SELECT TOP ${lim}
+		        IdTipoPedido,
+		        RTRIM(LTRIM(DescPractica)) AS descripcion,
+		        IdPractica AS idPractica
+		 FROM dbo.imTiposPedidosEstudios
+		 WHERE DescPractica LIKE @p0
+		    OR CAST(IdPractica AS VARCHAR(20)) LIKE @p0
+		    OR CAST(IdTipoPedido AS VARCHAR(20)) LIKE @p0
+		 ORDER BY DescPractica`,
+		[{ value: like, type: 'VarChar' }],
+	);
+	return rows.map((r) => ({
+		idTipoPedido: r.IdTipoPedido,
+		descripcion: r.descripcion,
+		idPractica: r.idPractica,
 	}));
 }
 
@@ -1915,6 +2293,314 @@ async function buscarClientes({ q, limit = 30 }) {
 	}));
 }
 
+/**
+ * Detalle completo de una atención de turno (HC, diagnóstico, RAC, adjuntos).
+ */
+async function obtenerDetalleAtencionTurno(idTurno) {
+	const id = Number(idTurno);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTurno inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const rows = await executeQuery(
+		`SELECT TOP 1
+		        t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.Horallegada, t.HoraIngreso, t.HoraSalida,
+		        t.Sector, t.Observaciones, t.Status, t.TipoTurno, t.NumeroVisita, t.Especialidad,
+		        t.IdClasificacionTriage, t.Profesional, t.NumeroDocumento,
+		        t.CodOperador, t.FechaCarga, t.HoraCarga,
+		        t.OperadorLlegada, t.OperadorIngreso,
+		        op.Apellido AS OpAsigApellido, op.Nombres AS OpAsigNombres,
+		        ${SQL_PACIENTE_COLS},
+		        pac.NumeroHC,
+		        prof.ApellidoNombre AS ProfesionalNombre
+		 FROM dbo.imTurnos t
+		 ${SQL_PACIENTE_JOIN}
+		 LEFT JOIN dbo.imPersonal prof ON prof.Matricula = t.Profesional
+		 LEFT JOIN dbo.imPassword op ON op.CodOperador = t.CodOperador OR op.ValorPersonal = t.CodOperador
+		 WHERE t.IdTurno = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+	if (!rows.length) {
+		const e = new Error('Turno no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+
+	const r = rows[0];
+	const st = r.Status != null ? Number(r.Status) : STATUS_OCUPADO;
+	const hs = Number(r.HoraSalida) || 0;
+	const numeroVisita = Number(r.NumeroVisita) || 0;
+	const extras = _slotExtrasFromTurno(r);
+
+	const racStats = await executeQuery(
+		`SELECT
+			(SELECT COUNT(*) FROM dbo.imInterCtrlFrecuente WHERE IdTurno = @p0) AS controles,
+			(SELECT COUNT(*) FROM dbo.imInterCtrlMedicamento WHERE IdTurno = @p0) AS medicacion`,
+		[{ value: id, type: 'Int' }],
+	);
+	const racControles = Number(racStats[0]?.controles) || 0;
+	const racMedicacion = Number(racStats[0]?.medicacion) || 0;
+
+	const tieneAtencion =
+		st === STATUS_ATENDIDO ||
+		hs > 0 ||
+		numeroVisita > 0 ||
+		Boolean(extras.horaLlegada) ||
+		Boolean(extras.horaIngreso) ||
+		extras.idClasificacionTriage != null ||
+		racControles > 0 ||
+		racMedicacion > 0;
+
+	if (!tieneAtencion) {
+		const e = new Error('El turno aún no tiene datos de atención registrados');
+		e.statusCode = 404;
+		throw e;
+	}
+
+	let diagnostico = null;
+	let hc = null;
+
+	if (numeroVisita > 0) {
+		const visitaRows = await executeQuery(
+			`SELECT TOP 1 RTRIM(LTRIM(DIAGNOSTICO)) AS codigo
+			 FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
+			[{ value: numeroVisita, type: 'Int' }],
+		);
+		const codRaw = visitaRows[0]?.codigo ? String(visitaRows[0].codigo).trim() : '';
+		if (codRaw) {
+			const codBusq = codRaw.replace(/\s+/g, '');
+			const diagRows = await executeQuery(
+				`SELECT TOP 1 RTRIM(LTRIM(CodigoOMS)) AS codigo, RTRIM(LTRIM(Descripcion)) AS descripcion
+				 FROM dbo.imDiagnosticos
+				 WHERE CIE = 10 AND REPLACE(RTRIM(LTRIM(CodigoOMS)), ' ', '') = @p0`,
+				[{ value: codBusq, type: 'VarChar' }],
+			);
+			diagnostico = diagRows[0]
+				? { codigo: diagRows[0].codigo, descripcion: diagRows[0].descripcion }
+				: { codigo: codRaw, descripcion: null };
+		}
+
+		const hciRows = await executeQuery(
+			`SELECT TOP 1 MotivoConsulta, EnfermedadActual, Semiologia,
+			        SV_PA, SV_FC, SV_FR, SV_TAX, SV_GLUCEMIA, SV_TALLA, SV_PESOACTUAL, SV_IMPRESIONGENERAL
+			 FROM dbo.imHCI
+			 WHERE NumeroVisita = @p0
+			 ORDER BY IdHCIngreso DESC`,
+			[{ value: numeroVisita, type: 'Int' }],
+		);
+		if (hciRows[0]) {
+			const h = hciRows[0];
+			hc = {
+				motivoConsulta: h.MotivoConsulta ? String(h.MotivoConsulta).trim() : null,
+				enfermedadActual: h.EnfermedadActual ? String(h.EnfermedadActual).trim() : null,
+				semiologia: h.Semiologia ? String(h.Semiologia).trim() : null,
+				pa: h.SV_PA ? String(h.SV_PA).trim() : null,
+				fc: h.SV_FC ? String(h.SV_FC).trim() : null,
+				fr: h.SV_FR ? String(h.SV_FR).trim() : null,
+				tax: h.SV_TAX ? String(h.SV_TAX).trim() : null,
+				glucemia: h.SV_GLUCEMIA ? String(h.SV_GLUCEMIA).trim() : null,
+				talla: h.SV_TALLA ? String(h.SV_TALLA).trim() : null,
+				peso: h.SV_PESOACTUAL ? String(h.SV_PESOACTUAL).trim() : null,
+				impresionGeneral: h.SV_IMPRESIONGENERAL
+					? String(h.SV_IMPRESIONGENERAL).trim()
+					: null,
+			};
+		}
+	}
+
+	const rac = await agendaRacService.obtenerRac(id);
+	let adjuntos = [];
+	try {
+		adjuntos = await adjuntosService.getAdjuntosPorTurno(id);
+	} catch {
+		adjuntos = [];
+	}
+
+	const fa = Number(r.FechaAsignada) || 0;
+	const fechaIso = fa > 0 ? _isoDate(convertirFechaClarionADate(fa)) : null;
+
+	const opAsigNom = [r.OpAsigApellido, r.OpAsigNombres]
+		.filter(Boolean)
+		.map((s) => String(s).trim())
+		.join(' ')
+		.trim();
+	const fcAsig = Number(r.FechaCarga) || 0;
+	const hcAsig = Number(r.HoraCarga) || 0;
+	const opLlegadaCod = Number(r.OperadorLlegada) || 0;
+	const opIngresoCod = Number(r.OperadorIngreso) || 0;
+	const codAsig = Number(r.CodOperador) || 0;
+
+	const [nomAsig, nomLlegada, nomIngreso] = await Promise.all([
+		opAsigNom ? Promise.resolve(opAsigNom) : codAsig > 0 ? _nombreOperador(codAsig) : null,
+		opLlegadaCod > 0 ? _nombreOperador(opLlegadaCod) : null,
+		opIngresoCod > 0 ? _nombreOperador(opIngresoCod) : null,
+	]);
+
+	const trazabilidad = {
+		asignacion:
+			codAsig > 0 || fcAsig > 0
+				? {
+						nombre: nomAsig || null,
+						fecha: fcAsig > 0 ? _isoDate(convertirFechaClarionADate(fcAsig)) : null,
+						hora: hcAsig > 0 ? _hhmm(hcAsig) : null,
+					}
+				: null,
+		llegada: extras.horaLlegada
+			? { hora: extras.horaLlegada, operador: nomLlegada }
+			: null,
+		ingreso: extras.horaIngreso
+			? { hora: extras.horaIngreso, operador: nomIngreso }
+			: null,
+		cierre: extras.horaSalida ? { hora: extras.horaSalida, operador: null } : null,
+	};
+
+	if (numeroVisita > 0) {
+		const visRows = await executeQuery(
+			`SELECT TOP 1 OperadorEgreso FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
+			[{ value: numeroVisita, type: 'Int' }],
+		);
+		if (visRows[0]) {
+			const opEgr = Number(visRows[0].OperadorEgreso) || 0;
+			if (opEgr > 0 && extras.horaSalida) {
+				const nom = await _nombreOperador(opEgr);
+				trazabilidad.cierre = {
+					hora: extras.horaSalida,
+					operador: nom,
+				};
+			}
+		}
+	}
+
+	let procedimientosRealizados = [];
+	let pedidosEstudiosDetalle = [];
+
+	if (numeroVisita > 0) {
+		const codConsulta = await _getCodPracticaConsulta();
+		const procRows = await executeQuery(
+			`SELECT fp.Valor, fp.Practica, fp.CantidadPractica, fp.HoraPracticaInicio,
+			        LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS DescTipo,
+			        LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS DescNom,
+			        prof.ApellidoNombre AS ProfesionalNombre
+			 FROM dbo.imFacPracticas fp
+			 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdPractica = fp.Practica
+			 LEFT JOIN dbo.imNomenclador nom ON nom.IDPractica = fp.Practica
+			 LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fp.Valor AND fprof.Funcion = 1
+			 LEFT JOIN dbo.imPersonal prof ON prof.Matricula = fprof.Matricula
+			 WHERE fp.NumeroVisita = @p0 AND fp.Practica <> @p1
+			 ORDER BY fp.Valor`,
+			[
+				{ value: numeroVisita, type: 'Int' },
+				{ value: codConsulta, type: 'Int' },
+			],
+		);
+		procedimientosRealizados = (procRows || []).map((row) => {
+			const descTipo = String(row.DescTipo || '').trim();
+			const descNom = String(row.DescNom || '').trim();
+			const cod = Number(row.Practica) || 0;
+			return {
+				valor: Number(row.Valor) || 0,
+				codigoPractica: cod,
+				descripcion: descTipo || descNom || (cod > 0 ? `Práctica ${cod}` : '—'),
+				cantidad: Number(row.CantidadPractica) || 1,
+				hora: _hhmm(Number(row.HoraPracticaInicio) || 0),
+				profesional: row.ProfesionalNombre
+					? String(row.ProfesionalNombre).trim()
+					: null,
+			};
+		});
+
+		const pedRows = await executeQuery(
+			`SELECT pe.IdPedido, pe.FechaPedido, pe.IdTipoPedido, pe.IdPractica,
+			        LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS DescPractica,
+			        pe.NotasObservacion, pe.EstadoUrgencia,
+			        LTRIM(RTRIM(ISNULL(pe.IdSectorReceptor, ''))) AS SectorReceptor,
+			        LTRIM(RTRIM(ISNULL(srv.Descripcion, ISNULL(secRec.Descripcion, '')))) AS SectorReceptorNombre
+			 FROM dbo.imPedidosEstudios pe
+			 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdTipoPedido = pe.IdTipoPedido
+			 LEFT JOIN dbo.imServicios srv ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
+			 LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
+			 WHERE pe.IdVisita = @p0
+			 ORDER BY pe.IdPedido`,
+			[{ value: numeroVisita, type: 'Int' }],
+		);
+		pedidosEstudiosDetalle = (pedRows || []).map((row) => {
+			const fp = row.FechaPedido;
+			let fechaPedido = null;
+			if (fp instanceof Date && !Number.isNaN(fp.getTime())) {
+				fechaPedido = fp.toISOString();
+			} else if (fp) {
+				fechaPedido = String(fp);
+			}
+			const desc = String(row.DescPractica || '').trim();
+			const cod = Number(row.IdPractica) || 0;
+			const sector = String(row.SectorReceptor || '').trim();
+			return {
+				idPedido: Number(row.IdPedido) || 0,
+				idTipoPedido: Number(row.IdTipoPedido) || 0,
+				codigoPractica: cod,
+				descripcion: desc || (cod > 0 ? `Estudio ${cod}` : '—'),
+				sectorReceptor: sector,
+				sectorReceptorNombre: String(row.SectorReceptorNombre || '').trim() || null,
+				estadoUrgencia: row.EstadoUrgencia
+					? String(row.EstadoUrgencia).trim()
+					: null,
+				notas: row.NotasObservacion ? String(row.NotasObservacion).trim() : null,
+				fechaPedido,
+			};
+		});
+	}
+
+	return {
+		turno: {
+			idTurno: id,
+			fecha: fechaIso,
+			hora: _hhmm(Number(r.HoraAsignada) || 0) || null,
+			sector: String(r.Sector || '').trim(),
+			status: st,
+			estado: st === STATUS_ATENDIDO || hs > 0 ? 'ATENDIDO' : 'OCUPADO',
+			tipoTurno: Number(r.TipoTurno) || 0,
+			observaciones: r.Observaciones ? String(r.Observaciones).trim() : null,
+			numeroVisita,
+			idClasificacionTriage: extras.idClasificacionTriage,
+			horaLlegada: extras.horaLlegada,
+			horaIngreso: extras.horaIngreso,
+			horaSalida: extras.horaSalida,
+			especialidad: Number(r.Especialidad) || 0,
+		},
+		paciente: {
+			nombre: r.PacienteNombre ? String(r.PacienteNombre).trim() : null,
+			numeroDocumento: r.NumeroDocumento ?? null,
+			numeroHC: r.NumeroHC ? String(r.NumeroHC).trim() : null,
+			sexo: extras.sexo,
+			fechaNacimiento: extras.fechaNacimiento,
+			edad: extras.edad,
+			cobertura: extras.cobertura,
+		},
+		profesional: {
+			matricula: Number(r.Profesional) || 0,
+			nombre: r.ProfesionalNombre ? String(r.ProfesionalNombre).trim() : null,
+		},
+		hc,
+		diagnostico,
+		rac: {
+			controles: rac.controles || [],
+			medicacion: rac.medicacion || [],
+		},
+		adjuntos: (adjuntos || []).map((a) => ({
+			idAdjunto: a.IdAdjunto,
+			nombreArchivo: a.NombreArchivo,
+			tipoImagen: a.TipoImagen,
+			tipoImagenNombre: a.TipoImagenNombre,
+			fechaCarga: a.FechaCarga,
+		})),
+		trazabilidad,
+		procedimientosRealizados,
+		pedidosEstudios: pedidosEstudiosDetalle,
+	};
+}
+
 module.exports = {
 	generarSlots,
 	listarDiasConAgenda,
@@ -1927,7 +2613,12 @@ module.exports = {
 	actualizarTurno,
 	cancelarTurno,
 	borrarTurno,
+	marcarLlegada,
+	marcarIngreso,
 	cerrarTurno,
 	buscarDiagnosticos,
 	buscarClientes,
+	buscarTiposPedidosEstudios,
+	listarSectoresReceptorEstudios,
+	obtenerDetalleAtencionTurno,
 };
