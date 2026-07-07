@@ -88,6 +88,35 @@ async function probarConexionEmpresa(req, res) {
 	}
 }
 
+async function probarConexionDatos(req, res) {
+	try {
+		const data = await superAdminService.probarConexionDatos(req.body);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(400).json({ success: false, mensaje: e.message });
+	}
+}
+
+async function listarTablasImportables(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const data = await superAdminService.listarTablasImportables(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
+async function importarTablas(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const data = await superAdminService.importarTablasEmpresa(id, req.body?.tablas);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function actualizarPacks(req, res) {
 	try {
 		const id = Number(req.params.id);
@@ -255,6 +284,9 @@ module.exports = {
 	actualizarEmpresa,
 	actualizarConexionEmpresa,
 	probarConexionEmpresa,
+	probarConexionDatos,
+	listarTablasImportables,
+	importarTablas,
 	eliminarEmpresa,
 	actualizarPacks,
 	actualizarOnboarding,

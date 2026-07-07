@@ -9,6 +9,7 @@ const sectoresService = require('./sectores.service');
 const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const platformMysql = require('./platformMysql.service');
+const nubeTenant = require('./nubeTenant.service');
 const {
 	PACKS_PRINCIPALES,
 	MODULOS_GENERALES,
@@ -23,6 +24,20 @@ function useMysqlPlatform() {
 	return authCentralService.isAuthCentralEnabled();
 }
 
+function normalizeTipoServidor(v) {
+	return String(v || '').trim().toUpperCase() === 'NUBE' ? 'NUBE' : 'FISICO';
+}
+
+/** true si la empresa guarda todos sus datos en Railway (MySQL), sin SQL Server on-premise. */
+async function esEmpresaNube(idEmpresa) {
+	if (!useMysqlPlatform()) return false;
+	try {
+		return (await platformMysql.obtenerTipoServidor(Number(idEmpresa))) === 'NUBE';
+	} catch {
+		return false;
+	}
+}
+
 function mapEmpresaRow(r) {
 	return {
 		id: String(r.IDEMPRESA ?? r.IdEmpresa ?? r.id),
@@ -34,6 +49,7 @@ function mapEmpresaRow(r) {
 		telefono: String(r.TEEmpresa ?? '').trim(),
 		calle: String(r.calle ?? '').trim(),
 		calle_nro: r.calle_nro != null ? String(r.calle_nro) : '',
+		tipoServidor: normalizeTipoServidor(r.TipoServidor),
 		conexion: {
 			dbServer: r.DbServer != null ? String(r.DbServer) : '',
 			dbPort: r.DbPort != null ? Number(r.DbPort) : null,
@@ -262,7 +278,8 @@ async function crearEmpresa(data) {
 			estado: 'PRUEBA',
 			importeMensual: data.importeMensual ?? null,
 		});
-		if (data.conexion || data.dbServer || data.dbName) {
+		const esNube = normalizeTipoServidor(data.tipoServidor) === 'NUBE';
+		if (!esNube && (data.conexion || data.dbServer || data.dbName)) {
 			const c = data.conexion || data;
 			await tenantRegistry.guardarConexionEmpresa(nuevoId, {
 				dbServer: c.dbServer,
@@ -337,12 +354,46 @@ async function probarConexionEmpresa(idEmpresa) {
 	return testTenantConnection(Number(idEmpresa));
 }
 
+/** Prueba una conexión SQL con las credenciales tipeadas (sin guardarlas en Empresas). */
+async function probarConexionDatos(body = {}) {
+	const row = {
+		DbServer: body.dbServer,
+		DbPort: body.dbPort,
+		DbInstance: body.dbInstance,
+		DbName: body.dbName,
+		DbUser: body.dbUser,
+		DbPassword: body.dbPassword,
+	};
+	if (!String(row.DbServer || '').trim() || !String(row.DbName || '').trim() || !String(row.DbUser || '').trim()) {
+		return { ok: false, error: 'Completá servidor, base de datos y usuario para probar la conexión' };
+	}
+	try {
+		await testTenantConnection(row);
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, error: e.message };
+	}
+}
+
+/** Lista las tablas que se pueden importar del SQL Server físico hacia la nube. */
+async function listarTablasImportables(idEmpresa) {
+	return nubeTenant.listarTablasImportables(Number(idEmpresa));
+}
+
+/** Importa (snapshot) las tablas seleccionadas del SQL Server físico a Railway. */
+async function importarTablasEmpresa(idEmpresa, tablas) {
+	return nubeTenant.importarTablas(Number(idEmpresa), tablas);
+}
+
 async function actualizarEmpresa(idEmpresa, data) {
 	const desc = String(data.descripcion || '').trim();
 	if (!desc) throw new Error('La descripción es obligatoria');
 
 	if (useMysqlPlatform()) {
 		await platformMysql.actualizarEmpresaRow(idEmpresa, data);
+		if (data.tipoServidor !== undefined) {
+			await platformMysql.actualizarTipoServidor(idEmpresa, data.tipoServidor);
+		}
 		return obtenerEmpresaDetalle(idEmpresa);
 	}
 
@@ -526,6 +577,9 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
 async function crearUsuarioEmpresa(idEmpresa, body) {
+	if (await esEmpresaNube(idEmpresa)) {
+		return nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
+	}
 	return runWithTenant(idEmpresa, async () => {
 		const {
 			nombreRed,
@@ -597,6 +651,9 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 }
 
 async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
+	if (await esEmpresaNube(idEmpresa)) {
+		return nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
+	}
 	return runWithTenant(idEmpresa, async () => {
 		const vinculo = await tenantDb.executeQuery(
 			`SELECT TOP 1 1 FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @p0 AND IdPersonal = @p1`,
@@ -703,6 +760,10 @@ async function crearSector(data) {
 		throw e;
 	}
 
+	if (await esEmpresaNube(idEmpresa)) {
+		return nubeTenant.crearSector({ valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
+	}
+
 	return runWithTenant(idEmpresa, async () => {
 		const valor = String(data.valor || '')
 			.trim()
@@ -758,6 +819,10 @@ async function actualizarSector(valor, data) {
 		throw e;
 	}
 
+	if (await esEmpresaNube(idEmpresa)) {
+		return nubeTenant.actualizarSector(valor, { descripcion: data.descripcion, ambInt: data.ambInt });
+	}
+
 	return runWithTenant(idEmpresa, async () => {
 		const id = String(valor || '').trim().toUpperCase();
 		const descripcion = String(data.descripcion || '').trim();
@@ -797,6 +862,10 @@ async function eliminarSector(valor, idEmpresa) {
 		const e = new Error('idEmpresa es obligatorio para eliminar sectores del tenant');
 		e.statusCode = 400;
 		throw e;
+	}
+
+	if (await esEmpresaNube(tenantId)) {
+		return nubeTenant.eliminarSector(valor);
 	}
 
 	return runWithTenant(tenantId, async () => {
@@ -870,6 +939,13 @@ async function upsertSuscripcion(idEmpresa, data) {
 }
 
 async function listarUsuariosEmpresa(idEmpresa) {
+	if (await esEmpresaNube(idEmpresa)) {
+		try {
+			return await nubeTenant.listarUsuariosEmpresa(idEmpresa);
+		} catch {
+			return [];
+		}
+	}
 	return runWithTenant(idEmpresa, async () => {
 		try {
 			const rows = await tenantDb.executeQuery(
@@ -1001,6 +1077,10 @@ async function listarTodosUsuarios(filtro = '') {
 }
 
 async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
+	if (await esEmpresaNube(idEmpresa)) {
+		await nubeTenant.vincularUsuarioEmpresa(idEmpresa, idPersonal);
+		return listarUsuariosEmpresa(idEmpresa);
+	}
 	return runWithTenant(idEmpresa, async () => {
 		await tenantDb.executeQuery(
 			`
@@ -1018,6 +1098,9 @@ async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
+	if (await esEmpresaNube(idEmpresa)) {
+		return nubeTenant.desvincularUsuarioEmpresa(idEmpresa, idPersonal);
+	}
 	return runWithTenant(idEmpresa, async () => {
 		await tenantDb.executeQuery(
 			`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
@@ -1076,6 +1159,15 @@ async function obtenerCatalogos() {
 
 async function obtenerCatalogosTenant(idEmpresa) {
 	const base = await obtenerCatalogos();
+
+	if (await esEmpresaNube(idEmpresa)) {
+		const [sectores, roles] = await Promise.all([
+			nubeTenant.listarSectores().catch(() => []),
+			nubeTenant.listarRoles().catch(() => []),
+		]);
+		return { ...base, sectores, roles };
+	}
+
 	return runWithTenant(idEmpresa, async () => {
 		const [sectores, roles] = await Promise.all([
 			sectoresService.obtenerSectores().catch(() => []),
@@ -1157,6 +1249,9 @@ module.exports = {
 	actualizarEmpresa,
 	actualizarConexionEmpresa,
 	probarConexionEmpresa,
+	probarConexionDatos,
+	listarTablasImportables,
+	importarTablasEmpresa,
 	eliminarEmpresa,
 	actualizarPacksEmpresa,
 	upsertOnboarding,

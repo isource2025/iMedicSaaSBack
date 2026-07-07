@@ -11,12 +11,16 @@ router.get('/catalogos', requirePermiso('PLATAFORMA.PANEL.VER'), ctrl.catalogos)
 router.get('/config', requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'), ctrl.configPlataforma);
 router.put('/config', requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'), ctrl.configPlataforma);
 
+router.post('/conexion/probar', requirePermiso('PLATAFORMA.EMPRESAS.CREAR'), ctrl.probarConexionDatos);
+
 router.get('/empresas', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.listarEmpresas);
 router.post('/empresas', requirePermiso('PLATAFORMA.EMPRESAS.CREAR'), ctrl.crearEmpresa);
 router.get('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.obtenerEmpresa);
 router.put('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.actualizarEmpresa);
 router.put('/empresas/:id/conexion', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.actualizarConexionEmpresa);
 router.post('/empresas/:id/conexion/probar', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.probarConexionEmpresa);
+router.get('/empresas/:id/importar/tablas', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.listarTablasImportables);
+router.post('/empresas/:id/importar', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.importarTablas);
 router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.eliminarEmpresa);
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
 router.put('/empresas/:id/onboarding', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarOnboarding);

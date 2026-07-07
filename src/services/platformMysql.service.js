@@ -42,21 +42,35 @@ const NUMERIC_MYSQL_TYPES = new Set([
 ]);
 
 let empresasNumericColsCache = null;
+let empresasColsCache = null;
 
-/** Columnas numéricas reales de Empresas (para no mandar '' a un INT). */
-async function getEmpresasNumericCols() {
-	if (empresasNumericColsCache) return empresasNumericColsCache;
+/** Todas las columnas de Empresas (lowercase) para features opcionales (ej. TipoServidor). */
+async function getEmpresasCols() {
+	if (empresasColsCache) return empresasColsCache;
 	const rows = await mysqlQuery(
 		`SELECT COLUMN_NAME AS col, DATA_TYPE AS tipo
      FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Empresas'`,
 	);
+	empresasColsCache = new Set(rows.map((r) => String(r.col).toLowerCase()));
 	empresasNumericColsCache = new Set(
 		rows
 			.filter((r) => NUMERIC_MYSQL_TYPES.has(String(r.tipo).toLowerCase()))
 			.map((r) => String(r.col).toLowerCase()),
 	);
+	return empresasColsCache;
+}
+
+/** Columnas numéricas reales de Empresas (para no mandar '' a un INT). */
+async function getEmpresasNumericCols() {
+	if (empresasNumericColsCache) return empresasNumericColsCache;
+	await getEmpresasCols();
 	return empresasNumericColsCache;
+}
+
+/** Normaliza TipoServidor a 'NUBE' | 'FISICO' (default FISICO). */
+function normalizeTipoServidor(v) {
+	return String(v || '').trim().toUpperCase() === 'NUBE' ? 'NUBE' : 'FISICO';
 }
 
 /**
@@ -93,18 +107,21 @@ function mapEmpresaRow(r) {
 		DbUser: r.DbUser,
 		DbPasswordEnc: r.DbPasswordEnc,
 		DbPassword: r.DbPassword,
+		TipoServidor: normalizeTipoServidor(r.TipoServidor),
 		CantUsuarios: r.CantUsuarios,
 	};
 }
 
 async function listarEmpresasRows(filtro = '') {
 	assertMysql();
+	const cols = await getEmpresasCols();
+	const tipoSel = cols.has('tiposervidor') ? 'e.TipoServidor' : `'FISICO' AS TipoServidor`;
 	const qstr = String(filtro || '').trim();
 	let sql = `
     SELECT
       e.IDEMPRESA, e.DESCRIPCION, e.Nro_CUIT, e.localidad, e.Provincia,
       e.Email, e.TEEmpresa, e.DbServer, e.DbPort, e.DbInstance, e.DbName,
-      e.DbUser, e.DbPasswordEnc,
+      e.DbUser, e.DbPasswordEnc, ${tipoSel},
       (SELECT COUNT(*) FROM ${q('imPersonalEmpresas')} pe WHERE pe.IdEmpresa = e.IDEMPRESA) AS CantUsuarios
     FROM ${q('Empresas')} e
   `;
@@ -120,11 +137,13 @@ async function listarEmpresasRows(filtro = '') {
 
 async function obtenerEmpresaRow(idEmpresa) {
 	assertMysql();
+	const cols = await getEmpresasCols();
+	const tipoSel = cols.has('tiposervidor') ? 'TipoServidor' : `'FISICO' AS TipoServidor`;
 	const rows = await mysqlQuery(
 		`
     SELECT IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
            Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
-           DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc, DbPassword
+           DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc, DbPassword, ${tipoSel}
     FROM ${q('Empresas')} WHERE IDEMPRESA = ? LIMIT 1
     `,
 		[Number(idEmpresa)],
@@ -141,27 +160,55 @@ async function crearEmpresaRow(data) {
 	assertMysql();
 	const nuevoId = await siguienteIdEmpresa();
 	const desc = String(data.descripcion || '').trim();
+	const cols = await getEmpresasCols();
 	const numericCols = await getEmpresasNumericCols();
 	const val = (col, v) => coerceValor(col, v, numericCols);
+
+	const campos = ['IDEMPRESA', 'DESCRIPCION', 'calle', 'calle_nro', 'localidad', 'Provincia', 'Nro_CUIT', 'Email', 'TEEmpresa'];
+	const valores = [
+		nuevoId,
+		desc,
+		val('calle', data.calle || ''),
+		val('calle_nro', data.calle_nro),
+		val('localidad', data.localidad || ''),
+		val('Provincia', data.provincia),
+		val('Nro_CUIT', data.cuit || ''),
+		val('Email', data.email || ''),
+		val('TEEmpresa', data.telefono || ''),
+	];
+	if (cols.has('tiposervidor')) {
+		campos.push('TipoServidor');
+		valores.push(normalizeTipoServidor(data.tipoServidor));
+	}
+
 	await mysqlExec(
-		`
-    INSERT INTO ${q('Empresas')}
-      (IDEMPRESA, DESCRIPCION, calle, calle_nro, localidad, Provincia, Nro_CUIT, Email, TEEmpresa)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-		[
-			nuevoId,
-			desc,
-			val('calle', data.calle || ''),
-			val('calle_nro', data.calle_nro),
-			val('localidad', data.localidad || ''),
-			val('Provincia', data.provincia),
-			val('Nro_CUIT', data.cuit || ''),
-			val('Email', data.email || ''),
-			val('TEEmpresa', data.telefono || ''),
-		],
+		`INSERT INTO ${q('Empresas')} (${campos.map(q).join(', ')}) VALUES (${campos.map(() => '?').join(', ')})`,
+		valores,
 	);
 	return nuevoId;
+}
+
+/** Devuelve 'NUBE' | 'FISICO' para la empresa (default FISICO si no existe la columna). */
+async function obtenerTipoServidor(idEmpresa) {
+	assertMysql();
+	const cols = await getEmpresasCols();
+	if (!cols.has('tiposervidor')) return 'FISICO';
+	const rows = await mysqlQuery(
+		`SELECT TipoServidor FROM ${q('Empresas')} WHERE IDEMPRESA = ? LIMIT 1`,
+		[Number(idEmpresa)],
+	);
+	return normalizeTipoServidor(rows[0]?.TipoServidor);
+}
+
+/** Actualiza el tipo de servidor de la empresa. */
+async function actualizarTipoServidor(idEmpresa, tipoServidor) {
+	assertMysql();
+	const cols = await getEmpresasCols();
+	if (!cols.has('tiposervidor')) return;
+	await mysqlExec(`UPDATE ${q('Empresas')} SET TipoServidor = ? WHERE IDEMPRESA = ?`, [
+		normalizeTipoServidor(tipoServidor),
+		Number(idEmpresa),
+	]);
 }
 
 async function actualizarEmpresaRow(idEmpresa, data) {
@@ -495,6 +542,8 @@ module.exports = {
 	obtenerEmpresaRow,
 	crearEmpresaRow,
 	actualizarEmpresaRow,
+	obtenerTipoServidor,
+	actualizarTipoServidor,
 	guardarConexionEmpresa,
 	eliminarEmpresa,
 	obtenerPacks,
