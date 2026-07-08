@@ -42,7 +42,8 @@ const TABLAS_IMPORTABLES = [
 	{ tabla: 'imPersonal', label: 'Personal', estrategia: 'tenant', remapPersona: ['Valor'] },
 	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', remapPersona: ['ValorPersonal', 'CodOperador'] },
 	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', remapPersona: ['idPersonal'] },
-	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'tenant', remapPersona: ['IdPersonal'], forzarEmpresa: ['IdEmpresa'] },
+	// El vínculo usuario↔empresa se GENERA (el físico no lo usa), tomando el personal importado.
+	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'vinculo' },
 ];
 
 function configTabla(tabla) {
@@ -488,8 +489,10 @@ async function listarTablasImportables(idEmpresa) {
 
 	const resultado = [];
 	for (const t of TABLAS_IMPORTABLES) {
-		const esNube = t.estrategia === 'nube';
-		const cols = esNube ? [] : await sqlServerColumnas(pool, t.tabla).catch(() => []);
+		// Los catálogos globales de plataforma (roles/permisos/IVA) y el vínculo auto-generado
+		// no se listan: se usan/arman desde la nube y no hay nada que buscar en el físico.
+		if (t.estrategia !== 'tenant') continue;
+		const cols = await sqlServerColumnas(pool, t.tabla).catch(() => []);
 		const existeOrigen = cols.length > 0;
 		resultado.push({
 			tabla: t.tabla,
@@ -498,8 +501,7 @@ async function listarTablasImportables(idEmpresa) {
 			existeOrigen,
 			existeDestino: destinoTablas.has(t.tabla.toLowerCase()),
 			filasOrigen: existeOrigen ? await sqlServerContar(pool, t.tabla) : 0,
-			// Si es global de plataforma o no existe en el físico, se toma de Railway.
-			desdeNube: esNube || (!existeOrigen && destinoTablas.has(t.tabla.toLowerCase())),
+			desdeNube: !existeOrigen && destinoTablas.has(t.tabla.toLowerCase()),
 		});
 	}
 	return resultado;
@@ -522,11 +524,16 @@ async function importarTablas(idEmpresa, tablas) {
 	const emp = Number(idEmpresa);
 	const offset = offsetEmpresa(emp);
 
-	// Se agrega siempre el vínculo usuario-empresa para que el login funcione.
-	const pedidas = (Array.isArray(tablas) ? tablas : []).map((t) => String(t));
+	const pedidas = (Array.isArray(tablas) ? tablas : []).map((t) => String(t).toLowerCase());
+	const pidePersonal = pedidas.includes('impassword') || pedidas.includes('impersonal');
 	const seleccion = TABLAS_IMPORTABLES
 		.map((x) => x.tabla)
-		.filter((t) => pedidas.some((p) => p.toLowerCase() === t.toLowerCase()) || t === 'imPersonalEmpresas');
+		.filter((t) => {
+			const cfg = configTabla(t);
+			// Se genera el vínculo usuario-empresa solo si se importó personal/usuarios.
+			if (cfg?.estrategia === 'vinculo') return pidePersonal;
+			return pedidas.includes(t.toLowerCase());
+		});
 	if (!seleccion.length) {
 		const e = new Error('No se seleccionaron tablas válidas para importar');
 		e.statusCode = 400;
@@ -544,6 +551,37 @@ async function importarTablas(idEmpresa, tablas) {
 		if (cfg.estrategia === 'nube') {
 			res.omitida = true;
 			res.nota = 'Catálogo de plataforma: se usan los datos de la nube (Railway)';
+			resultados.push(res);
+			continue;
+		}
+
+		// Vínculo usuario↔empresa: se GENERA a partir del personal del físico (el físico no
+		// mantiene imPersonalEmpresas). Sin esto los usuarios importados no podrían loguearse.
+		if (cfg.estrategia === 'vinculo') {
+			try {
+				const tienePass = (await sqlServerColumnas(pool, 'imPassword').catch(() => [])).length > 0;
+				const fuente = tienePass ? 'imPassword' : 'imPersonal';
+				const idCol = tienePass ? 'ValorPersonal' : 'Valor';
+				const data = await pool.request().query(`SELECT [${idCol}] AS pid FROM dbo.[${fuente}]`);
+				const ids = [...new Set(
+					(data.recordset || []).map((r) => Number(r.pid)).filter((n) => Number.isFinite(n) && n > 0),
+				)];
+				res.leidas = ids.length;
+				for (const lote of chunk(ids, 500)) {
+					const flat = [];
+					for (const pid of lote) flat.push(offset + pid, emp);
+					const valuesSql = lote.map(() => '(?, ?)').join(', ');
+					const r = await mysqlExec(
+						`INSERT INTO \`imPersonalEmpresas\` (IdPersonal, IdEmpresa) VALUES ${valuesSql}
+             ON DUPLICATE KEY UPDATE IdEmpresa = VALUES(IdEmpresa)`,
+						flat,
+					);
+					res.escritas += Number(r?.affectedRows) || lote.length;
+				}
+				res.nota = 'Vínculos generados desde el personal importado';
+			} catch (e) {
+				res.error = e.message;
+			}
 			resultados.push(res);
 			continue;
 		}
