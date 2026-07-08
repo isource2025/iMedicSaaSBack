@@ -1164,19 +1164,17 @@ async function obtenerCatalogos() {
 async function obtenerCatalogosTenant(idEmpresa) {
 	const base = await obtenerCatalogos();
 
+	// Los roles son un catálogo GLOBAL de plataforma (viven en Railway). Los servidores
+	// clínicos físicos legacy no tienen imRoles, así que siempre se leen de la nube.
+	const roles = await nubeTenant.listarRoles().catch(() => []);
+
 	if (await esEmpresaNube(idEmpresa)) {
-		const [sectores, roles] = await Promise.all([
-			nubeTenant.listarSectores(idEmpresa).catch(() => []),
-			nubeTenant.listarRoles().catch(() => []),
-		]);
+		const sectores = await nubeTenant.listarSectores(idEmpresa).catch(() => []);
 		return { ...base, sectores, roles };
 	}
 
 	return runWithTenant(idEmpresa, async () => {
-		const [sectores, roles] = await Promise.all([
-			sectoresService.obtenerSectores().catch(() => []),
-			rolesService.listarRoles().catch(() => []),
-		]);
+		const sectores = await sectoresService.obtenerSectores().catch(() => []);
 		return {
 			...base,
 			sectores: (sectores || []).map((s) => ({
@@ -1184,14 +1182,7 @@ async function obtenerCatalogosTenant(idEmpresa) {
 				descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
 				ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
 			})),
-			roles: (roles || [])
-				.filter((r) => r.Nombre !== 'SUPER_ADMIN')
-				.map((r) => ({
-					idRol: r.IdRol,
-					nombre: r.Nombre,
-					descripcion: r.Descripcion,
-					nivel: r.Nivel,
-				})),
+			roles,
 		};
 	});
 }
