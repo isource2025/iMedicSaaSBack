@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { requireAuth } = require('../middlewares/authJwt.middleware');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const catalogsController = require('../controllers/catalogs.controller');
+
+router.use(requireAuth, requireTenant);
 
 /**
  * Ruta para obtener las disposiciones de egreso

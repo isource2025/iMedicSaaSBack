@@ -3,7 +3,86 @@ const { isPlatformSqlConfigured } = require('../config/database');
 const { runWithTenant, getTenantId } = require('../context/tenantContext');
 const tenantRegistry = require('./tenantRegistry.service');
 const authCentralService = require('./authCentral.service');
+const authCentralSync = require('./authCentralSync.service');
 const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
+
+function mapSectorRow(r) {
+	return {
+		idPersonal: String(r.idPersonal ?? r.IdPersonal ?? ''),
+		idSector: String(r.idSector ?? r.IdSector ?? '').trim(),
+		descripcionSector: String(r.descripcionSector ?? r.Descripcion ?? '').trim(),
+	};
+}
+
+/** Sectores del usuario en el SQL físico del tenant (sin pasar por Railway). */
+async function obtenerSectoresPorUsuarioEnFisico(username) {
+	const consulta = `
+    SELECT
+      ps.idPersonal AS idPersonal,
+      ps.idSector AS idSector,
+      s.Descripcion AS descripcionSector
+    FROM impassword pw
+    INNER JOIN imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
+    INNER JOIN imSectores s ON ps.idSector = s.Valor
+    WHERE UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
+       OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
+  `;
+	const resultado = await executeQuery(consulta, [{ value: username, type: 'VarChar' }]);
+	return (resultado || []).map(mapSectorRow);
+}
+
+async function sincronizarSectoresDesdeFisico(idEmpresa, idPersonal) {
+	if (!authCentralService.isAuthCentralEnabled()) return;
+	try {
+		await authCentralSync.syncPersonalSectores(idEmpresa, idPersonal);
+	} catch (e) {
+		console.warn(`[auth] sync sectores ${idEmpresa}/${idPersonal}:`, e.message);
+	}
+}
+
+/**
+ * Railway primero; si vacío en empresa FÍSICO, lee SQL físico y replica a Railway.
+ */
+async function resolverSectoresLogin(username, idEmpresa) {
+	const id =
+		idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
+			? Number(idEmpresa)
+			: null;
+
+	if (!id) {
+		if (authCentralService.isAuthCentralEnabled()) {
+			const empresas = await authCentralService.descubrirEmpresas(username);
+			if (empresas.length === 1) {
+				return resolverSectoresLogin(username, empresas[0].idEmpresa);
+			}
+		}
+		return [];
+	}
+
+	if (authCentralService.isAuthCentralEnabled()) {
+		try {
+			const central = await authCentralService.obtenerSectores(username, id);
+			if (central.length) return central;
+		} catch (e) {
+			console.warn(`[authCentral] sectores empresa ${id}:`, e.message);
+		}
+	}
+
+	try {
+		const fisico = await runWithTenant(id, () => obtenerSectoresPorUsuarioEnFisico(username));
+		if (fisico.length) {
+			const idPersonal = Number(fisico[0].idPersonal);
+			if (Number.isFinite(idPersonal)) {
+				await sincronizarSectoresDesdeFisico(id, idPersonal);
+			}
+			return fisico;
+		}
+	} catch (e) {
+		console.warn(`[auth] sectores físico empresa ${id}:`, e.message);
+	}
+
+	return [];
+}
 
 const esErrorEsquemaRoles = (error) => {
   const msg = String(error?.message || '').toLowerCase();
@@ -26,20 +105,21 @@ const eximeSeleccionSectorPorUsuario = (userData) => {
   return false;
 };
 
-const SQL_ROL_USUARIO = `
+const SQL_ROL_USUARIO_FISICO = `
   SELECT TOP 1
     LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId,
-    LTRIM(RTRIM(ISNULL(r.Nombre, ''))) AS RolNombre,
+    CAST('' AS VARCHAR(50)) AS RolNombre,
     COALESCE(pw.Grupo, 0) AS Grupo
   FROM impassword pw
   LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
-  LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
   WHERE UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
      OR UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
 `;
 
 const obtenerRolUsuarioEnTenant = async (username) => {
-  const rolRows = await executeQuery(SQL_ROL_USUARIO, [{ value: username, type: 'VarChar' }]);
+  const rolRows = await executeQuery(SQL_ROL_USUARIO_FISICO, [
+    { value: username, type: 'VarChar' },
+  ]);
   return rolRows[0] || null;
 };
 
@@ -52,16 +132,19 @@ const eximeSectorPorUsername = async (username, idEmpresa = null) => {
     } catch (e) {
       console.warn('[authCentral] eximeSectorPorUsername:', e.message);
     }
+    return false;
   }
 
   if (isPlatformSqlConfigured()) {
     try {
-      const rolRows = await executePlatformQuery(SQL_ROL_USUARIO, [
+      const rolRows = await executePlatformQuery(SQL_ROL_USUARIO_FISICO, [
         { value: username, type: 'VarChar' },
       ]);
       if (rolRows.length && eximeSeleccionSectorPorUsuario(rolRows[0])) return true;
     } catch (e) {
-      console.warn('[auth] eximeSectorPorUsername plataforma:', e.message);
+      if (!esErrorEsquemaRoles(e)) {
+        console.warn('[auth] eximeSectorPorUsername plataforma:', e.message);
+      }
     }
   }
 
@@ -71,7 +154,9 @@ const eximeSectorPorUsername = async (username, idEmpresa = null) => {
       const rol = await runWithTenant(id, () => obtenerRolUsuarioEnTenant(username));
       if (eximeSeleccionSectorPorUsuario(rol)) return true;
     } catch (e) {
-      console.warn(`[auth] eximeSectorPorUsername tenant ${id}:`, e.message);
+      if (!esErrorEsquemaRoles(e)) {
+        console.warn(`[auth] eximeSectorPorUsername tenant ${id}:`, e.message);
+      }
     }
     return false;
   }
@@ -79,69 +164,85 @@ const eximeSectorPorUsername = async (username, idEmpresa = null) => {
   try {
     const candidatos = await tenantRegistry.descubrirEmpresasPorUsuario(username);
     for (const c of candidatos.slice(0, 3)) {
-      const rol = await runWithTenant(c.idEmpresa, () => obtenerRolUsuarioEnTenant(username));
-      if (eximeSeleccionSectorPorUsuario(rol)) return true;
+      try {
+        const rol = await runWithTenant(c.idEmpresa, () => obtenerRolUsuarioEnTenant(username));
+        if (eximeSeleccionSectorPorUsuario(rol)) return true;
+      } catch (e) {
+        if (!esErrorEsquemaRoles(e)) throw e;
+      }
     }
   } catch (e) {
-    console.warn('[auth] eximeSectorPorUsername descubrimiento:', e.message);
+    if (!esErrorEsquemaRoles(e)) {
+      console.warn('[auth] eximeSectorPorUsername descubrimiento:', e.message);
+    }
   }
 
   return false;
 };
 
-/** Primera empresa del catálogo con conexión SQL usable (login admin plataforma). */
+/** Primera empresa del usuario con conexión SQL usable (solo login super-admin sin empresa elegida). */
 const resolverEmpresaTenantOperativa = async (empresasUsuario = []) => {
-  const candidatos = [];
-  const push = (raw) => {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0 && !candidatos.includes(n)) candidatos.push(n);
-  };
+	const candidatos = [];
+	const push = (raw) => {
+		const n = Number(raw);
+		if (Number.isFinite(n) && n > 0 && !candidatos.includes(n)) candidatos.push(n);
+	};
 
-  const fallback = Number(process.env.BOT_EMPRESA_ID || process.env.DEFAULT_EMPRESA_ID || 0);
-  if (Number.isFinite(fallback) && fallback > 0) push(fallback);
-  for (const e of empresasUsuario) push(e.idEmpresa);
+	// Solo empresas vinculadas al usuario. BOT_EMPRESA_ID es exclusivo del bot/WhatsApp.
+	for (const e of empresasUsuario) push(e.idEmpresa);
 
-  if (!authCentralService.isAuthCentralEnabled()) {
-    return candidatos[0] || null;
-  }
+	if (!authCentralService.isAuthCentralEnabled()) {
+		return candidatos[0] || null;
+	}
 
-  for (const id of candidatos) {
-    try {
-      const row = await authCentralService.obtenerEmpresaPorId(id);
-      if (empresaRowHasSqlConnection(row)) return id;
-    } catch (err) {
-      console.warn(`[auth] empresa ${id} sin SQL operativa:`, err.message);
-    }
-  }
+	for (const id of candidatos) {
+		try {
+			const row = await authCentralService.obtenerEmpresaPorId(id);
+			if (empresaRowHasSqlConnection(row)) return id;
+		} catch (err) {
+			console.warn(`[auth] empresa ${id} sin SQL operativa:`, err.message);
+		}
+	}
 
-  return candidatos[0] || null;
+	return candidatos[0] || null;
 };
 
 /** idEmpresa para JWT tras login (tenant clínico). */
 const resolverIdEmpresaLogin = async ({
-  idEmpresaSesion,
-  idEmpresaBody,
-  empresasUsuario,
+	idEmpresaSesion,
+	idEmpresaBody,
+	empresasUsuario,
+	esSuperAdmin = false,
 }) => {
-  let id =
-    idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0
-      ? Number(idEmpresaSesion)
-      : null;
+	// Usuario de clínica: la empresa autenticada es la del JWT (no reemplazar por defaults).
+	if (
+		!esSuperAdmin &&
+		idEmpresaSesion != null &&
+		Number.isFinite(Number(idEmpresaSesion)) &&
+		Number(idEmpresaSesion) > 0
+	) {
+		return Number(idEmpresaSesion);
+	}
 
-  if (id == null && idEmpresaBody != null && idEmpresaBody !== '') {
-    const n = Number(idEmpresaBody);
-    if (Number.isFinite(n) && n > 0) id = n;
-  }
+	let id =
+		idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0
+			? Number(idEmpresaSesion)
+			: null;
 
-  if (id == null && empresasUsuario.length === 1) {
-    id = Number(empresasUsuario[0].idEmpresa);
-  }
+	if (id == null && idEmpresaBody != null && idEmpresaBody !== '') {
+		const n = Number(idEmpresaBody);
+		if (Number.isFinite(n) && n > 0) id = n;
+	}
 
-  if (id == null) {
-    id = await resolverEmpresaTenantOperativa(empresasUsuario);
-  }
+	if (id == null && empresasUsuario.length === 1) {
+		id = Number(empresasUsuario[0].idEmpresa);
+	}
 
-  return id;
+	if (id == null) {
+		id = await resolverEmpresaTenantOperativa(empresasUsuario);
+	}
+
+	return id;
 };
 
 /** Login multi-tenant: resuelve BD por empresa y valida credenciales. */
@@ -217,46 +318,16 @@ const obtenerSectoresPorUsuario = async (username) => {
       return [];
     }
 
-    if (authCentralService.isAuthCentralEnabled() && !isPlatformSqlConfigured()) {
-      try {
-        const empresas = await authCentralService.descubrirEmpresas(username);
-        if (empresas.length === 1) {
-          return authCentralService.obtenerSectores(username, empresas[0].idEmpresa);
-        }
-      } catch (e) {
-        console.warn('[authCentral] obtenerSectoresPorUsuario sin idEmpresa:', e.message);
-      }
-      return [];
+    const idEmpresa = getTenantId();
+    if (idEmpresa != null && Number(idEmpresa) > 0) {
+      return obtenerSectoresPorUsuarioEnFisico(username);
     }
 
-    // Realizar consulta con JOIN para obtener solo los sectores asociados al usuario
-    // Usar UPPER y RTRIM para hacer la comparación case-insensitive y sin espacios
-    const consulta = `
-      SELECT 
-        ps.idPersonal as idPersonal,
-        ps.idSector as idSector, 
-        s.Descripcion as descripcionSector 
-      FROM 
-        impassword pw
-      INNER JOIN 
-        imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
-      INNER JOIN 
-        imSectores s ON ps.idSector = s.Valor
-      WHERE 
-        UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
-    `;
-    
-    const parametros = [{ 
-      value: username,
-      type: 'VarChar' // Especificar tipo VARCHAR para manejar números como strings
-    }];
-    console.log(`Ejecutando consulta SQL:\n${consulta}\nCon parámetro: ${username}`);
-    const resultado = await executeQuery(consulta, parametros);
-    console.log(`✅ Resultado CRUDO de la consulta:`, resultado);
-    console.log(`✅ Tipo de resultado:`, typeof resultado, Array.isArray(resultado));
-    console.log(`✅ Cantidad de registros:`, resultado ? resultado.length : 0);
-    console.log(`Sectores filtrados para usuario ${username}:`, JSON.stringify(resultado, null, 2));
-    return resultado;
+    if (authCentralService.isAuthCentralEnabled() && !isPlatformSqlConfigured()) {
+      return resolverSectoresLogin(username, null);
+    }
+
+    return obtenerSectoresPorUsuarioEnFisico(username);
   } catch (error) {
     console.error(`Error al obtener sectores para usuario ${username}:`, error.message);
     throw error;
@@ -443,36 +514,7 @@ const obtenerSectoresPorUsuarioConTenant = async (username, idEmpresa) => {
   if (await eximeSectorPorUsername(username, idEmpresa)) {
     return [];
   }
-
-  const id = idEmpresa != null ? Number(idEmpresa) : null;
-  if (id && Number.isFinite(id) && authCentralService.isAuthCentralEnabled()) {
-    try {
-      const central = await authCentralService.obtenerSectores(username, id);
-      if (central.length) return central;
-    } catch (e) {
-      console.warn(`[authCentral] sectores empresa ${id}:`, e.message);
-    }
-  }
-  if (id && Number.isFinite(id)) {
-    return runWithTenant(id, () => obtenerSectoresPorUsuario(username));
-  }
-
-  if (authCentralService.isAuthCentralEnabled()) {
-    try {
-      const empresas = await authCentralService.descubrirEmpresas(username);
-      if (empresas.length === 1) {
-        const central = await authCentralService.obtenerSectores(username, empresas[0].idEmpresa);
-        if (central.length) return central;
-      }
-    } catch (e) {
-      console.warn('[authCentral] obtenerSectoresPorUsuarioConTenant:', e.message);
-    }
-    if (!isPlatformSqlConfigured()) {
-      return [];
-    }
-  }
-
-  return obtenerSectoresPorUsuario(username);
+  return resolverSectoresLogin(username, idEmpresa);
 };
 
 const obtenerDescripcionSector = async (idSector) => {

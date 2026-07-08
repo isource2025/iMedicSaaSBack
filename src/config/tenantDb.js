@@ -45,11 +45,21 @@ function envDefaultConfig() {
 
 function rowToSqlConfig(row) {
 	const empresa = normalizeEmpresaRow(row);
-	if (isLocalDevOnly() && isPlatformSqlConfigured()) {
+	const authCentral = authCentralService.isAuthCentralEnabled();
+
+	if (isLocalDevOnly() && isPlatformSqlConfigured() && !authCentral) {
 		console.log('[tenantDb] LOCAL_DEV_ONLY=1 → conexión tenant desde .env DB_* (ignora DbServer remoto en Empresas)');
 		return envDefaultConfig();
 	}
 	if (!empresaRowHasSqlConnection(empresa)) {
+		// SaaS: cada empresa tiene su SQL en MySQL Empresas — nunca mezclar con .env DB_*.
+		if (authCentral) {
+			const err = new Error(
+				`Falta conexión SQL en Empresas (ID ${empresa.IDEMPRESA ?? '?'}): DbServer, DbName, DbUser y DbPasswordEnc`,
+			);
+			err.code = 'TENANT_DB_NOT_CONFIGURED';
+			throw err;
+		}
 		if (isPlatformSqlConfigured()) {
 			return envDefaultConfig();
 		}

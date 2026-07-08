@@ -139,6 +139,7 @@ const inicioSesion = async (req, res) => {
             idEmpresaSesion,
             idEmpresaBody: idEmpresa,
             empresasUsuario,
+            esSuperAdmin,
           });
 
           if (
@@ -173,7 +174,7 @@ const inicioSesion = async (req, res) => {
               await runWithTenant(idEmpresaEfectiva, cargarEmpresaTenant);
             }
           } else if (empresasUsuario.length === 0 && !esSuperAdmin) {
-            empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+            console.warn('[auth.login] Usuario sin empresas vinculadas en auth central');
           }
         } catch (empErr) {
           console.error('[auth.login] Error al resolver empresa:', empErr.message);
@@ -184,6 +185,7 @@ const inicioSesion = async (req, res) => {
                 idEmpresaSesion,
                 idEmpresaBody: idEmpresa,
                 empresasUsuario,
+                esSuperAdmin,
               }));
             if (idFallback != null) {
               idEmpresaEfectiva = idFallback;
@@ -191,7 +193,7 @@ const inicioSesion = async (req, res) => {
                 empresaSeleccionada = await empresaService.obtenerInfoEmpresaPorId(idFallback);
               });
             } else if (!esSuperAdmin) {
-              empresaSeleccionada = await empresaService.obtenerInfoEmpresa();
+              console.warn('[auth.login] Fallback empresa omitido: sin idEmpresa');
             }
           } catch (fallbackErr) {
             console.warn('[auth.login] Fallback empresa omitido:', fallbackErr.message);
@@ -205,7 +207,18 @@ const inicioSesion = async (req, res) => {
             idEmpresaSesion,
             idEmpresaBody: idEmpresa,
             empresasUsuario,
+            esSuperAdmin,
           });
+        }
+
+        // Usuario de clínica: JWT siempre con la empresa autenticada (no reasignar).
+        if (
+          !esSuperAdmin &&
+          idEmpresaSesion != null &&
+          Number.isFinite(Number(idEmpresaSesion)) &&
+          Number(idEmpresaSesion) > 0
+        ) {
+          idEmpresaEfectiva = Number(idEmpresaSesion);
         }
 
         const token = generarToken(usuario, idEmpresaEfectiva);
@@ -213,8 +226,20 @@ const inicioSesion = async (req, res) => {
 
         let permisos = [];
         try {
-          if (rol?.id != null) {
-            permisos = await permisosService.permisosDeRol(rol.id, rol.nombre);
+          const cargarPermisos = async () => {
+            if (idEmpresaEfectiva != null && Number.isFinite(Number(idEmpresaEfectiva))) {
+              const r = await permisosService.permisosDeUsuario(usuario.ValorPersonal);
+              if (r?.permisos?.length) return r.permisos;
+            }
+            if (rol?.id != null) {
+              return permisosService.permisosDeRol(rol.id, rol.nombre);
+            }
+            return [];
+          };
+          if (idEmpresaEfectiva != null && Number.isFinite(Number(idEmpresaEfectiva))) {
+            permisos = await runWithTenant(Number(idEmpresaEfectiva), cargarPermisos);
+          } else {
+            permisos = await cargarPermisos();
           }
         } catch (e) {
           console.error('[auth.login] Error al cargar permisos:', e.message);

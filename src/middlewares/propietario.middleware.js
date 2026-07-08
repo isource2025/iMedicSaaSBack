@@ -22,6 +22,9 @@
  *   permitirAdmin {boolean} Si true (default), rol ADMIN omite verificación de autor.
  */
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
+const authCentralService = require('../services/authCentral.service');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 /** ADMIN de tenant: puede editar registros ajenos en internación. */
 async function esAdminClinico(req) {
@@ -33,16 +36,32 @@ async function esAdminClinico(req) {
 
 	if (!req.valorPersonal) return false;
 
+	if (isAuthCentralEnabled()) {
+		const idEmpresa = getTenantId();
+		if (idEmpresa != null && Number(idEmpresa) > 0) {
+			try {
+				const r = await authCentralService.obtenerRolDeValorPersonal(
+					Number(idEmpresa),
+					Number(req.valorPersonal),
+				);
+				if (r) {
+					const nombre = String(r.nombre || '').toUpperCase();
+					if (nombre === 'ADMIN' || Number(r.idRol) === 1) return true;
+				}
+			} catch (_) {
+				/* ignore */
+			}
+		}
+	}
+
 	try {
 		const rows = await executeQuery(
 			`
       SELECT
         pw.Grupo,
-        LTRIM(RTRIM(ISNULL(r.Nombre, ''))) AS RolNombre,
         LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId
       FROM dbo.imPassword pw
       LEFT JOIN dbo.imPersonal p ON p.Valor = pw.ValorPersonal
-      LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
       WHERE pw.ValorPersonal = @p0
       `,
 			[{ value: Number(req.valorPersonal) }],
@@ -50,8 +69,6 @@ async function esAdminClinico(req) {
 		const row = rows[0];
 		if (!row) return false;
 		if (Number(row.Grupo) === 11) return true;
-		const dbRol = String(row.RolNombre || '').trim().toUpperCase();
-		if (dbRol === 'ADMIN') return true;
 		const dbRolId = row.RolId != null && row.RolId !== '' ? Number(row.RolId) : NaN;
 		if (Number.isFinite(dbRolId) && dbRolId === 1) return true;
 	} catch (err) {

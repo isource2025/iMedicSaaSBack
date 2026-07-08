@@ -807,6 +807,7 @@ module.exports = {
 	eliminarSector,
 	listarRoles,
 	listarUsuariosEmpresa,
+	asegurarFichaPersonal,
 	crearUsuarioEmpresa,
 	actualizarUsuarioEmpresa,
 	desvincularUsuarioEmpresa,

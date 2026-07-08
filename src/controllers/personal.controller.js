@@ -21,6 +21,18 @@ const listar = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('[personal.listar] ERROR:', error.message);
+		const msg = String(error.message || '');
+		if (
+			error.code === 'ETIMEOUT' ||
+			error.originalError?.code === 'ETIMEOUT' ||
+			/ETIMEOUT|Failed to connect/i.test(msg)
+		) {
+			return res.status(503).json({
+				success: false,
+				mensaje:
+					'No se puede conectar al servidor SQL de la clínica. Verificá que el puerto 1433 esté accesible desde Railway (firewall / red).',
+			});
+		}
 		res.status(500).json({ success: false, mensaje: 'Error al obtener el personal' });
 	}
 };

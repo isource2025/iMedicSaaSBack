@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { requireAuth } = require('../middlewares/authJwt.middleware');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const notificacionesService = require('../services/notificaciones.service');
+
+router.use(requireAuth, requireTenant);
 
 function valorPersonalReq(req) {
   const q = req.query.userId ?? req.query.valorPersonal;

@@ -42,7 +42,7 @@ async function mapearEmpresaRow(empresa, { skipIva = false } = {}) {
   }
 
   return {
-    id: empresa.IDEMPRESA?.toString() || '1',
+    id: empresa.IDEMPRESA != null ? String(empresa.IDEMPRESA) : '',
     descripcion: empresa.DESCRIPCION?.trim() || 'iMedicWS',
     razonSocial: empresa.DESCRIPCION?.trim() || 'iMedicWS',
     cuit: empresa.Nro_CUIT?.toString() || '-',
@@ -112,7 +112,7 @@ const obtenerInfoEmpresa = async (idEmpresa = null) => {
 
   if (authCentralService.isAuthCentralEnabled()) {
     return {
-      id: '1',
+      id: '',
       descripcion: 'iMedicWS',
     };
   }
@@ -124,7 +124,7 @@ const obtenerInfoEmpresa = async (idEmpresa = null) => {
     }
 
     return {
-      id: '1',
+      id: '',
       descripcion: 'iMedicWS',
     };
   } catch (error) {

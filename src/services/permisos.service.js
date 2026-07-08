@@ -23,7 +23,8 @@ function esErrorEsquemaRoles(error) {
 	return (
 		msg.includes("invalid object name 'imroles'") ||
 		msg.includes("invalid object name 'imrolpermisos'") ||
-		msg.includes("invalid object name 'impermisos'")
+		msg.includes("invalid object name 'impermisos'") ||
+		msg.includes("invalid column name 'rol'")
 	);
 }
 
@@ -90,6 +91,18 @@ async function permisosDeRol(idRol, nombreRol) {
 	return [...permisos];
 }
 
+function esErrorConexionTenant(error) {
+	const msg = String(error?.message || '').toLowerCase();
+	return (
+		error?.code === 'ETIMEOUT' ||
+		error?.originalError?.code === 'ETIMEOUT' ||
+		msg.includes('etimeout') ||
+		msg.includes('failed to connect') ||
+		msg.includes('econnrefused') ||
+		msg.includes('etimedout')
+	);
+}
+
 /** Permisos efectivos del usuario logueado (por valorPersonal + empresa del JWT). */
 async function permisosDeUsuario(valorPersonal) {
 	if (!Number.isFinite(Number(valorPersonal))) {
@@ -98,9 +111,12 @@ async function permisosDeUsuario(valorPersonal) {
 	const vp = Number(valorPersonal);
 	const idEmpresa = getTenantId();
 
-	if (authCentralService.isAuthCentralEnabled() && idEmpresa != null && Number(idEmpresa) > 0) {
+	if (authCentralService.isAuthCentralEnabled()) {
+		if (idEmpresa == null || !Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) <= 0) {
+			return { rol: null, permisos: [] };
+		}
 		try {
-			const mapped = await authCentralService.obtenerRolDeValorPersonal(idEmpresa, vp);
+			const mapped = await authCentralService.obtenerRolDeValorPersonal(Number(idEmpresa), vp);
 			if (mapped) {
 				const permisos = await permisosDeRol(mapped.idRol, mapped.nombre);
 				return {
@@ -109,34 +125,39 @@ async function permisosDeUsuario(valorPersonal) {
 				};
 			}
 		} catch (e) {
-			console.warn('[permisos] auth central permisosDeUsuario:', e.message);
+			if (!esErrorEsquemaRoles(e) && !esErrorConexionTenant(e)) {
+				console.warn('[permisos] auth central permisosDeUsuario:', e.message);
+			}
 		}
+		return { rol: null, permisos: [] };
 	}
 
 	try {
 		const rows = await executeQuery(
 			`
     SELECT TOP 1
-      r.IdRol,
-      LTRIM(RTRIM(r.Nombre)) AS Nombre
+      LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId,
+      COALESCE(pw.Grupo, 0) AS Grupo
     FROM dbo.imPersonal p
-    LEFT JOIN dbo.imRoles r
-      ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
+    LEFT JOIN dbo.imPassword pw ON pw.ValorPersonal = p.Valor
     WHERE p.Valor = @p0
     `,
 			[{ value: vp, type: 'Int' }],
 		);
 		const r = rows[0];
-		if (!r || r.IdRol == null) {
-			return { rol: null, permisos: [] };
-		}
-		const permisos = await permisosDeRol(Number(r.IdRol), r.Nombre);
+		if (!r) return { rol: null, permisos: [] };
+		const rolIdRaw = r.RolId != null && r.RolId !== '' ? Number(r.RolId) : null;
+		const rolId = Number.isFinite(rolIdRaw) && rolIdRaw > 0 ? rolIdRaw : null;
+		if (!rolId && Number(r.Grupo) !== 11) return { rol: null, permisos: [] };
+		const idRol = Number(r.Grupo) === 11 ? 1 : rolId;
+		const nombre = Number(r.Grupo) === 11 ? 'ADMIN' : null;
+		const permisos = await permisosDeRol(idRol, nombre);
 		return {
-			rol: { id: Number(r.IdRol), nombre: String(r.Nombre || '').toUpperCase() },
+			rol: { id: idRol, nombre: String(nombre || '').toUpperCase() },
 			permisos,
 		};
 	} catch (e) {
-		if (esErrorEsquemaRoles(e)) {
+		if (esErrorEsquemaRoles(e) || esErrorConexionTenant(e)) {
 			return { rol: null, permisos: [] };
 		}
 		throw e;

@@ -399,15 +399,76 @@ async function obtenerRolDeValorPersonal(idEmpresa, valorPersonal) {
       r.Descripcion AS Descripcion,
       r.Nivel AS Nivel,
       COALESCE(pw.Grupo, 0) AS Grupo
-    FROM \`imPassword\` pw
-    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
+    FROM \`imPersonal\` p
+    LEFT JOIN \`imPassword\` pw ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
-    WHERE pw.IdEmpresa = ? AND pw.ValorPersonal = ?
+    WHERE p.IdEmpresa = ? AND p.Valor = ?
     LIMIT 1
     `,
 		[emp, vp],
 	);
 	return mapRolDesdeFila(rows[0] || null);
+}
+
+/**
+ * Persiste imPersonal.Rol en Railway (auth central).
+ * @param {number} idEmpresa
+ * @param {number} valorPersonal
+ * @param {number|null} idRol - null para limpiar
+ */
+async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
+	if (!isAuthCentralEnabled()) return null;
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) {
+		const e = new Error('idEmpresa o valorPersonal inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const [pwRows, personalRows] = await Promise.all([
+		query(
+			`SELECT ValorPersonal FROM \`imPassword\` WHERE IdEmpresa = ? AND ValorPersonal = ? LIMIT 1`,
+			[emp, vp],
+		),
+		query(`SELECT Valor FROM \`imPersonal\` WHERE IdEmpresa = ? AND Valor = ? LIMIT 1`, [emp, vp]),
+	]);
+	if (!pwRows.length && !personalRows.length) {
+		const otrasEmpresas = await query(
+			`SELECT DISTINCT IdEmpresa FROM \`imPersonal\` WHERE Valor = ?`,
+			[vp],
+		);
+		if (otrasEmpresas.length) {
+			const ids = otrasEmpresas.map((r) => r.IdEmpresa).join(', ');
+			const e = new Error(
+				`El personal ${vp} está en Railway con IdEmpresa ${ids}, pero la sesión usa empresa ${emp}. Volvé a iniciar sesión en la empresa correcta.`,
+			);
+			e.statusCode = 409;
+			throw e;
+		}
+		const e = new Error('Personal no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+
+	const rolValor =
+		idRol == null || idRol === '' || Number(idRol) === 0 ? null : String(Number(idRol));
+
+	const pool = await getAuthCentralPool();
+	const [updResult] = await pool.query(
+		`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`,
+		[rolValor, emp, vp],
+	);
+	if (!updResult.affectedRows) {
+		await query(`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol) VALUES (?, ?, ?)`, [
+			emp,
+			vp,
+			rolValor,
+		]);
+	}
+
+	if (rolValor == null) return null;
+	return obtenerRolDeValorPersonal(emp, vp);
 }
 
 async function obtenerRolPorId(idRol) {
@@ -454,6 +515,7 @@ module.exports = {
 	obtenerRolDeUsuario,
 	eximeSectorPorUsername,
 	obtenerRolDeValorPersonal,
+	asignarRolDeValorPersonal,
 	obtenerRolPorId,
 	listarRolesCatalogo,
 	mapRolDesdeFila,

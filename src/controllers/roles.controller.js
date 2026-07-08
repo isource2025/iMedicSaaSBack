@@ -64,6 +64,10 @@ const obtenerDePersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[roles.obtenerDePersonal]', error);
+		const msg = String(error?.message || '').toLowerCase();
+		if (msg.includes("invalid object name 'imroles'")) {
+			return res.json({ success: true, data: null });
+		}
 		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
 	}
 };

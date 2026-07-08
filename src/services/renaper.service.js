@@ -321,12 +321,12 @@ async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 	const base = String(process.env.RENAPER_PROXY_BASE_URL || '').replace(/\/$/, '');
 	const key = String(process.env.RENAPER_PROXY_API_KEY || process.env.BOT_API_KEY || '').trim();
 	const tenantId = getTenantId();
-	const idEmpresa = String(
-		tenantId ||
-			process.env.BOT_EMPRESA_ID ||
-			process.env.WHATSAPP_EMPRESA_ID ||
-			'1',
-	).trim();
+	const idEmpresa = String(tenantId || process.env.BOT_EMPRESA_ID || '').trim();
+	if (!idEmpresa) {
+		const err = new Error('Se requiere empresa activa (idEmpresa) para consultar RENAPER');
+		err.statusCode = 400;
+		throw err;
+	}
 	const timeoutMs = Number(opts.timeoutMs) || 25000;
 	const url = `${base}/renaper/${encodeURIComponent(String(NumeroDocumento).trim())}`;
 
