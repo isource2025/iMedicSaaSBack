@@ -48,7 +48,7 @@ const eximeSectorPorUsername = async (username, idEmpresa = null) => {
 
   if (authCentralService.isAuthCentralEnabled()) {
     try {
-      if (await authCentralService.esSuperAdmin(username)) return true;
+      if (await authCentralService.eximeSectorPorUsername(username, idEmpresa)) return true;
     } catch (e) {
       console.warn('[authCentral] eximeSectorPorUsername:', e.message);
     }

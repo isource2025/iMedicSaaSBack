@@ -298,6 +298,70 @@ async function permisosDeRol(idRol) {
 	return rows.map((row) => String(row.Codigo || '')).filter(Boolean);
 }
 
+/** Roles que no eligen sector en el login (misma regla que auth.service). */
+function eximeRolSector(rol) {
+	if (!rol) return false;
+	const rolId = rol.RolId != null && rol.RolId !== '' ? Number(rol.RolId) : null;
+	const rolNombre = String(rol.RolNombre || '').trim().toUpperCase();
+	if (rolNombre === 'SUPER_ADMIN' || rolId === 5) return true;
+	if (rolNombre === 'ADMIN' || rolId === 1) return true;
+	if (Number(rol.Grupo) === 11) return true;
+	return false;
+}
+
+/** Rol del usuario en auth central (MySQL), opcionalmente acotado a una empresa. */
+async function obtenerRolDeUsuario(username, idEmpresa = null) {
+	if (!isAuthCentralEnabled()) return null;
+	const u = normalizarUsername(username);
+	const params = [u];
+	let filtroEmpresa = '';
+	if (idEmpresa != null && idEmpresa !== '' && Number(idEmpresa) > 0) {
+		filtroEmpresa = 'AND pw.IdEmpresa = ?';
+		params.push(Number(idEmpresa));
+	}
+	const rows = await query(
+		`
+    SELECT
+      r.IdRol AS RolId,
+      r.Nombre AS RolNombre,
+      COALESCE(pw.Grupo, 0) AS Grupo
+    FROM \`imPassword\` pw
+    INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
+    LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
+    WHERE ${USER_MATCH} = ?
+    ${filtroEmpresa}
+    ORDER BY pw.IdEmpresa
+    LIMIT 1
+    `,
+		params,
+	);
+	return rows[0] || null;
+}
+
+/** true si el usuario es ADMIN / SUPER_ADMIN / Grupo 11 en Railway (sin consultar SQL físico). */
+async function eximeSectorPorUsername(username, idEmpresa = null) {
+	if (!isAuthCentralEnabled()) return false;
+	if (await esSuperAdmin(username)) return true;
+
+	const id =
+		idEmpresa != null && idEmpresa !== '' && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
+			? Number(idEmpresa)
+			: null;
+
+	if (id) {
+		const rol = await obtenerRolDeUsuario(username, id);
+		return eximeRolSector(rol);
+	}
+
+	const empresas = await descubrirEmpresas(username);
+	for (const e of empresas.slice(0, 5)) {
+		const rol = await obtenerRolDeUsuario(username, e.idEmpresa);
+		if (eximeRolSector(rol)) return true;
+	}
+	return false;
+}
+
 module.exports = {
 	isAuthCentralEnabled,
 	autenticarPlataforma,
@@ -312,4 +376,6 @@ module.exports = {
 	obtenerTodasEmpresas,
 	obtenerPacksEmpresa,
 	permisosDeRol,
+	obtenerRolDeUsuario,
+	eximeSectorPorUsername,
 };
