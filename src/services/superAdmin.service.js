@@ -669,22 +669,34 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	});
 }
 
-async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
-	if (await esEmpresaNube(idEmpresa)) {
-		return nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
-	}
+/**
+ * Actualiza credencial/ficha en el SQL físico del tenant.
+ * @param {{ requireVinculo?: boolean, syncToRailway?: boolean }} options
+ *   requireVinculo: exige fila en imPersonalEmpresas (dev local).
+ *   syncToRailway: replica cambios a Railway tras escribir en físico.
+ */
+async function actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body, options = {}) {
+	const { requireVinculo = true, syncToRailway = true } = options;
 	return runWithTenant(idEmpresa, async () => {
-		const vinculo = await tenantDb.executeQuery(
-			`SELECT TOP 1 1 FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @p0 AND IdPersonal = @p1`,
-			[
-				{ value: idEmpresa, type: 'Int' },
-				{ value: idPersonal, type: 'Int' },
-			],
-		);
-		if (!vinculo.length) {
-			const e = new Error('El usuario no está vinculado a esta empresa');
-			e.statusCode = 404;
-			throw e;
+		if (requireVinculo) {
+			const vinculo = await tenantDb.executeQuery(
+				`SELECT TOP 1 1 FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @p0 AND IdPersonal = @p1`,
+				[
+					{ value: idEmpresa, type: 'Int' },
+					{ value: idPersonal, type: 'Int' },
+				],
+			);
+			if (!vinculo.length) {
+				const e = new Error('El usuario no está vinculado a esta empresa');
+				e.statusCode = 404;
+				throw e;
+			}
+		} else {
+			const exists = await tenantDb.executeQuery(
+				`SELECT TOP 1 ValorPersonal FROM dbo.imPassword WHERE ValorPersonal = @p0`,
+				[{ value: idPersonal, type: 'Int' }],
+			);
+			if (!exists.length) return null;
 		}
 
 		if (
@@ -712,7 +724,9 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 
 		if (body.idRol != null && body.idRol !== '') {
 			await rolesService.asignarRolAPersonal(idPersonal, Number(body.idRol));
-			await authCentralSync.syncPersonal(idEmpresa, idPersonal);
+			if (syncToRailway) {
+				await authCentralSync.syncPersonal(idEmpresa, idPersonal);
+			}
 		}
 
 		if (Array.isArray(body.sectores)) {
@@ -728,11 +742,27 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 			}
 		}
 
-		await authCentralSync.syncUserLoginBundle(idEmpresa, idPersonal);
-
-		const lista = await listarUsuariosEmpresa(idEmpresa);
-		return lista.find((u) => u.idPersonal === idPersonal) || null;
+		if (syncToRailway) {
+			await authCentralSync.syncUserLoginBundle(idEmpresa, idPersonal);
+			const lista = await listarUsuariosEmpresa(idEmpresa);
+			return lista.find((u) => u.idPersonal === idPersonal) || null;
+		}
+		return null;
 	});
+}
+
+async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
+	if (await gestionAuthEnRailway()) {
+		const result = await nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
+		if (!(await esEmpresaNube(idEmpresa))) {
+			await actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body, {
+				requireVinculo: false,
+				syncToRailway: false,
+			}).catch((e) => console.warn('[superAdmin] espejo actualizar usuario físico:', e.message));
+		}
+		return result;
+	}
+	return actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body);
 }
 
 async function eliminarEmpresa(idEmpresa) {
@@ -1098,8 +1128,22 @@ async function listarTodosUsuarios(filtro = '') {
 }
 
 async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		await nubeTenant.vincularUsuarioEmpresa(idEmpresa, idPersonal);
+		if (!(await esEmpresaNube(idEmpresa))) {
+			await runWithTenant(idEmpresa, async () => {
+				await tenantDb.executeQuery(
+					`
+    IF NOT EXISTS (SELECT 1 FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1)
+      INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa) VALUES (@p0, @p1)
+    `,
+					[
+						{ value: idPersonal, type: 'Int' },
+						{ value: idEmpresa, type: 'Int' },
+					],
+				);
+			}).catch((e) => console.warn('[superAdmin] espejo vincular usuario físico:', e.message));
+		}
 		return listarUsuariosEmpresa(idEmpresa);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -1119,8 +1163,20 @@ async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await esEmpresaNube(idEmpresa)) {
-		return nubeTenant.desvincularUsuarioEmpresa(idEmpresa, idPersonal);
+	if (await gestionAuthEnRailway()) {
+		const lista = await nubeTenant.desvincularUsuarioEmpresa(idEmpresa, idPersonal);
+		if (!(await esEmpresaNube(idEmpresa))) {
+			await runWithTenant(idEmpresa, async () => {
+				await tenantDb.executeQuery(
+					`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1`,
+					[
+						{ value: idPersonal, type: 'Int' },
+						{ value: idEmpresa, type: 'Int' },
+					],
+				);
+			}).catch((e) => console.warn('[superAdmin] espejo desvincular usuario físico:', e.message));
+		}
+		return lista;
 	}
 	return runWithTenant(idEmpresa, async () => {
 		await tenantDb.executeQuery(
