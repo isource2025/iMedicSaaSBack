@@ -12,17 +12,42 @@ const { convertirFechaAClarion } = require('../utils/dateUtils');
 
 const COLLATE = 'utf8mb4_unicode_ci';
 
-/** Tablas que se pueden importar del SQL Server físico a la nube (las que ya existen en Railway). */
+/**
+ * Desfase de IDs por empresa al importar personal desde un SQL Server físico.
+ * El físico numera su personal desde 1; para no pisar el de otras empresas ya
+ * cargadas en Railway, cada empresa vive en su propia franja: id_nube = base + id_origen.
+ * Determinístico ⇒ re-importar es idempotente (upsert sobre el mismo id remapeado).
+ */
+const OFFSET_EMPRESA = 10_000_000;
+function offsetEmpresa(idEmpresa) {
+	return Number(idEmpresa) * OFFSET_EMPRESA;
+}
+
+/**
+ * Estrategias de importación FÍSICO → NUBE:
+ *  - 'nube'   : catálogo GLOBAL de plataforma (roles/permisos/IVA). No se copia del físico:
+ *               se usan siempre los de Railway (respuesta al punto 1: "lo que no esté en
+ *               local se toma de la nube"). También cubre tablas que faltan en el físico.
+ *  - 'tenant' : datos propios de la empresa. Se copian remapeando IDs y forzando IdEmpresa.
+ *      · remapPersona : columnas con id de persona → se les suma offsetEmpresa().
+ *      · forzarEmpresa: columnas que se setean SIEMPRE al IdEmpresa destino (aunque el
+ *                       físico no las tenga), para etiquetar la fila con su empresa.
+ */
 const TABLAS_IMPORTABLES = [
-	{ tabla: 'imRoles', label: 'Roles' },
-	{ tabla: 'imPermisos', label: 'Permisos' },
-	{ tabla: 'imRolPermisos', label: 'Permisos por rol' },
-	{ tabla: 'imSectores', label: 'Sectores' },
-	{ tabla: 'imIVA', label: 'Condiciones de IVA' },
-	{ tabla: 'imPersonal', label: 'Personal' },
-	{ tabla: 'imPassword', label: 'Usuarios de acceso' },
-	{ tabla: 'imPersonalSectores', label: 'Sectores por personal' },
+	{ tabla: 'imRoles', label: 'Roles', estrategia: 'nube' },
+	{ tabla: 'imPermisos', label: 'Permisos', estrategia: 'nube' },
+	{ tabla: 'imRolPermisos', label: 'Permisos por rol', estrategia: 'nube' },
+	{ tabla: 'imIVA', label: 'Condiciones de IVA', estrategia: 'nube' },
+	{ tabla: 'imSectores', label: 'Sectores', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{ tabla: 'imPersonal', label: 'Personal', estrategia: 'tenant', remapPersona: ['Valor'] },
+	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', remapPersona: ['ValorPersonal', 'CodOperador'] },
+	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', remapPersona: ['idPersonal'] },
+	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'tenant', remapPersona: ['IdPersonal'], forzarEmpresa: ['IdEmpresa'] },
 ];
+
+function configTabla(tabla) {
+	return TABLAS_IMPORTABLES.find((x) => x.tabla.toLowerCase() === String(tabla).toLowerCase());
+}
 
 async function mysqlQuery(sql, params = []) {
 	const pool = await getAuthCentralPool();
@@ -93,9 +118,10 @@ function fechaClarionHoy() {
 
 // ───────────────────────────── sectores (NUBE) ─────────────────────────────
 
-async function listarSectores() {
+async function listarSectores(idEmpresa) {
 	const rows = await mysqlQuery(
-		`SELECT Valor, Descripcion, AmbInt FROM \`imSectores\` ORDER BY Descripcion`,
+		`SELECT Valor, Descripcion, AmbInt FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
+		[Number(idEmpresa)],
 	);
 	return rows.map((s) => ({
 		id: String(s.Valor || '').trim(),
@@ -104,7 +130,8 @@ async function listarSectores() {
 	}));
 }
 
-async function crearSector({ valor, descripcion, ambInt }) {
+async function crearSector(idEmpresa, { valor, descripcion, ambInt }) {
+	const emp = Number(idEmpresa);
 	const cod = String(valor || '').trim().toUpperCase().slice(0, 3);
 	const desc = String(descripcion || '').trim();
 	if (!cod || cod.length < 2) {
@@ -117,7 +144,10 @@ async function crearSector({ valor, descripcion, ambInt }) {
 		e.statusCode = 400;
 		throw e;
 	}
-	const dup = await mysqlQuery(`SELECT Valor FROM \`imSectores\` WHERE Valor = ? LIMIT 1`, [cod]);
+	const dup = await mysqlQuery(
+		`SELECT Valor FROM \`imSectores\` WHERE IdEmpresa = ? AND Valor = ? LIMIT 1`,
+		[emp, cod],
+	);
 	if (dup.length) {
 		const e = new Error('Ya existe un sector con ese código');
 		e.statusCode = 409;
@@ -125,8 +155,8 @@ async function crearSector({ valor, descripcion, ambInt }) {
 	}
 	const amb = String(ambInt || 'A').trim().slice(0, 1) || 'A';
 	const colMap = await columnasMeta('imSectores');
-	const campos = ['Valor', 'Descripcion'];
-	const valores = [cod, desc];
+	const campos = ['IdEmpresa', 'Valor', 'Descripcion'];
+	const valores = [emp, cod, desc];
 	if (colMap.has('ValorServicio')) {
 		campos.push('ValorServicio');
 		valores.push(`${cod} `.slice(0, 4));
@@ -148,7 +178,8 @@ async function crearSector({ valor, descripcion, ambInt }) {
 	return { id: cod, descripcion: desc, ambInt: amb };
 }
 
-async function actualizarSector(valor, { descripcion, ambInt }) {
+async function actualizarSector(idEmpresa, valor, { descripcion, ambInt }) {
+	const emp = Number(idEmpresa);
 	const id = String(valor || '').trim().toUpperCase();
 	const desc = String(descripcion || '').trim();
 	if (!desc) {
@@ -158,25 +189,35 @@ async function actualizarSector(valor, { descripcion, ambInt }) {
 	}
 	const amb = ambInt != null ? String(ambInt).trim().slice(0, 1) || 'A' : undefined;
 	if (amb) {
-		await mysqlExec(`UPDATE \`imSectores\` SET Descripcion = ?, AmbInt = ? WHERE Valor = ?`, [desc, amb, id]);
+		await mysqlExec(
+			`UPDATE \`imSectores\` SET Descripcion = ?, AmbInt = ? WHERE IdEmpresa = ? AND Valor = ?`,
+			[desc, amb, emp, id],
+		);
 	} else {
-		await mysqlExec(`UPDATE \`imSectores\` SET Descripcion = ? WHERE Valor = ?`, [desc, id]);
+		await mysqlExec(
+			`UPDATE \`imSectores\` SET Descripcion = ? WHERE IdEmpresa = ? AND Valor = ?`,
+			[desc, emp, id],
+		);
 	}
 	return { id, descripcion: desc, ambInt: amb || null };
 }
 
-async function eliminarSector(valor) {
+async function eliminarSector(idEmpresa, valor) {
+	const emp = Number(idEmpresa);
 	const id = String(valor || '').trim().toUpperCase();
 	const enUso = await mysqlQuery(
-		`SELECT 1 FROM \`imPersonalSectores\` WHERE idSector = ? LIMIT 1`,
-		[id],
+		`SELECT 1
+     FROM \`imPersonalSectores\` ps
+     INNER JOIN \`imPersonalEmpresas\` pe ON pe.IdPersonal = ps.idPersonal AND pe.IdEmpresa = ?
+     WHERE ps.idSector = ? LIMIT 1`,
+		[emp, id],
 	);
 	if (enUso.length) {
 		const e = new Error('No se puede eliminar: el sector está asignado a personal');
 		e.statusCode = 409;
 		throw e;
 	}
-	await mysqlExec(`DELETE FROM \`imSectores\` WHERE Valor = ?`, [id]);
+	await mysqlExec(`DELETE FROM \`imSectores\` WHERE IdEmpresa = ? AND Valor = ?`, [emp, id]);
 	return { ok: true, id };
 }
 
@@ -220,9 +261,11 @@ async function listarUsuariosEmpresa(idEmpresa) {
 			const secRows = await mysqlQuery(
 				`SELECT ps.idSector AS idSector, s.Descripcion AS descripcion
          FROM \`imPersonalSectores\` ps
-         LEFT JOIN \`imSectores\` s ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+         LEFT JOIN \`imSectores\` s
+           ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+          AND s.IdEmpresa = ?
          WHERE ps.idPersonal = ?`,
-				[idPersonal],
+				[id, idPersonal],
 			);
 			sectores = (secRows || []).map((s) => ({
 				id: String(s.idSector || ''),
@@ -445,14 +488,18 @@ async function listarTablasImportables(idEmpresa) {
 
 	const resultado = [];
 	for (const t of TABLAS_IMPORTABLES) {
-		const cols = await sqlServerColumnas(pool, t.tabla).catch(() => []);
+		const esNube = t.estrategia === 'nube';
+		const cols = esNube ? [] : await sqlServerColumnas(pool, t.tabla).catch(() => []);
 		const existeOrigen = cols.length > 0;
 		resultado.push({
 			tabla: t.tabla,
 			label: t.label,
+			estrategia: t.estrategia,
 			existeOrigen,
 			existeDestino: destinoTablas.has(t.tabla.toLowerCase()),
 			filasOrigen: existeOrigen ? await sqlServerContar(pool, t.tabla) : 0,
+			// Si es global de plataforma o no existe en el físico, se toma de Railway.
+			desdeNube: esNube || (!existeOrigen && destinoTablas.has(t.tabla.toLowerCase())),
 		});
 	}
 	return resultado;
@@ -464,43 +511,81 @@ function chunk(arr, size) {
 	return out;
 }
 
-/** Copia (snapshot, re-ejecutable con upsert) las tablas seleccionadas de SQL Server → MySQL. */
+/**
+ * Copia (snapshot, re-ejecutable con upsert) las tablas seleccionadas de SQL Server → MySQL.
+ * - Catálogos globales (roles/permisos/IVA) NO se copian: se usan los de Railway.
+ * - Tablas que no existan en el físico se conservan desde la nube (no fallan).
+ * - Datos de empresa: se remapean IDs de persona (offset por empresa) y se fuerza IdEmpresa,
+ *   de modo que lo importado quede aislado y vinculado a la empresa destino.
+ */
 async function importarTablas(idEmpresa, tablas) {
-	const seleccion = (Array.isArray(tablas) ? tablas : [])
-		.map((t) => String(t))
-		.filter((t) => TABLAS_IMPORTABLES.some((x) => x.tabla.toLowerCase() === t.toLowerCase()));
+	const emp = Number(idEmpresa);
+	const offset = offsetEmpresa(emp);
+
+	// Se agrega siempre el vínculo usuario-empresa para que el login funcione.
+	const pedidas = (Array.isArray(tablas) ? tablas : []).map((t) => String(t));
+	const seleccion = TABLAS_IMPORTABLES
+		.map((x) => x.tabla)
+		.filter((t) => pedidas.some((p) => p.toLowerCase() === t.toLowerCase()) || t === 'imPersonalEmpresas');
 	if (!seleccion.length) {
 		const e = new Error('No se seleccionaron tablas válidas para importar');
 		e.statusCode = 400;
 		throw e;
 	}
 
-	const pool = await getTenantPool(Number(idEmpresa));
+	const pool = await getTenantPool(emp);
 	const resultados = [];
 
 	for (const tabla of seleccion) {
-		const res = { tabla, leidas: 0, escritas: 0, error: null };
+		const cfg = configTabla(tabla) || {};
+		const res = { tabla, estrategia: cfg.estrategia, leidas: 0, escritas: 0, omitida: false, nota: null, error: null };
+
+		// Catálogos globales de plataforma: siempre desde la nube.
+		if (cfg.estrategia === 'nube') {
+			res.omitida = true;
+			res.nota = 'Catálogo de plataforma: se usan los datos de la nube (Railway)';
+			resultados.push(res);
+			continue;
+		}
+
 		try {
 			const destinoMeta = await columnasMeta(tabla);
 			if (!destinoMeta.size) throw new Error(`La tabla ${tabla} no existe en la nube (Railway)`);
-			const origenCols = await sqlServerColumnas(pool, tabla);
-			if (!origenCols.length) throw new Error(`La tabla ${tabla} no existe en el servidor físico`);
 
-			// Intersección de columnas (case-insensitive); usar el nombre real de MySQL para el INSERT.
+			const origenCols = await sqlServerColumnas(pool, tabla).catch(() => []);
+			if (!origenCols.length) {
+				// Punto 1: si no está en el físico, se conserva lo de la nube.
+				res.omitida = true;
+				res.nota = 'No existe en el servidor físico: se conservan los datos de la nube';
+				resultados.push(res);
+				continue;
+			}
+
 			const destinoPorLower = new Map([...destinoMeta.keys()].map((c) => [c.toLowerCase(), c]));
 			const comunes = [];
 			for (const oc of origenCols) {
 				const destCol = destinoPorLower.get(oc.toLowerCase());
 				if (destCol) comunes.push({ origen: oc, destino: destCol });
 			}
-			if (!comunes.length) throw new Error(`Sin columnas en común entre origen y nube para ${tabla}`);
+
+			const remap = new Set((cfg.remapPersona || []).map((c) => c.toLowerCase()));
+			const forzar = (cfg.forzarEmpresa || []).filter((c) => destinoPorLower.has(c.toLowerCase()));
+			const forzarReal = forzar.map((c) => destinoPorLower.get(c.toLowerCase()));
+			// Columnas forzadas que no vienen del origen no deben duplicarse en la lista común.
+			const comunesFiltradas = comunes.filter(
+				(c) => !forzarReal.some((f) => f.toLowerCase() === c.destino.toLowerCase()),
+			);
+
+			if (!comunesFiltradas.length && !forzarReal.length) {
+				throw new Error(`Sin columnas en común entre origen y nube para ${tabla}`);
+			}
 
 			const data = await pool.request().query(`SELECT * FROM dbo.[${tabla}]`);
 			const filas = data.recordset || [];
 			res.leidas = filas.length;
 			if (!filas.length) { resultados.push(res); continue; }
 
-			const colDest = comunes.map((c) => c.destino);
+			const colDest = [...comunesFiltradas.map((c) => c.destino), ...forzarReal];
 			const placeholdersFila = `(${colDest.map(() => '?').join(', ')})`;
 			const updates = colDest.map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
 			const colList = colDest.map((c) => `\`${c}\``).join(', ');
@@ -508,11 +593,15 @@ async function importarTablas(idEmpresa, tablas) {
 			for (const lote of chunk(filas, 200)) {
 				const flat = [];
 				for (const fila of lote) {
-					for (const c of comunes) {
+					for (const c of comunesFiltradas) {
 						let v = fila[c.origen];
 						if (v === undefined) v = null;
+						if (remap.has(c.destino.toLowerCase()) && v != null && Number.isFinite(Number(v))) {
+							v = offset + Number(v);
+						}
 						flat.push(v);
 					}
+					for (let i = 0; i < forzarReal.length; i++) flat.push(emp);
 				}
 				const valuesSql = lote.map(() => placeholdersFila).join(', ');
 				const r = await mysqlExec(
@@ -528,7 +617,7 @@ async function importarTablas(idEmpresa, tablas) {
 		resultados.push(res);
 	}
 
-	return { idEmpresa: Number(idEmpresa), resultados };
+	return { idEmpresa: emp, resultados };
 }
 
 module.exports = {

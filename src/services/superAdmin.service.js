@@ -761,7 +761,7 @@ async function crearSector(data) {
 	}
 
 	if (await esEmpresaNube(idEmpresa)) {
-		return nubeTenant.crearSector({ valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
+		return nubeTenant.crearSector(idEmpresa, { valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
 	return runWithTenant(idEmpresa, async () => {
@@ -806,7 +806,7 @@ async function crearSector(data) {
 			],
 		);
 
-		await authCentralSync.syncSector(valor);
+		await authCentralSync.syncSector(idEmpresa, valor);
 		return { id: valor, descripcion, ambInt };
 	});
 }
@@ -820,7 +820,7 @@ async function actualizarSector(valor, data) {
 	}
 
 	if (await esEmpresaNube(idEmpresa)) {
-		return nubeTenant.actualizarSector(valor, { descripcion: data.descripcion, ambInt: data.ambInt });
+		return nubeTenant.actualizarSector(idEmpresa, valor, { descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
 	return runWithTenant(idEmpresa, async () => {
@@ -851,7 +851,7 @@ async function actualizarSector(valor, data) {
 			]);
 		}
 
-		await authCentralSync.syncSector(id);
+		await authCentralSync.syncSector(idEmpresa, id);
 		return { id, descripcion, ambInt: ambInt || null };
 	});
 }
@@ -865,7 +865,7 @@ async function eliminarSector(valor, idEmpresa) {
 	}
 
 	if (await esEmpresaNube(tenantId)) {
-		return nubeTenant.eliminarSector(valor);
+		return nubeTenant.eliminarSector(tenantId, valor);
 	}
 
 	return runWithTenant(tenantId, async () => {
@@ -883,7 +883,7 @@ async function eliminarSector(valor, idEmpresa) {
 		await tenantDb.executeQuery(`DELETE FROM dbo.imSectores WHERE Valor = @p0`, [
 			{ value: id, type: 'VarChar' },
 		]);
-		await authCentralSync.removeSector(id);
+		await authCentralSync.removeSector(tenantId, id);
 		return { ok: true, id };
 	});
 }
@@ -1162,7 +1162,7 @@ async function obtenerCatalogosTenant(idEmpresa) {
 
 	if (await esEmpresaNube(idEmpresa)) {
 		const [sectores, roles] = await Promise.all([
-			nubeTenant.listarSectores().catch(() => []),
+			nubeTenant.listarSectores(idEmpresa).catch(() => []),
 			nubeTenant.listarRoles().catch(() => []),
 		]);
 		return { ...base, sectores, roles };

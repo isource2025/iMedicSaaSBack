@@ -170,7 +170,9 @@ async function obtenerSectores(username, idEmpresa) {
       ON pe.IdPersonal = pw.ValorPersonal
      AND pe.IdEmpresa = ?
     INNER JOIN \`imPersonalSectores\` ps ON ps.idPersonal = pw.ValorPersonal
-    INNER JOIN \`imSectores\` s ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+    INNER JOIN \`imSectores\` s
+      ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+     AND s.IdEmpresa = pe.IdEmpresa
     WHERE ${USER_MATCH} = ?
     ORDER BY descripcionSector
     `,
@@ -189,10 +191,10 @@ async function obtenerDescripcionSector(idEmpresa, idSector) {
 		`
     SELECT Valor AS idSector, Descripcion AS descripcion
     FROM \`imSectores\`
-    WHERE Valor = ?
+    WHERE Valor = ? AND IdEmpresa = ?
     LIMIT 1
     `,
-		[String(idSector)],
+		[String(idSector), Number(idEmpresa)],
 	);
 	return rows[0] || null;
 }
@@ -205,10 +207,12 @@ async function obtenerSectorPorPersonal(idEmpresa, idPersonal) {
       ps.idSector AS idSector,
       s.Descripcion AS descripcion
     FROM \`imPersonalSectores\` ps
-    INNER JOIN \`imSectores\` s ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
     INNER JOIN \`imPersonalEmpresas\` pe
       ON pe.IdPersonal = ps.idPersonal
      AND pe.IdEmpresa = ?
+    INNER JOIN \`imSectores\` s
+      ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+     AND s.IdEmpresa = pe.IdEmpresa
     WHERE ps.idPersonal = ?
     LIMIT 1
     `,

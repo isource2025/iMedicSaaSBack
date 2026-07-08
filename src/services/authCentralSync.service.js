@@ -108,17 +108,23 @@ async function removePersonalSector(idPersonal, idSector) {
 	);
 }
 
-async function syncSector(valor) {
+async function syncSector(idEmpresa, valor) {
 	const row = await readTenantRow('imSectores', 'Valor = @p0', [
 		{ value: String(valor), type: 'VarChar' },
 	]);
 	if (!row) return;
-	await upsertRow('imSectores', ['Valor'], row);
+	// imSectores en Railway es multi-tenant: PK (IdEmpresa, Valor). El SQL Server del
+	// tenant no tiene IdEmpresa, así que lo inyectamos con la empresa que está sincronizando.
+	row.IdEmpresa = Number(idEmpresa);
+	await upsertRow('imSectores', ['IdEmpresa', 'Valor'], row);
 }
 
-async function removeSector(valor) {
+async function removeSector(idEmpresa, valor) {
 	if (!isAuthCentralEnabled()) return;
-	await mysqlExec(`DELETE FROM ${q('imSectores')} WHERE Valor = ?`, [String(valor)]);
+	await mysqlExec(`DELETE FROM ${q('imSectores')} WHERE IdEmpresa = ? AND Valor = ?`, [
+		Number(idEmpresa),
+		String(valor),
+	]);
 }
 
 /** Elimina credenciales auth en MySQL si el personal ya no está vinculado a ninguna empresa. */
