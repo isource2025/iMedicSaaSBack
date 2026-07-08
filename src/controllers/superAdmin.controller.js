@@ -108,11 +108,16 @@ async function listarTablasImportables(req, res) {
 }
 
 async function importarTablas(req, res) {
+	const id = Number(req.params.id);
 	try {
-		const id = Number(req.params.id);
+		console.log(`[import] empresa ${id} → tablas pedidas:`, req.body?.tablas);
 		const data = await superAdminService.importarTablasEmpresa(id, req.body?.tablas);
+		console.log(`[import] empresa ${id} → OK`, JSON.stringify(data.resultados?.map((r) => ({
+			tabla: r.tabla, leidas: r.leidas, escritas: r.escritas, omitida: r.omitida, error: r.error,
+		}))));
 		res.json({ success: true, data });
 	} catch (e) {
+		console.error(`[import] empresa ${id} → ERROR:`, e?.message, e?.stack);
 		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
 	}
 }

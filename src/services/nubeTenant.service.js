@@ -600,7 +600,17 @@ async function importarTablas(idEmpresa, tablas) {
 		throw e;
 	}
 
-	const pool = await getTenantPool(emp);
+	console.log(`[import] empresa ${emp}: conectando al servidor físico…`);
+	let pool;
+	try {
+		pool = await getTenantPool(emp);
+	} catch (e) {
+		console.error(`[import] empresa ${emp}: no se pudo conectar al servidor físico:`, e.message);
+		const err = new Error(`No se pudo conectar al servidor físico de la empresa: ${e.message}`);
+		err.statusCode = 502;
+		throw err;
+	}
+	console.log(`[import] empresa ${emp}: conectado. Tablas a procesar:`, seleccion.join(', '));
 	const resultados = [];
 
 	for (const tabla of seleccion) {
@@ -642,6 +652,8 @@ async function importarTablas(idEmpresa, tablas) {
 			} catch (e) {
 				res.error = e.message;
 			}
+			console.log(`[import] empresa ${emp}: ${res.tabla} (vínculo) → generados=${res.escritas}` +
+				`${res.error ? ` ERROR: ${res.error}` : ''}`);
 			resultados.push(res);
 			continue;
 		}
@@ -712,6 +724,8 @@ async function importarTablas(idEmpresa, tablas) {
 		} catch (e) {
 			res.error = e.message;
 		}
+		console.log(`[import] empresa ${emp}: ${res.tabla} → leidas=${res.leidas} escritas=${res.escritas}` +
+			`${res.omitida ? ' (omitida)' : ''}${res.error ? ` ERROR: ${res.error}` : ''}`);
 		resultados.push(res);
 	}
 
