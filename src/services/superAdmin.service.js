@@ -650,9 +650,10 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		await vincularUsuarioEmpresa(idEmpresa, valorPersonal);
 
 		const sectoresAsignar =
-			Array.isArray(sectores) && sectores.length
+			(await nubeTenant.resolverSectoresUsuario(idEmpresa, idRol, sectores)) ??
+			(Array.isArray(sectores) && sectores.length
 				? sectores
-				: (await obtenerOnboardingEmpresa(idEmpresa)).sectoresDefecto || [];
+				: (await obtenerOnboardingEmpresa(idEmpresa)).sectoresDefecto || []);
 
 		for (const idSector of sectoresAsignar) {
 			try {
@@ -729,11 +730,12 @@ async function actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body, opt
 			}
 		}
 
-		if (Array.isArray(body.sectores)) {
+		const sectoresAsignar = await nubeTenant.resolverSectoresUsuario(idEmpresa, body.idRol, body.sectores);
+		if (sectoresAsignar != null) {
 			await tenantDb.executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
 				{ value: idPersonal, type: 'Int' },
 			]);
-			for (const idSector of body.sectores) {
+			for (const idSector of sectoresAsignar) {
 				try {
 					await usersService.asignarSector(idPersonal, String(idSector));
 				} catch (err) {

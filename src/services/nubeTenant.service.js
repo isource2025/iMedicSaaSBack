@@ -119,6 +119,39 @@ function esNumerica(colMap, col) {
 	return NUMERIC_TYPES.has(colMap.get(col)?.tipo);
 }
 
+/** Convierte valores para UPDATE/INSERT según el tipo real de la columna en MySQL. */
+function valorCampoSegunTipo(colMap, col, raw) {
+	if (raw == null) return null;
+	if (!colMap.has(col)) return raw;
+	if (esNumerica(colMap, col)) {
+		const s = String(raw).trim();
+		if (s === '') return null;
+		const n = Number(s.replace(/\D/g, ''));
+		return Number.isFinite(n) ? n : null;
+	}
+	const s = String(raw).trim();
+	return s === '' ? null : s;
+}
+
+async function esRolAdmin(idRol) {
+	if (idRol == null || idRol === '' || Number(idRol) === 0) return false;
+	if (Number(idRol) === 1) return true;
+	const rows = await mysqlQuery(
+		`SELECT Nombre FROM \`imRoles\` WHERE IdRol = ? AND Activo = 1 LIMIT 1`,
+		[Number(idRol)],
+	);
+	return String(rows[0]?.Nombre || '').toUpperCase() === 'ADMIN';
+}
+
+/** ADMIN recibe todos los sectores de la empresa; el resto usa la lista enviada. */
+async function resolverSectoresUsuario(idEmpresa, idRol, sectores) {
+	if (await esRolAdmin(idRol)) {
+		const todos = await listarSectores(idEmpresa);
+		return todos.map((s) => s.id);
+	}
+	return Array.isArray(sectores) ? sectores.map(String) : null;
+}
+
 function fechaClarionHoy() {
 	const hoy = new Date();
 	const s = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
@@ -383,7 +416,10 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	const colMap = await columnasMeta('imPassword');
 	const campos = ['IdEmpresa', 'ValorPersonal', 'NombreRed', 'Password', 'Apellido', 'Nombres'];
 	const valores = [emp, valorPersonal, nombreRed.trim(), password.trim(), apellido.trim(), nombres.trim()];
-	if (colMap.has('NumeroDocumento')) { campos.push('NumeroDocumento'); valores.push(numeroDocumento || ''); }
+	if (colMap.has('NumeroDocumento')) {
+		campos.push('NumeroDocumento');
+		valores.push(valorCampoSegunTipo(colMap, 'NumeroDocumento', numeroDocumento));
+	}
 	if (colMap.has('Legajo')) { campos.push('Legajo'); valores.push(legajo || ''); }
 	if (colMap.has('CodOperador')) {
 		campos.push('CodOperador');
@@ -405,7 +441,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	await asegurarFichaPersonal(emp, valorPersonal, { apellido, nombres, numeroDocumento, idRol });
 	await vincularUsuarioEmpresa(emp, valorPersonal);
 
-	for (const idSector of sectores || []) {
+	for (const idSector of (await resolverSectoresUsuario(emp, idRol, sectores)) || []) {
 		try {
 			await mysqlExec(
 				`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector)
@@ -442,10 +478,12 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 	const sets = [];
 	const params = [];
 	const set = (col, v) => { if (colMap.has(col)) { sets.push(`\`${col}\` = ?`); params.push(v); } };
-	if (body.nombreRed != null) set('NombreRed', String(body.nombreRed).trim());
-	if (body.apellido != null) set('Apellido', String(body.apellido).trim());
-	if (body.nombres != null) set('Nombres', String(body.nombres).trim());
-	if (body.numeroDocumento != null) set('NumeroDocumento', String(body.numeroDocumento));
+	if (body.nombreRed != null) set('NombreRed', valorCampoSegunTipo(colMap, 'NombreRed', body.nombreRed));
+	if (body.apellido != null) set('Apellido', valorCampoSegunTipo(colMap, 'Apellido', body.apellido));
+	if (body.nombres != null) set('Nombres', valorCampoSegunTipo(colMap, 'Nombres', body.nombres));
+	if (body.numeroDocumento != null) {
+		set('NumeroDocumento', valorCampoSegunTipo(colMap, 'NumeroDocumento', body.numeroDocumento));
+	}
 	if (body.password?.trim()) set('Password', body.password.trim());
 	if (sets.length) {
 		params.push(emp, id);
@@ -461,9 +499,10 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 		}
 	}
 
-	if (Array.isArray(body.sectores)) {
+	const sectoresAsignar = await resolverSectoresUsuario(emp, body.idRol, body.sectores);
+	if (sectoresAsignar != null) {
 		await mysqlExec(`DELETE FROM \`imPersonalSectores\` WHERE IdEmpresa = ? AND idPersonal = ?`, [emp, id]);
-		for (const idSector of body.sectores) {
+		for (const idSector of sectoresAsignar) {
 			try {
 				await mysqlExec(
 					`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector) VALUES (?, ?, ?)`,
@@ -772,6 +811,8 @@ module.exports = {
 	actualizarUsuarioEmpresa,
 	desvincularUsuarioEmpresa,
 	vincularUsuarioEmpresa,
+	resolverSectoresUsuario,
+	esRolAdmin,
 	listarTablasImportables,
 	previewTabla,
 	importarTablas,
