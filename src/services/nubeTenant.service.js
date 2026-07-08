@@ -513,6 +513,66 @@ function chunk(arr, size) {
 	return out;
 }
 
+/** Normaliza un valor de SQL Server a algo serializable/legible para el preview. */
+function valorPreview(v) {
+	if (v == null) return null;
+	if (Buffer.isBuffer(v)) return `«binario ${v.length} bytes»`;
+	if (v instanceof Date) return v.toISOString();
+	if (typeof v === 'object') return JSON.stringify(v);
+	return v;
+}
+
+/** Devuelve las primeras filas de una tabla del SQL Server físico para previsualizar. */
+async function previewTabla(idEmpresa, tabla, limite = 50) {
+	const cfg = configTabla(tabla);
+	if (!cfg) {
+		const e = new Error('Tabla no válida para previsualizar');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (cfg.estrategia !== 'tenant') {
+		return {
+			tabla,
+			label: cfg.label,
+			estrategia: cfg.estrategia,
+			total: null,
+			columnas: [],
+			filas: [],
+			nota: 'Catálogo de plataforma: los datos se toman de la nube (Railway), no del servidor físico.',
+		};
+	}
+
+	const pool = await getTenantPool(Number(idEmpresa));
+	const cols = await sqlServerColumnas(pool, tabla).catch(() => []);
+	if (!cols.length) {
+		return {
+			tabla,
+			label: cfg.label,
+			estrategia: cfg.estrategia,
+			total: 0,
+			columnas: [],
+			filas: [],
+			nota: 'La tabla no existe en el servidor físico; al importar se conservan los datos de la nube.',
+		};
+	}
+
+	const lim = Math.min(Math.max(Number(limite) || 50, 1), 200);
+	const data = await pool.request().query(`SELECT TOP ${lim} * FROM dbo.[${tabla}]`);
+	const filas = (data.recordset || []).map((row) => {
+		const out = {};
+		for (const c of cols) out[c] = valorPreview(row[c]);
+		return out;
+	});
+	return {
+		tabla,
+		label: cfg.label,
+		estrategia: cfg.estrategia,
+		total: await sqlServerContar(pool, tabla),
+		columnas: cols,
+		filas,
+	};
+}
+
 /**
  * Copia (snapshot, re-ejecutable con upsert) las tablas seleccionadas de SQL Server → MySQL.
  * - Catálogos globales (roles/permisos/IVA) NO se copian: se usan los de Railway.
@@ -671,5 +731,6 @@ module.exports = {
 	desvincularUsuarioEmpresa,
 	vincularUsuarioEmpresa,
 	listarTablasImportables,
+	previewTabla,
 	importarTablas,
 };

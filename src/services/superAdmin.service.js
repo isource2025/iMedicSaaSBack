@@ -385,6 +385,10 @@ async function importarTablasEmpresa(idEmpresa, tablas) {
 	return nubeTenant.importarTablas(Number(idEmpresa), tablas);
 }
 
+async function previewTablaImportable(idEmpresa, tabla, limite) {
+	return nubeTenant.previewTabla(Number(idEmpresa), String(tabla), limite);
+}
+
 async function actualizarEmpresa(idEmpresa, data) {
 	const desc = String(data.descripcion || '').trim();
 	if (!desc) throw new Error('La descripción es obligatoria');
@@ -1251,6 +1255,7 @@ module.exports = {
 	probarConexionEmpresa,
 	probarConexionDatos,
 	listarTablasImportables,
+	previewTablaImportable,
 	importarTablasEmpresa,
 	eliminarEmpresa,
 	actualizarPacksEmpresa,

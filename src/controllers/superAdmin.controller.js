@@ -117,6 +117,16 @@ async function importarTablas(req, res) {
 	}
 }
 
+async function previewTablaImportable(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const data = await superAdminService.previewTablaImportable(id, req.params.tabla, req.query?.limite);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function actualizarPacks(req, res) {
 	try {
 		const id = Number(req.params.id);
@@ -286,6 +296,7 @@ module.exports = {
 	probarConexionEmpresa,
 	probarConexionDatos,
 	listarTablasImportables,
+	previewTablaImportable,
 	importarTablas,
 	eliminarEmpresa,
 	actualizarPacks,

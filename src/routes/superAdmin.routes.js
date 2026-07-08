@@ -20,6 +20,7 @@ router.put('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.a
 router.put('/empresas/:id/conexion', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.actualizarConexionEmpresa);
 router.post('/empresas/:id/conexion/probar', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.probarConexionEmpresa);
 router.get('/empresas/:id/importar/tablas', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.listarTablasImportables);
+router.get('/empresas/:id/importar/tablas/:tabla/preview', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.previewTablaImportable);
 router.post('/empresas/:id/importar', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.importarTablas);
 router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.eliminarEmpresa);
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
