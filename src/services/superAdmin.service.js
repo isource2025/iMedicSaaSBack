@@ -28,14 +28,15 @@ function normalizeTipoServidor(v) {
 	return String(v || '').trim().toUpperCase() === 'NUBE' ? 'NUBE' : 'FISICO';
 }
 
-/** true si la empresa guarda todos sus datos en Railway (MySQL), sin SQL Server on-premise. */
-async function esEmpresaNube(idEmpresa) {
-	if (!useMysqlPlatform()) return false;
-	try {
-		return (await platformMysql.obtenerTipoServidor(Number(idEmpresa))) === 'NUBE';
-	} catch {
-		return false;
-	}
+/**
+ * true cuando la lógica de auth/gestión (usuarios, roles, sectores, login) de la empresa
+ * vive en Railway (MySQL). Esto es SIEMPRE así en producción, independientemente de
+ * TipoServidor: FISICO/NUBE solo describen dónde está la infraestructura CLÍNICA
+ * (hoy en el servidor físico; a futuro migrada a la nube). El auth es siempre Railway.
+ * En desarrollo local (plataforma SQL Server) la gestión usa el tenant físico.
+ */
+async function gestionAuthEnRailway() {
+	return useMysqlPlatform();
 }
 
 function mapEmpresaRow(r) {
@@ -382,20 +383,10 @@ async function listarTablasImportables(idEmpresa) {
 
 /** Importa (snapshot) las tablas seleccionadas del SQL Server físico a Railway. */
 async function importarTablasEmpresa(idEmpresa, tablas) {
-	const res = await nubeTenant.importarTablas(Number(idEmpresa), tablas);
-	// Tras importar, la lógica de auth/login/gestión de la empresa vive en Railway (NUBE).
-	// Lo clínico sigue operando contra el SQL físico (Empresas.Db*), que es independiente
-	// de TipoServidor. Así el login y la asignación de roles leen/escriben en el mismo lugar.
-	const escribioDatos = (res.resultados || []).some((r) => Number(r.escritas) > 0);
-	if (escribioDatos) {
-		try {
-			await platformMysql.actualizarTipoServidor(Number(idEmpresa), 'NUBE');
-			res.tipoServidor = 'NUBE';
-		} catch (e) {
-			console.warn('[import] no se pudo marcar la empresa como NUBE:', e.message);
-		}
-	}
-	return res;
+	// La empresa NO cambia de TipoServidor: sigue FISICO (su clínica vive en el servidor
+	// físico). El import solo trae al Railway las tablas de auth/login, que es donde el
+	// sistema resuelve login y gestión de usuarios/roles/sectores para todas las empresas.
+	return nubeTenant.importarTablas(Number(idEmpresa), tablas);
 }
 
 async function previewTablaImportable(idEmpresa, tabla, limite) {
@@ -594,7 +585,7 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
 async function crearUsuarioEmpresa(idEmpresa, body) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -668,7 +659,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 }
 
 async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -777,7 +768,7 @@ async function crearSector(data) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.crearSector(idEmpresa, { valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -836,7 +827,7 @@ async function actualizarSector(valor, data) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.actualizarSector(idEmpresa, valor, { descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -881,7 +872,7 @@ async function eliminarSector(valor, idEmpresa) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(tenantId)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.eliminarSector(tenantId, valor);
 	}
 
@@ -956,7 +947,7 @@ async function upsertSuscripcion(idEmpresa, data) {
 }
 
 async function listarUsuariosEmpresa(idEmpresa) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		try {
 			return await nubeTenant.listarUsuariosEmpresa(idEmpresa);
 		} catch {
@@ -1096,7 +1087,7 @@ async function listarTodosUsuarios(filtro = '') {
 }
 
 async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		await nubeTenant.vincularUsuarioEmpresa(idEmpresa, idPersonal);
 		return listarUsuariosEmpresa(idEmpresa);
 	}
@@ -1117,7 +1108,7 @@ async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.desvincularUsuarioEmpresa(idEmpresa, idPersonal);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -1183,7 +1174,7 @@ async function obtenerCatalogosTenant(idEmpresa) {
 	// clínicos físicos legacy no tienen imRoles, así que siempre se leen de la nube.
 	const roles = await nubeTenant.listarRoles().catch(() => []);
 
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		const sectores = await nubeTenant.listarSectores(idEmpresa).catch(() => []);
 		return { ...base, sectores, roles };
 	}
