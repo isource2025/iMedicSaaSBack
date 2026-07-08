@@ -24,7 +24,14 @@ const TABLAS_IMPORTABLES = [
 	{ tabla: 'imRolPermisos', label: 'Permisos por rol', estrategia: 'nube' },
 	{ tabla: 'imIVA', label: 'Condiciones de IVA', estrategia: 'nube' },
 	{ tabla: 'imSectores', label: 'Sectores', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
-	{ tabla: 'imPersonal', label: 'Personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{
+		tabla: 'imPersonal',
+		label: 'Personal',
+		estrategia: 'tenant',
+		forzarEmpresa: ['IdEmpresa'],
+		// Solo campos de auth en Railway; lo clínico completo queda en el físico.
+		soloColumnas: ['Valor', 'Rol', 'Matricula', 'Numero', 'ApellidoNombre', 'Estado', 'TipoDocumento'],
+	},
 	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'vinculo' },
@@ -52,6 +59,23 @@ const NUMERIC_TYPES = new Set([
 	'int', 'bigint', 'smallint', 'tinyint', 'mediumint', 'decimal', 'numeric', 'float', 'double',
 ]);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
+const BINARY_TYPES = new Set(['blob', 'mediumblob', 'longblob', 'tinyblob', 'binary', 'varbinary']);
+
+/** Columnas que nunca se copian al importar (binarios / clínico pesado). */
+const COLUMNAS_EXCLUIR_IMPORT = new Set(['firma', 'foto', 'imagen', 'observaciones']);
+
+function sanitizarValorImport(v, meta) {
+	if (v === undefined) return null;
+	if (Buffer.isBuffer(v)) return null;
+	if (v instanceof Date) return v;
+	if (meta && BINARY_TYPES.has(meta.tipo)) return null;
+	if (meta && NUMERIC_TYPES.has(meta.tipo)) {
+		if (v === null || v === '') return null;
+		const n = Number(v);
+		return Number.isFinite(n) ? n : null;
+	}
+	return v;
+}
 
 async function columnasMeta(tabla) {
 	const rows = await mysqlQuery(
@@ -681,15 +705,22 @@ async function importarTablas(idEmpresa, tablas) {
 
 			const forzar = (cfg.forzarEmpresa || []).filter((c) => destinoPorLower.has(c.toLowerCase()));
 			const forzarReal = forzar.map((c) => destinoPorLower.get(c.toLowerCase()));
-			const comunesFiltradas = comunes.filter(
-				(c) => !forzarReal.some((f) => f.toLowerCase() === c.destino.toLowerCase()),
+			const soloSet = cfg.soloColumnas
+				? new Set(cfg.soloColumnas.map((c) => c.toLowerCase()))
+				: null;
+			let comunesFiltradas = comunes.filter(
+				(c) =>
+					!forzarReal.some((f) => f.toLowerCase() === c.destino.toLowerCase()) &&
+					!COLUMNAS_EXCLUIR_IMPORT.has(c.destino.toLowerCase()) &&
+					(!soloSet || soloSet.has(c.destino.toLowerCase()) || soloSet.has(c.origen.toLowerCase())),
 			);
 
 			if (!comunesFiltradas.length && !forzarReal.length) {
 				throw new Error(`Sin columnas en común entre origen y nube para ${tabla}`);
 			}
 
-			const data = await pool.request().query(`SELECT * FROM dbo.[${tabla}]`);
+			const selectCols = comunesFiltradas.map((c) => `[${c.origen}]`).join(', ');
+			const data = await pool.request().query(`SELECT ${selectCols} FROM dbo.[${tabla}]`);
 			const filas = data.recordset || [];
 			res.leidas = filas.length;
 			if (!filas.length) { resultados.push(res); continue; }
@@ -698,14 +729,14 @@ async function importarTablas(idEmpresa, tablas) {
 			const placeholdersFila = `(${colDest.map(() => '?').join(', ')})`;
 			const updates = colDest.map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(', ');
 			const colList = colDest.map((c) => `\`${c}\``).join(', ');
+			const loteSize = tabla.toLowerCase() === 'impersonal' ? 25 : 100;
 
-			for (const lote of chunk(filas, 200)) {
+			for (const lote of chunk(filas, loteSize)) {
 				const flat = [];
 				for (const fila of lote) {
 					for (const c of comunesFiltradas) {
-						let v = fila[c.origen];
-						if (v === undefined) v = null;
-						flat.push(v);
+						const meta = destinoMeta.get(c.destino);
+						flat.push(sanitizarValorImport(fila[c.origen], meta));
 					}
 					for (let i = 0; i < forzarReal.length; i++) flat.push(emp);
 				}
@@ -719,6 +750,7 @@ async function importarTablas(idEmpresa, tablas) {
 			}
 		} catch (e) {
 			res.error = e.message;
+			console.error(`[import] empresa ${emp}: ${tabla} ERROR:`, e.message, e.stack);
 		}
 		console.log(`[import] empresa ${emp}: ${res.tabla} → leidas=${res.leidas} escritas=${res.escritas}` +
 			`${res.omitida ? ' (omitida)' : ''}${res.error ? ` ERROR: ${res.error}` : ''}`);
