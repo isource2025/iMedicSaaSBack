@@ -950,6 +950,10 @@ async function listarUsuariosEmpresa(idEmpresa) {
 			return [];
 		}
 	}
+	// Los nombres de rol son globales de plataforma (Railway), no del SQL físico legacy.
+	const rolesNube = await nubeTenant.listarRoles().catch(() => []);
+	const rolNombrePorId = new Map(rolesNube.map((r) => [Number(r.idRol), r.nombre]));
+
 	return runWithTenant(idEmpresa, async () => {
 		try {
 			const rows = await tenantDb.executeQuery(
@@ -961,13 +965,11 @@ async function listarUsuariosEmpresa(idEmpresa) {
         pw.Apellido AS Apellido,
         pw.NumeroDocumento AS NumeroDocumento,
         pw.CodOperador AS CodOperador,
-        r.IdRol AS IdRol,
-        r.Nombre AS RolNombre,
+        LTRIM(RTRIM(p.Rol)) AS IdRol,
         p.Estado AS EstadoPersonal
       FROM dbo.imPersonalEmpresas pe
       INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = pe.IdPersonal
       LEFT JOIN dbo.imPersonal p ON p.Valor = pe.IdPersonal
-      LEFT JOIN dbo.imRoles r ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
       WHERE pe.IdEmpresa = @p0
       ORDER BY pw.Apellido, pw.Nombres
       `,
@@ -1002,8 +1004,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
 					apellido: String(r.Apellido || '').trim(),
 					numeroDocumento: String(r.NumeroDocumento || '').trim(),
 					codOperador: r.CodOperador,
-					idRol: r.IdRol != null ? Number(r.IdRol) : null,
-					rol: r.RolNombre || null,
+					idRol: r.IdRol != null && r.IdRol !== '' ? Number(r.IdRol) : null,
+					rol: r.IdRol != null ? rolNombrePorId.get(Number(r.IdRol)) || null : null,
 					activo: r.EstadoPersonal == null || Number(r.EstadoPersonal) === 1,
 					sectores,
 				});
