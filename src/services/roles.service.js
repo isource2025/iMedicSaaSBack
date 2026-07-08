@@ -14,6 +14,7 @@ const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const authCentralSync = require('./authCentralSync.service');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const authCentralService = require('./authCentral.service');
 let _permisosService;
 function _invalidarCachePermisos(idRol) {
 	try {
@@ -26,6 +27,16 @@ function _invalidarCachePermisos(idRol) {
 
 /** Lista todos los roles activos del catálogo, ordenados por nivel descendente. */
 async function listarRoles() {
+	if (isAuthCentralEnabled()) {
+		const rows = await authCentralService.listarRolesCatalogo();
+		return rows.map((r) => ({
+			IdRol: r.IdRol,
+			Nombre: r.Nombre,
+			Descripcion: r.Descripcion,
+			Nivel: r.Nivel,
+			Activo: true,
+		}));
+	}
 	const rows = await executeQuery(
 		`
     SELECT
@@ -51,6 +62,19 @@ async function listarRoles() {
 /** Obtiene un rol por su Id. Devuelve null si no existe o está inactivo. */
 async function obtenerRolPorId(idRol) {
 	if (idRol == null) return null;
+	if (isAuthCentralEnabled()) {
+		const r = await authCentralService.obtenerRolPorId(idRol);
+		if (r) {
+			return {
+				IdRol: r.IdRol,
+				Nombre: r.Nombre,
+				Descripcion: r.Descripcion,
+				Nivel: r.Nivel,
+				Activo: true,
+			};
+		}
+		return null;
+	}
 	const rows = await executeQuery(
 		`
     SELECT TOP 1
@@ -151,7 +175,21 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
  */
 async function obtenerRolDePersonal(valorPersonal) {
 	if (!Number.isFinite(Number(valorPersonal))) return null;
-	const rows = await executeQuery(
+	const idEmpresa = getTenantId();
+	if (isAuthCentralEnabled() && idEmpresa != null && Number(idEmpresa) > 0) {
+		const r = await authCentralService.obtenerRolDeValorPersonal(idEmpresa, valorPersonal);
+		if (r) {
+			return {
+				IdRol: r.IdRol,
+				Nombre: r.Nombre,
+				Descripcion: r.Descripcion,
+				Nivel: r.Nivel,
+				Activo: true,
+			};
+		}
+	}
+	try {
+		const rows = await executeQuery(
 		`
     SELECT TOP 1
       r.IdRol,
@@ -174,6 +212,11 @@ async function obtenerRolDePersonal(valorPersonal) {
 		Nivel: Number(r.Nivel ?? 0),
 		Activo: !!r.Activo,
 	};
+	} catch (e) {
+		const msg = String(e?.message || '').toLowerCase();
+		if (msg.includes("invalid object name 'imroles'")) return null;
+		throw e;
+	}
 }
 
 module.exports = {

@@ -362,6 +362,81 @@ async function eximeSectorPorUsername(username, idEmpresa = null) {
 	return false;
 }
 
+/** Normaliza fila de rol desde MySQL (Grupo 11 legacy → ADMIN). */
+function mapRolDesdeFila(row) {
+	if (!row) return null;
+	let idRol = row.RolId != null && row.RolId !== '' ? Number(row.RolId) : null;
+	let nombre = String(row.RolNombre || row.Nombre || '').trim();
+	const nivel = row.Nivel != null ? Number(row.Nivel) : 0;
+	if (!idRol && Number(row.Grupo) === 11) {
+		idRol = 1;
+		nombre = 'ADMIN';
+	}
+	if (idRol == null || !Number.isFinite(idRol)) return null;
+	return {
+		idRol,
+		nombre,
+		nivel,
+		IdRol: idRol,
+		Nombre: nombre,
+		Descripcion: String(row.Descripcion || '').trim(),
+		Nivel: nivel,
+		Activo: true,
+	};
+}
+
+/** Rol de un personal en una empresa (catálogo global Railway + imPersonal.Rol). */
+async function obtenerRolDeValorPersonal(idEmpresa, valorPersonal) {
+	if (!isAuthCentralEnabled()) return null;
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) return null;
+	const rows = await query(
+		`
+    SELECT
+      r.IdRol AS RolId,
+      r.Nombre AS RolNombre,
+      r.Descripcion AS Descripcion,
+      r.Nivel AS Nivel,
+      COALESCE(pw.Grupo, 0) AS Grupo
+    FROM \`imPassword\` pw
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
+    LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
+    WHERE pw.IdEmpresa = ? AND pw.ValorPersonal = ?
+    LIMIT 1
+    `,
+		[emp, vp],
+	);
+	return mapRolDesdeFila(rows[0] || null);
+}
+
+async function obtenerRolPorId(idRol) {
+	if (!isAuthCentralEnabled() || idRol == null) return null;
+	const rows = await query(
+		`
+    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel
+    FROM \`imRoles\`
+    WHERE IdRol = ? AND Activo = 1
+    LIMIT 1
+    `,
+		[Number(idRol)],
+	);
+	return mapRolDesdeFila(rows[0] || null);
+}
+
+async function listarRolesCatalogo() {
+	if (!isAuthCentralEnabled()) return [];
+	const rows = await query(
+		`
+    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel
+    FROM \`imRoles\`
+    WHERE Activo = 1 AND UPPER(TRIM(Nombre)) <> 'SUPER_ADMIN'
+    ORDER BY Nivel DESC, Nombre ASC
+    `,
+	);
+	return rows.map((r) => mapRolDesdeFila(r)).filter(Boolean);
+}
+
 module.exports = {
 	isAuthCentralEnabled,
 	autenticarPlataforma,
@@ -378,4 +453,8 @@ module.exports = {
 	permisosDeRol,
 	obtenerRolDeUsuario,
 	eximeSectorPorUsername,
+	obtenerRolDeValorPersonal,
+	obtenerRolPorId,
+	listarRolesCatalogo,
+	mapRolDesdeFila,
 };

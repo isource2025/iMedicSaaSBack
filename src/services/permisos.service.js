@@ -5,10 +5,11 @@
  * - Caché en memoria por rol (TTL = 5 min) para no consultar en cada request.
  * - API alineada con `utils/permisos.js` (mismas funciones disponibles).
  *
- * Si la BD no tiene permisos sembrados, el servicio cae a la matriz hardcoded
- * en `utils/permisos.js` para no romper sesiones existentes.
+ * En producción (auth central / Railway) el catálogo de roles y permisos es
+ * global en MySQL; no se consulta imRoles en el SQL físico del tenant.
  */
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 const matriz = require('../utils/permisos');
 const authCentralService = require('./authCentral.service');
 
@@ -17,13 +18,22 @@ const _cache = new Map(); // idRol -> { permisos: string[], expira: number }
 
 function _ahora() { return Date.now(); }
 
+function esErrorEsquemaRoles(error) {
+	const msg = String(error?.message || '').toLowerCase();
+	return (
+		msg.includes("invalid object name 'imroles'") ||
+		msg.includes("invalid object name 'imrolpermisos'") ||
+		msg.includes("invalid object name 'impermisos'")
+	);
+}
+
 async function _leerDeBD(idRol) {
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
-			const permisosCentral = await authCentralService.permisosDeRol(idRol);
-			if (permisosCentral.length) return permisosCentral;
+			return await authCentralService.permisosDeRol(idRol);
 		} catch (e) {
 			console.warn('[authCentral] permisosDeRol:', e.message);
+			return [];
 		}
 	}
 
@@ -80,11 +90,32 @@ async function permisosDeRol(idRol, nombreRol) {
 	return [...permisos];
 }
 
-/** Permisos efectivos del usuario logueado (por valorPersonal). */
+/** Permisos efectivos del usuario logueado (por valorPersonal + empresa del JWT). */
 async function permisosDeUsuario(valorPersonal) {
-	if (!Number.isFinite(Number(valorPersonal))) return [];
-	const rows = await executeQuery(
-		`
+	if (!Number.isFinite(Number(valorPersonal))) {
+		return { rol: null, permisos: [] };
+	}
+	const vp = Number(valorPersonal);
+	const idEmpresa = getTenantId();
+
+	if (authCentralService.isAuthCentralEnabled() && idEmpresa != null && Number(idEmpresa) > 0) {
+		try {
+			const mapped = await authCentralService.obtenerRolDeValorPersonal(idEmpresa, vp);
+			if (mapped) {
+				const permisos = await permisosDeRol(mapped.idRol, mapped.nombre);
+				return {
+					rol: { id: mapped.idRol, nombre: String(mapped.nombre || '').toUpperCase() },
+					permisos,
+				};
+			}
+		} catch (e) {
+			console.warn('[permisos] auth central permisosDeUsuario:', e.message);
+		}
+	}
+
+	try {
+		const rows = await executeQuery(
+			`
     SELECT TOP 1
       r.IdRol,
       LTRIM(RTRIM(r.Nombre)) AS Nombre
@@ -93,18 +124,23 @@ async function permisosDeUsuario(valorPersonal) {
       ON CONVERT(VARCHAR(20), r.IdRol) = LTRIM(RTRIM(p.Rol)) AND r.Activo = 1
     WHERE p.Valor = @p0
     `,
-		[{ value: Number(valorPersonal), type: 'Int' }],
-	);
-	const r = rows[0];
-	if (!r || r.IdRol == null) {
-		// Sin rol asignado → sin permisos.
-		return { rol: null, permisos: [] };
+			[{ value: vp, type: 'Int' }],
+		);
+		const r = rows[0];
+		if (!r || r.IdRol == null) {
+			return { rol: null, permisos: [] };
+		}
+		const permisos = await permisosDeRol(Number(r.IdRol), r.Nombre);
+		return {
+			rol: { id: Number(r.IdRol), nombre: String(r.Nombre || '').toUpperCase() },
+			permisos,
+		};
+	} catch (e) {
+		if (esErrorEsquemaRoles(e)) {
+			return { rol: null, permisos: [] };
+		}
+		throw e;
 	}
-	const permisos = await permisosDeRol(Number(r.IdRol), r.Nombre);
-	return {
-		rol: { id: Number(r.IdRol), nombre: String(r.Nombre || '').toUpperCase() },
-		permisos,
-	};
 }
 
 /** Invalida la caché para un rol (o toda si no se pasa argumento). */
