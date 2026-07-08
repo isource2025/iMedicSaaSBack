@@ -382,7 +382,20 @@ async function listarTablasImportables(idEmpresa) {
 
 /** Importa (snapshot) las tablas seleccionadas del SQL Server físico a Railway. */
 async function importarTablasEmpresa(idEmpresa, tablas) {
-	return nubeTenant.importarTablas(Number(idEmpresa), tablas);
+	const res = await nubeTenant.importarTablas(Number(idEmpresa), tablas);
+	// Tras importar, la lógica de auth/login/gestión de la empresa vive en Railway (NUBE).
+	// Lo clínico sigue operando contra el SQL físico (Empresas.Db*), que es independiente
+	// de TipoServidor. Así el login y la asignación de roles leen/escriben en el mismo lugar.
+	const escribioDatos = (res.resultados || []).some((r) => Number(r.escritas) > 0);
+	if (escribioDatos) {
+		try {
+			await platformMysql.actualizarTipoServidor(Number(idEmpresa), 'NUBE');
+			res.tipoServidor = 'NUBE';
+		} catch (e) {
+			console.warn('[import] no se pudo marcar la empresa como NUBE:', e.message);
+		}
+	}
+	return res;
 }
 
 async function previewTablaImportable(idEmpresa, tabla, limite) {
