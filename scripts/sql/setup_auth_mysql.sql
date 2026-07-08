@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS `imRoles` (
 );
 
 CREATE TABLE IF NOT EXISTS `imPassword` (
+  `IdEmpresa` INT NOT NULL DEFAULT 1,
   `ValorPersonal` INT NOT NULL,
   `NombreRed` VARCHAR(120) NULL,
   `Password` VARCHAR(255) NOT NULL,
@@ -47,16 +48,19 @@ CREATE TABLE IF NOT EXISTS `imPassword` (
   `CodOperador` VARCHAR(60) NULL,
   `Grupo` INT NULL,
   `NumeroDocumento` VARCHAR(60) NULL,
-  PRIMARY KEY (`ValorPersonal`),
+  PRIMARY KEY (`IdEmpresa`, `ValorPersonal`),
   KEY `IX_imPassword_NombreRed` (`NombreRed`)
 );
 
 CREATE TABLE IF NOT EXISTS `imPersonal` (
+  `IdEmpresa` INT NOT NULL DEFAULT 1,
   `Valor` INT NOT NULL,
   `Rol` VARCHAR(20) NULL,
   `Matricula` INT NULL,
-  PRIMARY KEY (`Valor`),
-  KEY `IX_imPersonal_Rol` (`Rol`)
+  `Numero` INT NULL COMMENT 'DNI — vínculo futuro entre empresas',
+  PRIMARY KEY (`IdEmpresa`, `Valor`),
+  KEY `IX_imPersonal_Rol` (`Rol`),
+  KEY `IX_imPersonal_Numero` (`Numero`)
 );
 
 CREATE TABLE IF NOT EXISTS `imPersonalEmpresas` (
@@ -74,9 +78,10 @@ CREATE TABLE IF NOT EXISTS `imSectores` (
 );
 
 CREATE TABLE IF NOT EXISTS `imPersonalSectores` (
+  `IdEmpresa` INT NOT NULL DEFAULT 1,
   `idPersonal` INT NOT NULL,
   `idSector` VARCHAR(30) NOT NULL,
-  PRIMARY KEY (`idPersonal`, `idSector`),
+  PRIMARY KEY (`IdEmpresa`, `idPersonal`, `idSector`),
   KEY `IX_imPersonalSectores_Sector` (`idSector`)
 );
 

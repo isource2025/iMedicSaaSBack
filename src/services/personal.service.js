@@ -440,8 +440,8 @@ async function crear(data) {
 			const tenantId = resolveTenantEmpresaId();
 			if (tenantId != null) {
 				await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
+				await authCentralSync.syncPersonal(tenantId, nuevoValor);
 			}
-			await authCentralSync.syncPersonal(nuevoValor);
 			return await obtenerPorId(nuevoValor);
 		} catch (err) {
 			const n = err?.number ?? err?.originalError?.info?.number;
@@ -540,7 +540,10 @@ async function actualizar(valor, data) {
 			{ value: input.IdEspecialidadME, type: 'Int' },
 		],
 	);
-	await authCentralSync.syncPersonal(valor);
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId != null) {
+		await authCentralSync.syncPersonal(tenantId, valor);
+	}
 	return await obtenerPorId(valor);
 }
 
@@ -830,7 +833,7 @@ async function agregarSectorPersonal(valor, idSector) {
 	);
 	const tenantId = resolveTenantEmpresaId();
 	if (tenantId != null) {
-		await authCentralSync.syncPersonalSectores(valor);
+		await authCentralSync.syncPersonalSectores(tenantId, valor);
 	}
 	return listarSectoresPersonal(valor);
 }
@@ -851,7 +854,7 @@ async function quitarSectorPersonal(valor, idSector) {
 	);
 	const tenantId = resolveTenantEmpresaId();
 	if (tenantId != null) {
-		await authCentralSync.removePersonalSector(valor, sid);
+		await authCentralSync.removePersonalSector(tenantId, valor, sid);
 	}
 	return listarSectoresPersonal(valor);
 }

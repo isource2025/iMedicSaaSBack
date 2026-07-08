@@ -38,7 +38,7 @@ async function mysqlUsuarios(idEmpresa) {
 		`
     SELECT pe.IdPersonal AS valorPersonal, pw.NombreRed AS nombreRed
     FROM imPersonalEmpresas pe
-    INNER JOIN imPassword pw ON pw.ValorPersonal = pe.IdPersonal
+    INNER JOIN imPassword pw ON pw.ValorPersonal = pe.IdPersonal AND pw.IdEmpresa = pe.IdEmpresa
     WHERE pe.IdEmpresa = ?
     ORDER BY pe.IdPersonal
     `,

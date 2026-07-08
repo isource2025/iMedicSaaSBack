@@ -11,6 +11,7 @@
  * de relación sin tocar este servicio.
  */
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 const authCentralSync = require('./authCentralSync.service');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
 let _permisosService;
@@ -94,7 +95,10 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 			{ value: Number(valorPersonal), type: 'Int' },
 		]);
 		if (isAuthCentralEnabled()) {
-			await authCentralSync.syncPersonal(Number(valorPersonal));
+			const idEmpresa = getTenantId();
+			if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+				await authCentralSync.syncPersonal(Number(idEmpresa), Number(valorPersonal));
+			}
 		}
 		return null;
 	}
@@ -132,7 +136,10 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 	_invalidarCachePermisos(rol.IdRol);
 
 	if (isAuthCentralEnabled()) {
-		await authCentralSync.syncPersonal(Number(valorPersonal));
+		const idEmpresa = getTenantId();
+		if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+			await authCentralSync.syncPersonal(Number(idEmpresa), Number(valorPersonal));
+		}
 	}
 
 	return rol;

@@ -4,6 +4,8 @@ const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCent
 const COLLATE = 'utf8mb4_unicode_ci';
 const USER_MATCH = `LOWER(TRIM(COALESCE(NULLIF(pw.NombreRed, ''), ''))) COLLATE ${COLLATE}`;
 const ROL_JOIN = `CAST(r.IdRol AS CHAR) COLLATE ${COLLATE} = TRIM(p.Rol) COLLATE ${COLLATE}`;
+const JOIN_PERSONAL = `p.Valor = pw.ValorPersonal AND p.IdEmpresa = pw.IdEmpresa`;
+const JOIN_PERSONAL_EMPRESA = `pe.IdPersonal = pw.ValorPersonal AND pe.IdEmpresa = pw.IdEmpresa`;
 
 let empresasMysqlColumnsCache = null;
 
@@ -61,7 +63,7 @@ async function autenticarPlataforma(username, password) {
       r.Nombre AS RolNombre,
       r.Nivel AS RolNivel
     FROM \`imPassword\` pw
-    LEFT JOIN \`imPersonal\` p ON p.Valor = pw.ValorPersonal
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
       AND pw.Password = ?
@@ -79,6 +81,7 @@ async function autenticarPlataforma(username, password) {
 
 async function autenticarTenant(idEmpresa, username, password) {
 	if (!isAuthCentralEnabled()) return null;
+	const emp = Number(idEmpresa);
 	const rows = await query(
 		`
     SELECT
@@ -88,16 +91,15 @@ async function autenticarTenant(idEmpresa, username, password) {
       r.Nombre AS RolNombre,
       r.Nivel AS RolNivel
     FROM \`imPassword\` pw
-    INNER JOIN \`imPersonalEmpresas\` pe
-      ON pe.IdPersonal = pw.ValorPersonal
-     AND pe.IdEmpresa = ?
-    LEFT JOIN \`imPersonal\` p ON p.Valor = pw.ValorPersonal
+    INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA} AND pe.IdEmpresa = ?
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
-    WHERE ${USER_MATCH} = ?
+    WHERE pw.IdEmpresa = ?
+      AND ${USER_MATCH} = ?
       AND pw.Password = ?
     LIMIT 1
     `,
-		[Number(idEmpresa), normalizarUsername(username), String(password || '')],
+		[emp, emp, normalizarUsername(username), String(password || '')],
 	);
 	return rows.length ? mapUsuario(rows[0]) : null;
 }
@@ -115,9 +117,9 @@ async function autenticarEnTodasLasEmpresas(username, password) {
       r.Nombre AS RolNombre,
       r.Nivel AS RolNivel
     FROM \`imPassword\` pw
-    INNER JOIN \`imPersonalEmpresas\` pe ON pe.IdPersonal = pw.ValorPersonal
+    INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
     INNER JOIN \`Empresas\` e ON e.IDEMPRESA = pe.IdEmpresa
-    LEFT JOIN \`imPersonal\` p ON p.Valor = pw.ValorPersonal
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
       AND pw.Password = ?
@@ -142,7 +144,7 @@ async function descubrirEmpresas(username) {
       TRIM(COALESCE(e.DESCRIPCION, '')) AS descripcionEmpresa,
       pw.ValorPersonal AS valorPersonal
     FROM \`imPassword\` pw
-    INNER JOIN \`imPersonalEmpresas\` pe ON pe.IdPersonal = pw.ValorPersonal
+    INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
     INNER JOIN \`Empresas\` e ON e.IDEMPRESA = pe.IdEmpresa
     WHERE ${USER_MATCH} = ?
     ORDER BY descripcionEmpresa
@@ -159,6 +161,7 @@ async function descubrirEmpresas(username) {
 
 async function obtenerSectores(username, idEmpresa) {
 	if (!isAuthCentralEnabled()) return [];
+	const emp = Number(idEmpresa);
 	const rows = await query(
 		`
     SELECT DISTINCT
@@ -166,17 +169,17 @@ async function obtenerSectores(username, idEmpresa) {
       ps.idSector AS idSector,
       s.Descripcion AS descripcionSector
     FROM \`imPassword\` pw
-    INNER JOIN \`imPersonalEmpresas\` pe
-      ON pe.IdPersonal = pw.ValorPersonal
-     AND pe.IdEmpresa = ?
-    INNER JOIN \`imPersonalSectores\` ps ON ps.idPersonal = pw.ValorPersonal
+    INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA} AND pe.IdEmpresa = ?
+    INNER JOIN \`imPersonalSectores\` ps
+      ON ps.idPersonal = pw.ValorPersonal AND ps.IdEmpresa = pw.IdEmpresa
     INNER JOIN \`imSectores\` s
       ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
      AND s.IdEmpresa = pe.IdEmpresa
-    WHERE ${USER_MATCH} = ?
+    WHERE pw.IdEmpresa = ?
+      AND ${USER_MATCH} = ?
     ORDER BY descripcionSector
     `,
-		[Number(idEmpresa), normalizarUsername(username)],
+		[emp, emp, normalizarUsername(username)],
 	);
 	return rows.map((row) => ({
 		idPersonal: String(row.idPersonal),
@@ -207,13 +210,10 @@ async function obtenerSectorPorPersonal(idEmpresa, idPersonal) {
       ps.idSector AS idSector,
       s.Descripcion AS descripcion
     FROM \`imPersonalSectores\` ps
-    INNER JOIN \`imPersonalEmpresas\` pe
-      ON pe.IdPersonal = ps.idPersonal
-     AND pe.IdEmpresa = ?
     INNER JOIN \`imSectores\` s
       ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
-     AND s.IdEmpresa = pe.IdEmpresa
-    WHERE ps.idPersonal = ?
+     AND s.IdEmpresa = ps.IdEmpresa
+    WHERE ps.IdEmpresa = ? AND ps.idPersonal = ?
     LIMIT 1
     `,
 		[Number(idEmpresa), Number(idPersonal)],
@@ -227,7 +227,7 @@ async function esSuperAdmin(username) {
 		`
     SELECT 1
     FROM \`imPassword\` pw
-    LEFT JOIN \`imPersonal\` p ON p.Valor = pw.ValorPersonal
+    LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
       AND (

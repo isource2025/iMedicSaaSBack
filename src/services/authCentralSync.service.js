@@ -1,6 +1,7 @@
 /**
  * Sincronización en caliente tenant SQL Server → MySQL auth central.
  * Tras crear/actualizar usuarios, personal o vínculos, el login SaaS lee MySQL.
+ * Cada fila en Railway lleva IdEmpresa: el id de persona = id del servidor físico.
  */
 const { executeQuery } = require('../models/db');
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
@@ -52,21 +53,23 @@ function omitColumns(row, excluded = []) {
 	return out;
 }
 
-async function syncPassword(valorPersonal) {
+async function syncPassword(idEmpresa, valorPersonal) {
 	const row = await readTenantRow('imPassword', 'ValorPersonal = @p0', [
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (!row) return;
-	// MySQL auth: PK imPassword = CodOperador (espejo SQL Server), no ValorPersonal.
-	await upsertRow('imPassword', ['CodOperador'], row);
+	row.IdEmpresa = Number(idEmpresa);
+	await upsertRow('imPassword', ['IdEmpresa', 'ValorPersonal'], row);
 }
 
-async function syncPersonal(valorPersonal) {
+async function syncPersonal(idEmpresa, valorPersonal) {
 	const row = await readTenantRow('imPersonal', 'Valor = @p0', [
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (!row) return;
-	await upsertRow('imPersonal', ['Valor'], omitColumns(row, ['Firma']));
+	const out = omitColumns(row, ['Firma']);
+	out.IdEmpresa = Number(idEmpresa);
+	await upsertRow('imPersonal', ['IdEmpresa', 'Valor'], out);
 }
 
 async function syncPersonalEmpresa(idEmpresa, idPersonal) {
@@ -84,27 +87,41 @@ async function syncPersonalEmpresa(idEmpresa, idPersonal) {
 
 async function removePersonalEmpresa(idEmpresa, idPersonal) {
 	if (!isAuthCentralEnabled()) return;
+	const emp = Number(idEmpresa);
+	const id = Number(idPersonal);
 	await mysqlExec(
 		`DELETE FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ? AND IdEmpresa = ?`,
-		[idPersonal, idEmpresa],
+		[id, emp],
 	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ? AND idPersonal = ?`,
+		[emp, id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPassword')} WHERE IdEmpresa = ? AND ValorPersonal = ?`,
+		[emp, id],
+	);
+	await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE IdEmpresa = ? AND Valor = ?`, [emp, id]);
 }
 
-async function syncPersonalSectores(idPersonal) {
+async function syncPersonalSectores(idEmpresa, idPersonal) {
 	const rows = await executeQuery(
 		`SELECT idPersonal, idSector FROM dbo.imPersonalSectores WHERE idPersonal = @p0`,
 		[{ value: idPersonal, type: 'Int' }],
 	);
 	for (const row of rows || []) {
-		await upsertRow('imPersonalSectores', ['idPersonal', 'idSector'], row);
+		await upsertRow('imPersonalSectores', ['IdEmpresa', 'idPersonal', 'idSector'], {
+			...row,
+			IdEmpresa: Number(idEmpresa),
+		});
 	}
 }
 
-async function removePersonalSector(idPersonal, idSector) {
+async function removePersonalSector(idEmpresa, idPersonal, idSector) {
 	if (!isAuthCentralEnabled()) return;
 	await mysqlExec(
-		`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ? AND idSector = ?`,
-		[idPersonal, String(idSector)],
+		`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ? AND idPersonal = ? AND idSector = ?`,
+		[Number(idEmpresa), Number(idPersonal), String(idSector)],
 	);
 }
 
@@ -113,8 +130,6 @@ async function syncSector(idEmpresa, valor) {
 		{ value: String(valor), type: 'VarChar' },
 	]);
 	if (!row) return;
-	// imSectores en Railway es multi-tenant: PK (IdEmpresa, Valor). El SQL Server del
-	// tenant no tiene IdEmpresa, así que lo inyectamos con la empresa que está sincronizando.
 	row.IdEmpresa = Number(idEmpresa);
 	await upsertRow('imSectores', ['IdEmpresa', 'Valor'], row);
 }
@@ -159,10 +174,10 @@ async function purgePersonalAuth(valorPersonal) {
  */
 async function syncUserLoginBundle(idEmpresa, valorPersonal) {
 	if (!isAuthCentralEnabled()) return;
-	await syncPassword(valorPersonal);
-	await syncPersonal(valorPersonal);
+	await syncPassword(idEmpresa, valorPersonal);
+	await syncPersonal(idEmpresa, valorPersonal);
 	await syncPersonalEmpresa(idEmpresa, valorPersonal);
-	await syncPersonalSectores(valorPersonal);
+	await syncPersonalSectores(idEmpresa, valorPersonal);
 }
 
 async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal) {

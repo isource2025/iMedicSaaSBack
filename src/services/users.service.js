@@ -29,8 +29,8 @@ async function afterUserMutation(valorPersonal) {
     await authCentralSync.syncUserLoginBundle(Number(idEmpresa), valorPersonal);
     return;
   }
-  await authCentralSync.syncPassword(valorPersonal);
-  await authCentralSync.syncPersonalSectores(valorPersonal);
+  await authCentralSync.syncPassword(0, valorPersonal);
+  await authCentralSync.syncPersonalSectores(0, valorPersonal);
 }
 
 /**
@@ -627,7 +627,7 @@ const quitarSector = async (valorPersonal, idSector) => {
     await executeQuery(consulta, parametros);
     const idEmpresa = getTenantId();
     if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
-      await authCentralSync.removePersonalSector(valorPersonal, idSector);
+      await authCentralSync.removePersonalSector(Number(idEmpresa), valorPersonal, idSector);
     } else {
       await afterUserMutation(valorPersonal);
     }

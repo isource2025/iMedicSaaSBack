@@ -39,6 +39,17 @@ async function gestionAuthEnRailway() {
 	return useMysqlPlatform();
 }
 
+/** true si la clínica vive 100% en Railway (TipoServidor = NUBE). */
+async function esEmpresaNube(idEmpresa) {
+	if (!useMysqlPlatform()) return false;
+	try {
+		const row = await platformMysql.obtenerEmpresaRow(Number(idEmpresa));
+		return normalizeTipoServidor(row?.TipoServidor) === 'NUBE';
+	} catch {
+		return false;
+	}
+}
+
 function mapEmpresaRow(r) {
 	return {
 		id: String(r.IDEMPRESA ?? r.IdEmpresa ?? r.id),
@@ -585,7 +596,7 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
 async function crearUsuarioEmpresa(idEmpresa, body) {
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		return nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -633,7 +644,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 
 		if (idRol != null && idRol !== '') {
 			await rolesService.asignarRolAPersonal(valorPersonal, Number(idRol));
-			await authCentralSync.syncPersonal(valorPersonal);
+			await authCentralSync.syncPersonal(idEmpresa, valorPersonal);
 		}
 
 		await vincularUsuarioEmpresa(idEmpresa, valorPersonal);
@@ -659,7 +670,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 }
 
 async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		return nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -701,7 +712,7 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 
 		if (body.idRol != null && body.idRol !== '') {
 			await rolesService.asignarRolAPersonal(idPersonal, Number(body.idRol));
-			await authCentralSync.syncPersonal(idPersonal);
+			await authCentralSync.syncPersonal(idEmpresa, idPersonal);
 		}
 
 		if (Array.isArray(body.sectores)) {
@@ -768,7 +779,7 @@ async function crearSector(data) {
 		throw e;
 	}
 
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		return nubeTenant.crearSector(idEmpresa, { valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -827,7 +838,7 @@ async function actualizarSector(valor, data) {
 		throw e;
 	}
 
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		return nubeTenant.actualizarSector(idEmpresa, valor, { descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -872,7 +883,7 @@ async function eliminarSector(valor, idEmpresa) {
 		throw e;
 	}
 
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(tenantId)) {
 		return nubeTenant.eliminarSector(tenantId, valor);
 	}
 
@@ -1087,7 +1098,7 @@ async function listarTodosUsuarios(filtro = '') {
 }
 
 async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		await nubeTenant.vincularUsuarioEmpresa(idEmpresa, idPersonal);
 		return listarUsuariosEmpresa(idEmpresa);
 	}
@@ -1108,7 +1119,7 @@ async function vincularUsuarioEmpresa(idEmpresa, idPersonal) {
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
-	if (await gestionAuthEnRailway()) {
+	if (await esEmpresaNube(idEmpresa)) {
 		return nubeTenant.desvincularUsuarioEmpresa(idEmpresa, idPersonal);
 	}
 	return runWithTenant(idEmpresa, async () => {

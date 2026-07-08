@@ -13,25 +13,10 @@ const { convertirFechaAClarion } = require('../utils/dateUtils');
 const COLLATE = 'utf8mb4_unicode_ci';
 
 /**
- * Desfase de IDs por empresa al importar personal desde un SQL Server físico.
- * El físico numera su personal desde 1; para no pisar el de otras empresas ya
- * cargadas en Railway, cada empresa vive en su propia franja: id_nube = base + id_origen.
- * Determinístico ⇒ re-importar es idempotente (upsert sobre el mismo id remapeado).
- */
-const OFFSET_EMPRESA = 10_000_000;
-function offsetEmpresa(idEmpresa) {
-	return Number(idEmpresa) * OFFSET_EMPRESA;
-}
-
-/**
  * Estrategias de importación FÍSICO → NUBE:
- *  - 'nube'   : catálogo GLOBAL de plataforma (roles/permisos/IVA). No se copia del físico:
- *               se usan siempre los de Railway (respuesta al punto 1: "lo que no esté en
- *               local se toma de la nube"). También cubre tablas que faltan en el físico.
- *  - 'tenant' : datos propios de la empresa. Se copian remapeando IDs y forzando IdEmpresa.
- *      · remapPersona : columnas con id de persona → se les suma offsetEmpresa().
- *      · forzarEmpresa: columnas que se setean SIEMPRE al IdEmpresa destino (aunque el
- *                       físico no las tenga), para etiquetar la fila con su empresa.
+ *  - 'nube'   : catálogo GLOBAL de plataforma (roles/permisos/IVA). No se copia del físico.
+ *  - 'tenant' : datos propios de la empresa. Se copian con el mismo id del físico y IdEmpresa.
+ *  - 'vinculo': imPersonalEmpresas generado desde el personal importado.
  */
 const TABLAS_IMPORTABLES = [
 	{ tabla: 'imRoles', label: 'Roles', estrategia: 'nube' },
@@ -39,10 +24,9 @@ const TABLAS_IMPORTABLES = [
 	{ tabla: 'imRolPermisos', label: 'Permisos por rol', estrategia: 'nube' },
 	{ tabla: 'imIVA', label: 'Condiciones de IVA', estrategia: 'nube' },
 	{ tabla: 'imSectores', label: 'Sectores', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
-	{ tabla: 'imPersonal', label: 'Personal', estrategia: 'tenant', remapPersona: ['Valor'] },
-	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', remapPersona: ['ValorPersonal', 'CodOperador'] },
-	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', remapPersona: ['idPersonal'] },
-	// El vínculo usuario↔empresa se GENERA (el físico no lo usa), tomando el personal importado.
+	{ tabla: 'imPersonal', label: 'Personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'vinculo' },
 ];
 
@@ -207,10 +191,7 @@ async function eliminarSector(idEmpresa, valor) {
 	const emp = Number(idEmpresa);
 	const id = String(valor || '').trim().toUpperCase();
 	const enUso = await mysqlQuery(
-		`SELECT 1
-     FROM \`imPersonalSectores\` ps
-     INNER JOIN \`imPersonalEmpresas\` pe ON pe.IdPersonal = ps.idPersonal AND pe.IdEmpresa = ?
-     WHERE ps.idSector = ? LIMIT 1`,
+		`SELECT 1 FROM \`imPersonalSectores\` WHERE IdEmpresa = ? AND idSector = ? LIMIT 1`,
 		[emp, id],
 	);
 	if (enUso.length) {
@@ -245,8 +226,10 @@ async function listarUsuariosEmpresa(idEmpresa) {
       pw.NumeroDocumento AS NumeroDocumento, pw.CodOperador AS CodOperador,
       r.IdRol AS IdRol, r.Nombre AS RolNombre
     FROM \`imPersonalEmpresas\` pe
-    INNER JOIN \`imPassword\` pw ON pw.ValorPersonal = pe.IdPersonal
-    LEFT JOIN \`imPersonal\` p ON p.Valor = pe.IdPersonal
+    INNER JOIN \`imPassword\` pw
+      ON pw.ValorPersonal = pe.IdPersonal AND pw.IdEmpresa = pe.IdEmpresa
+    LEFT JOIN \`imPersonal\` p
+      ON p.Valor = pe.IdPersonal AND p.IdEmpresa = pe.IdEmpresa
     LEFT JOIN \`imRoles\` r
       ON CAST(r.IdRol AS CHAR) COLLATE ${COLLATE} = TRIM(p.Rol) COLLATE ${COLLATE} AND r.Activo = 1
     WHERE pe.IdEmpresa = ?
@@ -264,8 +247,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
          FROM \`imPersonalSectores\` ps
          LEFT JOIN \`imSectores\` s
            ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
-          AND s.IdEmpresa = ?
-         WHERE ps.idPersonal = ?`,
+          AND s.IdEmpresa = ps.IdEmpresa
+         WHERE ps.IdEmpresa = ? AND ps.idPersonal = ?`,
 				[id, idPersonal],
 			);
 			sectores = (secRows || []).map((s) => ({
@@ -291,26 +274,35 @@ async function listarUsuariosEmpresa(idEmpresa) {
 	return usuarios;
 }
 
-async function siguienteValorPersonal() {
-	const rows = await mysqlQuery(`SELECT COALESCE(MAX(ValorPersonal), 1000000) + 1 AS v FROM \`imPassword\``);
+async function siguienteValorPersonal(idEmpresa) {
+	const rows = await mysqlQuery(
+		`SELECT COALESCE(MAX(ValorPersonal), 1000000) + 1 AS v FROM \`imPassword\` WHERE IdEmpresa = ?`,
+		[Number(idEmpresa)],
+	);
 	return Number(rows[0]?.v) || 1000001;
 }
 
-async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroDocumento, idRol }) {
-	const existe = await mysqlQuery(`SELECT Valor FROM \`imPersonal\` WHERE Valor = ? LIMIT 1`, [valorPersonal]);
+async function asegurarFichaPersonal(idEmpresa, valorPersonal, { apellido, nombres, numeroDocumento, idRol }) {
+	const emp = Number(idEmpresa);
+	const existe = await mysqlQuery(
+		`SELECT Valor FROM \`imPersonal\` WHERE IdEmpresa = ? AND Valor = ? LIMIT 1`,
+		[emp, valorPersonal],
+	);
 	const colMap = await columnasMeta('imPersonal');
 	const apellidoNombre = `${String(apellido || '').trim()}, ${String(nombres || '').trim()}`
 		.replace(/^,\s*|,\s*$/g, '');
 
 	if (existe.length) {
 		if (idRol != null && colMap.has('Rol')) {
-			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE Valor = ?`, [String(idRol), valorPersonal]);
+			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+				String(idRol), emp, valorPersonal,
+			]);
 		}
 		return;
 	}
 
-	const campos = ['Valor'];
-	const valores = [valorPersonal];
+	const campos = ['IdEmpresa', 'Valor'];
+	const valores = [emp, valorPersonal];
 	if (colMap.has('Rol')) { campos.push('Rol'); valores.push(idRol != null ? String(idRol) : ''); }
 	if (colMap.has('Matricula')) { campos.push('Matricula'); valores.push(valorPersonal); }
 	if (colMap.has('ApellidoNombre')) { campos.push('ApellidoNombre'); valores.push(apellidoNombre || `Usuario ${valorPersonal}`); }
@@ -339,6 +331,7 @@ async function vincularUsuarioEmpresa(idEmpresa, valorPersonal) {
 }
 
 async function crearUsuarioEmpresa(idEmpresa, body) {
+	const emp = Number(idEmpresa);
 	const { nombreRed, password, apellido, nombres, numeroDocumento, legajo, codOperador, idRol, sectores } = body;
 	if (!nombreRed?.trim() || !password?.trim()) {
 		const e = new Error('Usuario de red y contraseña son obligatorios');
@@ -352,19 +345,20 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	}
 
 	const dup = await mysqlQuery(
-		`SELECT ValorPersonal FROM \`imPassword\` WHERE LOWER(TRIM(NombreRed)) = LOWER(TRIM(?)) LIMIT 1`,
-		[nombreRed.trim()],
+		`SELECT ValorPersonal FROM \`imPassword\`
+     WHERE IdEmpresa = ? AND LOWER(TRIM(NombreRed)) = LOWER(TRIM(?)) LIMIT 1`,
+		[emp, nombreRed.trim()],
 	);
 	if (dup.length) {
-		const e = new Error('Ya existe un usuario con ese nombre de acceso (NombreRed). Elegí otro.');
+		const e = new Error('Ya existe un usuario con ese nombre de acceso en esta empresa. Elegí otro.');
 		e.statusCode = 409;
 		throw e;
 	}
 
-	const valorPersonal = await siguienteValorPersonal();
+	const valorPersonal = await siguienteValorPersonal(emp);
 	const colMap = await columnasMeta('imPassword');
-	const campos = ['ValorPersonal', 'NombreRed', 'Password', 'Apellido', 'Nombres'];
-	const valores = [valorPersonal, nombreRed.trim(), password.trim(), apellido.trim(), nombres.trim()];
+	const campos = ['IdEmpresa', 'ValorPersonal', 'NombreRed', 'Password', 'Apellido', 'Nombres'];
+	const valores = [emp, valorPersonal, nombreRed.trim(), password.trim(), apellido.trim(), nombres.trim()];
 	if (colMap.has('NumeroDocumento')) { campos.push('NumeroDocumento'); valores.push(numeroDocumento || ''); }
 	if (colMap.has('Legajo')) { campos.push('Legajo'); valores.push(legajo || ''); }
 	if (colMap.has('CodOperador')) {
@@ -384,16 +378,19 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		valores,
 	);
 
-	await asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroDocumento, idRol });
-	await vincularUsuarioEmpresa(idEmpresa, valorPersonal);
+	await asegurarFichaPersonal(emp, valorPersonal, { apellido, nombres, numeroDocumento, idRol });
+	await vincularUsuarioEmpresa(emp, valorPersonal);
 
 	for (const idSector of sectores || []) {
 		try {
 			await mysqlExec(
-				`INSERT INTO \`imPersonalSectores\` (idPersonal, idSector)
-         SELECT ?, ? FROM DUAL
-         WHERE NOT EXISTS (SELECT 1 FROM \`imPersonalSectores\` WHERE idPersonal = ? AND idSector = ?)`,
-				[valorPersonal, String(idSector), valorPersonal, String(idSector)],
+				`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector)
+         SELECT ?, ?, ? FROM DUAL
+         WHERE NOT EXISTS (
+           SELECT 1 FROM \`imPersonalSectores\`
+           WHERE IdEmpresa = ? AND idPersonal = ? AND idSector = ?
+         )`,
+				[emp, valorPersonal, String(idSector), emp, valorPersonal, String(idSector)],
 			);
 		} catch (e) {
 			console.warn('[nube] asignar sector', idSector, e.message);
@@ -405,10 +402,11 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 }
 
 async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
+	const emp = Number(idEmpresa);
 	const id = Number(idPersonal);
 	const vinc = await mysqlQuery(
 		`SELECT 1 FROM \`imPersonalEmpresas\` WHERE IdEmpresa = ? AND IdPersonal = ? LIMIT 1`,
-		[Number(idEmpresa), id],
+		[emp, id],
 	);
 	if (!vinc.length) {
 		const e = new Error('El usuario no está vinculado a esta empresa');
@@ -426,22 +424,27 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 	if (body.numeroDocumento != null) set('NumeroDocumento', String(body.numeroDocumento));
 	if (body.password?.trim()) set('Password', body.password.trim());
 	if (sets.length) {
-		params.push(id);
-		await mysqlExec(`UPDATE \`imPassword\` SET ${sets.join(', ')} WHERE ValorPersonal = ?`, params);
+		params.push(emp, id);
+		await mysqlExec(`UPDATE \`imPassword\` SET ${sets.join(', ')} WHERE IdEmpresa = ? AND ValorPersonal = ?`, params);
 	}
 
 	if (body.idRol != null && body.idRol !== '') {
 		const pcols = await columnasMeta('imPersonal');
 		if (pcols.has('Rol')) {
-			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE Valor = ?`, [String(body.idRol), id]);
+			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+				String(body.idRol), emp, id,
+			]);
 		}
 	}
 
 	if (Array.isArray(body.sectores)) {
-		await mysqlExec(`DELETE FROM \`imPersonalSectores\` WHERE idPersonal = ?`, [id]);
+		await mysqlExec(`DELETE FROM \`imPersonalSectores\` WHERE IdEmpresa = ? AND idPersonal = ?`, [emp, id]);
 		for (const idSector of body.sectores) {
 			try {
-				await mysqlExec(`INSERT INTO \`imPersonalSectores\` (idPersonal, idSector) VALUES (?, ?)`, [id, String(idSector)]);
+				await mysqlExec(
+					`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector) VALUES (?, ?, ?)`,
+					[emp, id, String(idSector)],
+				);
 			} catch (e) {
 				console.warn('[nube] reasignar sector', idSector, e.message);
 			}
@@ -577,12 +580,10 @@ async function previewTabla(idEmpresa, tabla, limite = 50) {
  * Copia (snapshot, re-ejecutable con upsert) las tablas seleccionadas de SQL Server → MySQL.
  * - Catálogos globales (roles/permisos/IVA) NO se copian: se usan los de Railway.
  * - Tablas que no existan en el físico se conservan desde la nube (no fallan).
- * - Datos de empresa: se remapean IDs de persona (offset por empresa) y se fuerza IdEmpresa,
- *   de modo que lo importado quede aislado y vinculado a la empresa destino.
+ * - Datos de empresa: se copian con el mismo id del físico y IdEmpresa destino.
  */
 async function importarTablas(idEmpresa, tablas) {
 	const emp = Number(idEmpresa);
-	const offset = offsetEmpresa(emp);
 
 	const pedidas = (Array.isArray(tablas) ? tablas : []).map((t) => String(t).toLowerCase());
 	const pidePersonal = pedidas.includes('impassword') || pedidas.includes('impersonal');
@@ -639,7 +640,7 @@ async function importarTablas(idEmpresa, tablas) {
 				res.leidas = ids.length;
 				for (const lote of chunk(ids, 500)) {
 					const flat = [];
-					for (const pid of lote) flat.push(offset + pid, emp);
+					for (const pid of lote) flat.push(pid, emp);
 					const valuesSql = lote.map(() => '(?, ?)').join(', ');
 					const r = await mysqlExec(
 						`INSERT INTO \`imPersonalEmpresas\` (IdPersonal, IdEmpresa) VALUES ${valuesSql}
@@ -678,10 +679,8 @@ async function importarTablas(idEmpresa, tablas) {
 				if (destCol) comunes.push({ origen: oc, destino: destCol });
 			}
 
-			const remap = new Set((cfg.remapPersona || []).map((c) => c.toLowerCase()));
 			const forzar = (cfg.forzarEmpresa || []).filter((c) => destinoPorLower.has(c.toLowerCase()));
 			const forzarReal = forzar.map((c) => destinoPorLower.get(c.toLowerCase()));
-			// Columnas forzadas que no vienen del origen no deben duplicarse en la lista común.
 			const comunesFiltradas = comunes.filter(
 				(c) => !forzarReal.some((f) => f.toLowerCase() === c.destino.toLowerCase()),
 			);
@@ -706,9 +705,6 @@ async function importarTablas(idEmpresa, tablas) {
 					for (const c of comunesFiltradas) {
 						let v = fila[c.origen];
 						if (v === undefined) v = null;
-						if (remap.has(c.destino.toLowerCase()) && v != null && Number.isFinite(Number(v))) {
-							v = offset + Number(v);
-						}
 						flat.push(v);
 					}
 					for (let i = 0; i < forzarReal.length; i++) flat.push(emp);
