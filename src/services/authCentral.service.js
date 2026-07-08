@@ -70,7 +70,6 @@ async function autenticarPlataforma(username, password) {
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
         OR TRIM(COALESCE(p.Rol, '')) = '5'
-        OR COALESCE(pw.Grupo, 0) = 11
       )
     LIMIT 1
     `,
@@ -233,7 +232,6 @@ async function esSuperAdmin(username) {
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
         OR TRIM(COALESCE(p.Rol, '')) = '5'
-        OR COALESCE(pw.Grupo, 0) = 11
       )
     LIMIT 1
     `,

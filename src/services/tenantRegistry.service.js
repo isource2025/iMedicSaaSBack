@@ -247,15 +247,6 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
-			const usuarioPlataformaCentral = await authCentralService.autenticarPlataforma(u, p);
-			if (usuarioPlataformaCentral) {
-				const rolId = usuarioPlataformaCentral.RolId ?? usuarioPlataformaCentral.Rol;
-				const rolNombre = String(usuarioPlataformaCentral.RolNombre || '').toUpperCase();
-				if (rolNombre === 'SUPER_ADMIN' || String(rolId) === '5' || Number(usuarioPlataformaCentral.Grupo) === 11) {
-					return { idEmpresa: null, usuario: usuarioPlataformaCentral };
-				}
-			}
-
 			const matchesCentral = await authCentralService.autenticarEnTodasLasEmpresas(u, p);
 			if (matchesCentral.length > 1) {
 				const e = new Error('MULTI_EMPRESA');
@@ -270,6 +261,11 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 				const { idEmpresa, usuario } = matchesCentral[0];
 				return { idEmpresa, usuario };
 			}
+
+			const usuarioPlataformaCentral = await authCentralService.autenticarPlataforma(u, p);
+			if (usuarioPlataformaCentral) {
+				return { idEmpresa: null, usuario: usuarioPlataformaCentral };
+			}
 		} catch (e) {
 			if (e.statusCode === 409) throw e;
 			console.warn('[authCentral] resolverLogin multiempresa:', e.message);
@@ -280,7 +276,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	if (usuarioPlataforma) {
 		const rolId = usuarioPlataforma.RolId ?? usuarioPlataforma.Rol;
 		const rolNombre = String(usuarioPlataforma.RolNombre || '').toUpperCase();
-		if (rolNombre === 'SUPER_ADMIN' || String(rolId) === '5' || Number(usuarioPlataforma.Grupo) === 11) {
+		if (rolNombre === 'SUPER_ADMIN' || String(rolId) === '5') {
 			return { idEmpresa: null, usuario: usuarioPlataforma };
 		}
 	}
