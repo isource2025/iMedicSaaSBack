@@ -201,7 +201,7 @@ async function ensureTables() {
 
 function _schemaMissingError() {
 	const e = new Error(
-		'Tablas de turnero no instaladas. Ejecutá scripts/sql/setup_turnero.sql en la base del tenant.',
+		'Tablas de turnero no instaladas. Ejecutá scripts/sql/setup_saas_tenant_delta.sql en la base del tenant (o scripts/sql/setup_turnero.sql).',
 	);
 	e.statusCode = 503;
 	e.code = 'TURNERO_SCHEMA_MISSING';

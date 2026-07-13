@@ -100,6 +100,15 @@ async function main() {
      ON DUPLICATE KEY UPDATE Clave = Clave`,
 	);
 	console.log('✓ SESSION_IDLE_MINUTES default 30');
+	await pool.query(`
+    CREATE TABLE IF NOT EXISTS imTurneroTokens (
+      PublicToken VARCHAR(64) PRIMARY KEY,
+      IdEmpresa INT NOT NULL,
+      INDEX IX_imTurneroTokens_Empresa (IdEmpresa)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+	console.log('✓ imTurneroTokens');
+
 	console.log('\nMigración de seguridad completada.');
 	process.exit(0);
 }
