@@ -49,6 +49,7 @@ const DEFAULT_CONFIG = {
 		mostrarHora: true,
 		mostrarConsultorio: true,
 		mostrarProfesional: true,
+		mostrarLlamados: true,
 		mostrarMedicosHoy: true,
 		mantenerPantallaEncendida: true,
 		autoFullscreen: false,
@@ -169,6 +170,8 @@ function mergeConfig(raw) {
 		display: {
 			...DEFAULT_CONFIG.display,
 			...(raw.display || {}),
+			mostrarLlamados: raw.display?.mostrarLlamados !== false,
+			mostrarMedicosHoy: raw.display?.mostrarMedicosHoy !== false,
 			sectoresFiltrados: Array.isArray(raw.display?.sectoresFiltrados)
 				? raw.display.sectoresFiltrados
 				: [],
@@ -682,11 +685,16 @@ async function obtenerDisplayPorToken(publicToken) {
 
 		const pantalla = rows[0];
 		const config = parseConfigJson(pantalla.ConfigJson);
-		const llamadosRaw = await listarLlamadosDelDia(
-			pantalla.IdPantalla,
-			config.display?.maxLlamadosLista || 8,
-		);
-		const llamados = _filtrarLlamadosPorSector(llamadosRaw, config);
+		const mostrarLlamados = config.display?.mostrarLlamados !== false;
+		const llamadosRaw = mostrarLlamados
+			? await listarLlamadosDelDia(
+					pantalla.IdPantalla,
+					config.display?.maxLlamadosLista || 8,
+				)
+			: [];
+		const llamados = mostrarLlamados
+			? _filtrarLlamadosPorSector(llamadosRaw, config)
+			: [];
 		const medicosHoy =
 			config.display?.mostrarMedicosHoy !== false ? await listarMedicosAtiendenHoy() : [];
 
