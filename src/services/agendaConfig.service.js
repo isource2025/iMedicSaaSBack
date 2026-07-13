@@ -15,6 +15,8 @@ const {
 	convertirHoraAClarion,
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
+	fechaClarionHoyArgentina,
+	horaClarionAhoraArgentina,
 } = require('../utils/dateUtils');
 const {
 	DIAS_SEMANA,
@@ -356,10 +358,8 @@ async function crearNoHorario(matricula, codOperador, payload) {
 	const m = _validarMatricula(matricula);
 	const v = _validarPayloadNoHorario(payload);
 
-	const hoyFecha = convertirFechaAClarion(new Date());
-	const ahoraHora = convertirHoraAClarion(
-		new Date().toTimeString().slice(0, 8),
-	);
+	const hoyFecha = fechaClarionHoyArgentina();
+	const ahoraHora = horaClarionAhoraArgentina();
 
 	await executeQuery(
 		`INSERT INTO dbo.imPersonalNoHorarios
@@ -414,8 +414,8 @@ async function actualizarNoHorario(matricula, codOperador, body) {
 				 WHERE Matricula=@mat AND DesdeFecha=@df AND HoraDesde=@hd AND MotivodeEsepcion=@mo`,
 			);
 
-		const hoy = convertirFechaAClarion(new Date());
-		const ahora = convertirHoraAClarion(new Date().toTimeString().slice(0, 8));
+		const hoy = fechaClarionHoyArgentina();
+		const ahora = horaClarionAhoraArgentina();
 
 		await new sql.Request(tx)
 			.input('mat', sql.Int, m)

@@ -6,6 +6,8 @@ const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
 	convertirFechaClarionADate,
+	fechaCalendarioArgentina,
+	horaWallArgentina,
 } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const controlesService = require('./controlesFrecuentes.service');
@@ -138,19 +140,12 @@ async function crearMedicacionTurno(idTurno, data) {
 	const id = _validarIdTurno(idTurno);
 	const turno = await _obtenerTurno(id);
 
-	const ahora = new Date();
-	const yyyy = ahora.getFullYear();
-	const mm = String(ahora.getMonth() + 1).padStart(2, '0');
-	const dd = String(ahora.getDate()).padStart(2, '0');
-	const hh = String(ahora.getHours()).padStart(2, '0');
-	const mi = String(ahora.getMinutes()).padStart(2, '0');
-	const ss = String(ahora.getSeconds()).padStart(2, '0');
-
-	const fechaCargaClarion = convertirFechaAClarion(`${yyyy}-${mm}-${dd}`);
-	const horaCargaClarion = convertirHoraAClarion(`${hh}:${mi}:${ss}`);
-	const fechaControlClarion = convertirFechaAClarion(data.fechaControl || `${yyyy}-${mm}-${dd}`);
+	const fechaCargaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
+	const horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
+	const fechaControlClarion = convertirFechaAClarion(data.fechaControl || fechaCalendarioArgentina());
+	const horaCorta = horaWallArgentina(false);
 	const horaControlClarion = convertirHoraAClarion(
-		(data.horaControl || `${hh}:${mi}`) + ':00',
+		(data.horaControl || horaCorta) + ':00',
 	);
 
 	// Mismo INSERT que internación (indicaciones.service); columnas char: Sector(4), TipoUnidad(5)

@@ -7,5 +7,6 @@ const coberturaController = require('../controllers/cobertura.controller');
 
 router.use(requireAuth, requireTenant);
 router.get('/list', coberturaController.getCobertura);
+router.get('/validar-afiliado/:documento', coberturaController.validarAfiliado);
 
 module.exports = router;

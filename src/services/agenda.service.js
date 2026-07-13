@@ -9,6 +9,9 @@ const {
 	convertirHoraAClarion,
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
+	fechaCalendarioArgentina,
+	horaWallArgentina,
+	horaClarionAhoraArgentina,
 } = require('../utils/dateUtils');
 const {
 	DIAS_SEMANA,
@@ -1187,11 +1190,9 @@ async function asignarTurno({
 		? Number(codOperador)
 		: 0;
 
-	// FechaCarga / HoraCarga = ahora (en clarion)
-	const now = new Date();
-	const fechaCargaIso = _isoDate(now);
-	const horaCargaStr =
-		String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+	// FechaCarga / HoraCarga = ahora (Argentina)
+	const fechaCargaIso = fechaCalendarioArgentina();
+	const horaCargaStr = horaWallArgentina(false);
 	const fechaCargaClarion = convertirFechaAClarion(fechaCargaIso);
 	const horaCargaClarion = convertirHoraAClarion(horaCargaStr);
 
@@ -1359,9 +1360,7 @@ async function _obtenerTurnoPorId(idTurno) {
 }
 
 function _horaClarionAhora() {
-	const now = new Date();
-	const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-	return convertirHoraAClarion(horaStr);
+	return horaClarionAhoraArgentina();
 }
 
 function _validarTurnoHorario(row) {
@@ -1803,10 +1802,9 @@ async function cerrarTurno({
 		throw e;
 	}
 
-	// ── Datos de fecha/hora del cierre ──
-	const now = new Date();
-	const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-	const fechaIso = _isoDate(now);
+	// ── Datos de fecha/hora del cierre (Argentina) ──
+	const fechaIso = fechaCalendarioArgentina();
+	const horaStr = horaWallArgentina(true);
 	const fechaClarion = convertirFechaAClarion(fechaIso);
 	const horaClarion = convertirHoraAClarion(horaStr);
 

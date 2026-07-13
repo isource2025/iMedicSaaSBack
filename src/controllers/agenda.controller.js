@@ -1,21 +1,9 @@
 const service = require('../services/agenda.service');
+const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/matriculaTenant');
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
 	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
-}
-
-function _enforceAlcance(req, res, matriculaParam) {
-	const m = Number(matriculaParam);
-	if (!Number.isFinite(m) || m <= 0) {
-		res.status(400).json({ success: false, mensaje: 'Matrícula inválida' });
-		return null;
-	}
-	if (req.rolNombre === 'MEDICO' && req.matricula !== m) {
-		res.status(403).json({ success: false, mensaje: 'Sólo podés ver tu propia agenda' });
-		return null;
-	}
-	return m;
 }
 
 function _err(res, e) {
@@ -25,7 +13,7 @@ function _err(res, e) {
 
 async function obtenerSlots(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const { desde, hasta, ligero } = req.query;
 		if (!desde || !hasta) {
@@ -45,7 +33,7 @@ async function obtenerSlots(req, res) {
 
 async function obtenerDiasConAgenda(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const { desde, hasta } = req.query;
 		if (!desde || !hasta) {
@@ -63,7 +51,7 @@ async function obtenerDiasConAgenda(req, res) {
 
 async function obtenerResumen(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const { fecha } = req.query;
 		if (!fecha) {
@@ -81,7 +69,7 @@ async function obtenerResumen(req, res) {
 
 async function listarTurnos(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const { desde, hasta } = req.query;
 		if (!desde || !hasta) {
@@ -123,7 +111,7 @@ async function obtenerDisponibilidad(req, res) {
 
 async function asignarTurno(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const body = req.body || {};
 		const data = await service.asignarTurno({
@@ -149,7 +137,7 @@ async function asignarTurno(req, res) {
 
 async function actualizarTurno(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		const body = req.body || {};
@@ -167,7 +155,7 @@ async function actualizarTurno(req, res) {
 
 async function cancelarTurno(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		const data = await service.cancelarTurno({ matricula: m, idTurno });
@@ -179,7 +167,7 @@ async function cancelarTurno(req, res) {
 
 async function borrarTurno(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		const data = await service.borrarTurno({ matricula: m, idTurno });
@@ -191,7 +179,7 @@ async function borrarTurno(req, res) {
 
 async function cerrarTurno(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		// Enfermeros no pueden cerrar turnos (solo médico o administrativo)
@@ -220,7 +208,7 @@ async function cerrarTurno(req, res) {
 
 async function marcarLlegada(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		const data = await service.marcarLlegada({
@@ -237,7 +225,7 @@ async function marcarLlegada(req, res) {
 
 async function marcarIngreso(req, res) {
 	try {
-		const m = _enforceAlcance(req, res, req.params.matricula);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
 		const data = await service.marcarIngreso({
@@ -306,8 +294,19 @@ async function buscarTurnosPorPaciente(req, res) {
 				mensaje: 'Query param idPaciente es requerido',
 			});
 		}
-		const matriculaMedico =
-			req.rolNombre === 'MEDICO' && req.matricula ? Number(req.matricula) : null;
+		let matriculaMedico = null;
+		if (req.rolNombre === 'MEDICO') {
+			matriculaMedico =
+				req.matricula != null && Number(req.matricula) > 0 ? Number(req.matricula) : null;
+			if (req.valorPersonal != null) {
+				try {
+					const tenantMat = await resolverMatriculaTenant(req.valorPersonal);
+					if (tenantMat) matriculaMedico = tenantMat;
+				} catch {
+					/* keep JWT matricula */
+				}
+			}
+		}
 		const soloActivos =
 			req.query.soloActivos === '1' ||
 			req.query.soloActivos === 'true' ||

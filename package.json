@@ -20,6 +20,7 @@
 		"debug:ia": "node scripts/debug_conversacion_ia.js",
 		"bot:consola": "node scripts/bot_consola.js",
 		"auth:mysql:reconcile": "node scripts/reconcile_auth_mysql.js",
+		"auth:mysql:security-migrate": "node scripts/apply_security_mysql.js",
 		"setup:whatsapp": "node scripts/setup_whatsapp_bot.js",
 		"setup:whatsapp:all": "node scripts/setup_whatsapp_bot.js all",
 		"setup:empresa-prod-mysql": "node scripts/update_empresa_prod_railway.js",
@@ -28,14 +29,25 @@
 		"test:simulate:railway:prod": "node scripts/simulate_railway_whatsapp_flow.js https://imedicwsback-production.up.railway.app",
 		"diag:crypto": "node scripts/diag_crypto_env.js",
 		"diag:railway": "node scripts/diag_railway_conexiones.js",
-		"diag:railway:probe": "node scripts/diag_railway_conexiones.js --probe"
+		"diag:railway:probe": "node scripts/diag_railway_conexiones.js --probe",
+		"onboarding:migrate": "node scripts/onboarding/migrate_onboarding.js",
+		"onboarding:prepare": "node scripts/onboarding/prepare_target_db.js",
+		"onboarding:fix": "node scripts/onboarding/fix_post_migration.js",
+		"onboarding:close-stale": "node scripts/onboarding/close_stale_internaciones.js",
+		"setup:turnero": "node scripts/ejecutar_setup_turnero.js",
+		"audit:turnero": "node scripts/audit_turnero.js"
 	},
 	"dependencies": {
+		"argon2": "^0.44.0",
 		"axios": "^1.13.6",
+		"cookie-parser": "^1.4.7",
 		"cors": "^2.8.5",
 		"dotenv": "^16.0.3",
 		"express": "^4.18.2",
+		"express-rate-limit": "^8.5.2",
 		"form-data": "^4.0.5",
+		"geoip-lite": "^1.4.10",
+		"helmet": "^8.2.0",
 		"iconv-lite": "^0.6.3",
 		"jsonwebtoken": "^9.0.2",
 		"mongoose": "^7.0.3",
@@ -48,7 +60,8 @@
 		"pdfkit": "^0.18.0",
 		"sharp": "^0.33.5",
 		"string-similarity": "^4.0.4",
-		"tesseract.js": "^5.1.1"
+		"tesseract.js": "^5.1.1",
+		"uuid": "^14.0.1"
 	},
 	"devDependencies": {
 		"nodemon": "^2.0.22"

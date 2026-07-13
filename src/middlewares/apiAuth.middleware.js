@@ -11,7 +11,8 @@ function isPublicApiPath(req) {
 		path === '/empresa' ||
 		path.startsWith('/auth') ||
 		path.startsWith('/webhook/whatsapp') ||
-		path.startsWith('/integrations/bot')
+		path.startsWith('/integrations/bot') ||
+		path.startsWith('/turnero/display')
 	);
 }
 

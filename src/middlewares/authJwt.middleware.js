@@ -1,8 +1,9 @@
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/jwt');
 const { middlewareFromAuth } = require('../context/tenantContext');
+const sessionService = require('../services/session.service');
+const { COOKIE_ACCESS } = require('../config/security');
 
-/** Resuelve ValorPersonal desde JWT (Render legacy + Railway actual). */
 function resolveValorPersonal(decoded) {
 	const u = decoded?.usuario || {};
 	const candidates = [
@@ -42,6 +43,7 @@ function resolveCodOperador(decoded) {
 
 function assignAuthFromDecoded(req, decoded) {
 	req.auth = decoded;
+	req.auth.sessionId = decoded.sessionId || null;
 
 	const valorPersonal = resolveValorPersonal(decoded);
 	req.valorPersonal = valorPersonal;
@@ -64,37 +66,45 @@ function assignAuthFromDecoded(req, decoded) {
 }
 
 function extractTokenFromRequest(req) {
+	if (req.cookies?.[COOKIE_ACCESS]) {
+		return String(req.cookies[COOKIE_ACCESS]).trim();
+	}
 	const h = req.headers.authorization;
 	if (h && typeof h === 'string' && h.startsWith('Bearer ')) {
 		const t = h.slice(7).trim();
 		if (t) return t;
 	}
-	const q = req.query?.access_token ?? req.query?.token;
-	if (typeof q === 'string' && q.trim()) return q.trim();
 	return null;
 }
 
-function verifyBearerToken(req, res) {
+async function verifyBearerToken(req, res) {
 	const token = extractTokenFromRequest(req);
 	if (!token) {
 		res.status(401).json({ success: false, mensaje: 'No autorizado' });
 		return null;
 	}
+	let decoded;
 	try {
-		return jwt.verify(token, JWT_SECRET);
+		decoded = jwt.verify(token, JWT_SECRET);
 	} catch {
 		res.status(401).json({ success: false, mensaje: 'Token inválido o expirado' });
 		return null;
 	}
+
+	if (decoded.sessionId) {
+		const session = await sessionService.validateSession(decoded.sessionId);
+		if (!session) {
+			sessionService.clearAuthCookies(res);
+			res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+			return null;
+		}
+	}
+
+	return decoded;
 }
 
-/**
- * Requiere Authorization: Bearer <token> válido (mismo secret que /api/auth/login).
- * Asigna req.auth (payload) y req.valorPersonal (imPassword / imPersonal.Valor).
- * Contexto tenant: idEmpresa en JWT (null = solo plataforma, p. ej. SUPER_ADMIN).
- */
-function requireAuth(req, res, next) {
-	const decoded = verifyBearerToken(req, res);
+async function requireAuth(req, res, next) {
+	const decoded = await verifyBearerToken(req, res);
 	if (!decoded) return;
 
 	assignAuthFromDecoded(req, decoded);
@@ -104,12 +114,8 @@ function requireAuth(req, res, next) {
 	return middlewareFromAuth(req, res, next);
 }
 
-/**
- * JWT válido sin cambiar el tenant AsyncLocalStorage.
- * Render legacy (AUTH_DB_ENABLED=0): imHCI vive en la BD plataforma (.env DB_*).
- */
-function requireAuthPlatform(req, res, next) {
-	const decoded = verifyBearerToken(req, res);
+async function requireAuthPlatform(req, res, next) {
+	const decoded = await verifyBearerToken(req, res);
 	if (!decoded) return;
 
 	assignAuthFromDecoded(req, decoded);
@@ -119,4 +125,4 @@ function requireAuthPlatform(req, res, next) {
 	return next();
 }
 
-module.exports = { requireAuth, requireAuthPlatform };
+module.exports = { requireAuth, requireAuthPlatform, extractTokenFromRequest };

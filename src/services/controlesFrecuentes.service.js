@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion, convertirHoraAClarion } = require("../utils/dateUtils");
+const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 
@@ -188,16 +188,8 @@ const eliminarControl = async (valor) => {
  * @returns {Promise<Object>} Registro creado con su Valor (ID)
  */
 const crearControl = async (data) => {
-    const ahora = new Date();
-    const yyyy = ahora.getFullYear();
-    const mm = String(ahora.getMonth() + 1).padStart(2, '0');
-    const dd = String(ahora.getDate()).padStart(2, '0');
-    const hh = String(ahora.getHours()).padStart(2, '0');
-    const mi = String(ahora.getMinutes()).padStart(2, '0');
-    const ss = String(ahora.getSeconds()).padStart(2, '0');
-
-    const fechaCargaClarion = convertirFechaAClarion(`${yyyy}-${mm}-${dd}`);
-    const horaCargaClarion = convertirHoraAClarion(`${hh}:${mi}:${ss}`);
+    const fechaCargaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
+    const horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
     const fechaControlClarion = convertirFechaAClarion(data.fechaControl);
     const horaControlClarion = convertirHoraAClarion(data.horaControl + ':00');
 

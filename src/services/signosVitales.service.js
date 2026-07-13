@@ -1,6 +1,6 @@
 const { executeQuery } = require('../models/db');
 const hciService = require('./hci.service');
-const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina, horaClarionAhoraArgentina } = require('../utils/dateUtils');
 const { calcularIMC } = require('../utils/antropometria');
 
 /**
@@ -122,26 +122,12 @@ class SignosVitalesService {
    */
   prepararDatosControl(data) {
     const { medibles, NumeroVisita, OperadorCarga, Profesional, IdSector } = data;
-    const ahora = new Date();
-    
-    // Convertir fecha a Clarion
-    const fechaClarion = convertirFechaAClarion(ahora);
-    
-    // Hora en formato HHMMSS (entero)
-    const horaCarga = parseInt(
-      String(ahora.getHours()).padStart(2, '0') +
-      String(ahora.getMinutes()).padStart(2, '0') +
-      String(ahora.getSeconds()).padStart(2, '0')
-    );
-    
-    // Hora en formato milisegundos Clarion
-    const horaControl = Math.floor(
-      (ahora.getHours() * 3600000 + 
-       ahora.getMinutes() * 60000 + 
-       ahora.getSeconds() * 1000 + 
-       ahora.getMilliseconds()) / 10
-    ) + 1;
-    
+    const fechaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
+    const horaWall = horaWallArgentina(true);
+    const [hh, mi, ss] = horaWall.split(':');
+    const horaCarga = parseInt(`${hh}${mi}${ss}`, 10);
+    const horaControl = horaClarionAhoraArgentina();
+
     const datosControl = {
       NumeroVisita,
       FechaCarga: fechaClarion,

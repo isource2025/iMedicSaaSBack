@@ -60,6 +60,8 @@ const agendaConfigRoutes = require('./routes/agendaConfig.routes');
 const turnosAdminRoutes = require('./routes/turnosAdmin.routes');
 const botIntegrationRoutes = require('./routes/botIntegration.routes');
 const botAdminRoutes = require('./routes/botAdmin.routes');
+const turneroRoutes = require('./routes/turnero.routes');
+const turneroDisplayRoutes = require('./routes/turneroDisplay.routes');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook.routes');
 const healthRoutes = require('./routes/health.routes');
 const { whatsappRawBody } = require('./middlewares/whatsappRawBody.middleware');
@@ -71,8 +73,19 @@ const { isAuthCentralEnabled } = require('./config/authCentralDb');
 // Cargar variables de entorno
 dotenv.config();
 
+const helmet = require('helmet');
+const cookieParser = require('cookie-parser');
+
 // Inicializar la aplicación Express
 const app = express();
+app.set('trust proxy', 1);
+app.use(
+	helmet({
+		contentSecurityPolicy: false,
+		crossOriginEmbedderPolicy: false,
+	}),
+);
+app.use(cookieParser());
 
 // Webhook Meta PRIMERO — stream crudo antes de cors/body-parser (firma X-Hub-Signature-256)
 app.use('/api/webhook/whatsapp', whatsappRawBody, whatsappWebhookRoutes);
@@ -117,6 +130,8 @@ const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/health', healthRoutes);
+// Pantalla pública del turnero (sin JWT) — antes de apiAuthUnlessPublic
+app.use('/api/turnero/display', turneroDisplayRoutes);
 // JWT + idEmpresa en contexto (sin esto, /api/beds e indicadores usan DB_* de plataforma y fallan en Railway)
 app.use('/api', apiAuthUnlessPublic);
 
@@ -167,6 +182,7 @@ app.use('/api/agenda', agendaConfigRoutes);
 app.use('/api/turnos-admin', turnosAdminRoutes);
 app.use('/api/integrations/bot', botIntegrationRoutes);
 app.use('/api/admin/bot', botAdminRoutes);
+app.use('/api/turnero', turneroRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

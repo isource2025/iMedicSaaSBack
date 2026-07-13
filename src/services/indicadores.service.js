@@ -2,6 +2,13 @@ const { executeQuery, sql } = require('../models/db');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 
+function esObjetoSqlMissing(error) {
+	return (
+		Number(error?.number) === 208 ||
+		/Invalid object name/i.test(String(error?.message || ''))
+	);
+}
+
 async function obtenerMapaCamasInternacionPorSector() {
   const rows = await executeQuery(
     `
@@ -21,6 +28,65 @@ async function obtenerMapaCamasInternacionPorSector() {
     mapa.set(key, Number(row.TotalCamasInternacion || 0));
   }
   return mapa;
+}
+
+/** Misma lógica que dbo.fn_GetIndicadores (fallback si la UDF no está desplegada). */
+async function obtenerIndicadoresInline(tipoIndicador, fechaInicio, fechaFin) {
+  const tipo = String(tipoIndicador || 'Ingresos');
+  const params = [
+    { value: fechaInicio },
+    { value: fechaFin },
+  ];
+
+  if (tipo === 'TotalesPorClase') {
+    return executeQuery(
+      `
+      SELECT
+        CAST(NULL AS DATE) AS Fecha,
+        cp.Descripcion AS ClasePaciente,
+        COUNT(*) AS TotalIngresos
+      FROM dbo.imVisita v
+      INNER JOIN dbo.imClasePaciente cp ON v.ClasePaciente = cp.Valor
+      WHERE (@p0 IS NULL OR v.FechaAdmisionS >= @p0)
+        AND (@p1 IS NULL OR v.FechaAdmisionS < DATEADD(DAY, 1, @p1))
+      GROUP BY cp.Descripcion
+      ORDER BY cp.Descripcion
+      `,
+      params,
+    );
+  }
+
+  if (tipo === 'TotalesGenerales') {
+    return executeQuery(
+      `
+      SELECT
+        CAST(NULL AS DATE) AS Fecha,
+        'TOTAL' AS ClasePaciente,
+        COUNT(*) AS TotalIngresos
+      FROM dbo.imVisita v
+      WHERE (@p0 IS NULL OR v.FechaAdmisionS >= @p0)
+        AND (@p1 IS NULL OR v.FechaAdmisionS < DATEADD(DAY, 1, @p1))
+      `,
+      params,
+    );
+  }
+
+  // Ingresos (default)
+  return executeQuery(
+    `
+    SELECT
+      CAST(v.FechaAdmisionS AS DATE) AS Fecha,
+      cp.Descripcion AS ClasePaciente,
+      COUNT(*) AS TotalIngresos
+    FROM dbo.imVisita v
+    INNER JOIN dbo.imClasePaciente cp ON v.ClasePaciente = cp.Valor
+    WHERE (@p0 IS NULL OR v.FechaAdmisionS >= @p0)
+      AND (@p1 IS NULL OR v.FechaAdmisionS < DATEADD(DAY, 1, @p1))
+    GROUP BY CAST(v.FechaAdmisionS AS DATE), cp.Descripcion
+    ORDER BY Fecha DESC, ClasePaciente
+    `,
+    params,
+  );
 }
 
 /**
@@ -47,9 +113,15 @@ const obtenerIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio, fecha
       { value: fechaFin }
     ];
     
-    const result = await executeQuery(query, params);
-    
-    return result;
+    try {
+      return await executeQuery(query, params);
+    } catch (udfErr) {
+      if (!esObjetoSqlMissing(udfErr)) throw udfErr;
+      console.warn(
+        '[indicadores] fn_GetIndicadores ausente — usando consulta inline. Desplegá scripts/sql/fn_indicadores_dashboard.sql en el tenant.',
+      );
+      return await obtenerIndicadoresInline(tipoIndicador, fechaInicio, fechaFin);
+    }
   } catch (error) {
     console.error('Error al obtener indicadores:', error);
     throw new Error('Error al obtener indicadores de pacientes');
@@ -211,6 +283,73 @@ module.exports = {
  * Basado en la función dbo.fn_OcupacionPromedioCamas(fechaInicio, fechaFin)
  */
 
+/** Misma lógica que dbo.fn_OcupacionPromedioCamas (sin UDF; Clarion: DATEADD(day, n-4, 1801-01-01)). */
+async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
+  return executeQuery(
+    `
+    ;WITH Internados AS (
+      SELECT
+        vm.NumeroVisita,
+        vm.ValorSector,
+        CAST(DATEADD(day, vm.FechaAdmision - 4, '1801-01-01') AS date) AS FechaAdmision,
+        CAST(DATEADD(day, vm.FechaEgreso - 4, '1801-01-01') AS date) AS FechaEgreso
+      FROM dbo.imVisitaMovimiento vm
+      WHERE vm.FechaAdmision IS NOT NULL
+    ),
+    CamasPorSector AS (
+      SELECT ValorSector, COUNT(*) AS TotalCamas
+      FROM dbo.imHabitacionCamas
+      GROUP BY ValorSector
+    ),
+    Meses AS (
+      SELECT DATEFROMPARTS(YEAR(@p0), MONTH(@p0), 1) AS Mes
+      UNION ALL
+      SELECT DATEADD(MONTH, 1, Mes)
+      FROM Meses
+      WHERE Mes < DATEFROMPARTS(YEAR(@p1), MONTH(@p1), 1)
+    ),
+    PacientesMes AS (
+      SELECT
+        i.ValorSector,
+        m.Mes,
+        SUM(
+          DATEDIFF(
+            DAY,
+            CASE WHEN i.FechaAdmision < m.Mes THEN m.Mes ELSE i.FechaAdmision END,
+            DATEADD(DAY, 1,
+              CASE
+                WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > EOMONTH(m.Mes)
+                THEN EOMONTH(m.Mes)
+                ELSE i.FechaEgreso
+              END
+            )
+          )
+        ) AS PacientesDia
+      FROM Internados i
+      CROSS JOIN Meses m
+      WHERE i.FechaAdmision <= @p1
+        AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= @p0)
+        AND i.FechaAdmision <= EOMONTH(m.Mes)
+        AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= m.Mes)
+      GROUP BY i.ValorSector, m.Mes
+    )
+    SELECT
+      'Mensual' AS TipoIndicador,
+      FORMAT(pm.Mes, 'yyyy-MM') AS Periodo,
+      pm.ValorSector,
+      pm.PacientesDia,
+      c.TotalCamas,
+      DAY(EOMONTH(pm.Mes)) AS DiasDelMes,
+      CAST(pm.PacientesDia * 1.0 / NULLIF(c.TotalCamas * DAY(EOMONTH(pm.Mes)), 0) * 100 AS DECIMAL(10,2)) AS OcupacionPromedioPct
+    FROM PacientesMes pm
+    JOIN CamasPorSector c ON pm.ValorSector = c.ValorSector
+    ORDER BY pm.ValorSector, Periodo
+    OPTION (MAXRECURSION 120)
+    `,
+    [{ value: fechaInicio }, { value: fechaFin }],
+  );
+}
+
 /**
  * Obtiene registros de ocupación promedio de camas desde la función SQL
  * Se espera que la función devuelva al menos una columna de fecha (Fecha)
@@ -240,16 +379,26 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
     });
     
     const queryStartTime = Date.now();
-    const result = await executeQuery(query, [
-      { value: fechaInicio },
-      { value: fechaFin }
-    ]);
+    let result;
+    try {
+      result = await executeQuery(query, [
+        { value: fechaInicio },
+        { value: fechaFin }
+      ]);
+    } catch (udfErr) {
+      if (!esObjetoSqlMissing(udfErr)) throw udfErr;
+      console.warn(
+        '[CAMAS] fn_OcupacionPromedioCamas ausente — usando consulta inline. Desplegá scripts/sql/fn_indicadores_dashboard.sql en el tenant.',
+      );
+      result = await obtenerOcupacionCamasInline(fechaInicio, fechaFin);
+    }
 
     const queryTime = Date.now() - queryStartTime;
     console.log(`✅ [CAMAS] Query SQL completada en ${queryTime}ms`);
     console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
     
     let datos = result || [];
+
 
     // Ajuste funcional: analizar solo camas de internación (Tipo='cama').
     // La función SQL histórica incluye todo tipo de "cama", por eso

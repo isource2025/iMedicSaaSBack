@@ -2,6 +2,8 @@ const { executeQuery } = require("../models/db");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
+    fechaCalendarioArgentina,
+    horaWallArgentina,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC } = require("../utils/antropometria");
@@ -37,8 +39,7 @@ function normalizarFechaHci(data) {
         if (m) return `${m[1]} ${m[2]}:${m[3]}:00`;
     }
 
-    const now = new Date();
-    return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:00`;
+    return `${fechaCalendarioArgentina()} ${horaWallArgentina(false)}:00`;
 }
 
 function normalizarIdSector(value) {
@@ -115,16 +116,8 @@ async function aplicarAutorSesion(data, auth) {
  */
 const guardarSignosVitalesEnControles = async (data) => {
     try {
-        const ahora = new Date();
-        const yyyy = ahora.getFullYear();
-        const mm = String(ahora.getMonth() + 1).padStart(2, '0');
-        const dd = String(ahora.getDate()).padStart(2, '0');
-        const hh = String(ahora.getHours()).padStart(2, '0');
-        const mi = String(ahora.getMinutes()).padStart(2, '0');
-        const ss = String(ahora.getSeconds()).padStart(2, '0');
-
-        const fechaClarion = convertirFechaAClarion(`${yyyy}-${mm}-${dd}`);
-        const horaClarion = convertirHoraAClarion(`${hh}:${mi}:${ss}`);
+        const fechaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
+        const horaClarion = convertirHoraAClarion(horaWallArgentina(true));
         
         // Parsear presión arterial "120/80" → Maximo: 120, Minimo: 80
         let maximo = 0;

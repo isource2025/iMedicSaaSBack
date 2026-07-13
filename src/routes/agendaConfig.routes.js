@@ -7,6 +7,7 @@ const ctrl = require('../controllers/agendaConfig.controller');
 const agendaCtrl = require('../controllers/agenda.controller');
 const racCtrl = require('../controllers/agendaRac.controller');
 const agendaAdjCtrl = require('../controllers/agendaAdjuntos.controller');
+const turneroCtrl = require('../controllers/turnero.controller');
 
 router.use(requireAuth, requireTenant);
 
@@ -191,6 +192,11 @@ router.patch(
 	'/:matricula/turnos/:idTurno/ingreso',
 	requirePermiso('TURNOS.AGENDA.EDITAR'),
 	agendaCtrl.marcarIngreso,
+);
+router.post(
+	'/:matricula/turnos/:idTurno/llamar',
+	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	turneroCtrl.llamarTurno,
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/cerrar',

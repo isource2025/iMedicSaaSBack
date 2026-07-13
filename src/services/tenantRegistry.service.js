@@ -11,6 +11,8 @@ const {
 } = require('../config/tenantDb');
 const { encrypt } = require('../utils/dbCrypto');
 const authCentralService = require('./authCentral.service');
+const passwordService = require('./password.service');
+const { AUTH_FAIL_MESSAGE } = require('../config/security');
 
 const DISCOVER_MAX = Number(process.env.TENANT_DISCOVER_MAX) || 25;
 
@@ -44,11 +46,7 @@ async function listarEmpresasActivas() {
  */
 async function autenticarEnTenant(idEmpresa, username, password) {
 	const pool = await getTenantPool(idEmpresa);
-	const result = await pool
-		.request()
-		.input('user', username)
-		.input('pass', password)
-		.query(`
+	const result = await pool.request().input('user', username).query(`
       SELECT TOP 1
         pw.*,
         p.Matricula AS Matricula,
@@ -62,11 +60,13 @@ async function autenticarEnTenant(idEmpresa, username, password) {
           UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@user)))
           OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@user)))
         )
-        AND pw.Password = @pass
     `);
 
-	if (!result.recordset?.length) return null;
-	return result.recordset[0];
+	const row = result.recordset?.[0];
+	if (!row) return null;
+	if (!(await passwordService.verifyPassword(password, row))) return null;
+	await passwordService.upgradePasswordHashTenant(pool, row.ValorPersonal, password);
+	return row;
 }
 
 /** Agrupa empresas del catálogo que comparten la misma conexión SQL (evita duplicar por misma BD). */
@@ -216,7 +216,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 
 		const usuario = await autenticarEnPlataforma(u, p);
 		if (!usuario) {
-			const e = new Error('Credenciales inválidas');
+			const e = new Error(AUTH_FAIL_MESSAGE);
 			e.statusCode = 401;
 			throw e;
 		}
@@ -238,7 +238,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 
 		const usuario = await autenticarEnTenant(id, u, p);
 		if (!usuario) {
-			const e = new Error('Credenciales inválidas para la empresa seleccionada');
+			const e = new Error(AUTH_FAIL_MESSAGE);
 			e.statusCode = 401;
 			throw e;
 		}
@@ -283,7 +283,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 
 	const candidatos = await descubrirEmpresasPorUsuario(u);
 	if (!candidatos.length) {
-		const e = new Error('Usuario no encontrado en ninguna empresa activa');
+		const e = new Error(AUTH_FAIL_MESSAGE);
 		e.statusCode = 401;
 		throw e;
 	}
@@ -297,7 +297,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	}
 
 	if (!matches.length) {
-		const e = new Error('Credenciales inválidas');
+		const e = new Error(AUTH_FAIL_MESSAGE);
 		e.statusCode = 401;
 		throw e;
 	}

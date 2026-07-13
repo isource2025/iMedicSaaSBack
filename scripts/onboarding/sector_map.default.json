@@ -1,0 +1,4 @@
+{
+  "_nota": "Opcional: overrides por código de sector origen. Sin entrada, se usa el código tal cual (max 4 chars).",
+  "313": { "valor": "GEN", "descripcion": "General", "ambInt": "I" }
+}

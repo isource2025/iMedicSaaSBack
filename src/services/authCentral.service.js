@@ -1,4 +1,5 @@
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
+const passwordService = require('./password.service');
 
 /** Evita "Illegal mix of collations" entre tablas importadas con distinto utf8mb4 */
 const COLLATE = 'utf8mb4_unicode_ci';
@@ -66,16 +67,22 @@ async function autenticarPlataforma(username, password) {
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
-      AND pw.Password = ?
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
         OR TRIM(COALESCE(p.Rol, '')) = '5'
       )
     LIMIT 1
     `,
-		[normalizarUsername(username), String(password || '')],
+		[normalizarUsername(username)],
 	);
-	return rows.length ? mapUsuario(rows[0]) : null;
+	if (!rows.length) return null;
+	if (!(await passwordService.verifyPassword(password, rows[0]))) return null;
+	await passwordService.upgradePasswordHashCentral(
+		rows[0].IdEmpresa,
+		rows[0].ValorPersonal,
+		password,
+	);
+	return mapUsuario(rows[0]);
 }
 
 async function autenticarTenant(idEmpresa, username, password) {
@@ -95,12 +102,14 @@ async function autenticarTenant(idEmpresa, username, password) {
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE pw.IdEmpresa = ?
       AND ${USER_MATCH} = ?
-      AND pw.Password = ?
     LIMIT 1
     `,
-		[emp, emp, normalizarUsername(username), String(password || '')],
+		[emp, emp, normalizarUsername(username)],
 	);
-	return rows.length ? mapUsuario(rows[0]) : null;
+	if (!rows.length) return null;
+	if (!(await passwordService.verifyPassword(password, rows[0]))) return null;
+	await passwordService.upgradePasswordHashCentral(emp, rows[0].ValorPersonal, password);
+	return mapUsuario(rows[0]);
 }
 
 async function autenticarEnTodasLasEmpresas(username, password) {
@@ -121,16 +130,21 @@ async function autenticarEnTodasLasEmpresas(username, password) {
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
-      AND pw.Password = ?
     ORDER BY descripcionEmpresa
     `,
-		[normalizarUsername(username), String(password || '')],
+		[normalizarUsername(username)],
 	);
-	return rows.map((row) => ({
-		idEmpresa: Number(row.idEmpresa),
-		descripcionEmpresa: String(row.descripcionEmpresa || '').trim(),
-		usuario: mapUsuario(row),
-	}));
+	const matches = [];
+	for (const row of rows) {
+		if (!(await passwordService.verifyPassword(password, row))) continue;
+		await passwordService.upgradePasswordHashCentral(row.IdEmpresa, row.ValorPersonal, password);
+		matches.push({
+			idEmpresa: Number(row.idEmpresa),
+			descripcionEmpresa: String(row.descripcionEmpresa || '').trim(),
+			usuario: mapUsuario(row),
+		});
+	}
+	return matches;
 }
 
 async function descubrirEmpresas(username) {
