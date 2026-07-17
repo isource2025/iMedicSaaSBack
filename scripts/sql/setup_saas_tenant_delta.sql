@@ -383,6 +383,24 @@ ELSE
 GO
 
 /*------------------------------------------------------------------------------
+  7b) TOMA EXCLUSIVA DE PEDIDOS DE ESTUDIOS (SaaS)
+------------------------------------------------------------------------------*/
+IF OBJECT_ID(N'dbo.imPedidosEstudiosToma', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.imPedidosEstudiosToma (
+    IdPedido     INT NOT NULL PRIMARY KEY,
+    Matricula    INT NOT NULL,
+    CodOperador  INT NULL,
+    FechaToma    DATETIME NOT NULL CONSTRAINT DF_imPedidosEstudiosToma_Fecha DEFAULT (GETDATE())
+  );
+  CREATE INDEX IX_imPedidosEstudiosToma_Matricula ON dbo.imPedidosEstudiosToma (Matricula);
+  PRINT 'Creada: dbo.imPedidosEstudiosToma';
+END
+ELSE
+  PRINT 'OK: dbo.imPedidosEstudiosToma ya existe';
+GO
+
+/*------------------------------------------------------------------------------
   8) AFILIACIÓN / VALIDACIÓN OS (imClientes)
 ------------------------------------------------------------------------------*/
 IF OBJECT_ID(N'dbo.imClientes', N'U') IS NOT NULL
@@ -660,6 +678,7 @@ WHERE schema_id = SCHEMA_ID('dbo')
     'imNotificaciones', 'imHCInterconsulta',
     'imBotConfig', 'imBotChat',
     'imHCExamenesLabCabecera', 'imHCExamenesLabDetalle', 'imHCExamenesLabDetalleConf',
+    'imPedidosEstudiosToma',
     'fn_ClarionDATE2SQL', 'fn_GetIndicadores', 'fn_OcupacionPromedioCamas',
     'vw_iMedic_PedidosEstudiosBase', 'vw_iMedic_PedidosEstudiosImagen', 'vw_iMedic_PedidosInterconsultas'
   )

@@ -218,7 +218,7 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
-    const { fecha, limit } = opciones;
+    const { fecha, limit, excluirSuspendidas = false } = opciones;
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -236,6 +236,10 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     whereParts.push('iim.TipoIndicacion <> 9');
     // Excluir descartables sin registro
     whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
+    // Tabla de cama: no listar indicaciones suspendidas (Estado = 'S')
+    if (excluirSuspendidas) {
+        whereParts.push("(iim.Estado IS NULL OR iim.Estado <> 'S')");
+    }
 
     const sql = `
 SELECT ${topClause}
@@ -389,7 +393,7 @@ const obtenerUltimasIndicacionesPorVisita = (numeroVisita, limit = 3) =>
     getIndicacionesByVisita(numeroVisita, { limit });
 
 const getByVisitaAndDate = (numeroVisita, ymdDate) =>
-    getIndicacionesByVisita(numeroVisita, { fecha: ymdDate });
+    getIndicacionesByVisita(numeroVisita, { fecha: ymdDate, excluirSuspendidas: true });
 
 // ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {

@@ -1639,30 +1639,16 @@ function _s(v, max) {
 	return max != null ? s.slice(0, max) : s;
 }
 
+const estudiosService = require('./estudios.service');
+
 /** Sector receptor/solicitante para pedidos (4 chars, legacy). */
 function _padSectorPedido(v) {
-	return String(v || '').trim().padEnd(4, ' ').slice(0, 4);
+	return estudiosService._padSector(v);
 }
 
 /** Resuelve un tipo de pedido/estudio desde imTiposPedidosEstudios. */
 async function _resolverTipoPedidoEstudio(idTipoPedido) {
-	const id = Number(idTipoPedido);
-	if (!Number.isFinite(id) || id <= 0) {
-		const e = new Error('idTipoPedido inválido');
-		e.statusCode = 400;
-		throw e;
-	}
-	const rows = await executeQuery(
-		`SELECT TOP 1 IdTipoPedido, DescPractica, IdPractica
-		 FROM dbo.imTiposPedidosEstudios WHERE IdTipoPedido = @p0`,
-		[{ value: id, type: 'Int' }],
-	);
-	if (!rows.length) {
-		const e = new Error(`Tipo de pedido/estudio ${id} inexistente`);
-		e.statusCode = 404;
-		throw e;
-	}
-	return rows[0];
+	return estudiosService.resolverTipoPedidoEstudio(idTipoPedido);
 }
 
 /** Inserta imFacPracticas + imFacProfesionales (titular, funcion=1). */
@@ -1844,6 +1830,7 @@ async function cerrarTurno({
 	const listaProcedimientos = Array.isArray(procedimientos) ? procedimientos : [];
 	const listaPedidosEstudios = Array.isArray(pedidosEstudios) ? pedidosEstudios : [];
 	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const now = new Date();
 
 	try {
 		if (!yaTieneVisita) {
@@ -1980,53 +1967,19 @@ async function cerrarTurno({
 			creados.profesionalesExtra.push(extra.idFacProf);
 		}
 
-		// 5) Pedidos de estudios (solicitudes para realizar en otro sector)
+		// 5) Pedidos de estudios (vía Agenda — misma persistencia que Internación)
 		for (const item of listaPedidosEstudios) {
-			const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
-			const codPractica = Number(tipo.IdPractica) || 0;
-			if (codPractica <= 0) {
-				const e = new Error(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
-				e.statusCode = 400;
-				throw e;
-			}
-			const urgRaw = String(item?.estadoUrgencia || 'Normal').trim();
-			const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
-			const sectorReceptor = _padSectorPedido(item?.idSectorReceptor);
-			if (!String(item?.idSectorReceptor || '').trim()) {
-				const e = new Error(
-					`El sector receptor es obligatorio para el pedido "${String(tipo.DescPractica || '').trim()}"`,
-				);
-				e.statusCode = 400;
-				throw e;
-			}
-			const pedRows = await executeQuery(
-				`INSERT INTO dbo.imPedidosEstudios (
-					FechaPedido, NotasObservacion, ValorProfesional, IdVisita, IdPractica,
-					IdProtocolo, EstadoUrgencia, IdSectorSolicitante, IdSectorReceptor, IdTipoPedido
-				) VALUES (
-					@p0, @p1, @p2, @p3, @p4,
-					0, @p5, @p6, @p7, @p8
-				);
-				SELECT SCOPE_IDENTITY() AS IdPedido`,
-				[
-					{ value: now, type: 'DateTime' },
-					{ value: _s(item?.notas, 5000), type: 'VarChar' },
-					{ value: matriculaMedico, type: 'Int' },
-					{ value: numeroVisita, type: 'Int' },
-					{ value: codPractica, type: 'Int' },
-					{ value: urgencia, type: 'VarChar' },
-					{ value: _padSectorPedido(sectorSolicitante), type: 'VarChar' },
-					{ value: sectorReceptor, type: 'VarChar' },
-					{ value: Number(tipo.IdTipoPedido), type: 'Int' },
-				],
-			);
-			const idPedido = Number(pedRows[0]?.IdPedido) || 0;
-			if (idPedido <= 0) {
-				const e = new Error('No se pudo registrar el pedido de estudio');
-				e.statusCode = 500;
-				throw e;
-			}
-			creados.pedidosEstudios.push(idPedido);
+			const creado = await estudiosService.crearPedido({
+				idVisita: numeroVisita,
+				matriculaSolicitante: matriculaMedico,
+				sectorSolicitante,
+				idTipoPedido: item?.idTipoPedido,
+				idSectorReceptor: item?.idSectorReceptor,
+				notas: item?.notas,
+				estadoUrgencia: item?.estadoUrgencia,
+				fechaPedido: now,
+			});
+			creados.pedidosEstudios.push(creado.idPedido);
 		}
 
 		// 5) UPDATE imInterCtrlFrecuente (controles RAC del turno)
@@ -2192,48 +2145,14 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
  * Catálogo de sectores/servicios receptores para pedidos de estudios (imServicios).
  */
 async function listarSectoresReceptorEstudios() {
-	const rows = await executeQuery(
-		`SELECT RTRIM(LTRIM(Valor)) AS valor, RTRIM(LTRIM(Descripcion)) AS descripcion,
-		        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
-		 FROM dbo.imServicios
-		 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
-		 ORDER BY Descripcion`,
-	);
-	return rows.map((r) => ({
-		valor: String(r.valor || '').trim(),
-		descripcion: String(r.descripcion || '').trim(),
-		prefijos: String(r.prefijosPractica || '')
-			.split(',')
-			.map((s) => s.trim())
-			.filter(Boolean),
-	}));
+	return estudiosService.listarSectoresReceptor();
 }
 
 /**
  * Búsqueda de tipos de pedidos/estudios en imTiposPedidosEstudios.
  */
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
-	const term = String(q || '').trim();
-	const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
-	if (term.length < 2) return [];
-	const like = `%${term}%`;
-	const rows = await executeQuery(
-		`SELECT TOP ${lim}
-		        IdTipoPedido,
-		        RTRIM(LTRIM(DescPractica)) AS descripcion,
-		        IdPractica AS idPractica
-		 FROM dbo.imTiposPedidosEstudios
-		 WHERE DescPractica LIKE @p0
-		    OR CAST(IdPractica AS VARCHAR(20)) LIKE @p0
-		    OR CAST(IdTipoPedido AS VARCHAR(20)) LIKE @p0
-		 ORDER BY DescPractica`,
-		[{ value: like, type: 'VarChar' }],
-	);
-	return rows.map((r) => ({
-		idTipoPedido: r.IdTipoPedido,
-		descripcion: r.descripcion,
-		idPractica: r.idPractica,
-	}));
+	return estudiosService.buscarTiposPedidosEstudios({ q, limit });
 }
 
 /**
@@ -2509,43 +2428,33 @@ async function obtenerDetalleAtencionTurno(idTurno) {
 			};
 		});
 
-		const pedRows = await executeQuery(
-			`SELECT pe.IdPedido, pe.FechaPedido, pe.IdTipoPedido, pe.IdPractica,
-			        LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS DescPractica,
-			        pe.NotasObservacion, pe.EstadoUrgencia,
-			        LTRIM(RTRIM(ISNULL(pe.IdSectorReceptor, ''))) AS SectorReceptor,
-			        LTRIM(RTRIM(ISNULL(srv.Descripcion, ISNULL(secRec.Descripcion, '')))) AS SectorReceptorNombre
-			 FROM dbo.imPedidosEstudios pe
-			 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdTipoPedido = pe.IdTipoPedido
-			 LEFT JOIN dbo.imServicios srv ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
-			 LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
-			 WHERE pe.IdVisita = @p0
-			 ORDER BY pe.IdPedido`,
-			[{ value: numeroVisita, type: 'Int' }],
-		);
-		pedidosEstudiosDetalle = (pedRows || []).map((row) => {
+		const pedMapped = await estudiosService.listarPorVisita(numeroVisita);
+		pedidosEstudiosDetalle = (pedMapped || []).map((row) => {
 			const fp = row.FechaPedido;
 			let fechaPedido = null;
 			if (fp instanceof Date && !Number.isNaN(fp.getTime())) {
 				fechaPedido = fp.toISOString();
+			} else if (row.FechaPedidoISO) {
+				fechaPedido = String(row.FechaPedidoISO);
 			} else if (fp) {
 				fechaPedido = String(fp);
 			}
-			const desc = String(row.DescPractica || '').trim();
-			const cod = Number(row.IdPractica) || 0;
-			const sector = String(row.SectorReceptor || '').trim();
 			return {
-				idPedido: Number(row.IdPedido) || 0,
-				idTipoPedido: Number(row.IdTipoPedido) || 0,
-				codigoPractica: cod,
-				descripcion: desc || (cod > 0 ? `Estudio ${cod}` : '—'),
-				sectorReceptor: sector,
-				sectorReceptorNombre: String(row.SectorReceptorNombre || '').trim() || null,
-				estadoUrgencia: row.EstadoUrgencia
-					? String(row.EstadoUrgencia).trim()
-					: null,
-				notas: row.NotasObservacion ? String(row.NotasObservacion).trim() : null,
+				idPedido: row.IdPedido,
+				idTipoPedido: row.IdTipoPedido || 0,
+				codigoPractica: row.CodigoPractica || 0,
+				descripcion:
+					row.PracticaSolicitada ||
+					(row.CodigoPractica > 0 ? `Estudio ${row.CodigoPractica}` : '—'),
+				sectorReceptor: row.SectorReceptor || '',
+				sectorReceptorNombre: row.ServicioDescripcion || row.SectorReceptorNombre || null,
+				estadoUrgencia: row.EstadoUrgencia,
+				notas: row.NotasObservacion,
 				fechaPedido,
+				cumplido: !!row.Cumplido,
+				idProtocolo: row.IdProtocolo || 0,
+				textoResultado: row.TextoResultado,
+				fechaResultado: row.FechaResultado || null,
 			};
 		});
 	}

@@ -13,6 +13,28 @@
 const permisosService = require('../services/permisos.service');
 const matriz = require('../utils/permisos');
 
+async function _resolverPermisosReq(req) {
+	let permisos = [];
+	try {
+		const r = await permisosService.permisosDeUsuario(req.valorPersonal);
+		permisos = Array.isArray(r) ? r : r?.permisos || [];
+	} catch (e) {
+		console.warn('[requirePermiso] permisosDeUsuario falló:', e.message);
+	}
+
+	if (!permisos.length && req.rolNombre) {
+		permisos = matriz.permisosDeRol(req.rolNombre);
+	}
+	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
+	if (rn === 'ADMIN') {
+		permisos = matriz.permisosDeRol('ADMIN');
+	}
+	if (rn === 'SUPER_ADMIN') {
+		permisos = matriz.permisosDeRol('SUPER_ADMIN');
+	}
+	return permisos;
+}
+
 function requirePermiso(codigo) {
 	if (!codigo || typeof codigo !== 'string') {
 		throw new Error('requirePermiso: se requiere código de permiso');
@@ -23,26 +45,7 @@ function requirePermiso(codigo) {
 				return res.status(401).json({ success: false, mensaje: 'No autorizado' });
 			}
 
-			let permisos = [];
-			try {
-				const r = await permisosService.permisosDeUsuario(req.valorPersonal);
-				permisos = Array.isArray(r) ? r : r?.permisos || [];
-			} catch (e) {
-				console.warn('[requirePermiso] permisosDeUsuario falló:', e.message);
-			}
-
-			// Fallback a matriz hardcoded por rol (JWT) si BD no respondió
-			if (!permisos.length && req.rolNombre) {
-				permisos = matriz.permisosDeRol(req.rolNombre);
-			}
-			// ADMIN: siempre matriz completa (garantiza gestión tipo administrativo)
-			const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
-			if (rn === 'ADMIN') {
-				permisos = matriz.permisosDeRol('ADMIN');
-			}
-			if (rn === 'SUPER_ADMIN') {
-				permisos = matriz.permisosDeRol('SUPER_ADMIN');
-			}
+			const permisos = await _resolverPermisosReq(req);
 
 			if (permisosService.tienePermiso(permisos, codigo)) {
 				req.permisos = permisos;
@@ -58,4 +61,32 @@ function requirePermiso(codigo) {
 	};
 }
 
-module.exports = { requirePermiso };
+/** Pasa si el usuario tiene al menos uno de los códigos. */
+function requireAnyPermiso(...codigos) {
+	const lista = codigos.filter((c) => typeof c === 'string' && c);
+	if (!lista.length) {
+		throw new Error('requireAnyPermiso: se requiere al menos un código');
+	}
+	return async function (req, res, next) {
+		try {
+			if (!req.auth) {
+				return res.status(401).json({ success: false, mensaje: 'No autorizado' });
+			}
+			const permisos = await _resolverPermisosReq(req);
+			const ok = lista.some((c) => permisosService.tienePermiso(permisos, c));
+			if (ok) {
+				req.permisos = permisos;
+				return next();
+			}
+			return res.status(403).json({
+				success: false,
+				mensaje: `Permiso requerido: ${lista.join(' o ')}`,
+			});
+		} catch (e) {
+			console.error('[requireAnyPermiso] error:', e.message);
+			return res.status(500).json({ success: false, mensaje: 'Error verificando permisos' });
+		}
+	};
+}
+
+module.exports = { requirePermiso, requireAnyPermiso };
