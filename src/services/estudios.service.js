@@ -165,7 +165,9 @@ const FROM_PEDIDO = `
   LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
   LEFT JOIN dbo.imServicios srv ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
   LEFT JOIN dbo.imProtocolosResultados pr ON pr.IdProtocolo = pe.IdProtocolo AND pe.IdProtocolo > 0
-  LEFT JOIN dbo.imFacPracticas fac ON fac.Valor = pe.IdProtocolo AND pe.IdProtocolo > 0
+  LEFT JOIN dbo.imFacPracticas fac ON pe.IdProtocolo > 0 AND (
+    fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
+  )
   LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
   LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
   LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
@@ -577,11 +579,8 @@ async function cumplirPedido({
 		const idProtocolo = Number(resIns.recordset?.[0]?.IdProtocolo) || 0;
 		if (idProtocolo <= 0) throw _httpError('No se pudo crear el resultado', 500);
 
-		const reqFac = new sql.Request(tx);
-		await reqFac.query(`SET IDENTITY_INSERT dbo.imFacPracticas ON`);
-
+		// Valor es IDENTITY — no insertar Valor explícito (IDENTITY_INSERT OFF).
 		const reqInsFac = new sql.Request(tx);
-		reqInsFac.input('valor', sql.Int, idProtocolo);
 		reqInsFac.input('visita', sql.Int, numeroVisita);
 		reqInsFac.input('practica', sql.Int, practica);
 		reqInsFac.input('fechaC', sql.Int, fechaClarion);
@@ -589,27 +588,28 @@ async function cumplirPedido({
 		reqInsFac.input('sector', sql.VarChar(4), sectorFac);
 		reqInsFac.input('codOp', sql.Int, codOp);
 		reqInsFac.input('idPac', sql.Int, idPaciente > 0 ? idPaciente : null);
-		await reqInsFac.query(`
+		reqInsFac.input('idProt', sql.Int, idProtocolo);
+		const facIns = await reqInsFac.query(`
 			INSERT INTO dbo.imFacPracticas (
-				Valor, Numero, NumeroVisita, TipoPractica, Practica,
+				Numero, NumeroVisita, TipoPractica, Practica,
 				CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
 				ValorSector, FechaPrograma, HoraPrograma, CodOperador,
 				FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
-				NroInforme, NroAutorizacion, IdPaciente
+				NroInforme, NroAutorizacion, IdPaciente, IdProtocolo
 			) VALUES (
-				@valor, 0, @visita, 'NO', @practica,
+				0, @visita, 'NO', @practica,
 				1, @fechaC, @horaC, 0,
 				@sector, @fechaC, @horaC, @codOp,
 				@fechaC, @horaC, 0, 2, 2, 0,
-				0, '', @idPac
+				0, '', @idPac, @idProt
 			);
+			SELECT SCOPE_IDENTITY() AS Valor;
 		`);
-
-		const reqOff = new sql.Request(tx);
-		await reqOff.query(`SET IDENTITY_INSERT dbo.imFacPracticas OFF`);
+		const valorFac = Number(facIns.recordset?.[0]?.Valor) || 0;
+		if (valorFac <= 0) throw _httpError('No se pudo registrar la práctica', 500);
 
 		const reqProf = new sql.Request(tx);
-		reqProf.input('valor', sql.Int, idProtocolo);
+		reqProf.input('valor', sql.Int, valorFac);
 		reqProf.input('mat', sql.Int, matricula);
 		reqProf.input('codOp', sql.Int, codOp);
 		reqProf.input('fechaC', sql.Int, fechaClarion);
@@ -642,12 +642,6 @@ async function cumplirPedido({
 	} catch (err) {
 		try {
 			await tx.rollback();
-		} catch {
-			/* ignore */
-		}
-		try {
-			const off = new sql.Request(pool);
-			await off.query(`SET IDENTITY_INSERT dbo.imFacPracticas OFF`);
 		} catch {
 			/* ignore */
 		}
