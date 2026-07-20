@@ -54,8 +54,9 @@ function rowToSqlConfig(row) {
 	if (!empresaRowHasSqlConnection(empresa)) {
 		// SaaS: cada empresa tiene su SQL en MySQL Empresas — nunca mezclar con .env DB_*.
 		if (authCentral) {
+			const id = empresa.IDEMPRESA ?? '?';
 			const err = new Error(
-				`Falta conexión SQL en Empresas (ID ${empresa.IDEMPRESA ?? '?'}): DbServer, DbName, DbUser y DbPasswordEnc`,
+				`Falta conexión SQL en Empresas (ID ${id}): completá DbServer, DbName, DbUser y contraseña (DbPassword o DbPasswordEnc).`,
 			);
 			err.code = 'TENANT_DB_NOT_CONFIGURED';
 			throw err;
@@ -64,7 +65,7 @@ function rowToSqlConfig(row) {
 			return envDefaultConfig();
 		}
 		const err = new Error(
-			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y DbPasswordEnc (o DbPassword en texto)',
+			'Falta conexión SQL en Empresas: DbServer, DbName, DbUser y contraseña (DbPassword o DbPasswordEnc)',
 		);
 		err.code = 'TENANT_DB_NOT_CONFIGURED';
 		throw err;

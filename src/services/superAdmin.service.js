@@ -368,7 +368,11 @@ async function probarConexionEmpresa(idEmpresa) {
 
 /** Prueba una conexión SQL con las credenciales tipeadas (sin guardarlas en Empresas). */
 async function probarConexionDatos(body = {}) {
-	const row = {
+	const { loadEmpresaConnectionRow } = require('../config/tenantDb');
+	const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
+
+	let row = {
+		IDEMPRESA: body.idEmpresa != null ? Number(body.idEmpresa) : undefined,
 		DbServer: body.dbServer,
 		DbPort: body.dbPort,
 		DbInstance: body.dbInstance,
@@ -376,9 +380,53 @@ async function probarConexionDatos(body = {}) {
 		DbUser: body.dbUser,
 		DbPassword: body.dbPassword,
 	};
-	if (!String(row.DbServer || '').trim() || !String(row.DbName || '').trim() || !String(row.DbUser || '').trim()) {
-		return { ok: false, error: 'Completá servidor, base de datos y usuario para probar la conexión' };
+
+	const pwdTyped = String(body.dbPassword || '').trim();
+	const idEmp = body.idEmpresa != null ? Number(body.idEmpresa) : NaN;
+
+	// Si no tipearon password, reutilizar la guardada (Enc) de la empresa y
+	// sobrescribir solo los campos del formulario que vengan completos.
+	if (!pwdTyped && Number.isFinite(idEmp) && idEmp > 0) {
+		try {
+			const saved = await loadEmpresaConnectionRow(idEmp);
+			if (saved) {
+				row = {
+					...saved,
+					DbServer: String(body.dbServer || '').trim() || saved.DbServer,
+					DbPort:
+						body.dbPort != null && body.dbPort !== ''
+							? body.dbPort
+							: saved.DbPort,
+					DbInstance:
+						body.dbInstance != null && String(body.dbInstance).trim() !== ''
+							? body.dbInstance
+							: saved.DbInstance,
+					DbName: String(body.dbName || '').trim() || saved.DbName,
+					DbUser: String(body.dbUser || '').trim() || saved.DbUser,
+					DbPassword: saved.DbPassword,
+					DbPasswordEnc: saved.DbPasswordEnc,
+				};
+			}
+		} catch (e) {
+			console.warn('[probarConexionDatos] no se pudo cargar conexión guardada:', e.message);
+		}
 	}
+
+	if (!String(row.DbServer || '').trim() || !String(row.DbName || '').trim() || !String(row.DbUser || '').trim()) {
+		return {
+			ok: false,
+			error: 'Completá servidor, base de datos y usuario para probar la conexión',
+		};
+	}
+
+	if (!empresaRowHasSqlConnection(row)) {
+		return {
+			ok: false,
+			error:
+				'Falta la contraseña SQL. Ingresala en el formulario para probar, o guardá la conexión primero y volvé a probar.',
+		};
+	}
+
 	try {
 		await testTenantConnection(row);
 		return { ok: true };
