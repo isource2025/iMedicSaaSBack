@@ -42,9 +42,24 @@ async function obtenerDestinatariosSectorReceptor(idSectorReceptor, excluirValor
     SELECT DISTINCT pw.ValorPersonal
     FROM dbo.imPersonalSectores ps
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = ps.idPersonal
-    WHERE UPPER(LTRIM(RTRIM(ps.idSector))) = @p0
-      AND ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
+    LEFT JOIN dbo.imSectores sec ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ps.idSector))
+    LEFT JOIN dbo.imServicios srv ON UPPER(LTRIM(RTRIM(srv.Valor))) = @p0
+    WHERE ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
       AND pw.ValorPersonal <> @p1
+      AND (
+        UPPER(LTRIM(RTRIM(ps.idSector))) = @p0
+        OR (
+          srv.Valor IS NOT NULL
+          AND UPPER(LTRIM(RTRIM(ISNULL(sec.Descripcion, '')))) = UPPER(LTRIM(RTRIM(ISNULL(srv.Descripcion, ''))))
+        )
+        OR (
+          UPPER(LTRIM(RTRIM(ISNULL(sec.Descripcion, '')))) LIKE '%OFTAL%'
+          AND (
+            @p0 LIKE 'OFT%'
+            OR UPPER(LTRIM(RTRIM(ISNULL(srv.Descripcion, '')))) LIKE '%OFTAL%'
+          )
+        )
+      )
     `,
 		[
 			{ value: sector, type: 'VarChar' },
