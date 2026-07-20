@@ -320,12 +320,30 @@ async function crearPedido({
 	const idPedido = Number(pedRows[0]?.IdPedido) || 0;
 	if (idPedido <= 0) throw _httpError('No se pudo registrar el pedido de estudio', 500);
 
-	return {
+	const result = {
 		idPedido,
 		idTipoPedido: Number(tipo.IdTipoPedido),
 		descripcion: String(tipo.DescPractica || '').trim(),
 		idPractica: codPractica,
 	};
+
+	// Campanita: avisar a profesionales del sector receptor (imPersonalSectores).
+	try {
+		const notificacionesPedidos = require('./notificacionesPedidos.service');
+		void notificacionesPedidos.notificarPedidoSectorReceptor({
+			idPedido,
+			idVisita: numeroVisita,
+			idTipoPedido: result.idTipoPedido,
+			idSectorReceptor,
+			descripcionPractica: result.descripcion,
+			estadoUrgencia: urgencia,
+			matriculaSolicitante: matricula,
+		});
+	} catch (err) {
+		console.warn('[estudios] notif sector omitida:', err.message || err);
+	}
+
+	return result;
 }
 
 async function listarPorVisita(idVisita) {
