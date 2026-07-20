@@ -14,6 +14,7 @@ const adjuntosService = require('./adjuntos.service');
 const evolucionesService = require('./evoluciones.service');
 const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
+const estudiosService = require('./estudios.service');
 
 function normalizeLike(value) {
   return `%${String(value || '').trim().replace(/\s+/g, '%')}%`;
@@ -504,14 +505,20 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           pr.CodOperador AS CodOperadorResultado,
           LTRIM(RTRIM(ISNULL(opRes.ApellidoNombre, ''))) AS OperadorResultadoNombre,
           fprof.Matricula AS MatriculaRealizador,
-          LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
+          LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre,
+          toma.Matricula AS MatriculaToma,
+          LTRIM(RTRIM(ISNULL(tomaPer.ApellidoNombre, ''))) AS NombreToma
         FROM dbo.imPedidosEstudios pe
         LEFT JOIN dbo.imProtocolosResultados pr ON pe.IdProtocolo = pr.IdProtocolo AND pe.IdProtocolo > 0
         LEFT JOIN dbo.imPersonal sol ON sol.Matricula = pe.ValorProfesional
         LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
-        LEFT JOIN dbo.imFacPracticas fac ON fac.Valor = pe.IdProtocolo AND pe.IdProtocolo > 0
+        LEFT JOIN dbo.imFacPracticas fac ON pe.IdProtocolo > 0 AND (
+          fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
+        )
         LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
         LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
+        LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
+        LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
         OUTER APPLY (
           SELECT TOP 1 Descripcion FROM dbo.imNomenclador WHERE IDPractica = pe.IdPractica
         ) nom
@@ -557,7 +564,15 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
     const matriculaReal =
       e.MatriculaRealizador != null && Number(e.MatriculaRealizador) > 0
         ? Number(e.MatriculaRealizador)
-        : null;
+        : e.MatriculaToma != null && Number(e.MatriculaToma) > 0
+          ? Number(e.MatriculaToma)
+          : null;
+    const quienHizo =
+      String(e.RealizadorNombre || '').trim() ||
+      String(e.NombreToma || '').trim() ||
+      String(e.OperadorResultadoNombre || '').trim() ||
+      '';
+    const resultadoPlain = estudiosService.rtfToPlain(e.ResultadoEstudio || '');
     return {
       id: e.IdPedido,
       IdPedido: e.IdPedido,
@@ -579,11 +594,11 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
       MedicoSolicitanteNombre: e.MedicoSolicitanteNombre || '',
       matriculaRealizador: matriculaReal,
       MatriculaRealizador: matriculaReal,
-      realizadorNombre: e.RealizadorNombre || '',
-      RealizadorNombre: e.RealizadorNombre || '',
+      realizadorNombre: quienHizo,
+      RealizadorNombre: quienHizo,
       operadorResultadoNombre: e.OperadorResultadoNombre || '',
-      resultadoEstudio: e.ResultadoEstudio || '',
-      ResultadoEstudio: e.ResultadoEstudio || '',
+      resultadoEstudio: resultadoPlain,
+      ResultadoEstudio: resultadoPlain,
       nroProtocolo: e.NroProtocolo != null ? String(e.NroProtocolo) : '',
       NroProtocolo: e.NroProtocolo != null ? String(e.NroProtocolo) : '',
       estadoResultado: e.EstadoResultado != null ? String(e.EstadoResultado) : '',
