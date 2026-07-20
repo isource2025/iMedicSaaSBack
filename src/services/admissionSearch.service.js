@@ -253,9 +253,43 @@ async function _profesionalesPorPracticas(valoresPractica) {
 		const nombre = String(r.ProfesionalNombre || '').trim() || `Mat. ${r.Matricula}`;
 		const funcion = String(r.FuncionDescripcion || '').trim();
 		const etiqueta = funcion ? `${nombre} (${funcion})` : nombre;
-		map.get(valor).push(etiqueta);
+		map.get(valor).push({
+			nombre,
+			matricula: Number(r.Matricula) || null,
+			funcion: Number(r.Funcion) || null,
+			funcionDescripcion: funcion || null,
+			etiqueta,
+		});
 	}
 	return map;
+}
+
+/** Solicitantes de pedidos cumplidos (estudios/IC) indexados por IdProtocolo y Valor fac. */
+async function _solicitantesPedidosPorVisita(numeroVisita) {
+	const rows = await executeQuery(
+		`
+      SELECT
+        pe.IdPedido,
+        pe.IdProtocolo,
+        pe.ValorProfesional AS Matricula,
+        LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))) AS Nombre
+      FROM dbo.imPedidosEstudios pe
+      LEFT JOIN dbo.imPersonal per ON per.Matricula = pe.ValorProfesional
+      WHERE pe.IdVisita = @p0 AND pe.IdProtocolo IS NOT NULL AND pe.IdProtocolo > 0
+    `,
+		[{ value: numeroVisita, type: 'Int' }],
+	).catch(() => []);
+
+	const byProtocolo = new Map();
+	for (const r of rows || []) {
+		const idProt = Number(r.IdProtocolo) || 0;
+		const nombre = String(r.Nombre || '').trim();
+		const matricula = Number(r.Matricula) || 0;
+		if (idProt <= 0 || !nombre) continue;
+		const item = { nombre, matricula: matricula > 0 ? matricula : null, idPedido: Number(r.IdPedido) || null };
+		byProtocolo.set(idProt, item);
+	}
+	return byProtocolo;
 }
 
 async function _medicoDelTurnoPorVisita(numeroVisita) {
@@ -286,6 +320,15 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 	const nomenclador = await getPracticasNomencladorResolver();
 	const descSql = _sqlDescripcionPractica(nomenclador);
 	const medicoTurno = await _medicoDelTurnoPorVisita(numeroVisita);
+	const solicitantesPorProt = await _solicitantesPedidosPorVisita(numeroVisita);
+
+	const hasIdProtCol = await executeQuery(
+		`SELECT CASE WHEN COL_LENGTH('dbo.imFacPracticas', 'IdProtocolo') IS NULL THEN 0 ELSE 1 END AS ok`,
+	)
+		.then((r) => Number(r?.[0]?.ok) === 1)
+		.catch(() => false);
+
+	const idProtSelect = hasIdProtCol ? 'fp.IdProtocolo,' : 'CAST(NULL AS INT) AS IdProtocolo,';
 
 	const rows = await executeQuery(
 		`
@@ -305,7 +348,9 @@ async function obtenerPracticasPorVisita(numeroVisita) {
         fp.Autorizada,
         fp.CodOperador,
         fp.NroInforme,
-        fp.NroAutorizacion
+        fp.NroAutorizacion,
+        ${idProtSelect}
+        fp.Valor AS ValorFac
       FROM dbo.imFacPracticas fp
       WHERE fp.NumeroVisita = @p0
       ORDER BY fp.FechaPractica DESC, fp.HoraPracticaInicio DESC, fp.Valor DESC
@@ -317,11 +362,35 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 
 	return (rows || []).map((r) => {
 		const valor = Number(r.Valor);
+		const idProt = Number(r.IdProtocolo) || 0;
 		const profFact = profMap.get(valor) || [];
 		const horaPractica =
 			_clarionHoraHm(r.HoraPracticaInicio) || medicoTurno?.horaSalida || null;
-		// Priorizar siempre el médico asignado al turno (imTurnos.Profesional)
-		const profesionales = medicoTurno?.nombre ? [medicoTurno.nombre] : profFact;
+
+		const solicitante =
+			(idProt > 0 && solicitantesPorProt.get(idProt)) ||
+			solicitantesPorProt.get(valor) ||
+			null;
+
+		const realizadoresNombres = profFact.map((p) => p.etiqueta);
+		// Fallback: médico del turno solo si no hay profesionales en la práctica
+		if (!realizadoresNombres.length && medicoTurno?.nombre) {
+			const solMat = solicitante?.matricula != null ? Number(solicitante.matricula) : null;
+			const mismoQueSolicita =
+				solMat != null && Number(medicoTurno.matricula) === solMat;
+			if (!solicitante || !mismoQueSolicita) {
+				realizadoresNombres.push(medicoTurno.nombre);
+			}
+		}
+
+		const partes = [];
+		if (solicitante?.nombre) partes.push(`Solicita: ${solicitante.nombre}`);
+		if (realizadoresNombres.length) {
+			partes.push(
+				`${solicitante?.nombre ? 'Realizó' : 'Prof.'}: ${realizadoresNombres.join(', ')}`,
+			);
+		}
+
 		return {
 			Valor: valor,
 			NumeroVisita: Number(r.NumeroVisita),
@@ -339,9 +408,12 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 			CodOperador: r.CodOperador,
 			NroInforme: r.NroInforme,
 			NroAutorizacion: r.NroAutorizacion,
+			IdProtocolo: idProt > 0 ? idProt : null,
 			MatriculaMedicoTurno: medicoTurno?.matricula ?? null,
-			Profesionales: profesionales.join(' · '),
-			ProfesionalesLista: profesionales,
+			SolicitanteNombre: solicitante?.nombre || null,
+			Realizadores: realizadoresNombres,
+			Profesionales: partes.join(' · '),
+			ProfesionalesLista: partes,
 		};
 	});
 }
