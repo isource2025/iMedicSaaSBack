@@ -12,6 +12,7 @@ const medicacionControlService = require('./medicacionControl.service');
 const laboratoriosService = require('./laboratorios-simple.service');
 const adjuntosService = require('./adjuntos.service');
 const evolucionesService = require('./evoluciones.service');
+const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
 
 function normalizeLike(value) {
@@ -93,12 +94,10 @@ async function buscarAdmisiones({
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
   const offset = (safePage - 1) * safeLimit;
 
-  const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn();
-  if (!labVisCol) {
-    throw new Error(
-      'imHCExamenesLabCabecera: falta columna NumeroVisita o IdPaciente para contar laboratorios. Ejecute la migración SQL integral en producción.'
-    );
-  }
+  const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn().catch(() => null);
+  const labCntSql = labVisCol
+    ? `(SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios`
+    : `CAST(0 AS INT) AS CntLaboratorios`;
 
   const countQuery = `
     SELECT COUNT(1) AS total
@@ -136,11 +135,11 @@ async function buscarAdmisiones({
       (SELECT COUNT(1) FROM dbo.imFacpracticas fp WHERE fp.NumeroVisita = v.NumeroVisita) AS CntPracticas,
       (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
       (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
-      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios,
-      (SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab2
-        WHERE lab2.${labVisCol} = v.NumeroVisita
-        AND NULLIF(LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))), '') IS NOT NULL
-        AND LTRIM(RTRIM(CAST(lab2.NroProtocolo AS VARCHAR(200)))) <> '0') AS CntProtocolos,
+      /* iMedicAD: Estudios = imPedidosEstudios.IdVisita (= NumeroVisita) */
+      (SELECT COUNT(1) FROM dbo.imPedidosEstudios pe WHERE pe.IdVisita = v.NumeroVisita) AS CntEstudios,
+      ${labCntSql},
+      /* iMedicAD: Protocolos clínicos = HCProtocolosPtes.NumeroVisita */
+      (SELECT COUNT(1) FROM dbo.HCProtocolosPtes hp WHERE hp.NumeroVisita = v.NumeroVisita) AS CntProtocolos,
       (SELECT COUNT(1) FROM dbo.imPedidosEstudiosAdjuntos adj WHERE adj.NumeroVisita = v.NumeroVisita) AS CntAdjuntos,
       (SELECT COUNT(1) FROM dbo.imHCEvolucion ev WHERE ev.IdVisita = v.NumeroVisita) AS CntEvoluciones
     FROM imVisita v
@@ -359,6 +358,8 @@ async function exportarAdmisionCompleta(numeroVisita) {
     practicasLaboratorio,
     evolucionesMedicas,
     adjuntos,
+    estudios,
+    protocolos,
   ] = await Promise.all([
     obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
     indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => []),
@@ -367,6 +368,8 @@ async function exportarAdmisionCompleta(numeroVisita) {
     laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []),
     evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
     adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []),
+    obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []),
+    protocolosService.listarPorVisita(numeroVisita).catch(() => []),
   ]);
   const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
@@ -382,6 +385,8 @@ async function exportarAdmisionCompleta(numeroVisita) {
     medicamentos,
     indicaciones,
     evolucionesMedicas,
+    estudios,
+    protocolos,
   };
 }
 
@@ -468,6 +473,142 @@ function filterLabs(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(toYmd(r.FechaExamen), fechaInicio, fechaFin, exportAll));
 }
 
+/**
+ * Paridad iMedicAD: pedidos de estudios por visita (imPedidosEstudios.IdVisita = NumeroVisita)
+ * + resultados (imProtocolosResultados) + adjuntos de la visita.
+ */
+async function obtenerEstudiosPorVisitaAd(numeroVisita) {
+  const nv = Number(numeroVisita);
+  if (!Number.isFinite(nv) || nv <= 0) return [];
+
+  const [pedidos, adjuntos] = await Promise.all([
+    executeQuery(
+      `
+        SELECT
+          pe.IdPedido,
+          pe.FechaPedido,
+          pe.NotasObservacion AS PedidoEstudio,
+          pe.IdProtocolo,
+          pe.EstadoUrgencia,
+          pe.IdTipoPedido,
+          pe.IdPractica,
+          pe.ValorProfesional AS MatriculaSolicitante,
+          LTRIM(RTRIM(ISNULL(sol.ApellidoNombre, ''))) AS MedicoSolicitanteNombre,
+          LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS PracticaDescripcion,
+          pr.IdProtocolo AS ProtocoloResultadoId,
+          pr.FechaResultado,
+          pr.FechaCarga,
+          pr.TextoProtocolo AS ResultadoEstudio,
+          pr.NroProtocolo,
+          pr.Estado AS EstadoResultado,
+          pr.CodOperador AS CodOperadorResultado,
+          LTRIM(RTRIM(ISNULL(opRes.ApellidoNombre, ''))) AS OperadorResultadoNombre,
+          fprof.Matricula AS MatriculaRealizador,
+          LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
+        FROM dbo.imPedidosEstudios pe
+        LEFT JOIN dbo.imProtocolosResultados pr ON pe.IdProtocolo = pr.IdProtocolo AND pe.IdProtocolo > 0
+        LEFT JOIN dbo.imPersonal sol ON sol.Matricula = pe.ValorProfesional
+        LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
+        LEFT JOIN dbo.imFacPracticas fac ON fac.Valor = pe.IdProtocolo AND pe.IdProtocolo > 0
+        LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
+        LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
+        OUTER APPLY (
+          SELECT TOP 1 Descripcion FROM dbo.imNomenclador WHERE IDPractica = pe.IdPractica
+        ) nom
+        WHERE pe.IdVisita = @param0
+        ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC
+      `,
+      [{ value: nv }],
+    ).catch(() => []),
+    executeQuery(
+      `
+        SELECT
+          IdAdjunto,
+          NumeroVisita,
+          IdProtocolo,
+          Patch,
+          PatchServidor,
+          Descripcion,
+          Fecha
+        FROM dbo.imPedidosEstudiosAdjuntos
+        WHERE NumeroVisita = @param0
+      `,
+      [{ value: nv }],
+    ).catch(() => []),
+  ]);
+
+  const adjList = adjuntos || [];
+  return (pedidos || []).map((e) => {
+    const idProt = e.IdProtocolo != null ? Number(e.IdProtocolo) : 0;
+    const adjuntosDelEstudio = adjList.filter((adj) => {
+      if (idProt > 0) return Number(adj.IdProtocolo) === idProt;
+      return !adj.IdProtocolo || Number(adj.IdProtocolo) === 0;
+    });
+    const fechaPedido =
+      e.FechaPedido instanceof Date
+        ? e.FechaPedido.toISOString()
+        : e.FechaPedido
+          ? String(e.FechaPedido)
+          : null;
+    const matriculaSol =
+      e.MatriculaSolicitante != null && Number(e.MatriculaSolicitante) > 0
+        ? Number(e.MatriculaSolicitante)
+        : null;
+    const matriculaReal =
+      e.MatriculaRealizador != null && Number(e.MatriculaRealizador) > 0
+        ? Number(e.MatriculaRealizador)
+        : null;
+    return {
+      id: e.IdPedido,
+      IdPedido: e.IdPedido,
+      fechaPedido,
+      FechaPedido: fechaPedido,
+      pedidoEstudio: e.PedidoEstudio || '',
+      PedidoEstudio: e.PedidoEstudio || '',
+      practicaDescripcion: e.PracticaDescripcion || '',
+      PracticaDescripcion: e.PracticaDescripcion || '',
+      idProtocolo: idProt > 0 ? idProt : null,
+      IdProtocolo: idProt > 0 ? idProt : null,
+      estadoUrgencia: e.EstadoUrgencia ? String(e.EstadoUrgencia).trim() : '',
+      EstadoUrgencia: e.EstadoUrgencia ? String(e.EstadoUrgencia).trim() : '',
+      idTipoPedido: e.IdTipoPedido != null ? Number(e.IdTipoPedido) : null,
+      /* Profesionales Clarion: sin columnas nuevas */
+      matriculaSolicitante: matriculaSol,
+      MatriculaSolicitante: matriculaSol,
+      medicoSolicitanteNombre: e.MedicoSolicitanteNombre || '',
+      MedicoSolicitanteNombre: e.MedicoSolicitanteNombre || '',
+      matriculaRealizador: matriculaReal,
+      MatriculaRealizador: matriculaReal,
+      realizadorNombre: e.RealizadorNombre || '',
+      RealizadorNombre: e.RealizadorNombre || '',
+      operadorResultadoNombre: e.OperadorResultadoNombre || '',
+      resultadoEstudio: e.ResultadoEstudio || '',
+      ResultadoEstudio: e.ResultadoEstudio || '',
+      nroProtocolo: e.NroProtocolo != null ? String(e.NroProtocolo) : '',
+      NroProtocolo: e.NroProtocolo != null ? String(e.NroProtocolo) : '',
+      estadoResultado: e.EstadoResultado != null ? String(e.EstadoResultado) : '',
+      fechaResultado: e.FechaResultado || null,
+      FechaResultado: e.FechaResultado || null,
+      adjuntos: adjuntosDelEstudio,
+      cantidadAdjuntos: adjuntosDelEstudio.length,
+    };
+  });
+}
+
+function filterEstudiosAd(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => {
+    const ymd = toYmd(r.fechaPedido) || toYmd(r.FechaPedido) || toYmd(r.FechaResultado);
+    return inDateRange(ymd, fechaInicio, fechaFin, exportAll);
+  });
+}
+
+function filterProtocolosClinicos(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => {
+    const ymd = toYmd(r.Fecha) || toYmd(r.fecha);
+    return inDateRange(ymd, fechaInicio, fechaFin, exportAll);
+  });
+}
+
 function filterAdjuntosMeta(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => {
     const ymd = toYmd(r.FechaCarga) || toYmd(r.Fecha);
@@ -518,7 +659,8 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     prac: sections.includes('practicas'),
     med: sections.includes('medicamentos'),
     evo: sections.includes('evoluciones'),
-    lab: sections.includes('estudios') || sections.includes('protocolos'),
+    est: sections.includes('estudios'),
+    prot: sections.includes('protocolos'),
     adj: sections.includes('adjuntos'),
   };
 
@@ -528,9 +670,10 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     indicacionesRaw,
     practicasRaw,
     medicamentos,
-    practicasLaboratorio,
     evolucionesMedicas,
     adjuntos,
+    estudiosRaw,
+    protocolosRaw,
   ] = await Promise.all([
     need.hc ? obtenerHCIngresoPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.ind
@@ -538,11 +681,12 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
       : Promise.resolve([]),
     need.prac ? obtenerPracticasPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.med ? medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
-    need.lab ? laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.evo
       ? evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => [])
       : Promise.resolve([]),
     need.adj ? adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.est ? obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.prot ? protocolosService.listarPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
   ]);
   const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
@@ -591,16 +735,12 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     out.evolucionesMedicas = filterEvoluciones(ev, fechaInicio, fechaFin, exportAll);
   }
 
-  const labsFiltered = filterLabs(practicasLaboratorio, fechaInicio, fechaFin, exportAll);
-
   if (sections.includes('estudios')) {
-    out.practicas = out.practicas || {};
-    out.practicas.laboratorios = labsFiltered;
+    out.estudios = filterEstudiosAd(estudiosRaw, fechaInicio, fechaFin, exportAll);
   }
 
   if (sections.includes('protocolos')) {
-    const prot = labsFiltered.map(slimLabRow);
-    out.protocolos = prot;
+    out.protocolos = filterProtocolosClinicos(protocolosRaw, fechaInicio, fechaFin, exportAll);
   }
 
   if (sections.includes('adjuntos')) {

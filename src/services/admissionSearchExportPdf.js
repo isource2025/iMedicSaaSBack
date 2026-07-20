@@ -700,8 +700,60 @@ async function buildSelectiveExportPdf(payload) {
       });
     }
 
+    if (payload.estudios && payload.estudios.length) {
+      sectionTitle(doc, 'Estudios solicitados');
+      payload.estudios.forEach((ex, ei) => {
+        ensureSpace(doc, 40);
+        const titulo =
+          str(ex.PracticaDescripcion || ex.practicaDescripcion) ||
+          str(ex.PedidoEstudio || ex.pedidoEstudio) ||
+          `Pedido #${str(ex.IdPedido || ex.id || ei + 1)}`;
+        const fecha = str(ex.FechaPedido || ex.fechaPedido).slice(0, 19);
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(`${titulo} — ${fecha}`, {
+          width: contentWidth(doc),
+        });
+        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
+        const pedidoTxt = str(ex.PedidoEstudio || ex.pedidoEstudio);
+        if (pedidoTxt) bodyParagraph(doc, pedidoTxt);
+        const resultado = str(ex.ResultadoEstudio || ex.resultadoEstudio);
+        if (resultado) {
+          doc.font('Helvetica-Bold').fontSize(8).text('Resultado', { width: contentWidth(doc) });
+          bodyParagraph(doc, resultado.slice(0, 2000));
+        }
+        doc.moveDown(0.15);
+      });
+    }
+
+    if (payload.protocolos && payload.protocolos.length) {
+      sectionTitle(doc, 'Protocolos clínicos');
+      payload.protocolos.forEach((p) => {
+        ensureSpace(doc, 36);
+        const tipo = str(p.tipoDescripcion || p.tipoProtocolo || p.TipoEstudio) || 'Protocolo';
+        const nro =
+          p.numeroProtocolo != null ? String(p.numeroProtocolo) : str(p.Protocolo) || '—';
+        const fecha = str(p.fecha || p.FechaExamen).slice(0, 19);
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(9)
+          .fillColor('#0f172a')
+          .text(`${tipo} · N° ${nro} — ${fecha}`, { width: contentWidth(doc) });
+        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
+        if (p.diagnosticoPre) bodyParagraph(doc, `Dx pre: ${str(p.diagnosticoPre)}`);
+        if (p.diagnosticoPos) bodyParagraph(doc, `Dx pos: ${str(p.diagnosticoPos)}`);
+        if (p.tecnica) bodyParagraph(doc, `Técnica: ${str(p.tecnica)}`);
+        if (Array.isArray(p.practicas) && p.practicas.length) {
+          const names = p.practicas
+            .map((x) => str(x.descripcion || x.codigoPractica))
+            .filter(Boolean)
+            .join(', ');
+          if (names) bodyParagraph(doc, `Prácticas: ${names}`);
+        }
+        doc.moveDown(0.1);
+      });
+    }
+
     if (payload.practicas && payload.practicas.laboratorios && payload.practicas.laboratorios.length) {
-      sectionTitle(doc, 'Estudios solicitados (laboratorio)');
+      sectionTitle(doc, 'Laboratorio (análisis)');
       payload.practicas.laboratorios.forEach((ex) => {
         ensureSpace(doc, 48);
         doc.font('Helvetica-Bold').fontSize(9).text(`${str(ex.TipoEstudio)} — ${str(ex.FechaExamen)} ${str(ex.HoraExamen)}`, {
@@ -740,31 +792,6 @@ async function buildSelectiveExportPdf(payload) {
         }
         doc.moveDown(0.25);
       });
-    }
-
-    if (payload.protocolos && payload.protocolos.length) {
-      sectionTitle(doc, 'Protocolos');
-      const left = doc.page.margins.left;
-      const w = contentWidth(doc);
-      const c3 = (w - 12) / 3;
-      let rowTop = doc.y;
-      payload.protocolos.forEach((p, n) => {
-        const col = n % 3;
-        if (col === 0) {
-          ensureSpace(doc, 34);
-          rowTop = doc.y;
-        }
-        const x = left + col * (c3 + 4);
-        const line = `Prot. ${str(p.Protocolo)} · ${str(p.TipoEstudio)}\n${str(p.FechaExamen)} · ${str(p.Laboratorio)}`;
-        doc.fontSize(7).fillColor('#1e293b').text(safeText(line, 400), x, rowTop, { width: c3 - 4, height: 28, ellipsis: true });
-        if (col === 2) {
-          doc.y = rowTop + 30;
-        }
-      });
-      if (payload.protocolos.length % 3 !== 0) {
-        doc.y = rowTop + 30;
-      }
-      doc.moveDown(0.2);
     }
 
     if (adjuntosResueltos.length) {
