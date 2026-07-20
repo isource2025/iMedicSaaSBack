@@ -209,7 +209,8 @@ async function crearUsuario(req, res) {
 		const data = await superAdminService.crearUsuarioEmpresa(idEmpresa, req.body);
 		res.status(201).json({ success: true, data });
 	} catch (e) {
-		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+		const code = e.statusCode || 500;
+		res.status(code).json({ success: false, mensaje: e.message || 'Error al crear usuario' });
 	}
 }
 

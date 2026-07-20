@@ -387,6 +387,38 @@ async function vincularUsuarioEmpresa(idEmpresa, valorPersonal) {
 	);
 }
 
+/**
+ * MySQL ER_DUP_ENTRY (1062) → HTTP 409 con mensaje usable.
+ */
+function mapMysqlDuplicateToHttp(err) {
+	const errno = err?.errno ?? err?.code;
+	if (errno !== 1062 && err?.code !== 'ER_DUP_ENTRY') return null;
+	const msg = String(err?.sqlMessage || err?.message || '').toLowerCase();
+	if (msg.includes('nombrered') || msg.includes('nombre_red') || msg.includes('usuario')) {
+		return {
+			statusCode: 409,
+			message: 'Ya existe un usuario con ese nombre de acceso. Elegí otro.',
+		};
+	}
+	if (msg.includes('password')) {
+		return {
+			statusCode: 409,
+			message:
+				'Esa contraseña ya está en uso por otro usuario (la base exige contraseñas únicas). Elegí otra.',
+		};
+	}
+	if (msg.includes('documento') || msg.includes('dni') || msg.includes('numero')) {
+		return {
+			statusCode: 409,
+			message: 'Ya existe un usuario con ese número de documento.',
+		};
+	}
+	return {
+		statusCode: 409,
+		message: 'Ya existe un registro con esos datos. Revisá usuario, contraseña o documento.',
+	};
+}
+
 async function crearUsuarioEmpresa(idEmpresa, body) {
 	const emp = Number(idEmpresa);
 	const { nombreRed, password, apellido, nombres, numeroDocumento, legajo, codOperador, idRol, sectores } = body;
@@ -407,7 +439,9 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		[emp, nombreRed.trim()],
 	);
 	if (dup.length) {
-		const e = new Error('Ya existe un usuario con ese nombre de acceso en esta empresa. Elegí otro.');
+		const e = new Error(
+			`Ya existe el usuario "${nombreRed.trim()}" en esta empresa. Elegí otro nombre de acceso o editá el existente.`,
+		);
 		e.statusCode = 409;
 		throw e;
 	}
@@ -432,11 +466,21 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		valores.push(esNumerica(colMap, 'FechaActual') ? fechaClarionHoy() : new Date());
 	}
 	completarObligatorias(colMap, campos, valores);
-	await mysqlExec(
-		`INSERT INTO \`imPassword\` (${campos.map((c) => `\`${c}\``).join(', ')})
+	try {
+		await mysqlExec(
+			`INSERT INTO \`imPassword\` (${campos.map((c) => `\`${c}\``).join(', ')})
      VALUES (${campos.map(() => '?').join(', ')})`,
-		valores,
-	);
+			valores,
+		);
+	} catch (err) {
+		const mapped = mapMysqlDuplicateToHttp(err);
+		if (mapped) {
+			const e = new Error(mapped.message);
+			e.statusCode = mapped.statusCode;
+			throw e;
+		}
+		throw err;
+	}
 
 	await asegurarFichaPersonal(emp, valorPersonal, { apellido, nombres, numeroDocumento, idRol });
 	await vincularUsuarioEmpresa(emp, valorPersonal);

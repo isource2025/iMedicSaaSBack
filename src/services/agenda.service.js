@@ -1747,6 +1747,7 @@ async function cerrarTurno({
 	porIdTurno,
 	procedimientos,
 	pedidosEstudios,
+	pedidosInterconsultas,
 }) {
 	const m = _validarMatricula(matricula);
 	const id = Number(idTurno);
@@ -1825,10 +1826,14 @@ async function cerrarTurno({
 		practicasExtra: [],
 		profesionalesExtra: [],
 		pedidosEstudios: [],
+		pedidosInterconsultas: [],
 	};
 
 	const listaProcedimientos = Array.isArray(procedimientos) ? procedimientos : [];
 	const listaPedidosEstudios = Array.isArray(pedidosEstudios) ? pedidosEstudios : [];
+	const listaPedidosInterconsultas = Array.isArray(pedidosInterconsultas)
+		? pedidosInterconsultas
+		: [];
 	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
 	const now = new Date();
 
@@ -1982,6 +1987,21 @@ async function cerrarTurno({
 			creados.pedidosEstudios.push(creado.idPedido);
 		}
 
+		// 5b) Interconsultas (tipo 33 → servicio destino)
+		const interconsultasService = require('./interconsultas.service');
+		for (const item of listaPedidosInterconsultas) {
+			const creado = await interconsultasService.crear({
+				idVisita: numeroVisita,
+				matriculaSolicitante: matriculaMedico,
+				sectorSolicitante,
+				idSectorReceptor: item?.idSectorReceptor,
+				motivo: item?.motivo,
+				estadoUrgencia: item?.estadoUrgencia,
+			});
+			const idPed = Number(creado?.IdPedido || creado?.IdInterconsulta) || 0;
+			if (idPed > 0) creados.pedidosInterconsultas.push(idPed);
+		}
+
 		// 5) UPDATE imInterCtrlFrecuente (controles RAC del turno)
 		await executeQuery(
 			`UPDATE dbo.imInterCtrlFrecuente SET NumeroVisita = @p0 WHERE IdTurno = @p1`,
@@ -2027,10 +2047,16 @@ async function cerrarTurno({
 			valoresPracticasProcedimientos: creados.practicasExtra,
 			procedimientosRegistrados: creados.practicasExtra.length,
 			pedidosEstudiosRegistrados: creados.pedidosEstudios.length,
+			pedidosInterconsultasRegistrados: creados.pedidosInterconsultas.length,
 		};
 	} catch (err) {
 		// Rollback best-effort en orden inverso
 		try {
+			for (const idPed of creados.pedidosInterconsultas.slice().reverse()) {
+				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
+					{ value: idPed, type: 'Int' },
+				]);
+			}
 			for (const idPed of creados.pedidosEstudios.slice().reverse()) {
 				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
 					{ value: idPed, type: 'Int' },
