@@ -178,7 +178,14 @@ const refrescarSesion = async (req, res) => {
 	const t0 = Date.now();
 	try {
 		const refresh = req.cookies?.[sessionService.COOKIE_REFRESH];
-		const access = req.cookies?.[sessionService.COOKIE_ACCESS];
+		let access = req.cookies?.[sessionService.COOKIE_ACCESS];
+		// Fallback: SPA cross-origin puede mandar Bearer aunque la cookie access no viaje.
+		if (!access) {
+			const h = req.headers.authorization;
+			if (h && typeof h === 'string' && h.startsWith('Bearer ')) {
+				access = h.slice(7).trim() || null;
+			}
+		}
 		if (!refresh || !access) {
 			return res.status(401).json({ success: false, mensaje: 'Sesión expirada' });
 		}
@@ -190,6 +197,26 @@ const refrescarSesion = async (req, res) => {
 		}
 		const rotated = await sessionService.rotateRefresh(decoded.sessionId, refresh);
 		if (!rotated) {
+			// Carrera entre pestañas: otra ya rotó el refresh. Si la sesión sigue viva, re-firmar access.
+			const still = decoded.sessionId
+				? await sessionService.getSession(decoded.sessionId)
+				: null;
+			if (still) {
+				const idleMinutes = await sessionService.getIdleTimeoutMinutes(still.IdEmpresa);
+				const idleMs = idleMinutes * 60 * 1000;
+				const last = new Date(still.LastActivityAt).getTime();
+				if (Date.now() - last <= idleMs && new Date(still.ExpiresAt).getTime() > Date.now()) {
+					await sessionService.touchSession(decoded.sessionId);
+					const newAccess = sessionService.signAccessToken({
+						usuario: decoded.usuario,
+						rol: decoded.rol,
+						idEmpresa: decoded.idEmpresa,
+						sessionId: decoded.sessionId,
+					});
+					sessionService.setAccessCookie(res, newAccess);
+					return res.json({ success: true, mensaje: 'Sesión renovada' });
+				}
+			}
 			sessionService.clearAuthCookies(res);
 			return res.status(401).json({ success: false, mensaje: 'Sesión expirada' });
 		}

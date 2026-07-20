@@ -79,10 +79,15 @@ function signAccessToken(payload) {
 
 function cookieOptions(maxAgeMs) {
 	const secure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
+	// Front y API en hosts distintos (Railway/Vercel): hace falta None+Secure.
+	// En local (http) usamos Lax; None sin Secure lo rechazan los browsers.
+	const raw = String(process.env.COOKIE_SAMESITE || '').toLowerCase();
+	let sameSite = raw === 'strict' || raw === 'lax' || raw === 'none' ? raw : secure ? 'none' : 'lax';
+	if (sameSite === 'none' && !secure) sameSite = 'lax';
 	return {
 		httpOnly: true,
 		secure,
-		sameSite: 'strict',
+		sameSite,
 		path: '/',
 		...(maxAgeMs != null ? { maxAge: maxAgeMs } : {}),
 	};
@@ -94,9 +99,25 @@ function setAuthCookies(res, accessToken, refreshToken) {
 	res.cookie(COOKIE_REFRESH, refreshToken, { ...cookieOptions(maxRefresh), path: '/api/auth' });
 }
 
+function setAccessCookie(res, accessToken) {
+	const maxRefresh = SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000;
+	res.cookie(COOKIE_ACCESS, accessToken, cookieOptions(maxRefresh));
+}
+
 function clearAuthCookies(res) {
-	res.clearCookie(COOKIE_ACCESS, { path: '/' });
-	res.clearCookie(COOKIE_REFRESH, { path: '/api/auth' });
+	const base = cookieOptions();
+	res.clearCookie(COOKIE_ACCESS, {
+		path: '/',
+		secure: base.secure,
+		sameSite: base.sameSite,
+		httpOnly: true,
+	});
+	res.clearCookie(COOKIE_REFRESH, {
+		path: '/api/auth',
+		secure: base.secure,
+		sameSite: base.sameSite,
+		httpOnly: true,
+	});
 }
 
 async function createSession({ valorPersonal, username, idEmpresa, ip, userAgent, jwtPayload }) {
@@ -203,8 +224,10 @@ module.exports = {
 	getIdleTimeoutMinutes,
 	signAccessToken,
 	setAuthCookies,
+	setAccessCookie,
 	clearAuthCookies,
 	createSession,
+	getSession,
 	validateSession,
 	revokeSession,
 	revokeByRefreshToken,
