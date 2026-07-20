@@ -220,7 +220,7 @@ async function resolverTipoPedidoEstudio(idTipoPedido) {
 	return rows[0];
 }
 
-async function listarSectoresReceptor() {
+async function listarSectoresReceptor({ valorPersonal } = {}) {
 	const rows = await executeQuery(
 		`SELECT RTRIM(LTRIM(Valor)) AS valor, RTRIM(LTRIM(Descripcion)) AS descripcion,
 		        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
@@ -228,7 +228,7 @@ async function listarSectoresReceptor() {
 		 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
 		 ORDER BY Descripcion`,
 	);
-	return rows.map((r) => ({
+	const all = rows.map((r) => ({
 		valor: String(r.valor || '').trim(),
 		descripcion: String(r.descripcion || '').trim(),
 		prefijos: String(r.prefijosPractica || '')
@@ -236,6 +236,54 @@ async function listarSectoresReceptor() {
 			.map((s) => s.trim())
 			.filter(Boolean),
 	}));
+
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(vp) || vp <= 0) return all;
+
+	const userSecs = await executeQuery(
+		`
+    SELECT
+      RTRIM(LTRIM(ps.idSector)) AS idSector,
+      RTRIM(LTRIM(ISNULL(s.Descripcion, ''))) AS descripcion
+    FROM dbo.imPersonalSectores ps
+    LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idSector))
+    WHERE ps.idPersonal = @p0
+    `,
+		[{ value: vp, type: 'Int' }],
+	).catch(() => []);
+
+	if (!userSecs?.length) return [];
+
+	const matched = all.filter((srv) =>
+		userSecs.some((us) => _sectorUsuarioCoincideServicio(us, srv)),
+	);
+	return matched;
+}
+
+/**
+ * Empata imSectores (login / imPersonalSectores) con imServicios.Valor receptor.
+ */
+function _sectorUsuarioCoincideServicio(userSec, srv) {
+	const id = String(userSec?.idSector || '')
+		.trim()
+		.toUpperCase();
+	const desc = String(userSec?.descripcion || '')
+		.trim()
+		.toUpperCase();
+	const v = String(srv?.valor || '')
+		.trim()
+		.toUpperCase();
+	const d = String(srv?.descripcion || '')
+		.trim()
+		.toUpperCase();
+	if (!v) return false;
+	if (id && id === v) return true;
+	if (desc && d && desc === d) return true;
+	if (desc && d && (desc.includes(d) || d.includes(desc))) return true;
+	if (/OFTAL|OFT\b|^OFT/.test(`${id} ${desc}`)) {
+		if (v.startsWith('OFT') || d.includes('OFTAL')) return true;
+	}
+	return false;
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {

@@ -177,7 +177,12 @@ async function buscarTipos(req, res) {
 
 async function listarSectores(req, res) {
 	try {
-		const data = await estudiosService.listarSectoresReceptor();
+		const soloMios =
+			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
+			String(req.query.soloMios || '').toLowerCase() === 'true';
+		const data = await estudiosService.listarSectoresReceptor({
+			valorPersonal: soloMios ? req.valorPersonal : null,
+		});
 		return res.json({ success: true, data });
 	} catch (err) {
 		return _err(res, err);
