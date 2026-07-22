@@ -38,11 +38,21 @@ function plainToRtf(plain) {
 	);
 }
 
+/**
+ * RTF Clarion / RichEdit → texto plano legible (sin fonttbl / generator / basura).
+ */
 function rtfToPlain(rtf) {
 	if (rtf == null) return '';
 	let s = String(rtf);
-	if (!s.includes('\\rtf')) return s.trim();
-	s = s.replace(/\\par[d]?/gi, '\n');
+	const esRtf = /\\rtf\d?/i.test(s) || /\{\\rtf/i.test(s) || /\\fonttbl/i.test(s) || /\\par\b/i.test(s);
+	if (!esRtf) return _limpiarBasuraTextoResultado(s).trim();
+
+	// Quitar grupos de metadatos anidados (fonttbl, colortbl, generator, etc.)
+	s = _stripRtfMetaGroups(s);
+
+	s = s.replace(/\\par[d]?\b/gi, '\n');
+	s = s.replace(/\\line\b/gi, '\n');
+	s = s.replace(/\\tab\b/gi, '\t');
 	s = s.replace(/\\'[0-9a-fA-F]{2}/g, (m) => {
 		try {
 			return String.fromCharCode(parseInt(m.slice(2), 16));
@@ -50,9 +60,82 @@ function rtfToPlain(rtf) {
 			return '';
 		}
 	});
-	s = s.replace(/\\[a-z]+\d* ?/gi, '');
+	s = s.replace(/\\u(-?\d+)\??/g, (_, n) => {
+		const code = Number(n);
+		if (!Number.isFinite(code)) return '';
+		const c = code < 0 ? code + 65536 : code;
+		return c > 0 ? String.fromCharCode(c) : '';
+	});
+	// Control words: \b, \f0, \fs18, \ansi, etc.
+	s = s.replace(/\\[a-z]+(-?\d+)?[ ]?/gi, '');
+	// Destinos / escapes residuales (\*, \{, etc.)
+	s = s.replace(/\\[^a-zA-Z\n]?/g, '');
 	s = s.replace(/[{}]/g, '');
-	return s.replace(/\n{3,}/g, '\n\n').trim();
+	s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+	return _limpiarBasuraTextoResultado(s).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Elimina {\\fonttbl...}, {\\*\\generator...}, etc. por balance de llaves. */
+function _stripRtfMetaGroups(input) {
+	let s = String(input || '');
+	const markers = [
+		'\\fonttbl',
+		'\\colortbl',
+		'\\stylesheet',
+		'\\listtable',
+		'\\listoverridetable',
+		'\\info',
+		'\\generator',
+		'\\*\\generator',
+		'\\*\\themedata',
+		'\\*\\colorschememapping',
+		'\\*\\latentstyles',
+		'\\*\\expandedcolortbl',
+		'\\*\\datastore',
+	];
+	for (let pass = 0; pass < 30; pass++) {
+		let removed = false;
+		for (const marker of markers) {
+			const idx = s.toLowerCase().indexOf(marker.toLowerCase());
+			if (idx < 0) continue;
+			// Buscar '{' que abre este grupo
+			let start = idx;
+			while (start > 0 && s[start] !== '{') start -= 1;
+			if (s[start] !== '{') continue;
+			let depth = 0;
+			let end = -1;
+			for (let i = start; i < s.length; i++) {
+				if (s[i] === '{') depth += 1;
+				else if (s[i] === '}') {
+					depth -= 1;
+					if (depth === 0) {
+						end = i;
+						break;
+					}
+				}
+			}
+			if (end < 0) continue;
+			s = s.slice(0, start) + s.slice(end + 1);
+			removed = true;
+			break;
+		}
+		if (!removed) break;
+	}
+	return s;
+}
+
+function _limpiarBasuraTextoResultado(texto) {
+	return String(texto || '')
+		.replace(/Times New Roman;?/gi, '')
+		.replace(/Microsoft Sans Serif;?/gi, '')
+		.replace(/\bArial;/gi, '')
+		.replace(/\\\*?Msftedit[^\n]*/gi, '')
+		.replace(/\*?Msftedit[^\n;]*;?/gi, '')
+		.replace(/^\s*;+\s*$/gm, '')
+		.replace(/^[;\s]+/gm, '')
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
 }
 
 function _fechaHoraArgentina(fechaPedido, isoFallback, horaFallback) {
