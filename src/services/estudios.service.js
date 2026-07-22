@@ -314,10 +314,23 @@ const SELECT_PEDIDO = `
   LTRIM(RTRIM(ISNULL(pac.Sexo, ''))) AS PacienteSexo,
   LTRIM(RTRIM(ISNULL(sx.Descripcion, ''))) AS PacienteSexoDescripcion,
   LTRIM(RTRIM(ISNULL(cob.RazonSocial, ''))) AS ObraSocial,
-  LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) AS ValorHabitacionCama,
-  LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSectorCama,
+  CASE
+    WHEN LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) <> '' THEN LTRIM(RTRIM(hc.ValorHabitacionCama))
+    WHEN LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) <> '' THEN LTRIM(RTRIM(v.VALORHABITACIONCAMA))
+    ELSE LTRIM(RTRIM(ISNULL(mov.MovCama, '')))
+  END AS ValorHabitacionCama,
+  CASE
+    WHEN LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) <> '' THEN LTRIM(RTRIM(hc.ValorSector))
+    WHEN LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) <> '' THEN LTRIM(RTRIM(v.VALORSECTOR))
+    ELSE LTRIM(RTRIM(ISNULL(mov.MovSector, '')))
+  END AS ValorSectorCama,
   LTRIM(RTRIM(ISNULL(secCama.Descripcion, ''))) AS SectorCamaNombre,
-  CASE WHEN ISNULL(hc.NumeroVisita, 0) > 0 THEN 1 ELSE 0 END AS UbicacionCama
+  CASE
+    WHEN ISNULL(hc.NumeroVisita, 0) > 0 THEN 1
+    WHEN LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) <> '' THEN 1
+    WHEN LTRIM(RTRIM(ISNULL(mov.MovCama, ''))) <> '' THEN 1
+    ELSE 0
+  END AS UbicacionCama
 `;
 
 const FROM_PEDIDO = `
@@ -341,7 +354,25 @@ const FROM_PEDIDO = `
   LEFT JOIN dbo.imSexo sx ON sx.Valor = pac.Sexo
   LEFT JOIN dbo.imClientes cob ON cob.Valor = pac.NumeroCuenta
   LEFT JOIN dbo.imHabitacionCamas hc ON hc.NumeroVisita = pe.IdVisita AND ISNULL(hc.NumeroVisita, 0) > 0
-  LEFT JOIN dbo.imSectores secCama ON LTRIM(RTRIM(secCama.Valor)) = LTRIM(RTRIM(hc.ValorSector))
+  OUTER APPLY (
+    SELECT TOP 1
+      LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS MovCama,
+      LTRIM(RTRIM(ISNULL(m.ValorSector, ''))) AS MovSector
+    FROM dbo.imVisitaMovimiento m
+    WHERE m.NumeroVisita = pe.IdVisita
+      AND (
+        LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) <> ''
+        OR LTRIM(RTRIM(ISNULL(m.ValorSector, ''))) <> ''
+      )
+    ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
+  ) mov
+  LEFT JOIN dbo.imSectores secCama ON LTRIM(RTRIM(secCama.Valor)) = LTRIM(RTRIM(
+    CASE
+      WHEN LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) <> '' THEN hc.ValorSector
+      WHEN LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) <> '' THEN v.VALORSECTOR
+      ELSE ISNULL(mov.MovSector, '')
+    END
+  ))
 `;
 
 let _tomaTableReady = false;
