@@ -5,6 +5,7 @@ const {
 	convertirHoraAClarion,
 	fechaCalendarioArgentina,
 	horaWallArgentina,
+	partesFechaHoraArgentina,
 } = require('../utils/dateUtils');
 
 function _s(v, max) {
@@ -430,7 +431,14 @@ async function crearPedido({
 
 	const urgRaw = String(estadoUrgencia || 'Normal').trim();
 	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
-	const now = fechaPedido instanceof Date ? fechaPedido : new Date();
+	// Wall-clock Argentina: evita que Railway (UTC) guarde/muestre 3 h corridas.
+	let now;
+	if (fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())) {
+		now = fechaPedido;
+	} else {
+		const { fecha, hora } = partesFechaHoraArgentina(new Date());
+		now = new Date(`${fecha}T${hora}-03:00`);
+	}
 
 	const pedRows = await executeQuery(
 		`INSERT INTO dbo.imPedidosEstudios (
