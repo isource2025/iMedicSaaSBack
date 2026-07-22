@@ -1737,10 +1737,88 @@ async function _insertarFacPracticaConProfesional({
  * @param {Array<{idTipoPedido:number}>} [args.procedimientos] - procedimientos realizados en consultorio
  * @param {Array<{idTipoPedido:number,notas?:string,estadoUrgencia?:string}>} [args.pedidosEstudios] - pedidos de estudios
  */
+const VENTANA_EDICION_POST_CIERRE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Fecha/hora de egreso (Clarion) → epoch ms (Argentina UTC-3).
+ */
+function _msCierreDesdeClarion(fechaClarion, horaClarion) {
+	const d = convertirFechaClarionADate(Number(fechaClarion) || 0);
+	if (!d) return null;
+	const fechaIso = _isoDate(d);
+	const hs = convertirHoraClarionAString(Number(horaClarion) || 0) || '00:00:00';
+	const t = Date.parse(`${fechaIso}T${hs.slice(0, 8)}-03:00`);
+	return Number.isFinite(t) ? t : null;
+}
+
+async function _resolverEdicionPostCierre({ numeroVisita, codOperador, valorPersonal }) {
+	const nv = Number(numeroVisita) || 0;
+	if (nv <= 0) {
+		return {
+			puedeEditar: false,
+			motivoBloqueo: 'El turno no tiene visita de cierre',
+			operadorEgreso: null,
+			cerradoEn: null,
+			venceEn: null,
+		};
+	}
+	const rows = await executeQuery(
+		`SELECT TOP 1 OperadorEgreso, FECHAEGRESO, HORAEGRESO
+		 FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
+		[{ value: nv, type: 'Int' }],
+	);
+	const opEgr = Number(rows[0]?.OperadorEgreso) || 0;
+	const fe = Number(rows[0]?.FECHAEGRESO) || 0;
+	const he = Number(rows[0]?.HORAEGRESO) || 0;
+	const cerradoMs = _msCierreDesdeClarion(fe, he);
+	const venceMs = cerradoMs != null ? cerradoMs + VENTANA_EDICION_POST_CIERRE_MS : null;
+	const cerradoEn =
+		cerradoMs != null ? new Date(cerradoMs).toISOString() : null;
+	const venceEn = venceMs != null ? new Date(venceMs).toISOString() : null;
+
+	if (opEgr <= 0) {
+		return {
+			puedeEditar: false,
+			motivoBloqueo: 'No se registró quién cerró la atención',
+			operadorEgreso: null,
+			cerradoEn,
+			venceEn,
+		};
+	}
+	const sesion = [Number(codOperador) || 0, Number(valorPersonal) || 0].filter((n) => n > 0);
+	const mismoUsuario = sesion.includes(opEgr);
+	if (!mismoUsuario) {
+		return {
+			puedeEditar: false,
+			motivoBloqueo: 'Solo quien finalizó la atención puede editarla',
+			operadorEgreso: opEgr,
+			cerradoEn,
+			venceEn,
+		};
+	}
+	if (venceMs == null || Date.now() > venceMs) {
+		return {
+			puedeEditar: false,
+			motivoBloqueo: 'La ventana de edición de 24 horas ya venció',
+			operadorEgreso: opEgr,
+			cerradoEn,
+			venceEn,
+		};
+	}
+	return {
+		puedeEditar: true,
+		motivoBloqueo: null,
+		operadorEgreso: opEgr,
+		cerradoEn,
+		venceEn,
+	};
+}
+
 async function cerrarTurno({
 	matricula,
 	idTurno,
 	codOperador,
+	valorPersonal,
 	diagnostico,
 	contrato,
 	hci,
@@ -1756,7 +1834,7 @@ async function cerrarTurno({
 		e.statusCode = 400;
 		throw e;
 	}
-	const codOp = Number(codOperador) || 0;
+	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
 
 	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
 	const matriculaMedico = Number(row.Profesional) || m;
@@ -2097,6 +2175,194 @@ async function cerrarTurno({
 }
 
 /**
+ * Edita HC / agrega prácticas y pedidos a una atención ya cerrada.
+ * Solo el operador que cerró, dentro de las 24 h posteriores.
+ */
+async function actualizarAtencionPostCierre({
+	matricula,
+	idTurno,
+	codOperador,
+	valorPersonal,
+	diagnostico,
+	hci,
+	porIdTurno,
+	procedimientos,
+	pedidosEstudios,
+	pedidosInterconsultas,
+}) {
+	const m = _validarMatricula(matricula);
+	const id = Number(idTurno);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTurno inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
+	const matriculaMedico = Number(row.Profesional) || m;
+	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
+	const hs = Number(row.HoraSalida) || 0;
+	const numeroVisita = Number(row.NumeroVisita) || 0;
+	const idP = Number(row.IDPaciente) || 0;
+
+	if (st !== STATUS_ATENDIDO && !(hs > 0)) {
+		const e = new Error('La atención aún no está finalizada');
+		e.statusCode = 409;
+		throw e;
+	}
+	if (numeroVisita <= 0 || idP <= 0) {
+		const e = new Error('El turno no tiene visita asociada para editar');
+		e.statusCode = 409;
+		throw e;
+	}
+
+	const edicion = await _resolverEdicionPostCierre({
+		numeroVisita,
+		codOperador,
+		valorPersonal,
+	});
+	if (!edicion.puedeEditar) {
+		const e = new Error(edicion.motivoBloqueo || 'No se puede editar esta atención');
+		e.statusCode = 403;
+		throw e;
+	}
+
+	const detalle = await executeQuery(
+		`SELECT TOP 1 t.Sector
+		 FROM dbo.imTurnos t
+		 WHERE t.IdTurno = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+	const sector = String(detalle[0]?.Sector || '').trim().padEnd(4, ' ').slice(0, 4);
+	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
+	const fechaIso = fechaCalendarioArgentina();
+	const horaStr = horaWallArgentina(true);
+	const fechaClarion = convertirFechaAClarion(fechaIso);
+	const horaClarion = convertirHoraAClarion(horaStr);
+	const now = new Date();
+
+	const listaProcedimientos = Array.isArray(procedimientos) ? procedimientos : [];
+	const listaPedidosEstudios = Array.isArray(pedidosEstudios) ? pedidosEstudios : [];
+	const listaPedidosInterconsultas = Array.isArray(pedidosInterconsultas)
+		? pedidosInterconsultas
+		: [];
+
+	if (listaPedidosEstudios.some((p) => !String(p?.idSectorReceptor || '').trim())) {
+		const e = new Error('Cada pedido de estudio requiere sector receptor');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (
+		listaPedidosInterconsultas.some(
+			(p) => !String(p?.idSectorReceptor || '').trim() || !String(p?.motivo || '').trim(),
+		)
+	) {
+		const e = new Error('Cada interconsulta requiere servicio destino y motivo');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const diagPadded = String(diagnostico || '').trim() ? _padDiag(diagnostico) : '';
+	const h = hci || {};
+
+	if (diagPadded) {
+		await executeQuery(
+			`UPDATE dbo.imVisita SET DIAGNOSTICO = @p1 WHERE NUMEROVISITA = @p0`,
+			[
+				{ value: numeroVisita, type: 'Int' },
+				{ value: diagPadded, type: 'VarChar' },
+			],
+		);
+	}
+
+	const hciRows = await executeQuery(
+		`SELECT TOP 1 IdHCIngreso FROM dbo.imHCI
+		 WHERE NumeroVisita = @p0 ORDER BY IdHCIngreso DESC`,
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+	const idHci = Number(hciRows[0]?.IdHCIngreso) || 0;
+	if (idHci > 0 && (h.motivoConsulta != null || h.enfermedadActual != null)) {
+		await executeQuery(
+			`UPDATE dbo.imHCI
+			 SET MotivoConsulta = CASE WHEN @p1 IS NOT NULL THEN @p1 ELSE MotivoConsulta END,
+			     EnfermedadActual = CASE WHEN @p2 IS NOT NULL THEN @p2 ELSE EnfermedadActual END
+			 WHERE IdHCIngreso = @p0`,
+			[
+				{ value: idHci, type: 'Int' },
+				{
+					value: h.motivoConsulta != null ? _s(h.motivoConsulta, 500) : null,
+					type: 'VarChar',
+				},
+				{
+					value: h.enfermedadActual != null ? _s(h.enfermedadActual, 8000) : null,
+					type: 'VarChar',
+				},
+			],
+		);
+	}
+
+	const practicasExtra = [];
+	for (const item of listaProcedimientos) {
+		const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
+		const codPractica = Number(tipo.IdPractica) || 0;
+		if (codPractica <= 0) continue;
+		const extra = await _insertarFacPracticaConProfesional({
+			numeroVisita,
+			idPaciente: idP,
+			codPractica,
+			sector,
+			codOp,
+			matriculaMedico,
+			fechaClarion,
+			horaClarion,
+		});
+		practicasExtra.push(extra.valorPractica);
+	}
+
+	const pedidosCreados = [];
+	for (const item of listaPedidosEstudios) {
+		const creado = await estudiosService.crearPedido({
+			idVisita: numeroVisita,
+			matriculaSolicitante: matriculaMedico,
+			sectorSolicitante,
+			idTipoPedido: item?.idTipoPedido,
+			idSectorReceptor: item?.idSectorReceptor,
+			notas: item?.notas,
+			estadoUrgencia: item?.estadoUrgencia,
+			fechaPedido: now,
+		});
+		pedidosCreados.push(creado.idPedido);
+	}
+
+	const interconsultasService = require('./interconsultas.service');
+	const icsCreadas = [];
+	for (const item of listaPedidosInterconsultas) {
+		const creado = await interconsultasService.crear({
+			idVisita: numeroVisita,
+			matriculaSolicitante: matriculaMedico,
+			sectorSolicitante,
+			idSectorReceptor: item?.idSectorReceptor,
+			motivo: item?.motivo,
+			estadoUrgencia: item?.estadoUrgencia,
+		});
+		const idPed = Number(creado?.IdPedido || creado?.IdInterconsulta) || 0;
+		if (idPed > 0) icsCreadas.push(idPed);
+	}
+
+	await adjuntosService.vincularAdjuntosTurnoAVisita(id, numeroVisita);
+
+	return {
+		idTurno: id,
+		numeroVisita,
+		procedimientosAgregados: practicasExtra.length,
+		pedidosEstudiosAgregados: pedidosCreados.length,
+		pedidosInterconsultasAgregados: icsCreadas.length,
+		edicionPostCierre: edicion,
+	};
+}
+
+/**
  * Todos los turnos de un paciente (histórico), opcionalmente filtrados por médico.
  * @param {number} idPaciente
  * @param {{ matriculaMedico?: number }} [opciones]
@@ -2238,8 +2504,10 @@ async function buscarClientes({ q, limit = 30 }) {
 
 /**
  * Detalle completo de una atención de turno (HC, diagnóstico, RAC, adjuntos).
+ * @param {number} idTurno
+ * @param {{ codOperador?: number, valorPersonal?: number }} [opts]
  */
-async function obtenerDetalleAtencionTurno(idTurno) {
+async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 	const id = Number(idTurno);
 	if (!Number.isFinite(id) || id <= 0) {
 		const e = new Error('idTurno inválido');
@@ -2531,6 +2799,11 @@ async function obtenerDetalleAtencionTurno(idTurno) {
 		trazabilidad,
 		procedimientosRealizados,
 		pedidosEstudios: pedidosEstudiosDetalle,
+		edicionPostCierre: await _resolverEdicionPostCierre({
+			numeroVisita,
+			codOperador: opts.codOperador,
+			valorPersonal: opts.valorPersonal,
+		}),
 	};
 }
 
@@ -2549,6 +2822,7 @@ module.exports = {
 	marcarLlegada,
 	marcarIngreso,
 	cerrarTurno,
+	actualizarAtencionPostCierre,
 	buscarDiagnosticos,
 	buscarClientes,
 	buscarTiposPedidosEstudios,

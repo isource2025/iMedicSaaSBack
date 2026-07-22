@@ -193,8 +193,38 @@ async function cerrarTurno(req, res) {
 			matricula: m,
 			idTurno,
 			codOperador: _codOperadorSesion(req),
+			valorPersonal: req.valorPersonal,
 			diagnostico: body.diagnostico,
 			contrato: body.contrato,
+			hci: body.hci || null,
+			procedimientos: body.procedimientos || null,
+			pedidosEstudios: body.pedidosEstudios || null,
+			pedidosInterconsultas: body.pedidosInterconsultas || null,
+			porIdTurno: req.rolNombre !== 'MEDICO',
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function actualizarAtencionPostCierre(req, res) {
+	try {
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
+		if (m == null) return;
+		const idTurno = Number(req.params.idTurno);
+		if (req.rolNombre === 'ENFERMERO') {
+			return res
+				.status(403)
+				.json({ success: false, mensaje: 'Sólo médico o administrativo pueden editar la atención' });
+		}
+		const body = req.body || {};
+		const data = await service.actualizarAtencionPostCierre({
+			matricula: m,
+			idTurno,
+			codOperador: _codOperadorSesion(req),
+			valorPersonal: req.valorPersonal,
+			diagnostico: body.diagnostico,
 			hci: body.hci || null,
 			procedimientos: body.procedimientos || null,
 			pedidosEstudios: body.pedidosEstudios || null,
@@ -342,7 +372,10 @@ async function listarProfesionales(req, res) {
 async function obtenerDetalleAtencion(req, res) {
 	try {
 		const id = Number(req.params.idTurno);
-		const data = await service.obtenerDetalleAtencionTurno(id);
+		const data = await service.obtenerDetalleAtencionTurno(id, {
+			codOperador: _codOperadorSesion(req),
+			valorPersonal: req.valorPersonal,
+		});
 		res.json({ success: true, data });
 	} catch (e) {
 		_err(res, e);
@@ -364,6 +397,7 @@ module.exports = {
 	marcarLlegada,
 	marcarIngreso,
 	cerrarTurno,
+	actualizarAtencionPostCierre,
 	buscarDiagnosticos,
 	buscarClientes,
 	buscarTiposPedidosEstudios,

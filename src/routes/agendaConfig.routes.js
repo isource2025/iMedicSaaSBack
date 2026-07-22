@@ -203,6 +203,11 @@ router.patch(
 	requirePermiso('TURNOS.AGENDA.EDITAR'),
 	agendaCtrl.cerrarTurno,
 );
+router.patch(
+	'/:matricula/turnos/:idTurno/atencion',
+	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	agendaCtrl.actualizarAtencionPostCierre,
+);
 router.delete(
 	'/:matricula/turnos/:idTurno',
 	requirePermiso('TURNOS.AGENDA.ELIMINAR'),
