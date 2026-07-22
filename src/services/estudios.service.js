@@ -54,6 +54,37 @@ function rtfToPlain(rtf) {
 	return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function _fechaHoraArgentina(fechaPedido, isoFallback, horaFallback) {
+	let d = null;
+	if (fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())) {
+		d = fechaPedido;
+	} else if (fechaPedido != null && fechaPedido !== '') {
+		const t = Date.parse(String(fechaPedido));
+		if (Number.isFinite(t)) d = new Date(t);
+	}
+	if (!d && isoFallback) {
+		const raw = `${String(isoFallback).slice(0, 10)}T${String(horaFallback || '00:00').slice(0, 5)}:00Z`;
+		const t = Date.parse(raw);
+		if (Number.isFinite(t)) d = new Date(t);
+	}
+	if (!d) {
+		return {
+			FechaPedidoISO: isoFallback || null,
+			HoraPedido: horaFallback || null,
+		};
+	}
+	const tz = 'America/Argentina/Buenos_Aires';
+	return {
+		FechaPedidoISO: d.toLocaleDateString('en-CA', { timeZone: tz }),
+		HoraPedido: d.toLocaleTimeString('en-GB', {
+			timeZone: tz,
+			hour: '2-digit',
+			minute: '2-digit',
+			hour12: false,
+		}),
+	};
+}
+
 function mapPedidoRow(row) {
 	const idProtocolo = Number(row.IdProtocolo) || 0;
 	const cumplido = idProtocolo > 0;
@@ -61,12 +92,36 @@ function mapPedidoRow(row) {
 	const matriculaToma =
 		row.MatriculaToma != null ? Number(row.MatriculaToma) : null;
 	const tomado = Number.isFinite(matriculaToma) && matriculaToma > 0;
+	const fh = _fechaHoraArgentina(row.FechaPedido, row.FechaPedidoISO, row.HoraPedido);
+	const clase = String(row.ClasePaciente || '')
+		.trim()
+		.toUpperCase();
+	const tipoAdm = String(row.TipoAdmision || '')
+		.trim()
+		.toUpperCase();
+	let tipoAtencion = null;
+	if (clase === 'A' || tipoAdm === 'A' || /AMBUL/.test(tipoAdm)) tipoAtencion = 'AMBULATORIO';
+	else if (clase === 'I' || tipoAdm === 'I' || /INTERN/.test(tipoAdm)) tipoAtencion = 'INTERNADO';
+	else if (row.UbicacionCama) tipoAtencion = 'INTERNADO';
+	else if (Number(row.IdVisita) > 0) tipoAtencion = clase ? clase : null;
+
+	const hab = String(row.ValorHabitacionCama || '').trim();
+	const secCama = String(row.SectorCama || row.ValorSectorCama || '').trim();
+	const secCamaNom = String(row.SectorCamaNombre || '').trim();
+	let ubicacion = null;
+	if (hab || secCama) {
+		const partes = [];
+		if (secCamaNom || secCama) partes.push(secCamaNom || secCama);
+		if (hab) partes.push(`Cama ${hab}`);
+		ubicacion = partes.join(' · ');
+	}
+
 	return {
 		IdPedido: Number(row.IdPedido) || 0,
 		IdVisita: Number(row.IdVisita) || 0,
 		FechaPedido: row.FechaPedido,
-		FechaPedidoISO: row.FechaPedidoISO || null,
-		HoraPedido: row.HoraPedido || null,
+		FechaPedidoISO: fh.FechaPedidoISO,
+		HoraPedido: fh.HoraPedido,
 		IdTipoPedido: row.IdTipoPedido != null ? Number(row.IdTipoPedido) : null,
 		TipoPedidoDescripcion: row.TipoPedidoDescripcion
 			? String(row.TipoPedidoDescripcion).trim()
@@ -120,6 +175,19 @@ function mapPedidoRow(row) {
 		NombreToma: row.NombreToma ? String(row.NombreToma).trim() : null,
 		FechaToma: row.FechaToma || null,
 		EstadoWorkflow: cumplido ? 'CUMPLIDO' : tomado ? 'TOMADO' : 'PENDIENTE',
+		PacienteNombre: row.PacienteNombre ? String(row.PacienteNombre).trim() : null,
+		PacienteDocumento:
+			row.PacienteDocumento != null && String(row.PacienteDocumento).trim() !== ''
+				? String(row.PacienteDocumento).trim()
+				: null,
+		PacienteSexo: row.PacienteSexo ? String(row.PacienteSexo).trim() : null,
+		PacienteSexoDescripcion: row.PacienteSexoDescripcion
+			? String(row.PacienteSexoDescripcion).trim()
+			: null,
+		ObraSocial: row.ObraSocial ? String(row.ObraSocial).trim() : null,
+		TipoAtencion: tipoAtencion,
+		Ubicacion: ubicacion,
+		IdPaciente: row.IdPaciente != null ? Number(row.IdPaciente) : null,
 	};
 }
 
@@ -153,7 +221,19 @@ const SELECT_PEDIDO = `
   realiz.ApellidoNombre AS RealizadorNombre,
   toma.Matricula AS MatriculaToma,
   toma.FechaToma,
-  tomaPer.ApellidoNombre AS NombreToma
+  tomaPer.ApellidoNombre AS NombreToma,
+  v.IDPACIENTE AS IdPaciente,
+  LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) AS ClasePaciente,
+  LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) AS TipoAdmision,
+  LTRIM(RTRIM(ISNULL(pac.ApellidoyNombre, ''))) AS PacienteNombre,
+  pac.NumeroDocumento AS PacienteDocumento,
+  LTRIM(RTRIM(ISNULL(pac.Sexo, ''))) AS PacienteSexo,
+  LTRIM(RTRIM(ISNULL(sx.Descripcion, ''))) AS PacienteSexoDescripcion,
+  LTRIM(RTRIM(ISNULL(cob.RazonSocial, ''))) AS ObraSocial,
+  LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) AS ValorHabitacionCama,
+  LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSectorCama,
+  LTRIM(RTRIM(ISNULL(secCama.Descripcion, ''))) AS SectorCamaNombre,
+  CASE WHEN ISNULL(hc.NumeroVisita, 0) > 0 THEN 1 ELSE 0 END AS UbicacionCama
 `;
 
 const FROM_PEDIDO = `
@@ -172,6 +252,12 @@ const FROM_PEDIDO = `
   LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
   LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
   LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
+  LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = pe.IdVisita
+  LEFT JOIN dbo.imPacientes pac ON pac.IDPaciente = v.IDPACIENTE
+  LEFT JOIN dbo.imSexo sx ON sx.Valor = pac.Sexo
+  LEFT JOIN dbo.imClientes cob ON cob.Valor = pac.NumeroCuenta
+  LEFT JOIN dbo.imHabitacionCamas hc ON hc.NumeroVisita = pe.IdVisita AND ISNULL(hc.NumeroVisita, 0) > 0
+  LEFT JOIN dbo.imSectores secCama ON LTRIM(RTRIM(secCama.Valor)) = LTRIM(RTRIM(hc.ValorSector))
 `;
 
 let _tomaTableReady = false;
@@ -409,25 +495,52 @@ async function listarPorVisita(idVisita) {
 	return (rows || []).map(mapPedidoRow);
 }
 
-async function listarPendientesPorSector(sectorReceptor, { limit = 100 } = {}) {
+async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	await ensureTomaTable();
 	const sector = _padSector(sectorReceptor);
 	if (!String(sectorReceptor || '').trim()) {
 		throw _httpError('sector receptor requerido');
 	}
-	const lim = Math.min(Math.max(Number(limit) || 100, 1), 300);
+	const lim = Math.min(Math.max(Number(opts.limit) || 100, 1), 300);
+	const paciente = String(opts.paciente || opts.q || '').trim();
+	const fechaDesde = String(opts.fechaDesde || '').trim().slice(0, 10);
+	const fechaHasta = String(opts.fechaHasta || '').trim().slice(0, 10);
+	const soloIc = opts.soloInterconsultas === true || opts.categoria === 'INTERCONSULTA';
+	const soloEst = opts.soloEstudios === true || opts.categoria === 'ESTUDIO';
+
+	const params = [{ value: sector, type: 'VarChar' }];
+	let whereExtra = '';
+	if (soloIc) {
+		whereExtra += ' AND pe.IdTipoPedido = 33';
+	} else if (soloEst) {
+		whereExtra += ' AND (pe.IdTipoPedido IS NULL OR pe.IdTipoPedido <> 33)';
+	}
+	if (/^\d{4}-\d{2}-\d{2}$/.test(fechaDesde)) {
+		params.push({ value: fechaDesde, type: 'VarChar' });
+		whereExtra += ` AND CONVERT(date, pe.FechaPedido) >= CONVERT(date, @p${params.length - 1})`;
+	}
+	if (/^\d{4}-\d{2}-\d{2}$/.test(fechaHasta)) {
+		params.push({ value: fechaHasta, type: 'VarChar' });
+		whereExtra += ` AND CONVERT(date, pe.FechaPedido) <= CONVERT(date, @p${params.length - 1})`;
+	}
+	if (paciente) {
+		const like = `%${paciente}%`;
+		params.push({ value: like, type: 'VarChar' });
+		const pi = params.length - 1;
+		whereExtra += ` AND (
+		  LTRIM(RTRIM(ISNULL(pac.ApellidoyNombre, ''))) LIKE @p${pi}
+		  OR CAST(ISNULL(pac.NumeroDocumento, 0) AS VARCHAR(30)) LIKE @p${pi}
+		)`;
+	}
+
 	const rows = await executeQuery(
 		`SELECT TOP ${lim} ${SELECT_PEDIDO}
 		 ${FROM_PEDIDO}
 		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) = LTRIM(RTRIM(@p0))
 		   AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
-		   AND (pe.IdTipoPedido IS NULL OR pe.IdTipoPedido <> 33)
-		 ORDER BY
-		   CASE WHEN pe.EstadoUrgencia = 'Urgente' THEN 0
-		        WHEN pe.EstadoUrgencia = 'Medio' THEN 1
-		        ELSE 2 END,
-		   pe.FechaPedido ASC, pe.IdPedido ASC`,
-		[{ value: sector, type: 'VarChar' }],
+		   ${whereExtra}
+		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
+		params,
 	);
 	return (rows || []).map(mapPedidoRow);
 }

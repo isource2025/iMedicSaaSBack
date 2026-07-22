@@ -168,6 +168,14 @@ function mapPedidoToInterconsulta(p) {
 		Cumplido: cumplido,
 		EstadoWorkflow: p.EstadoWorkflow,
 		Origen: 'LEGACY',
+		PacienteNombre: p.PacienteNombre || null,
+		PacienteDocumento: p.PacienteDocumento || null,
+		PacienteSexo: p.PacienteSexo || null,
+		PacienteSexoDescripcion: p.PacienteSexoDescripcion || null,
+		ObraSocial: p.ObraSocial || null,
+		TipoAtencion: p.TipoAtencion || null,
+		Ubicacion: p.Ubicacion || null,
+		IdPaciente: p.IdPaciente || null,
 	};
 }
 
@@ -243,99 +251,12 @@ async function crear({
 	};
 }
 
-async function listarPendientesPorSector(sectorReceptor, { limit = 100 } = {}) {
-	await estudiosService.ensureTomaTable();
-	const sector = String(sectorReceptor || '').trim();
-	if (!sector) throw _httpError('sector receptor requerido');
-
-	const lim = Math.min(Math.max(Number(limit) || 100, 1), 300);
-	const pad = String(sector).padEnd(4, ' ').slice(0, 4);
-
-	const rows = await executeQuery(
-		`SELECT TOP ${lim}
-		  pe.IdPedido,
-		  pe.IdVisita,
-		  pe.FechaPedido,
-		  CONVERT(varchar(10), pe.FechaPedido, 23) AS FechaPedidoISO,
-		  CONVERT(varchar(5), pe.FechaPedido, 108) AS HoraPedido,
-		  pe.IdTipoPedido,
-		  LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS TipoPedidoDescripcion,
-		  pe.IdPractica AS CodigoPractica,
-		  LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS PracticaSolicitada,
-		  LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS NomencladorDescripcion,
-		  pe.NotasObservacion,
-		  pe.ValorProfesional AS MatriculaSolicitante,
-		  per.ApellidoNombre AS MedicoSolicitanteNombre,
-		  pe.IdProtocolo,
-		  pe.EstadoUrgencia,
-		  LTRIM(RTRIM(ISNULL(pe.IdSectorSolicitante, ''))) AS SectorSolicitante,
-		  secSol.Descripcion AS SectorSolicitanteNombre,
-		  LTRIM(RTRIM(ISNULL(pe.IdSectorReceptor, ''))) AS SectorReceptor,
-		  secRec.Descripcion AS SectorReceptorNombre,
-		  LTRIM(RTRIM(ISNULL(srv.Valor, ''))) AS ServicioCodigo,
-		  srv.Descripcion AS ServicioDescripcion,
-		  'INTERCONSULTA' AS CategoriaPedido,
-		  NULL AS TextoProtocolo,
-		  NULL AS FechaResultado,
-		  NULL AS PracticaFacturada,
-		  NULL AS MatriculaRealizador,
-		  NULL AS RealizadorNombre,
-		  toma.Matricula AS MatriculaToma,
-		  toma.FechaToma,
-		  tomaPer.ApellidoNombre AS NombreToma
-		 FROM dbo.imPedidosEstudios pe
-		 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdTipoPedido = pe.IdTipoPedido
-		 LEFT JOIN dbo.imNomenclador nom ON nom.IDPractica = pe.IdPractica
-		 LEFT JOIN dbo.imPersonal per ON per.Matricula = pe.ValorProfesional
-		 LEFT JOIN dbo.imSectores secSol ON LTRIM(RTRIM(secSol.Valor)) = LTRIM(RTRIM(pe.IdSectorSolicitante))
-		 LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
-		 LEFT JOIN dbo.imServicios srv ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
-		 LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
-		 LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
-		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) = LTRIM(RTRIM(@p0))
-		   AND pe.IdTipoPedido = ${ID_TIPO_INTERCONSULTA}
-		   AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
-		 ORDER BY
-		   CASE WHEN pe.EstadoUrgencia = 'Urgente' THEN 0
-		        WHEN pe.EstadoUrgencia = 'Medio' THEN 1
-		        ELSE 2 END,
-		   pe.FechaPedido ASC, pe.IdPedido ASC`,
-		[{ value: pad, type: 'VarChar' }],
-	);
-
-	return (rows || []).map((row) => {
-		const matriculaToma = row.MatriculaToma != null ? Number(row.MatriculaToma) : null;
-		const tomado = Number.isFinite(matriculaToma) && matriculaToma > 0;
-		return mapPedidoToInterconsulta({
-			IdPedido: Number(row.IdPedido),
-			IdVisita: Number(row.IdVisita),
-			FechaPedidoISO: row.FechaPedidoISO,
-			HoraPedido: row.HoraPedido,
-			IdTipoPedido: row.IdTipoPedido,
-			TipoPedidoDescripcion: row.TipoPedidoDescripcion,
-			CodigoPractica: row.CodigoPractica,
-			PracticaSolicitada: row.PracticaSolicitada,
-			NomencladorDescripcion: row.NomencladorDescripcion,
-			NotasObservacion: row.NotasObservacion,
-			MatriculaSolicitante: row.MatriculaSolicitante,
-			MedicoSolicitanteNombre: row.MedicoSolicitanteNombre,
-			IdProtocolo: 0,
-			Cumplido: false,
-			EstadoUrgencia: row.EstadoUrgencia,
-			SectorSolicitante: row.SectorSolicitante,
-			SectorSolicitanteNombre: row.SectorSolicitanteNombre,
-			SectorReceptor: row.SectorReceptor,
-			SectorReceptorNombre: row.SectorReceptorNombre,
-			ServicioCodigo: row.ServicioCodigo,
-			ServicioDescripcion: row.ServicioDescripcion,
-			TextoResultado: null,
-			FechaResultado: null,
-			Tomado: tomado,
-			MatriculaToma: tomado ? matriculaToma : null,
-			NombreToma: row.NombreToma,
-			EstadoWorkflow: tomado ? 'TOMADO' : 'PENDIENTE',
-		});
+async function listarPendientesPorSector(sectorReceptor, opts = {}) {
+	const rows = await estudiosService.listarPendientesPorSector(sectorReceptor, {
+		...opts,
+		soloInterconsultas: true,
 	});
+	return (rows || []).map((p) => mapPedidoToInterconsulta(p));
 }
 
 async function tomar({ idPedido, matricula, codOperador }) {

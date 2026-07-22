@@ -46,7 +46,13 @@ async function listarPendientes(req, res) {
 			return res.status(400).json({ success: false, mensaje: 'Query sector requerido' });
 		}
 		const limit = req.query.limit != null ? Number(req.query.limit) : 100;
-		const data = await estudiosService.listarPendientesPorSector(sector, { limit });
+		const data = await estudiosService.listarPendientesPorSector(sector, {
+			limit,
+			paciente: req.query.paciente || req.query.q,
+			fechaDesde: req.query.fechaDesde,
+			fechaHasta: req.query.fechaHasta,
+			soloEstudios: true,
+		});
 		return res.json({ success: true, data: data || [] });
 	} catch (err) {
 		console.error('[estudios] pendientes:', err.message);

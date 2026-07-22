@@ -2,16 +2,25 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
+const { requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 const interconsultasController = require('../controllers/interconsultas.controller');
 
 router.use(requireAuth, requireTenant);
 
-const ver = requirePermiso('INTERNACION.INTERCONSULTAS.VER');
-const crear = requirePermiso('INTERNACION.INTERCONSULTAS.CREAR');
+/** Bandeja agenda + internación: médicos con TURNOS.AGENDA también ven/atienden. */
+const ver = requireAnyPermiso(
+	'INTERNACION.INTERCONSULTAS.VER',
+	'TURNOS.AGENDA.VER',
+);
+const crear = requireAnyPermiso(
+	'INTERNACION.INTERCONSULTAS.CREAR',
+	'TURNOS.AGENDA.CREAR',
+	'TURNOS.AGENDA.EDITAR',
+);
 const atender = requireAnyPermiso(
 	'INTERNACION.INTERCONSULTAS.CREAR',
 	'INTERNACION.INTERCONSULTAS.EDITAR',
+	'TURNOS.AGENDA.EDITAR',
 );
 
 router.get('/sectores-destino', ver, interconsultasController.listarSectores);
