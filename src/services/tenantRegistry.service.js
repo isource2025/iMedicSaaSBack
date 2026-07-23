@@ -381,7 +381,8 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 		.input('inst', data.dbInstance || null)
 		.input('db', data.dbName || null)
 		.input('usr', data.dbUser || null)
-		.input('pwd', enc);
+		.input('pwd', enc)
+		.input('fsUrl', data.fileServerUrl != null ? String(data.fileServerUrl).trim() || null : data.FileServerUrl != null ? String(data.FileServerUrl).trim() || null : null);
 
 	const sets = [];
 	if (has('DbServer')) sets.push('DbServer = COALESCE(@srv, DbServer)');
@@ -391,6 +392,9 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 	if (has('DbUser')) sets.push('DbUser = COALESCE(@usr, DbUser)');
 	if (has('DbPasswordEnc')) {
 		sets.push('DbPasswordEnc = CASE WHEN @pwd IS NOT NULL THEN @pwd ELSE DbPasswordEnc END');
+	}
+	if (has('FileServerUrl') && (data.fileServerUrl !== undefined || data.FileServerUrl !== undefined)) {
+		sets.push('FileServerUrl = @fsUrl');
 	}
 	if (sets.length) {
 		await request.query(`

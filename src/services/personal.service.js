@@ -307,17 +307,89 @@ function normalizarInput(data) {
 	};
 }
 
-/** Verifica que una Matricula provincial no esté duplicada (ignora nulls y al propio registro) */
-async function existeMatricula(matricula, excluirValor = null) {
+/**
+ * Matrícula provincial única por especialidad (misma matrícula OK en otra especialidad).
+ */
+async function existeMatricula(matricula, excluirValor = null, valorEspecialidad = null) {
 	if (matricula == null) return false;
-	let query = `SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Matricula = @p0 AND Valor < ${ADMIN_VALOR_THRESHOLD}`;
+	let query = `
+    SELECT TOP 1 Valor FROM dbo.imPersonal
+    WHERE Matricula = @p0 AND Valor < ${ADMIN_VALOR_THRESHOLD}
+  `;
 	const params = [{ value: matricula, type: 'Int' }];
-	if (excluirValor != null) {
-		query += ` AND Valor <> @p1`;
-		params.push({ value: excluirValor, type: 'Int' });
+	if (valorEspecialidad != null && Number.isFinite(Number(valorEspecialidad))) {
+		query += ` AND ISNULL(ValorEspecialidad, -1) = @p1`;
+		params.push({ value: Number(valorEspecialidad), type: 'SmallInt' });
+		if (excluirValor != null) {
+			query += ` AND Valor <> @p2`;
+			params.push({ value: excluirValor, type: 'Int' });
+		}
+	} else {
+		query += ` AND ValorEspecialidad IS NULL`;
+		if (excluirValor != null) {
+			query += ` AND Valor <> @p1`;
+			params.push({ value: excluirValor, type: 'Int' });
+		}
 	}
 	const rows = await executeQuery(query, params);
 	return rows.length > 0;
+}
+
+/** Si existe índice único solo en Matricula, lo reemplaza por (Matricula, ValorEspecialidad). */
+let _matriculaIndexReady = false;
+async function ensureMatriculaEspecialidadUnique() {
+	if (_matriculaIndexReady) return;
+	try {
+		const idxs = await executeQuery(`
+      SELECT i.name AS IndexName, i.is_unique AS IsUnique, COL_NAME(ic.object_id, ic.column_id) AS ColName
+      FROM sys.indexes i
+      INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+      WHERE i.object_id = OBJECT_ID('dbo.imPersonal') AND i.is_unique = 1 AND i.is_primary_key = 0
+    `);
+		const byIndex = new Map();
+		for (const r of idxs || []) {
+			const name = String(r.IndexName || '');
+			if (!byIndex.has(name)) byIndex.set(name, []);
+			byIndex.get(name).push(String(r.ColName || '').toLowerCase());
+		}
+		for (const [name, cols] of byIndex) {
+			if (cols.length === 1 && cols[0] === 'matricula') {
+				await executeQuery(`DROP INDEX [${name.replace(/]/g, ']]')}] ON dbo.imPersonal`);
+				console.log(`[personal] índice único ${name} (solo Matricula) eliminado`);
+			}
+		}
+		const hasPair = [...byIndex.values()].some(
+			(cols) =>
+				cols.includes('matricula') &&
+				cols.includes('valorespecialidad') &&
+				cols.length === 2,
+		);
+		if (!hasPair) {
+			const dup = await executeQuery(`
+        SELECT Matricula, ISNULL(ValorEspecialidad, -1) AS Esp, COUNT(*) AS Cnt
+        FROM dbo.imPersonal
+        WHERE Matricula IS NOT NULL AND Valor < ${ADMIN_VALOR_THRESHOLD}
+        GROUP BY Matricula, ISNULL(ValorEspecialidad, -1)
+        HAVING COUNT(*) > 1
+      `);
+			if (!dup?.length) {
+				await executeQuery(`
+          CREATE UNIQUE NONCLUSTERED INDEX IX_imPersonal_Matricula_Especialidad
+          ON dbo.imPersonal (Matricula, ValorEspecialidad)
+          WHERE Matricula IS NOT NULL AND Valor < ${ADMIN_VALOR_THRESHOLD}
+        `);
+				console.log('[personal] índice único (Matricula, ValorEspecialidad) creado');
+			} else {
+				console.warn(
+					'[personal] no se pudo crear índice (Matricula, Especialidad): hay duplicados exactos',
+					dup.length,
+				);
+			}
+		}
+	} catch (e) {
+		console.warn('[personal] ensureMatriculaEspecialidadUnique:', e.message);
+	}
+	_matriculaIndexReady = true;
 }
 
 async function crear(data) {
@@ -337,9 +409,11 @@ async function crear(data) {
 
 	if (
 		input.MatriculaProvincial != null &&
-		(await existeMatricula(input.MatriculaProvincial))
+		(await existeMatricula(input.MatriculaProvincial, null, input.ValorEspecialidad))
 	) {
-		const e = new Error('Ya existe un personal con esa matrícula provincial');
+		const e = new Error(
+			'Ya existe un personal con esa matrícula provincial en la misma especialidad',
+		);
 		e.statusCode = 409;
 		throw e;
 	}
@@ -365,12 +439,13 @@ async function crear(data) {
 		}
 	}
 
+	await ensureMatriculaEspecialidadUnique();
+
 	// Intentar hasta 5 veces por si hay carrera en MAX+1
 	let lastErr = null;
 	for (let intento = 0; intento < 5; intento++) {
 		const nuevoValor = await obtenerProximoValor();
-		// Si el usuario NO ingresó matrícula provincial, la seteamos en Valor
-		// (la tabla tiene índice único en Matricula y no admite múltiples NULL).
+		// Si el usuario NO ingresó matrícula provincial, la seteamos en Valor.
 		const matriculaFinal =
 			input.MatriculaProvincial != null ? input.MatriculaProvincial : nuevoValor;
 		try {
@@ -475,12 +550,16 @@ async function actualizar(valor, data) {
 
 	if (
 		input.MatriculaProvincial != null &&
-		(await existeMatricula(input.MatriculaProvincial, valor))
+		(await existeMatricula(input.MatriculaProvincial, valor, input.ValorEspecialidad))
 	) {
-		const e = new Error('Ya existe otro personal con esa matrícula provincial');
+		const e = new Error(
+			'Ya existe otro personal con esa matrícula provincial en la misma especialidad',
+		);
 		e.statusCode = 409;
 		throw e;
 	}
+
+	await ensureMatriculaEspecialidadUnique();
 
 	// Si no mandaron matrícula provincial, caemos al Valor para mantener la
 	// unicidad del índice (no admite múltiples NULL).

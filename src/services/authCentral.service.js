@@ -256,8 +256,28 @@ async function esSuperAdmin(username) {
 
 async function obtenerEmpresaPorId(idEmpresa) {
 	if (!isAuthCentralEnabled()) return null;
-	const rows = await query(
-		`
+	const id = Number(idEmpresa);
+	try {
+		const rows = await query(
+			`
+    SELECT
+      IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
+      Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
+      DbServer, DbPort, DbInstance, DbName, DbUser, DbPassword, DbPasswordEnc,
+      WhatsAppPhoneNumberId, WhatsAppWabaId, WhatsAppAccessTokenEnc,
+      FileServerUrl
+    FROM \`Empresas\`
+    WHERE IDEMPRESA = ?
+    LIMIT 1
+    `,
+			[id],
+		);
+		return rows[0] || null;
+	} catch (e) {
+		// Columna FileServerUrl aún no migrada
+		if (!/fileserverurl/i.test(String(e.message || ''))) throw e;
+		const rows = await query(
+			`
     SELECT
       IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
       Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
@@ -267,9 +287,10 @@ async function obtenerEmpresaPorId(idEmpresa) {
     WHERE IDEMPRESA = ?
     LIMIT 1
     `,
-		[Number(idEmpresa)],
-	);
-	return rows[0] || null;
+			[id],
+		);
+		return rows[0] || null;
+	}
 }
 
 async function obtenerTodasEmpresas() {

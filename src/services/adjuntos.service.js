@@ -4,8 +4,8 @@ const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
-const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
 let idTurnoColumnReady = false;
@@ -145,7 +145,8 @@ class AdjuntosService {
     const rutaN = this.normalizarRutaPatch(adj.RutaArchivo);
     const nombreArchivo = adj.NombreArchivo || path.basename(String(adj.RutaArchivo)) || 'adjunto';
     try {
-      const url = `${FILE_SERVER_URL}/file?path=${encodeURIComponent(rutaN)}`;
+      const fileServerUrl = await resolveFileServerUrl();
+      const url = `${fileServerUrl}/file?path=${encodeURIComponent(rutaN)}`;
       const res = await axios.get(url, {
         responseType: 'arraybuffer',
         timeout: FILE_SERVER_TIMEOUT_MS,
@@ -394,7 +395,8 @@ class AdjuntosService {
       if (adjunto.RutaArchivo) {
         try {
           const encodedPath = encodeURIComponent(adjunto.RutaArchivo);
-          const deleteUrl = `${FILE_SERVER_URL}/file?path=${encodedPath}`;
+          const fileServerUrl = await resolveFileServerUrl();
+          const deleteUrl = `${fileServerUrl}/file?path=${encodedPath}`;
 
           console.log(`🗑️ Eliminando archivo del servidor: ${adjunto.RutaArchivo}`);
 

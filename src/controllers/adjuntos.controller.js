@@ -10,8 +10,8 @@ const adjuntosService = require('../services/adjuntos.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
-const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
 /** Si el servidor HTTP de archivos no responde (timeout/red), guardar ruta absoluta del archivo en disco del backend. */
@@ -190,7 +190,8 @@ router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.sing
       formData.append('numeroVisita', numeroVisita);
       formData.append('nombrePaciente', nombrePaciente);
 
-      const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+      const fileServerUrl = await resolveFileServerUrl();
+      const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
         headers: {
           ...formData.getHeaders()
         },
@@ -214,7 +215,7 @@ router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.sing
       } else {
         await fs.unlink(req.file.path).catch(() => {});
         const msg = isFileServerNetworkError(remoteErr)
-          ? 'No se pudo contactar el servidor de archivos (timeout o red). Revise VPN/red y FILE_SERVER_URL. Si no usa servidor remoto, defina FILE_SERVER_FALLBACK_LOCAL=1 en .env para guardar en disco del backend.'
+          ? 'No se pudo contactar el servidor de archivos (timeout o red). Revise VPN/red y FileServerUrl de la empresa (o FILE_SERVER_URL). Si no usa servidor remoto, defina FILE_SERVER_FALLBACK_LOCAL=1 en .env para guardar en disco del backend.'
           : remoteErr.message || 'Error al subir archivo';
         return res.status(503).json({
           success: false,
@@ -311,7 +312,8 @@ router.post('/upload-multiple', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), up
         const fileStream = fsSync.createReadStream(file.path);
         formData.append('file', fileStream, file.originalname);
 
-        const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+        const fileServerUrl = await resolveFileServerUrl();
+        const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
           headers: {
             ...formData.getHeaders()
           },
@@ -511,7 +513,8 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
     try {
       // Construir URL manualmente para controlar la codificación
       const encodedPath = encodeURIComponent(rutaNormalizada);
-      const fileUrl = `${FILE_SERVER_URL}/file?path=${encodedPath}`;
+      const fileServerUrl = await resolveFileServerUrl();
+      const fileUrl = `${fileServerUrl}/file?path=${encodedPath}`;
       
       console.log(`🌐 URL solicitada: ${fileUrl}`);
       

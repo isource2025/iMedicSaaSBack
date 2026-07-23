@@ -163,7 +163,8 @@ async function loadEmpresaConnectionRow(idEmpresa) {
         ${c('DbName')},
         ${c('DbUser')},
         ${c('DbPassword')},
-        ${c('DbPasswordEnc')}
+        ${c('DbPasswordEnc')},
+        ${c('FileServerUrl')}
       FROM dbo.Empresas
       WHERE IDEMPRESA = @id
     `);

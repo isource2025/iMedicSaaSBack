@@ -10,8 +10,8 @@ const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
 const racService = require('../services/agendaRac.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
+const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
-const FILE_SERVER_URL = process.env.FILE_SERVER_URL || 'http://181.4.71.230:3002';
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 const FILE_SERVER_FALLBACK_LOCAL =
   process.env.FILE_SERVER_FALLBACK_LOCAL === '1' ||
@@ -100,7 +100,8 @@ async function subirAdjuntoTurno(req, res) {
       formData.append('numeroVisita', String(idTurno));
       formData.append('nombrePaciente', nombrePaciente);
 
-      const uploadResponse = await axios.post(`${FILE_SERVER_URL}/upload`, formData, {
+      const fileServerUrl = await resolveFileServerUrl();
+      const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
         headers: formData.getHeaders(),
         timeout: FILE_SERVER_TIMEOUT_MS,
       });

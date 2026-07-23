@@ -68,6 +68,7 @@ function mapEmpresaRow(r) {
 			dbInstance: r.DbInstance != null ? String(r.DbInstance) : '',
 			dbName: r.DbName != null ? String(r.DbName) : '',
 			dbUser: r.DbUser != null ? String(r.DbUser) : '',
+			fileServerUrl: r.FileServerUrl != null ? String(r.FileServerUrl) : '',
 			tienePassword: !!r.DbPasswordEnc,
 		},
 	};
@@ -300,6 +301,7 @@ async function crearEmpresa(data) {
 				dbName: c.dbName,
 				dbUser: c.dbUser,
 				dbPassword: c.dbPassword,
+				fileServerUrl: c.fileServerUrl,
 			});
 		}
 		return obtenerEmpresaDetalle(nuevoId);
@@ -344,6 +346,7 @@ async function crearEmpresa(data) {
 			dbName: c.dbName,
 			dbUser: c.dbUser,
 			dbPassword: c.dbPassword,
+			fileServerUrl: c.fileServerUrl,
 		});
 	}
 
@@ -358,6 +361,7 @@ async function actualizarConexionEmpresa(idEmpresa, data) {
 		dbName: data.dbName,
 		dbUser: data.dbUser,
 		dbPassword: data.dbPassword,
+		fileServerUrl: data.fileServerUrl,
 	});
 	return obtenerEmpresaDetalle(idEmpresa);
 }

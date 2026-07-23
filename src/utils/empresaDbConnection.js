@@ -26,6 +26,7 @@ function normalizeEmpresaRow(row) {
 		DbUser: pickField(row, 'DbUser', 'dbuser'),
 		DbPassword: pickField(row, 'DbPassword', 'dbpassword'),
 		DbPasswordEnc: pickField(row, 'DbPasswordEnc', 'dbpasswordenc'),
+		FileServerUrl: pickField(row, 'FileServerUrl', 'fileserverurl'),
 	};
 }
 

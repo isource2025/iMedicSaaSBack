@@ -108,6 +108,7 @@ function mapEmpresaRow(r) {
 		DbPasswordEnc: r.DbPasswordEnc,
 		DbPassword: r.DbPassword,
 		TipoServidor: normalizeTipoServidor(r.TipoServidor),
+		FileServerUrl: r.FileServerUrl != null ? String(r.FileServerUrl) : null,
 		CantUsuarios: r.CantUsuarios,
 	};
 }
@@ -116,12 +117,13 @@ async function listarEmpresasRows(filtro = '') {
 	assertMysql();
 	const cols = await getEmpresasCols();
 	const tipoSel = cols.has('tiposervidor') ? 'e.TipoServidor' : `'FISICO' AS TipoServidor`;
+	const fileSel = cols.has('fileserverurl') ? 'e.FileServerUrl' : 'NULL AS FileServerUrl';
 	const qstr = String(filtro || '').trim();
 	let sql = `
     SELECT
       e.IDEMPRESA, e.DESCRIPCION, e.Nro_CUIT, e.localidad, e.Provincia,
       e.Email, e.TEEmpresa, e.DbServer, e.DbPort, e.DbInstance, e.DbName,
-      e.DbUser, e.DbPasswordEnc, ${tipoSel},
+      e.DbUser, e.DbPasswordEnc, ${tipoSel}, ${fileSel},
       (SELECT COUNT(*) FROM ${q('imPersonalEmpresas')} pe WHERE pe.IdEmpresa = e.IDEMPRESA) AS CantUsuarios
     FROM ${q('Empresas')} e
   `;
@@ -139,11 +141,13 @@ async function obtenerEmpresaRow(idEmpresa) {
 	assertMysql();
 	const cols = await getEmpresasCols();
 	const tipoSel = cols.has('tiposervidor') ? 'TipoServidor' : `'FISICO' AS TipoServidor`;
+	const fileSel = cols.has('fileserverurl') ? 'FileServerUrl' : 'NULL AS FileServerUrl';
 	const rows = await mysqlQuery(
 		`
     SELECT IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
            Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
-           DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc, DbPassword, ${tipoSel}
+           DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc, DbPassword,
+           ${tipoSel}, ${fileSel}
     FROM ${q('Empresas')} WHERE IDEMPRESA = ? LIMIT 1
     `,
 		[Number(idEmpresa)],
@@ -252,6 +256,14 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 	if (data.dbInstance !== undefined) add('DbInstance', data.dbInstance || null);
 	if (data.dbName !== undefined) add('DbName', data.dbName || null);
 	if (data.dbUser !== undefined) add('DbUser', data.dbUser || null);
+
+	if (data.fileServerUrl !== undefined || data.FileServerUrl !== undefined) {
+		const cols = await getEmpresasCols();
+		if (cols.has('fileserverurl')) {
+			const raw = data.fileServerUrl !== undefined ? data.fileServerUrl : data.FileServerUrl;
+			add('FileServerUrl', raw != null && String(raw).trim() !== '' ? String(raw).trim().replace(/\/+$/, '') : null);
+		}
+	}
 
 	if (data.dbPassword != null && String(data.dbPassword).trim() !== '') {
 		add('DbPassword', String(data.dbPassword));

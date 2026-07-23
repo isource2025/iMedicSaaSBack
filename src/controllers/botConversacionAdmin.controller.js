@@ -90,6 +90,11 @@ async function enviarMensaje(req, res) {
 	try {
 		const { contenido } = req.body || {};
 		const id = req.params.id;
+		const texto = String(contenido || '').trim();
+		if (!texto) {
+			return res.status(400).json({ success: false, mensaje: 'El mensaje no puede estar vacío' });
+		}
+
 		const conv = await botConversacion.obtenerConversacion(id);
 		if (!conv) return res.status(404).json({ success: false, mensaje: 'Conversación no encontrada' });
 
@@ -106,40 +111,66 @@ async function enviarMensaje(req, res) {
 			await botConversacion.cambiarModoControl(id, 'HUMANO', agente);
 		}
 
+		const idEmpresa = req.idEmpresa;
+		if (idEmpresa == null) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No hay empresa en la sesión; no se puede enviar a WhatsApp',
+				codigo: 'SIN_EMPRESA',
+			});
+		}
+
+		const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
+		if (!cfg?.phoneNumberId || !cfg?.accessToken) {
+			return res.status(503).json({
+				success: false,
+				mensaje:
+					'WhatsApp no está configurado para esta empresa (Phone Number ID / Access Token). Revisá Super Admin o variables Meta.',
+				codigo: 'WHATSAPP_NO_CONFIG',
+			});
+		}
+
+		let metaEnvio;
+		try {
+			metaEnvio = await whatsappMeta.sendTextMessage({
+				phoneNumberId: cfg.phoneNumberId,
+				accessToken: cfg.accessToken,
+				to: conv.telefonoWhatsApp,
+				text: texto,
+			});
+		} catch (err) {
+			console.warn('[enviarMensaje] Meta Graph API:', err.message);
+			return res.status(502).json({
+				success: false,
+				mensaje:
+					err.message ||
+					'WhatsApp rechazó el mensaje (token, número o ventana de 24 h). No se guardó como enviado.',
+				codigo: 'META_SEND_FAILED',
+				metaError: err.message,
+			});
+		}
+
+		if (!metaEnvio?.messageId) {
+			return res.status(502).json({
+				success: false,
+				mensaje: 'WhatsApp no devolvió ID de mensaje. No se guardó como enviado.',
+				codigo: 'META_NO_MESSAGE_ID',
+				metaEnvio,
+			});
+		}
+
 		const result = await botConversacion.registrarMensajeSaliente({
 			idConversacion: id,
-			contenido,
+			contenido: texto,
 			origen: 'AGENTE',
 			idAgente: agente.idAgente,
 			nombreAgente: agente.nombreAgente,
+			metaMessageId: metaEnvio.messageId,
 		});
-
-		let metaEnvio = null;
-		let metaError = null;
-		const idEmpresa = req.idEmpresa;
-		if (idEmpresa != null) {
-			try {
-				const cfg = await whatsappEmpresa.getConfigForEmpresa(idEmpresa);
-				if (cfg?.phoneNumberId && cfg?.accessToken) {
-					metaEnvio = await whatsappMeta.sendTextMessage({
-						phoneNumberId: cfg.phoneNumberId,
-						accessToken: cfg.accessToken,
-						to: conv.telefonoWhatsApp,
-						text: contenido,
-					});
-				}
-			} catch (err) {
-				metaError = err.message;
-				console.warn('[enviarMensaje] Meta Graph API:', err.message);
-			}
-		}
 
 		res.json({
 			success: true,
-			data: result,
-			metaEnvio,
-			metaError,
-			pendienteMeta: !metaEnvio?.messageId,
+			data: { ...result, pendienteMeta: false, metaEnvio },
 		});
 	} catch (err) {
 		res.status(err.statusCode || 500).json({ success: false, mensaje: err.message });
