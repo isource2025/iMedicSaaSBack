@@ -32,6 +32,9 @@ async function _resolverPermisosReq(req) {
 	if (rn === 'SUPER_ADMIN') {
 		permisos = matriz.permisosDeRol('SUPER_ADMIN');
 	}
+	if (rn === 'MEDICO') {
+		permisos = matriz.permisosDeRol('MEDICO');
+	}
 	return permisos;
 }
 
