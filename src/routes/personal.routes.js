@@ -24,6 +24,12 @@ router.get('/catalogos/categorias', requirePermiso('CONFIGURACION.PERSONAL.VER')
 router.get('/catalogos/clases', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarClases);
 router.get('/catalogos/empresas', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarEmpresasCatalogo);
 
+// Sync FÍSICO → NUBE + export Excel (antes de /:id)
+router.get('/export-fields', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCamposExport);
+router.get('/sync-fisico/estado', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.estadoSyncFisico);
+router.post('/sync-desde-fisico', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.syncDesdeFisico);
+router.post('/exportar', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.exportarPersonal);
+
 // Acciones sobre un registro (no van en el form CRUD principal)
 router.get('/:id/servicio', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerServicioPersonal);
 router.put('/:id/servicio', requirePermiso('CONFIGURACION.PERSONAL.EDITAR'), personalController.actualizarServicioPersonal);

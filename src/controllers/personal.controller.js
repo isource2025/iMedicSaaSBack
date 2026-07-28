@@ -2,6 +2,60 @@
  * Controlador CRUD de Personal (tabla imPersonal) - sección Datos Personales.
  */
 const personalService = require('../services/personal.service');
+const personalSyncService = require('../services/personalSync.service');
+const { getTenantId } = require('../context/tenantContext');
+
+const listarCamposExport = async (_req, res) => {
+	try {
+		res.json({ success: true, data: personalSyncService.listExportFields() });
+	} catch (error) {
+		console.error('[personal.listarCamposExport] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al listar campos de exportación' });
+	}
+};
+
+const estadoSyncFisico = async (_req, res) => {
+	try {
+		const disponible = await personalSyncService.puedeSyncDesdeFisico(getTenantId());
+		res.json({ success: true, data: { disponible } });
+	} catch (error) {
+		console.error('[personal.estadoSyncFisico] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al consultar estado de sync' });
+	}
+};
+
+const syncDesdeFisico = async (_req, res) => {
+	try {
+		const resumen = await personalSyncService.syncPersonalDesdeFisico(getTenantId());
+		res.json({
+			success: true,
+			mensaje: `Personal actualizado en la nube: ${resumen.personal} registros`,
+			data: resumen,
+		});
+	} catch (error) {
+		console.error('[personal.syncDesdeFisico] ERROR:', error.message);
+		const code = error.statusCode || 500;
+		res.status(code).json({
+			success: false,
+			mensaje: error.message || 'Error al sincronizar desde la base física',
+		});
+	}
+};
+
+const exportarPersonal = async (req, res) => {
+	try {
+		const campos = Array.isArray(req.body?.campos) ? req.body.campos : [];
+		const data = await personalSyncService.listarParaExport(campos);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.exportarPersonal] ERROR:', error.message);
+		const code = error.statusCode || 500;
+		res.status(code).json({
+			success: false,
+			mensaje: error.message || 'Error al exportar personal',
+		});
+	}
+};
 
 const listar = async (req, res) => {
 	try {
@@ -554,6 +608,10 @@ module.exports = {
 	crear,
 	actualizar,
 	eliminar,
+	listarCamposExport,
+	estadoSyncFisico,
+	syncDesdeFisico,
+	exportarPersonal,
 	listarEspecialidades,
 	listarFunciones,
 	listarServicios,

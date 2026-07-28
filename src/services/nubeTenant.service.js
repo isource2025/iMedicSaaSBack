@@ -29,8 +29,24 @@ const TABLAS_IMPORTABLES = [
 		label: 'Personal',
 		estrategia: 'tenant',
 		forzarEmpresa: ['IdEmpresa'],
-		// Solo campos de auth en Railway; lo clínico completo queda en el físico.
-		soloColumnas: ['Valor', 'Rol', 'Matricula', 'Numero', 'ApellidoNombre', 'Estado', 'TipoDocumento'],
+		// Campos exportables / sync FÍSICO → NUBE (alineado a personalExportFields).
+		soloColumnas: [
+			'Valor',
+			'Rol',
+			'Matricula',
+			'Numero',
+			'ApellidoNombre',
+			'TipoDocumento',
+			'MatriculaNacional',
+			'ValorEspecialidad',
+			'ValorServicio',
+			'ValorServicioParaFacturar',
+			'ValorCategoria',
+			'Telefono',
+			'CUIT',
+			'Domicilio',
+			'Estado',
+		],
 	},
 	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
@@ -719,6 +735,16 @@ async function importarTablas(idEmpresa, tablas) {
 		throw err;
 	}
 	console.log(`[import] empresa ${emp}: conectado. Tablas a procesar:`, seleccion.join(', '));
+
+	if (seleccion.some((t) => t.toLowerCase() === 'impersonal')) {
+		try {
+			const { ensureImPersonalExportColumns } = require('./personalSync.service');
+			await ensureImPersonalExportColumns();
+		} catch (e) {
+			console.warn('[import] ensureImPersonalExportColumns:', e.message);
+		}
+	}
+
 	const resultados = [];
 
 	for (const tabla of seleccion) {
