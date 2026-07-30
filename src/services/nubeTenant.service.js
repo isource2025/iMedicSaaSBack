@@ -765,8 +765,9 @@ async function importarTablas(idEmpresa, tablas) {
 			try {
 				const tienePass = (await sqlServerColumnas(pool, 'imPassword').catch(() => [])).length > 0;
 				const fuente = tienePass ? 'imPassword' : 'imPersonal';
-				const idCol = tienePass ? 'ValorPersonal' : 'Valor';
-				const data = await pool.request().query(`SELECT [${idCol}] AS pid FROM dbo.[${fuente}]`);
+				// Legacy: ValorPersonal puede ser NULL y el id real vive en CodOperador (IDENTITY).
+				const idExpr = tienePass ? 'COALESCE(ValorPersonal, CodOperador)' : 'Valor';
+				const data = await pool.request().query(`SELECT ${idExpr} AS pid FROM dbo.[${fuente}]`);
 				const ids = [...new Set(
 					(data.recordset || []).map((r) => Number(r.pid)).filter((n) => Number.isFinite(n) && n > 0),
 				)];
@@ -828,11 +829,40 @@ async function importarTablas(idEmpresa, tablas) {
 				throw new Error(`Sin columnas en común entre origen y nube para ${tabla}`);
 			}
 
-			const selectCols = comunesFiltradas.map((c) => `[${c.origen}]`).join(', ');
+			// imPassword legacy: leer CodOperador aunque no se copie, para rellenar ValorPersonal NULL.
+			const esImPassword = tabla.toLowerCase() === 'impassword';
+			const origenColsLower = new Set(origenCols.map((c) => c.toLowerCase()));
+			const selectList = [...comunesFiltradas.map((c) => `[${c.origen}]`)];
+			if (esImPassword && origenColsLower.has('codoperador')
+				&& !comunesFiltradas.some((c) => c.origen.toLowerCase() === 'codoperador')) {
+				selectList.push('[CodOperador]');
+			}
+			const selectCols = selectList.join(', ');
 			const data = await pool.request().query(`SELECT ${selectCols} FROM dbo.[${tabla}]`);
-			const filas = data.recordset || [];
+			let filas = data.recordset || [];
 			res.leidas = filas.length;
 			if (!filas.length) { resultados.push(res); continue; }
+
+			if (esImPassword) {
+				filas = filas.map((fila) => {
+					const out = { ...fila };
+					const vp = out.ValorPersonal ?? out.valorPersonal;
+					const cod = out.CodOperador ?? out.codOperador;
+					if ((vp == null || vp === '') && cod != null && cod !== '') {
+						const n = Number(cod);
+						out.ValorPersonal = Number.isFinite(n) ? n : null;
+					}
+					return out;
+				}).filter((fila) => {
+					const vp = fila.ValorPersonal ?? fila.valorPersonal;
+					return vp != null && vp !== '' && Number.isFinite(Number(vp));
+				});
+				if (!filas.length) {
+					res.error = 'imPassword sin ValorPersonal ni CodOperador usable (legado)';
+					resultados.push(res);
+					continue;
+				}
+			}
 
 			const colDest = [...comunesFiltradas.map((c) => c.destino), ...forzarReal];
 			const placeholdersFila = `(${colDest.map(() => '?').join(', ')})`;
