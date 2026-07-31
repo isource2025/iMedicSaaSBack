@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 const {
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
@@ -24,10 +25,20 @@ function normalizeDigits(value) {
   return String(value || '').replace(/\D+/g, '');
 }
 
-let practicasNomencladorResolverPromise = null;
+const practicasNomencladorByTenant = new Map();
+const practicasNomencladorPromiseByTenant = new Map();
+
 async function getPracticasNomencladorResolver() {
-  if (practicasNomencladorResolverPromise) return practicasNomencladorResolverPromise;
-  practicasNomencladorResolverPromise = (async () => {
+  const key = (() => {
+    const id = getTenantId();
+    return id != null ? String(id) : '_default';
+  })();
+  if (practicasNomencladorByTenant.has(key)) return practicasNomencladorByTenant.get(key);
+  if (practicasNomencladorPromiseByTenant.has(key)) {
+    return practicasNomencladorPromiseByTenant.get(key);
+  }
+
+  const promise = (async () => {
     try {
       const cols = await executeQuery(
         `
@@ -37,18 +48,27 @@ async function getPracticasNomencladorResolver() {
         `
       );
       const set = new Set((cols || []).map((r) => String(r.COLUMN_NAME || '').trim().toLowerCase()).filter(Boolean));
-      if (set.size === 0) return null;
+      if (set.size === 0) {
+        practicasNomencladorByTenant.set(key, null);
+        return null;
+      }
 
       const pick = (candidates) => candidates.find((c) => set.has(c.toLowerCase())) || null;
       const codeCol = pick(['Practica', 'CodigoPractica', 'CodPractica', 'Codigo', 'IdPractica', 'Valor']);
       const descCol = pick(['DescPractica', 'DescripcionPractica', 'Descripcion', 'Prestacion', 'Denominacion', 'Detalle']);
-      if (!codeCol || !descCol) return null;
-      return { codeCol, descCol };
+      const resolved = codeCol && descCol ? { codeCol, descCol } : null;
+      practicasNomencladorByTenant.set(key, resolved);
+      return resolved;
     } catch (_) {
+      practicasNomencladorByTenant.set(key, null);
       return null;
     }
-  })();
-  return practicasNomencladorResolverPromise;
+  })().finally(() => {
+    practicasNomencladorPromiseByTenant.delete(key);
+  });
+
+  practicasNomencladorPromiseByTenant.set(key, promise);
+  return promise;
 }
 
 async function buscarAdmisiones({

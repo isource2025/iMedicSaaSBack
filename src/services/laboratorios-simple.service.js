@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 const ocrService = require('./ocr.service');
 const {
   validarRango,
@@ -39,14 +40,22 @@ const SQL_DETALLE_LAB = `
  * Servicio simplificado para laboratorios usando tablas existentes
  */
 
-let _cabeceraColumnsCache = null;
-let _cabeceraColumnsPromise = null;
+/** Columnas de imHCExamenesLabCabecera cacheadas por tenant (esquemas distintos entre hospitales). */
+const _cabeceraColumnsByTenant = new Map();
+const _cabeceraColumnsPromiseByTenant = new Map();
 
-/** Columnas reales de imHCExamenesLabCabecera (cache por proceso). */
+function _cabeceraCacheKey() {
+  const id = getTenantId();
+  return id != null ? String(id) : '_default';
+}
+
+/** Columnas reales de imHCExamenesLabCabecera (cache por tenant). */
 async function getCabeceraColumnNames() {
-  if (_cabeceraColumnsCache) return _cabeceraColumnsCache;
-  if (_cabeceraColumnsPromise) return _cabeceraColumnsPromise;
-  _cabeceraColumnsPromise = (async () => {
+  const key = _cabeceraCacheKey();
+  if (_cabeceraColumnsByTenant.has(key)) return _cabeceraColumnsByTenant.get(key);
+  if (_cabeceraColumnsPromiseByTenant.has(key)) return _cabeceraColumnsPromiseByTenant.get(key);
+
+  const promise = (async () => {
     // INFORMATION_SCHEMA mezcla tablas del mismo nombre en distintos esquemas;
     // hay que usar la tabla real (prioridad dbo) como en imPassword.
     const objs = await executeQuery(`
@@ -57,18 +66,23 @@ async function getCabeceraColumnNames() {
       ORDER BY CASE WHEN s.name = N'dbo' THEN 0 ELSE 1 END, s.name
     `);
     if (!objs || !objs.length) {
-      _cabeceraColumnsCache = new Set();
-      return _cabeceraColumnsCache;
+      const empty = new Set();
+      _cabeceraColumnsByTenant.set(key, empty);
+      return empty;
     }
     const rows = await executeQuery(
       `SELECT name AS COLUMN_NAME FROM sys.columns WHERE object_id = @p0 ORDER BY column_id`,
       [{ value: objs[0].oid }]
     );
     const set = new Set(rows.map((r) => String(r.COLUMN_NAME).toLowerCase()));
-    _cabeceraColumnsCache = set;
+    _cabeceraColumnsByTenant.set(key, set);
     return set;
-  })();
-  return _cabeceraColumnsPromise;
+  })().finally(() => {
+    _cabeceraColumnsPromiseByTenant.delete(key);
+  });
+
+  _cabeceraColumnsPromiseByTenant.set(key, promise);
+  return promise;
 }
 
 /**
