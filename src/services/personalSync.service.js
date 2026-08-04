@@ -306,10 +306,10 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		await insertLote([row]);
 	}
 
-	for (const lote of chunk(mapped, 25)) {
+	for (const lote of chunk(mapped, 50)) {
 		try {
 			written += await insertLote(lote);
-		} catch (batchErr) {
+		} catch {
 			// Unicidad de Password/NombreRed en MySQL: reintentar fila a fila.
 			for (const row of lote) {
 				try {
@@ -374,24 +374,32 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 		escritasMysql += Number(r?.affectedRows) || lote.length;
 	}
 
-	// Espejo físico: sin pe en el on-prem el reconcile y reporting quedan incompletos.
+	// Espejo físico: solo faltantes, en bloques (evita 1 round-trip por usuario).
 	let escritasFisico = 0;
 	try {
-		for (const lote of chunk(ids, 100)) {
-			for (const pid of lote) {
-				const result = await pool
-					.request()
-					.input('pid', pid)
-					.input('emp', emp)
-					.query(`
-            IF NOT EXISTS (
-              SELECT 1 FROM dbo.imPersonalEmpresas
-              WHERE IdPersonal = @pid AND IdEmpresa = @emp
-            )
-              INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa) VALUES (@pid, @emp)
-          `);
-				escritasFisico += Number(result?.rowsAffected?.[0]) || 0;
-			}
+		const exist = await pool
+			.request()
+			.input('emp', emp)
+			.query(`SELECT IdPersonal FROM dbo.imPersonalEmpresas WHERE IdEmpresa = @emp`);
+		const have = new Set(
+			(exist.recordset || [])
+				.map((r) => Number(r.IdPersonal))
+				.filter((n) => Number.isFinite(n) && n > 0),
+		);
+		const missing = ids.filter((id) => !have.has(id));
+		for (const lote of chunk(missing, 200)) {
+			// IDs ya validados como enteros
+			const valuesSql = lote.map((pid) => `(${Number(pid)}, ${Number(emp)})`).join(', ');
+			const result = await pool.request().query(`
+        INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa)
+        SELECT v.IdPersonal, v.IdEmpresa
+        FROM (VALUES ${valuesSql}) AS v(IdPersonal, IdEmpresa)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM dbo.imPersonalEmpresas pe
+          WHERE pe.IdPersonal = v.IdPersonal AND pe.IdEmpresa = v.IdEmpresa
+        )
+      `);
+			escritasFisico += Number(result?.rowsAffected?.[0]) || lote.length;
 		}
 	} catch (e) {
 		console.warn('[personalSync] espejo imPersonalEmpresas físico:', e.message);
