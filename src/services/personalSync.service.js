@@ -102,79 +102,188 @@ function pickSyncRow(fisicoRow, idEmpresa) {
 	return out;
 }
 
-async function upsertPersonalLote(rows) {
-	if (!rows.length) return 0;
+/** Normaliza valores para comparar físico vs MySQL (delta real). */
+function normCmp(v) {
+	if (v === undefined || v === null) return '';
+	if (v instanceof Date) return v.toISOString();
+	if (Buffer.isBuffer(v)) return '';
+	if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+	if (typeof v === 'boolean') return v ? '1' : '0';
+	return String(v).trim();
+}
+
+function fingerprint(row, cols) {
+	return cols.map((c) => `${c}=${normCmp(row[c])}`).join('\n');
+}
+
+/**
+ * Escribe solo personal nuevo o modificado. Evita re-contar 100% en cada clic.
+ */
+async function syncPersonalDelta(emp, syncRows) {
 	const colList = ['IdEmpresa', ...PERSONAL_SYNC_COLUMNS];
-	const placeholders = `(${colList.map(() => '?').join(', ')})`;
-	const updates = colList
-		.filter((c) => c !== 'IdEmpresa' && c !== 'Valor')
-		.map((c) => `${q(c)} = VALUES(${q(c)})`)
-		.join(', ');
-	let escritas = 0;
-	for (const lote of chunk(rows, 40)) {
-		const flat = [];
-		for (const row of lote) {
-			for (const c of colList) flat.push(row[c] === undefined ? null : row[c]);
-		}
-		const valuesSql = lote.map(() => placeholders).join(', ');
-		const r = await mysqlExec(
-			`INSERT INTO ${q('imPersonal')} (${colList.map(q).join(', ')})
-       VALUES ${valuesSql}
-       ON DUPLICATE KEY UPDATE ${updates}`,
-			flat,
-		);
-		escritas += Number(r?.affectedRows) || lote.length;
+	const existing = await mysqlQuery(
+		`SELECT ${colList.map(q).join(', ')} FROM ${q('imPersonal')} WHERE IdEmpresa = ?`,
+		[emp],
+	);
+	const byId = new Map();
+	for (const r of existing) {
+		const id = Number(r.Valor);
+		if (Number.isFinite(id)) byId.set(id, r);
 	}
-	return escritas;
+
+	let nuevos = 0;
+	let actualizados = 0;
+	let sinCambio = 0;
+	const toWrite = [];
+
+	for (const row of syncRows) {
+		const id = Number(row.Valor);
+		if (!Number.isFinite(id) || id <= 0) continue;
+		const prev = byId.get(id);
+		if (!prev) {
+			nuevos += 1;
+			toWrite.push(row);
+			continue;
+		}
+		if (fingerprint(row, PERSONAL_SYNC_COLUMNS) !== fingerprint(prev, PERSONAL_SYNC_COLUMNS)) {
+			actualizados += 1;
+			toWrite.push(row);
+		} else {
+			sinCambio += 1;
+		}
+	}
+
+	if (toWrite.length) {
+		const placeholders = `(${colList.map(() => '?').join(', ')})`;
+		const updates = colList
+			.filter((c) => c !== 'IdEmpresa' && c !== 'Valor')
+			.map((c) => `${q(c)} = VALUES(${q(c)})`)
+			.join(', ');
+		for (const lote of chunk(toWrite, 40)) {
+			const flat = [];
+			for (const row of lote) {
+				for (const c of colList) flat.push(row[c] === undefined ? null : row[c]);
+			}
+			const valuesSql = lote.map(() => placeholders).join(', ');
+			await mysqlExec(
+				`INSERT INTO ${q('imPersonal')} (${colList.map(q).join(', ')})
+         VALUES ${valuesSql}
+         ON DUPLICATE KEY UPDATE ${updates}`,
+				flat,
+			);
+		}
+	}
+
+	return {
+		total: syncRows.length,
+		nuevos,
+		actualizados,
+		sinCambio,
+		// Cantidad que “cambiaron” (para UI: 0 si ya estaba al día)
+		cambios: nuevos + actualizados,
+	};
 }
 
 async function syncSectoresDesdeFisico(idEmpresa, pool) {
 	const emp = Number(idEmpresa);
-	// Sectores usados por el personal
 	const sectores = await pool.request().query(`
     SELECT DISTINCT s.Valor, RTRIM(LTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion
     FROM dbo.imSectores s
     INNER JOIN dbo.imPersonalSectores ps ON ps.idSector = s.Valor
   `);
 	const secRows = sectores.recordset || [];
+
+	const existingSec = await mysqlQuery(
+		`SELECT Valor, Descripcion FROM ${q('imSectores')} WHERE IdEmpresa = ?`,
+		[emp],
+	);
+	const secByValor = new Map(
+		(existingSec || []).map((r) => [String(r.Valor || '').trim(), normCmp(r.Descripcion)]),
+	);
+	let sectoresCambios = 0;
 	for (const s of secRows) {
 		const valor = String(s.Valor || '').trim();
 		if (!valor) continue;
-		await mysqlExec(
-			`INSERT INTO ${q('imSectores')} (IdEmpresa, Valor, Descripcion)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion)`,
-			[emp, valor, String(s.Descripcion || '').trim() || valor],
-		);
+		const desc = String(s.Descripcion || '').trim() || valor;
+		const prev = secByValor.get(valor);
+		if (prev === undefined || prev !== normCmp(desc)) {
+			sectoresCambios += 1;
+			await mysqlExec(
+				`INSERT INTO ${q('imSectores')} (IdEmpresa, Valor, Descripcion)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion)`,
+				[emp, valor, desc],
+			);
+		}
 	}
 
 	const asign = await pool.request().query(`
     SELECT idPersonal, idSector FROM dbo.imPersonalSectores
   `);
-	const asignRows = asign.recordset || [];
-	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ?`, [emp]);
-	let n = 0;
-	for (const lote of chunk(asignRows, 200)) {
-		const flat = [];
-		const valid = [];
-		for (const r of lote) {
-			const idP = Number(r.idPersonal);
-			const idS = String(r.idSector || '').trim();
-			if (!Number.isFinite(idP) || idP <= 0 || !idS) continue;
-			valid.push(r);
-			flat.push(emp, idP, idS);
+	const asignFisico = [];
+	const setFisico = new Set();
+	for (const r of asign.recordset || []) {
+		const idP = Number(r.idPersonal);
+		const idS = String(r.idSector || '').trim();
+		if (!Number.isFinite(idP) || idP <= 0 || !idS) continue;
+		const key = `${idP}\t${idS}`;
+		if (setFisico.has(key)) continue;
+		setFisico.add(key);
+		asignFisico.push({ idP, idS });
+	}
+
+	const existingAsign = await mysqlQuery(
+		`SELECT idPersonal, idSector FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ?`,
+		[emp],
+	);
+	const setNube = new Set(
+		(existingAsign || []).map((r) => `${Number(r.idPersonal)}\t${String(r.idSector || '').trim()}`),
+	);
+
+	let same = setFisico.size === setNube.size;
+	if (same) {
+		for (const k of setFisico) {
+			if (!setNube.has(k)) {
+				same = false;
+				break;
+			}
 		}
-		if (!valid.length) continue;
-		const valuesSql = valid.map(() => '(?, ?, ?)').join(', ');
+	}
+
+	if (same) {
+		return {
+			sectoresCatalogo: secRows.length,
+			sectoresCatalogoCambios: sectoresCambios,
+			asignaciones: 0,
+			asignacionesTotal: asignFisico.length,
+		};
+	}
+
+	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ?`, [emp]);
+	for (const lote of chunk(asignFisico, 200)) {
+		const flat = [];
+		for (const r of lote) flat.push(emp, r.idP, r.idS);
+		const valuesSql = lote.map(() => '(?, ?, ?)').join(', ');
 		await mysqlExec(
 			`INSERT INTO ${q('imPersonalSectores')} (IdEmpresa, idPersonal, idSector)
        VALUES ${valuesSql}
        ON DUPLICATE KEY UPDATE idSector = VALUES(idSector)`,
 			flat,
 		);
-		n += valid.length;
 	}
-	return { sectoresCatalogo: secRows.length, asignaciones: n };
+
+	// Cambios ≈ |simétricos| aproximados: tamaño de diferencia de sets
+	let onlyFisico = 0;
+	for (const k of setFisico) if (!setNube.has(k)) onlyFisico += 1;
+	let onlyNube = 0;
+	for (const k of setNube) if (!setFisico.has(k)) onlyNube += 1;
+
+	return {
+		sectoresCatalogo: secRows.length,
+		sectoresCatalogoCambios: sectoresCambios,
+		asignaciones: onlyFisico + onlyNube,
+		asignacionesTotal: asignFisico.length,
+	};
 }
 
 async function getMysqlColumnNames(table) {
@@ -211,7 +320,7 @@ function sanitizePasswordCell(v) {
 
 /**
  * Credenciales imPassword del SQL físico → MySQL (auth SaaS).
- * Limpia PasswordHash si el físico no trae Argon2, para no bloquear clave legacy.
+ * Solo escribe altas/modificaciones; limpia PasswordHash si el físico no trae Argon2.
  */
 async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 	const emp = Number(idEmpresa);
@@ -221,11 +330,27 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		fisicoRows = data.recordset || [];
 	} catch (e) {
 		console.warn('[personalSync] imPassword no disponible en físico:', e.message);
-		return { passwords: 0, written: 0, errores: 0, detalleErrores: [] };
+		return {
+			passwords: 0,
+			nuevos: 0,
+			actualizados: 0,
+			sinCambio: 0,
+			cambios: 0,
+			errores: 0,
+			detalleErrores: [],
+		};
 	}
 
 	if (!fisicoRows.length) {
-		return { passwords: 0, written: 0, errores: 0, detalleErrores: [] };
+		return {
+			passwords: 0,
+			nuevos: 0,
+			actualizados: 0,
+			sinCambio: 0,
+			cambios: 0,
+			errores: 0,
+			detalleErrores: [],
+		};
 	}
 
 	const mysqlColByLower = await getMysqlColumnNames('imPassword');
@@ -235,6 +360,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		throw e;
 	}
 
+	const skipHashCmp = new Set(['passwordhash', 'idempresa']);
 	const mapped = [];
 	for (const fr of fisicoRows) {
 		const row = {};
@@ -250,7 +376,6 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		if (!Number.isFinite(vp) || vp <= 0) continue;
 		row.ValorPersonal = vp;
 
-		// Si no hay hash Argon2 en el físico, invalidar el de MySQL en el upsert.
 		if (mysqlColByLower.has('passwordhash')) {
 			const hashKey = mysqlColByLower.get('passwordhash');
 			const hash = row[hashKey];
@@ -261,17 +386,58 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		mapped.push(row);
 	}
 
-	// Columnas estables del lote = unión (solo las presentes en MySQL).
+	const cmpCols = [...new Set(mapped.flatMap((r) => Object.keys(r)))].filter(
+		(c) => !skipHashCmp.has(String(c).toLowerCase()),
+	);
+	// Password legacy siempre en la comparación
+	if (mysqlColByLower.has('password') && !cmpCols.some((c) => c.toLowerCase() === 'password')) {
+		cmpCols.push(mysqlColByLower.get('password'));
+	}
+	if (mysqlColByLower.has('nombrered') && !cmpCols.some((c) => c.toLowerCase() === 'nombrered')) {
+		cmpCols.push(mysqlColByLower.get('nombrered'));
+	}
+
+	const existing = await mysqlQuery(`SELECT * FROM ${q('imPassword')} WHERE IdEmpresa = ?`, [emp]);
+	const byVp = new Map();
+	for (const r of existing || []) {
+		const vp = Number(r.ValorPersonal);
+		if (Number.isFinite(vp)) byVp.set(vp, r);
+	}
+
+	let nuevos = 0;
+	let actualizados = 0;
+	let sinCambio = 0;
+	const toWrite = [];
+	const hashKey = mysqlColByLower.has('passwordhash')
+		? mysqlColByLower.get('passwordhash')
+		: null;
+
+	for (const row of mapped) {
+		const prev = byVp.get(row.ValorPersonal);
+		if (!prev) {
+			nuevos += 1;
+			toWrite.push(row);
+			continue;
+		}
+		if (fingerprint(row, cmpCols) !== fingerprint(prev, cmpCols)) {
+			// Clave o datos de cuenta cambiaron en el físico → anular hash SaaS
+			const payload = { ...row };
+			if (hashKey) payload[hashKey] = null;
+			actualizados += 1;
+			toWrite.push(payload);
+		} else {
+			sinCambio += 1;
+		}
+	}
+
 	const colSet = new Set(['IdEmpresa', 'ValorPersonal']);
-	for (const r of mapped) {
+	for (const r of toWrite) {
 		for (const c of Object.keys(r)) colSet.add(c);
 	}
-	// Siempre incluir PasswordHash en el UPDATE si existe, para poder anular hashes viejos.
 	if (mysqlColByLower.has('passwordhash')) {
 		colSet.add(mysqlColByLower.get('passwordhash'));
 	}
 	const colList = [...colSet].filter((c) => mysqlColByLower.has(String(c).toLowerCase()));
-
 	const pkLower = new Set(['idempresa', 'valorpersonal']);
 	const updates = colList
 		.filter((c) => !pkLower.has(String(c).toLowerCase()))
@@ -279,16 +445,13 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		.join(', ');
 	const placeholders = `(${colList.map(() => '?').join(', ')})`;
 
-	let written = 0;
 	let errores = 0;
 	const detalleErrores = [];
 
 	async function insertLote(lote) {
 		const flat = [];
 		for (const row of lote) {
-			for (const c of colList) {
-				flat.push(row[c] === undefined ? null : row[c]);
-			}
+			for (const c of colList) flat.push(row[c] === undefined ? null : row[c]);
 		}
 		const valuesSql = lote.map(() => placeholders).join(', ');
 		const sql = updates
@@ -299,22 +462,15 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
          VALUES ${valuesSql}
          ON DUPLICATE KEY UPDATE ValorPersonal = VALUES(ValorPersonal)`;
 		await mysqlExec(sql, flat);
-		return lote.length;
 	}
 
-	async function insertUno(row) {
-		await insertLote([row]);
-	}
-
-	for (const lote of chunk(mapped, 50)) {
+	for (const lote of chunk(toWrite, 50)) {
 		try {
-			written += await insertLote(lote);
+			await insertLote(lote);
 		} catch {
-			// Unicidad de Password/NombreRed en MySQL: reintentar fila a fila.
 			for (const row of lote) {
 				try {
-					await insertUno(row);
-					written += 1;
+					await insertLote([row]);
 				} catch (rowErr) {
 					errores += 1;
 					if (detalleErrores.length < 15) {
@@ -333,17 +489,21 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		}
 	}
 
+	const cambios = Math.max(0, nuevos + actualizados - errores);
 	return {
 		passwords: mapped.length,
-		written,
+		nuevos,
+		actualizados,
+		sinCambio,
+		cambios,
+		written: toWrite.length - errores,
 		errores,
 		detalleErrores,
 	};
 }
 
 /**
- * Vínculos en MySQL + espejo en SQL físico (login SaaS + reconcile futuro).
- * Preferencia: todos los ValorPersonal de imPassword; si no hay, todo imPersonal.
+ * Vínculos en MySQL + espejo en SQL físico. Solo cuenta altas nuevas.
  */
 async function syncVinculosEmpresa(idEmpresa, pool) {
 	const emp = Number(idEmpresa);
@@ -361,21 +521,32 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 		ids = (pers.recordset || []).map((r) => Number(r.pid)).filter((n) => Number.isFinite(n) && n > 0);
 	}
 	ids = [...new Set(ids)];
-	let escritasMysql = 0;
-	for (const lote of chunk(ids, 500)) {
-		const flat = [];
-		for (const pid of lote) flat.push(pid, emp);
-		const valuesSql = lote.map(() => '(?, ?)').join(', ');
-		const r = await mysqlExec(
-			`INSERT INTO ${q('imPersonalEmpresas')} (IdPersonal, IdEmpresa) VALUES ${valuesSql}
-       ON DUPLICATE KEY UPDATE IdEmpresa = VALUES(IdEmpresa)`,
-			flat,
-		);
-		escritasMysql += Number(r?.affectedRows) || lote.length;
+
+	const existingMysql = await mysqlQuery(
+		`SELECT IdPersonal FROM ${q('imPersonalEmpresas')} WHERE IdEmpresa = ?`,
+		[emp],
+	);
+	const haveMysql = new Set(
+		(existingMysql || [])
+			.map((r) => Number(r.IdPersonal))
+			.filter((n) => Number.isFinite(n) && n > 0),
+	);
+	const missingMysql = ids.filter((id) => !haveMysql.has(id));
+
+	if (missingMysql.length) {
+		for (const lote of chunk(missingMysql, 500)) {
+			const flat = [];
+			for (const pid of lote) flat.push(pid, emp);
+			const valuesSql = lote.map(() => '(?, ?)').join(', ');
+			await mysqlExec(
+				`INSERT INTO ${q('imPersonalEmpresas')} (IdPersonal, IdEmpresa) VALUES ${valuesSql}
+         ON DUPLICATE KEY UPDATE IdEmpresa = VALUES(IdEmpresa)`,
+				flat,
+			);
+		}
 	}
 
-	// Espejo físico: solo faltantes, en bloques (evita 1 round-trip por usuario).
-	let escritasFisico = 0;
+	let nuevosFisico = 0;
 	try {
 		const exist = await pool
 			.request()
@@ -387,10 +558,10 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 				.filter((n) => Number.isFinite(n) && n > 0),
 		);
 		const missing = ids.filter((id) => !have.has(id));
+		nuevosFisico = missing.length;
 		for (const lote of chunk(missing, 200)) {
-			// IDs ya validados como enteros
 			const valuesSql = lote.map((pid) => `(${Number(pid)}, ${Number(emp)})`).join(', ');
-			const result = await pool.request().query(`
+			await pool.request().query(`
         INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa)
         SELECT v.IdPersonal, v.IdEmpresa
         FROM (VALUES ${valuesSql}) AS v(IdPersonal, IdEmpresa)
@@ -399,18 +570,23 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
           WHERE pe.IdPersonal = v.IdPersonal AND pe.IdEmpresa = v.IdEmpresa
         )
       `);
-			escritasFisico += Number(result?.rowsAffected?.[0]) || lote.length;
 		}
 	} catch (e) {
 		console.warn('[personalSync] espejo imPersonalEmpresas físico:', e.message);
 	}
 
-	return { mysql: escritasMysql, fisico: escritasFisico, ids: ids.length };
+	return {
+		ids: ids.length,
+		nuevos: missingMysql.length,
+		nuevosFisico,
+		// UI: solo lo que se agregó en esta corrida
+		cambios: missingMysql.length,
+	};
 }
 
 /**
- * Copia personal + credenciales + sectores + vínculos del SQL físico a MySQL
- * para dejar el login SaaS operativo en un solo paso.
+ * Copia personal + credenciales + sectores + vínculos del SQL físico a MySQL.
+ * Los contadores de la UI son deltas (0 si ya estaba al día).
  */
 async function syncPersonalDesdeFisico(idEmpresa) {
 	assertAuthCentral();
@@ -431,25 +607,42 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	const data = await pool.request().query(`SELECT ${selectCols} FROM dbo.imPersonal`);
 	const filas = data.recordset || [];
 	const syncRows = filas.map((f) => pickSyncRow(f, emp));
-	const personalEscritos = await upsertPersonalLote(syncRows);
+	const personal = await syncPersonalDelta(emp, syncRows);
 
-	// Credenciales antes de vínculos: el login SaaS exige imPassword + pe.
 	const passwords = await syncPasswordsDesdeFisico(emp, pool);
 	const sec = await syncSectoresDesdeFisico(emp, pool);
 	const vinculos = await syncVinculosEmpresa(emp, pool);
 
+	const totalCambios =
+		personal.cambios +
+		passwords.cambios +
+		(sec.asignaciones || 0) +
+		(sec.sectoresCatalogoCambios || 0) +
+		vinculos.cambios;
+
 	return {
-		personal: filas.length,
-		personalEscritos,
-		passwords: passwords.passwords,
-		passwordsEscritos: passwords.written,
+		// UI principal: deltas (0 en re-sync idéntico)
+		personal: personal.cambios,
+		personalTotal: personal.total,
+		personalNuevos: personal.nuevos,
+		personalActualizados: personal.actualizados,
+		personalSinCambio: personal.sinCambio,
+		passwordsEscritos: passwords.cambios,
+		passwordsTotal: passwords.passwords,
+		passwordsNuevos: passwords.nuevos,
+		passwordsActualizados: passwords.actualizados,
+		passwordsSinCambio: passwords.sinCambio,
 		passwordsErrores: passwords.errores,
 		passwordsDetalleErrores: passwords.detalleErrores,
-		sectoresCatalogo: sec.sectoresCatalogo,
 		sectoresAsignaciones: sec.asignaciones,
-		vinculos: vinculos.ids,
-		vinculosMysql: vinculos.mysql,
-		vinculosFisico: vinculos.fisico,
+		sectoresAsignacionesTotal: sec.asignacionesTotal,
+		sectoresCatalogoCambios: sec.sectoresCatalogoCambios,
+		vinculos: vinculos.cambios,
+		vinculosTotal: vinculos.ids,
+		vinculosMysql: vinculos.nuevos,
+		vinculosFisico: vinculos.nuevosFisico,
+		sinCambios: totalCambios === 0,
+		totalCambios,
 	};
 }
 
