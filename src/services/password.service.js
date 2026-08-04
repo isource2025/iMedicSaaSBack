@@ -18,18 +18,30 @@ function rowPasswordFields(row) {
 	};
 }
 
+function matchesLegacyPassword(plain, legacy) {
+	if (legacy == null) return false;
+	// Legacy Clarion (imPassword.Password): comparación case-insensitive
+	return String(legacy).trim().toUpperCase() === String(plain).trim().toUpperCase();
+}
+
+/**
+ * Verifica contraseña. Prioriza Argon2 si hay hash; si falla o no hay hash,
+ * acepta el campo legacy (Password) para no bloquear usuarios migrados / reseteados.
+ */
 async function verifyPassword(plain, row) {
-	if (!plain || !row) return false;
+	if (plain == null || plain === '' || !row) return false;
+	const plainStr = String(plain);
 	const { hash, legacy } = rowPasswordFields(row);
+
 	if (hash && String(hash).startsWith('$argon2')) {
 		try {
-			return await argon2.verify(String(hash), String(plain));
+			if (await argon2.verify(String(hash), plainStr)) return true;
 		} catch {
-			return false;
+			/* continuar a legacy */
 		}
 	}
-	if (legacy == null) return false;
-	return String(legacy) === String(plain);
+
+	return matchesLegacyPassword(plainStr, legacy);
 }
 
 async function upgradePasswordHashCentral(idEmpresa, valorPersonal, plain) {
@@ -65,9 +77,25 @@ async function upgradePasswordHashTenant(pool, valorPersonal, plain) {
 	}
 }
 
+/** Anula PasswordHash en MySQL (p. ej. tras cambio de clave legacy). */
+async function clearPasswordHashCentral(idEmpresa, valorPersonal) {
+	if (!isAuthCentralEnabled()) return;
+	try {
+		const pool = await getAuthCentralPool();
+		await pool.query(
+			`UPDATE \`imPassword\` SET PasswordHash = NULL WHERE IdEmpresa = ? AND ValorPersonal = ?`,
+			[Number(idEmpresa), Number(valorPersonal)],
+		);
+	} catch (e) {
+		console.warn('[password] clearPasswordHashCentral:', e.message);
+	}
+}
+
 module.exports = {
 	hashPassword,
 	verifyPassword,
+	matchesLegacyPassword,
 	upgradePasswordHashCentral,
 	upgradePasswordHashTenant,
+	clearPasswordHashCentral,
 };

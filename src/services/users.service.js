@@ -544,18 +544,47 @@ const crearUsuario = async (userData) => {
  */
 const cambiarPassword = async (valorPersonal, nuevaPassword) => {
   try {
-    const consulta = `
-      UPDATE imPassword 
+    // Actualizar legacy; si existe PasswordHash, anularlo para no rechazar la clave nueva.
+    let consulta = `
+      UPDATE imPassword
       SET Password = @p1
       WHERE ValorPersonal = @p0
     `;
-    
+    try {
+      const cols = await executeQuery(`
+        SELECT 1 AS ok
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE UPPER(TABLE_NAME) = 'IMPASSWORD' AND UPPER(COLUMN_NAME) = 'PASSWORDHASH'
+      `);
+      if (cols?.length) {
+        consulta = `
+          UPDATE imPassword
+          SET Password = @p1, PasswordHash = NULL
+          WHERE ValorPersonal = @p0
+        `;
+      }
+    } catch {
+      /* columna opcional */
+    }
+
     const parametros = [
       { value: valorPersonal },
-      { value: nuevaPassword, type: 'VarChar' }
+      { value: nuevaPassword, type: 'VarChar' },
     ];
-    
+
     await executeQuery(consulta, parametros);
+
+    // Espejo MySQL: invalidar hash si hay auth central
+    try {
+      const passwordService = require('./password.service');
+      const idEmpresa = getTenantId();
+      if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
+        await passwordService.clearPasswordHashCentral(Number(idEmpresa), valorPersonal);
+      }
+    } catch (e) {
+      console.warn('[users] clearPasswordHashCentral:', e.message);
+    }
+
     await afterUserMutation(valorPersonal);
     return true;
   } catch (error) {

@@ -177,6 +177,174 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 	return { sectoresCatalogo: secRows.length, asignaciones: n };
 }
 
+async function getMysqlColumnNames(table) {
+	const rows = await mysqlQuery(
+		`
+    SELECT COLUMN_NAME AS col
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+    `,
+		[String(table)],
+	);
+	return new Map((rows || []).map((r) => [String(r.col).toLowerCase(), String(r.col)]));
+}
+
+function isBinaryLike(value) {
+	return (
+		Buffer.isBuffer(value) ||
+		(value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data))
+	);
+}
+
+function sanitizePasswordCell(v) {
+	if (v === undefined) return undefined;
+	if (v === null) return null;
+	if (isBinaryLike(v)) return null;
+	if (v instanceof Date) return v;
+	if (typeof v === 'string') {
+		const t = v.trim();
+		return t === '' ? null : t;
+	}
+	if (typeof v === 'object') return String(v);
+	return v;
+}
+
+/**
+ * Credenciales imPassword del SQL físico → MySQL (auth SaaS).
+ * Limpia PasswordHash si el físico no trae Argon2, para no bloquear clave legacy.
+ */
+async function syncPasswordsDesdeFisico(idEmpresa, pool) {
+	const emp = Number(idEmpresa);
+	let fisicoRows;
+	try {
+		const data = await pool.request().query(`SELECT * FROM dbo.imPassword`);
+		fisicoRows = data.recordset || [];
+	} catch (e) {
+		console.warn('[personalSync] imPassword no disponible en físico:', e.message);
+		return { passwords: 0, written: 0, errores: 0, detalleErrores: [] };
+	}
+
+	if (!fisicoRows.length) {
+		return { passwords: 0, written: 0, errores: 0, detalleErrores: [] };
+	}
+
+	const mysqlColByLower = await getMysqlColumnNames('imPassword');
+	if (!mysqlColByLower.has('idempresa') || !mysqlColByLower.has('valorpersonal')) {
+		const e = new Error('MySQL imPassword no tiene IdEmpresa/ValorPersonal');
+		e.statusCode = 500;
+		throw e;
+	}
+
+	const mapped = [];
+	for (const fr of fisicoRows) {
+		const row = {};
+		for (const [rawKey, rawVal] of Object.entries(fr)) {
+			const canon = mysqlColByLower.get(String(rawKey).toLowerCase());
+			if (!canon) continue;
+			const v = sanitizePasswordCell(rawVal);
+			if (v === undefined) continue;
+			row[canon] = v;
+		}
+		row.IdEmpresa = emp;
+		const vp = Number(row.ValorPersonal);
+		if (!Number.isFinite(vp) || vp <= 0) continue;
+		row.ValorPersonal = vp;
+
+		// Si no hay hash Argon2 en el físico, invalidar el de MySQL en el upsert.
+		if (mysqlColByLower.has('passwordhash')) {
+			const hashKey = mysqlColByLower.get('passwordhash');
+			const hash = row[hashKey];
+			if (hash == null || hash === '' || !String(hash).startsWith('$argon2')) {
+				row[hashKey] = null;
+			}
+		}
+		mapped.push(row);
+	}
+
+	// Columnas estables del lote = unión (solo las presentes en MySQL).
+	const colSet = new Set(['IdEmpresa', 'ValorPersonal']);
+	for (const r of mapped) {
+		for (const c of Object.keys(r)) colSet.add(c);
+	}
+	// Siempre incluir PasswordHash en el UPDATE si existe, para poder anular hashes viejos.
+	if (mysqlColByLower.has('passwordhash')) {
+		colSet.add(mysqlColByLower.get('passwordhash'));
+	}
+	const colList = [...colSet].filter((c) => mysqlColByLower.has(String(c).toLowerCase()));
+
+	const pkLower = new Set(['idempresa', 'valorpersonal']);
+	const updates = colList
+		.filter((c) => !pkLower.has(String(c).toLowerCase()))
+		.map((c) => `${q(c)} = VALUES(${q(c)})`)
+		.join(', ');
+	const placeholders = `(${colList.map(() => '?').join(', ')})`;
+
+	let written = 0;
+	let errores = 0;
+	const detalleErrores = [];
+
+	async function insertLote(lote) {
+		const flat = [];
+		for (const row of lote) {
+			for (const c of colList) {
+				flat.push(row[c] === undefined ? null : row[c]);
+			}
+		}
+		const valuesSql = lote.map(() => placeholders).join(', ');
+		const sql = updates
+			? `INSERT INTO ${q('imPassword')} (${colList.map(q).join(', ')})
+         VALUES ${valuesSql}
+         ON DUPLICATE KEY UPDATE ${updates}`
+			: `INSERT INTO ${q('imPassword')} (${colList.map(q).join(', ')})
+         VALUES ${valuesSql}
+         ON DUPLICATE KEY UPDATE ValorPersonal = VALUES(ValorPersonal)`;
+		await mysqlExec(sql, flat);
+		return lote.length;
+	}
+
+	async function insertUno(row) {
+		await insertLote([row]);
+	}
+
+	for (const lote of chunk(mapped, 25)) {
+		try {
+			written += await insertLote(lote);
+		} catch (batchErr) {
+			// Unicidad de Password/NombreRed en MySQL: reintentar fila a fila.
+			for (const row of lote) {
+				try {
+					await insertUno(row);
+					written += 1;
+				} catch (rowErr) {
+					errores += 1;
+					if (detalleErrores.length < 15) {
+						detalleErrores.push({
+							valorPersonal: row.ValorPersonal,
+							nombreRed: row.NombreRed || row.nombrered || null,
+							error: String(rowErr.message || rowErr).slice(0, 200),
+						});
+					}
+					console.warn(
+						`[personalSync] imPassword ValorPersonal=${row.ValorPersonal}:`,
+						rowErr.message,
+					);
+				}
+			}
+		}
+	}
+
+	return {
+		passwords: mapped.length,
+		written,
+		errores,
+		detalleErrores,
+	};
+}
+
+/**
+ * Vínculos en MySQL + espejo en SQL físico (login SaaS + reconcile futuro).
+ * Preferencia: todos los ValorPersonal de imPassword; si no hay, todo imPersonal.
+ */
 async function syncVinculosEmpresa(idEmpresa, pool) {
 	const emp = Number(idEmpresa);
 	let ids = [];
@@ -193,7 +361,7 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 		ids = (pers.recordset || []).map((r) => Number(r.pid)).filter((n) => Number.isFinite(n) && n > 0);
 	}
 	ids = [...new Set(ids)];
-	let escritas = 0;
+	let escritasMysql = 0;
 	for (const lote of chunk(ids, 500)) {
 		const flat = [];
 		for (const pid of lote) flat.push(pid, emp);
@@ -203,13 +371,38 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
        ON DUPLICATE KEY UPDATE IdEmpresa = VALUES(IdEmpresa)`,
 			flat,
 		);
-		escritas += Number(r?.affectedRows) || lote.length;
+		escritasMysql += Number(r?.affectedRows) || lote.length;
 	}
-	return escritas;
+
+	// Espejo físico: sin pe en el on-prem el reconcile y reporting quedan incompletos.
+	let escritasFisico = 0;
+	try {
+		for (const lote of chunk(ids, 100)) {
+			for (const pid of lote) {
+				const result = await pool
+					.request()
+					.input('pid', pid)
+					.input('emp', emp)
+					.query(`
+            IF NOT EXISTS (
+              SELECT 1 FROM dbo.imPersonalEmpresas
+              WHERE IdPersonal = @pid AND IdEmpresa = @emp
+            )
+              INSERT INTO dbo.imPersonalEmpresas (IdPersonal, IdEmpresa) VALUES (@pid, @emp)
+          `);
+				escritasFisico += Number(result?.rowsAffected?.[0]) || 0;
+			}
+		}
+	} catch (e) {
+		console.warn('[personalSync] espejo imPersonalEmpresas físico:', e.message);
+	}
+
+	return { mysql: escritasMysql, fisico: escritasFisico, ids: ids.length };
 }
 
 /**
- * Copia personal (+ sectores + vínculos) del SQL físico a MySQL Railway.
+ * Copia personal + credenciales + sectores + vínculos del SQL físico a MySQL
+ * para dejar el login SaaS operativo en un solo paso.
  */
 async function syncPersonalDesdeFisico(idEmpresa) {
 	assertAuthCentral();
@@ -231,15 +424,24 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	const filas = data.recordset || [];
 	const syncRows = filas.map((f) => pickSyncRow(f, emp));
 	const personalEscritos = await upsertPersonalLote(syncRows);
+
+	// Credenciales antes de vínculos: el login SaaS exige imPassword + pe.
+	const passwords = await syncPasswordsDesdeFisico(emp, pool);
 	const sec = await syncSectoresDesdeFisico(emp, pool);
 	const vinculos = await syncVinculosEmpresa(emp, pool);
 
 	return {
 		personal: filas.length,
 		personalEscritos,
+		passwords: passwords.passwords,
+		passwordsEscritos: passwords.written,
+		passwordsErrores: passwords.errores,
+		passwordsDetalleErrores: passwords.detalleErrores,
 		sectoresCatalogo: sec.sectoresCatalogo,
 		sectoresAsignaciones: sec.asignaciones,
-		vinculos,
+		vinculos: vinculos.ids,
+		vinculosMysql: vinculos.mysql,
+		vinculosFisico: vinculos.fisico,
 	};
 }
 

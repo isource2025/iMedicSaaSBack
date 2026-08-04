@@ -10,15 +10,49 @@ function q(name) {
 	return `\`${String(name).replace(/`/g, '``')}\``;
 }
 
+const tableColumnsCache = new Map();
+
 async function mysqlExec(sql, params = []) {
 	if (!isAuthCentralEnabled()) return;
 	const pool = await getAuthCentralPool();
 	await pool.query(sql, params);
 }
 
+/** Columnas reales de MySQL (evita Unknown column al sincronizar desde SQL Server). */
+async function getMysqlTableColumns(table) {
+	const key = String(table);
+	if (tableColumnsCache.has(key)) return tableColumnsCache.get(key);
+	const pool = await getAuthCentralPool();
+	const [rows] = await pool.query(
+		`
+    SELECT COLUMN_NAME AS col
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+    `,
+		[key],
+	);
+	const set = new Set((rows || []).map((r) => String(r.col)));
+	tableColumnsCache.set(key, set);
+	return set;
+}
+
+function isBinaryLike(value) {
+	return (
+		Buffer.isBuffer(value) ||
+		(value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data))
+	);
+}
+
 async function upsertRow(table, pkColumns, row) {
 	if (!row || !isAuthCentralEnabled()) return;
-	const cols = Object.keys(row).filter((c) => row[c] !== undefined);
+	const allowed = await getMysqlTableColumns(table);
+	const cols = Object.keys(row).filter((c) => {
+		if (row[c] === undefined) return false;
+		if (!allowed.has(c)) return false;
+		// No copiar binarios grandes (Firma, etc.)
+		if (isBinaryLike(row[c])) return false;
+		return true;
+	});
 	if (!cols.length) return;
 
 	const pkSet = new Set(pkColumns.map((c) => String(c).toLowerCase()));
@@ -59,6 +93,11 @@ async function syncPassword(idEmpresa, valorPersonal) {
 	]);
 	if (!row) return;
 	row.IdEmpresa = Number(idEmpresa);
+	// Si el tenant no trae hash (o está vacío), invalidar el de MySQL para no bloquear legacy.
+	const hash = row.PasswordHash ?? row.passwordHash;
+	if (hash == null || String(hash).trim() === '') {
+		row.PasswordHash = null;
+	}
 	await upsertRow('imPassword', ['IdEmpresa', 'ValorPersonal'], row);
 }
 
@@ -67,7 +106,14 @@ async function syncPersonal(idEmpresa, valorPersonal) {
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (!row) return;
-	const out = omitColumns(row, ['Firma']);
+	const out = omitColumns(row, [
+		'Firma',
+		'emailVerified',
+		'image',
+		'hospitalId',
+		'createdAt',
+		'updatedAt',
+	]);
 	out.IdEmpresa = Number(idEmpresa);
 	await upsertRow('imPersonal', ['IdEmpresa', 'Valor'], out);
 }
@@ -174,10 +220,19 @@ async function purgePersonalAuth(valorPersonal) {
  */
 async function syncUserLoginBundle(idEmpresa, valorPersonal) {
 	if (!isAuthCentralEnabled()) return;
+	// Password + vínculo primero: sin ellos el login SaaS falla.
 	await syncPassword(idEmpresa, valorPersonal);
-	await syncPersonal(idEmpresa, valorPersonal);
 	await syncPersonalEmpresa(idEmpresa, valorPersonal);
-	await syncPersonalSectores(idEmpresa, valorPersonal);
+	try {
+		await syncPersonal(idEmpresa, valorPersonal);
+	} catch (e) {
+		console.warn('[authCentralSync] syncPersonal:', e.message);
+	}
+	try {
+		await syncPersonalSectores(idEmpresa, valorPersonal);
+	} catch (e) {
+		console.warn('[authCentralSync] syncPersonalSectores:', e.message);
+	}
 }
 
 async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal) {

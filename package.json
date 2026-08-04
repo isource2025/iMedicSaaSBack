@@ -35,7 +35,9 @@
 		"onboarding:fix": "node scripts/onboarding/fix_post_migration.js",
 		"onboarding:close-stale": "node scripts/onboarding/close_stale_internaciones.js",
 		"setup:turnero": "node scripts/ejecutar_setup_turnero.js",
-		"audit:turnero": "node scripts/audit_turnero.js"
+		"audit:turnero": "node scripts/audit_turnero.js",
+		"seed:permisos": "node scripts/seed_permisos.js",
+		"seed:almacen": "node scripts/seed_almacen.js"
 	},
 	"dependencies": {
 		"argon2": "^0.44.0",

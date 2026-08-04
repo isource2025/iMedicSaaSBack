@@ -25,12 +25,20 @@ const PACKS_PRINCIPALES = Object.freeze([
 		modulos: ['FACTURACION'],
 		orden: 3,
 	},
+	{
+		codigo: 'ALMACEN',
+		label: 'Almacén / Abastecimiento',
+		descripcion: 'Solicitudes, órdenes de provisión, actas de recepción y stock.',
+		modulos: ['ALMACEN'],
+		orden: 4,
+	},
 ]);
 
 /** Siempre habilitados (menú general). */
 const MODULOS_GENERALES = Object.freeze([
 	'DASHBOARD',
 	'ADMISION',
+	'ALMACEN',
 	'REPORTES',
 	'CONFIGURACION',
 	'USUARIO',

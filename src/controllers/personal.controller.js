@@ -27,9 +27,15 @@ const estadoSyncFisico = async (_req, res) => {
 const syncDesdeFisico = async (_req, res) => {
 	try {
 		const resumen = await personalSyncService.syncPersonalDesdeFisico(getTenantId());
+		const pw = Number(resumen.passwordsEscritos) || 0;
+		const pe = Number(resumen.personal) || 0;
+		const errPw = Number(resumen.passwordsErrores) || 0;
 		res.json({
 			success: true,
-			mensaje: `Personal actualizado en la nube: ${resumen.personal} registros`,
+			mensaje:
+				errPw > 0
+					? `Nube actualizada: ${pe} personal, ${pw} cuentas de acceso (${errPw} con error)`
+					: `Nube actualizada: ${pe} personal, ${pw} cuentas de acceso (listas para login SaaS)`,
 			data: resumen,
 		});
 	} catch (error) {
