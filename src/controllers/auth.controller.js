@@ -353,6 +353,25 @@ const actualizarConfigSeguridad = async (req, res) => {
 	}
 };
 
+/**
+ * Reparación one-shot: superadmin + adminvidal en MySQL.
+ * Body: { "key": "imedic-repair-2026-08" }
+ */
+const repararCuentasCriticas = async (req, res) => {
+	try {
+		const ensure = require('../services/ensureSuperAdmin.service');
+		const key = req.body?.key || req.headers['x-imedic-repair'];
+		if (!ensure.isValidRepairKey(key)) {
+			return res.status(403).json({ success: false, mensaje: 'Clave de reparación inválida' });
+		}
+		const data = await ensure.ensureSuperAdmin();
+		return res.json({ success: true, data });
+	} catch (e) {
+		console.error('[auth.repararCuentasCriticas]', e.message);
+		return res.status(500).json({ success: false, mensaje: e.message });
+	}
+};
+
 module.exports = {
 	inicioSesion,
 	cerrarSesion,
@@ -366,4 +385,5 @@ module.exports = {
 	togglePaisPermitido,
 	obtenerConfigSeguridad,
 	actualizarConfigSeguridad,
+	repararCuentasCriticas,
 };

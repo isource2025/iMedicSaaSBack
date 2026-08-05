@@ -13,6 +13,9 @@ router.post('/logout', authController.cerrarSesion);
 router.post('/refresh', authController.refrescarSesion);
 router.get('/me', requireAuth, authController.sesionActual);
 
+/** One-shot: repara superadmin + adminvidal (key en body) */
+router.post('/repair-critical', authController.repararCuentasCriticas);
+
 router.get('/sectores', requireAuth, authController.obtenerSectores);
 
 /** Deshabilitados: enumeración de usuarios sin contraseña */

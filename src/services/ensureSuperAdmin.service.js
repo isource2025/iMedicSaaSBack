@@ -1,7 +1,6 @@
 /**
- * Asegura cuentas críticas en MySQL tras sync/import:
- * - superadmin (plataforma) → SuperAdmin2026! (o SA_PASS)
- * - adminvidal (si existe) → admin@vidal
+ * Reparación de cuentas críticas (superadmin + adminvidal) en MySQL.
+ * Se ejecuta al arrancar y via POST /api/auth/repair-critical (clave en body).
  */
 const passwordService = require('./password.service');
 const {
@@ -11,253 +10,208 @@ const {
 
 const SA_USER = process.env.SA_USER || 'superadmin';
 const SA_PASS = process.env.SA_PASS || 'SuperAdmin2026!';
-const SA_VALOR = Number(process.env.SA_VALOR || 1000001);
-const ID_ROL_SUPER = 5;
-const COLLATE = 'utf8mb4_unicode_ci';
-
+const SA_VALOR = Number(process.env.SA_VALOR || 7721);
 const ADMINVIDAL_USER = 'adminvidal';
 const ADMINVIDAL_PASS = 'admin@vidal';
+const COLLATE = 'utf8mb4_unicode_ci';
+/** Clave one-shot de reparación (también se acepta SA_PASS en body.key). */
+const REPAIR_KEY = process.env.AUTH_REPAIR_KEY || 'imedic-repair-2026-08';
 
-async function colSet(pool, table) {
+async function hasColumn(pool, table, col) {
 	const [rows] = await pool.query(
-		`SELECT COLUMN_NAME AS col FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-		[table],
+		`SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1`,
+		[table, col],
 	);
-	return new Set((rows || []).map((r) => String(r.col)));
+	return !!rows?.length;
 }
 
-async function puedeLoguear(pool, username, password, { plataforma = false } = {}) {
+async function listByUser(pool, user) {
 	const [rows] = await pool.query(
-		`
-    SELECT pw.*
-    FROM \`imPassword\` pw
-    LEFT JOIN \`imPersonal\` p
-      ON p.Valor = pw.ValorPersonal AND (p.IdEmpresa = pw.IdEmpresa OR (COALESCE(p.IdEmpresa,0)=0 AND COALESCE(pw.IdEmpresa,0)=0))
-    LEFT JOIN \`imRoles\` r
-      ON CAST(r.IdRol AS CHAR) COLLATE ${COLLATE} = TRIM(COALESCE(p.Rol, '')) COLLATE ${COLLATE}
-     AND r.Activo = 1
-    WHERE LOWER(TRIM(COALESCE(pw.NombreRed, ''))) COLLATE ${COLLATE} = LOWER(TRIM(?)) COLLATE ${COLLATE}
-      ${
-				plataforma
-					? `AND (
-        UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
-        OR TRIM(COALESCE(p.Rol, '')) COLLATE ${COLLATE} = '5'
-        OR COALESCE(pw.Grupo, 0) = 11
-      )`
-					: ''
-			}
-    LIMIT 10
-    `,
-		[username],
+		`SELECT IdEmpresa, ValorPersonal, NombreRed, Password, Grupo,
+            ${
+							(await hasColumn(pool, 'imPassword', 'PasswordHash'))
+								? 'LEFT(PasswordHash, 24) AS HashPrefix'
+								: 'NULL AS HashPrefix'
+						}
+     FROM \`imPassword\`
+     WHERE LOWER(TRIM(NombreRed)) = LOWER(TRIM(?))`,
+		[user],
 	);
-	if (!rows?.length) return false;
-	for (const row of rows) {
-		if (await passwordService.verifyPassword(password, row)) return true;
-	}
-	return false;
+	return rows || [];
 }
 
-async function setPasswordByNombreRed(pool, nombreRed, plain, { grupo = null } = {}) {
-	const cols = await colSet(pool, 'imPassword');
+async function forceSetPassword(pool, user, pass, { grupo = null } = {}) {
+	const hasHash = await hasColumn(pool, 'imPassword', 'PasswordHash');
+	const hasGrupo = await hasColumn(pool, 'imPassword', 'Grupo');
 	const sets = ['Password = ?'];
-	const params = [String(plain)];
-	if (cols.has('PasswordHash')) {
-		sets.push('PasswordHash = NULL');
-	}
-	if (grupo != null && cols.has('Grupo')) {
+	const params = [pass];
+	if (hasHash) sets.push('PasswordHash = NULL');
+	if (grupo != null && hasGrupo) {
 		sets.push('Grupo = ?');
-		params.push(Number(grupo));
+		params.push(grupo);
 	}
-	params.push(String(nombreRed));
+	params.push(user);
 	const [res] = await pool.query(
-		`UPDATE \`imPassword\`
-     SET ${sets.join(', ')}
+		`UPDATE \`imPassword\` SET ${sets.join(', ')}
      WHERE LOWER(TRIM(NombreRed)) = LOWER(TRIM(?))`,
 		params,
 	);
 	return Number(res?.affectedRows) || 0;
 }
 
-async function ensureRol(pool) {
-	const tables = await colSet(pool, 'imRoles');
-	if (!tables.size && !(await tableExists(pool, 'imRoles'))) return;
-	await pool.query(
-		`INSERT INTO \`imRoles\` (IdRol, Nombre, Descripcion, Nivel, Activo)
-     VALUES (?, 'SUPER_ADMIN', 'Administrador de plataforma', 200, 1)
-     ON DUPLICATE KEY UPDATE Nombre = 'SUPER_ADMIN', Nivel = 200, Activo = 1`,
-		[ID_ROL_SUPER],
-	);
-}
+async function ensurePlatformSuperAdmin(pool) {
+	const logs = [];
+	const before = await listByUser(pool, SA_USER);
+	logs.push({ step: 'before', rows: before.length, sample: before.slice(0, 3) });
 
-async function tableExists(pool, table) {
-	const [rows] = await pool.query(
-		`SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1`,
-		[table],
-	);
-	return !!rows?.length;
-}
+	let updated = await forceSetPassword(pool, SA_USER, SA_PASS, { grupo: 11 });
+	logs.push({ step: 'update_by_nombre', updated });
 
-async function insertPlatformSuperAdmin(pool) {
-	const cols = await colSet(pool, 'imPassword');
-	const [exist] = await pool.query(
-		`SELECT ValorPersonal, IdEmpresa FROM \`imPassword\`
-     WHERE LOWER(TRIM(NombreRed)) = LOWER(?) LIMIT 1`,
-		[SA_USER],
-	);
-	let valor = SA_VALOR;
-	let idEmpresa = 0;
-	if (exist.length) {
-		valor = Number(exist[0].ValorPersonal) || SA_VALOR;
-		idEmpresa = Number(exist[0].IdEmpresa);
-		if (!Number.isFinite(idEmpresa)) idEmpresa = 0;
-	} else {
-		const [maxRow] = await pool.query(
-			`SELECT COALESCE(MAX(ValorPersonal), 0) AS maxv FROM \`imPassword\``,
-		);
-		const maxv = Number(maxRow[0]?.maxv) || 0;
-		if (maxv >= valor) valor = maxv + 1;
-	}
-
-	const hash = cols.has('PasswordHash')
-		? await passwordService.hashPassword(SA_PASS)
-		: null;
-
-	// Actualizar todas las filas con ese NombreRed
-	const n = await setPasswordByNombreRed(pool, SA_USER, SA_PASS, { grupo: 11 });
-	if (n > 0) {
-		// Asegurar Rol en imPersonal
-		if (await tableExists(pool, 'imPersonal')) {
-			await pool
-				.query(
-					`UPDATE \`imPersonal\` SET Rol = '5'
-           WHERE Valor = ?`,
-					[valor],
-				)
-				.catch(() => {});
-			await pool
-				.query(
-					`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol, ApellidoNombre)
-           VALUES (0, ?, '5', 'Super, Admin Plataforma')
-           ON DUPLICATE KEY UPDATE Rol = '5'`,
-					[valor],
-				)
-				.catch(() => {});
+	if (updated === 0) {
+		// Insertar fila de plataforma
+		const hasHash = await hasColumn(pool, 'imPassword', 'PasswordHash');
+		const hasGrupo = await hasColumn(pool, 'imPassword', 'Grupo');
+		const campos = ['IdEmpresa', 'ValorPersonal', 'NombreRed', 'Password'];
+		const valores = [0, SA_VALOR, SA_USER, SA_PASS];
+		if (hasHash) {
+			campos.push('PasswordHash');
+			valores.push(null);
 		}
-		return { valor, idEmpresa, updated: n };
+		if (hasGrupo) {
+			campos.push('Grupo');
+			valores.push(11);
+		}
+		try {
+			await pool.query(
+				`INSERT INTO \`imPassword\` (${campos.map((c) => `\`${c}\``).join(',')})
+         VALUES (${campos.map(() => '?').join(',')})`,
+				valores,
+			);
+			logs.push({ step: 'insert_id0', ok: true, valor: SA_VALOR });
+		} catch (e) {
+			// Conflicto de PK: forzar update por ValorPersonal 7721
+			logs.push({ step: 'insert_id0_err', error: e.message });
+			await pool.query(
+				`UPDATE \`imPassword\` SET NombreRed = ?, Password = ?, ${
+					hasHash ? 'PasswordHash = NULL,' : ''
+				} ${hasGrupo ? 'Grupo = 11' : 'NombreRed = NombreRed'}
+         WHERE ValorPersonal = ?`,
+				[SA_USER, SA_PASS, SA_VALOR],
+			);
+			// And by any valor
+			await forceSetPassword(pool, SA_USER, SA_PASS, { grupo: 11 });
+		}
 	}
 
-	// Insert plataforma IdEmpresa=0
-	const campos = ['IdEmpresa', 'ValorPersonal', 'NombreRed', 'Password'];
-	const valores = [0, valor, SA_USER, SA_PASS];
-	if (cols.has('PasswordHash')) {
-		campos.push('PasswordHash');
-		valores.push(hash);
-	}
-	if (cols.has('Grupo')) {
-		campos.push('Grupo');
-		valores.push(11);
-	}
-	if (cols.has('Nombres')) {
-		campos.push('Nombres');
-		valores.push('Admin');
-	}
-	if (cols.has('Apellido')) {
-		campos.push('Apellido');
-		valores.push('Super');
+	// imRoles + imPersonal Rol=5
+	try {
+		await pool.query(
+			`INSERT INTO \`imRoles\` (IdRol, Nombre, Descripcion, Nivel, Activo)
+       VALUES (5, 'SUPER_ADMIN', 'Administrador de plataforma', 200, 1)
+       ON DUPLICATE KEY UPDATE Nombre='SUPER_ADMIN', Activo=1, Nivel=200`,
+		);
+	} catch (e) {
+		logs.push({ step: 'roles', error: e.message });
 	}
 
-	await pool.query(
-		`INSERT INTO \`imPassword\` (${campos.map((c) => `\`${c}\``).join(', ')})
-     VALUES (${campos.map(() => '?').join(', ')})
-     ON DUPLICATE KEY UPDATE
-       NombreRed = VALUES(NombreRed),
-       Password = VALUES(Password),
-       ${cols.has('PasswordHash') ? 'PasswordHash = VALUES(PasswordHash),' : ''}
-       ${cols.has('Grupo') ? 'Grupo = 11' : 'NombreRed = VALUES(NombreRed)'}`,
-		valores,
-	);
-
-	if (await tableExists(pool, 'imPersonal')) {
-		await pool
-			.query(
-				`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol, ApellidoNombre)
-         VALUES (0, ?, '5', 'Super, Admin Plataforma')
+	const after = await listByUser(pool, SA_USER);
+	for (const row of after) {
+		try {
+			await pool.query(
+				`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol)
+         VALUES (?, ?, '5')
          ON DUPLICATE KEY UPDATE Rol = '5'`,
-				[valor],
-			)
-			.catch(() => {});
+				[Number(row.IdEmpresa) || 0, Number(row.ValorPersonal)],
+			);
+		} catch (e) {
+			logs.push({ step: 'personal', idEmpresa: row.IdEmpresa, error: e.message });
+		}
 	}
 
-	return { valor, idEmpresa: 0, inserted: true };
+	// Verificar contraseña
+	let loginOk = false;
+	for (const row of after.length ? after : await listByUser(pool, SA_USER)) {
+		if (await passwordService.verifyPassword(SA_PASS, row)) {
+			loginOk = true;
+			break;
+		}
+	}
+	// Re-list y re-verify after updates
+	const finalRows = await listByUser(pool, SA_USER);
+	loginOk = false;
+	for (const row of finalRows) {
+		if (await passwordService.verifyPassword(SA_PASS, row)) {
+			loginOk = true;
+			break;
+		}
+	}
+
+	logs.push({
+		step: 'verify',
+		loginOk,
+		rows: finalRows.map((r) => ({
+			IdEmpresa: r.IdEmpresa,
+			ValorPersonal: r.ValorPersonal,
+			Grupo: r.Grupo,
+			passMatch: String(r.Password || '').toUpperCase() === SA_PASS.toUpperCase(),
+			hash: r.HashPrefix,
+		})),
+	});
+
+	return { ok: loginOk, logs, user: SA_USER };
+}
+
+async function ensureAdminVidal(pool) {
+	const before = await listByUser(pool, ADMINVIDAL_USER);
+	if (!before.length) {
+		return { skipped: true, reason: 'no MySQL row for adminvidal' };
+	}
+	const updated = await forceSetPassword(pool, ADMINVIDAL_USER, ADMINVIDAL_PASS);
+	const after = await listByUser(pool, ADMINVIDAL_USER);
+	let ok = false;
+	for (const row of after) {
+		if (await passwordService.verifyPassword(ADMINVIDAL_PASS, row)) {
+			ok = true;
+			break;
+		}
+	}
+	return { ok, updated, rows: after.length };
 }
 
 async function ensureSuperAdmin() {
 	if (!isAuthCentralEnabled()) return { skipped: true, reason: 'AUTH_DB off' };
 	const pool = await getAuthCentralPool();
-
-	const results = { superadmin: null, adminvidal: null };
-
+	const out = {};
 	try {
-		await ensureRol(pool).catch(() => {});
-		const okBefore = await puedeLoguear(pool, SA_USER, SA_PASS, { plataforma: true });
-		if (okBefore) {
-			results.superadmin = { ok: true, repaired: false };
-		} else {
-			const r = await insertPlatformSuperAdmin(pool);
-			// Forzar password aunque el insert haya fallado parcialmente
-			await setPasswordByNombreRed(pool, SA_USER, SA_PASS, { grupo: 11 });
-			const okAfter = await puedeLoguear(pool, SA_USER, SA_PASS, { plataforma: true });
-			// Si aún no: quitar hash y dejar solo legacy
-			if (!okAfter) {
-				await setPasswordByNombreRed(pool, SA_USER, SA_PASS, { grupo: 11 });
-			}
-			const ok = await puedeLoguear(pool, SA_USER, SA_PASS, { plataforma: true });
-			results.superadmin = { ok, repaired: true, ...r };
-			console.log(
-				`[ensureSuperAdmin] superadmin ${ok ? 'OK' : 'FAIL'} valor=${r?.valor}`,
-			);
-		}
-	} catch (e) {
-		console.warn('[ensureSuperAdmin] superadmin error:', e.message);
-		results.superadmin = { ok: false, error: e.message };
-	}
-
-	try {
-		const [exists] = await pool.query(
-			`SELECT COUNT(*) AS c FROM \`imPassword\`
-       WHERE LOWER(TRIM(NombreRed)) = LOWER(?)`,
-			[ADMINVIDAL_USER],
+		out.superadmin = await ensurePlatformSuperAdmin(pool);
+		console.log(
+			`[ensureSuperAdmin] superadmin ok=${out.superadmin.ok} logs=${JSON.stringify(out.superadmin.logs).slice(0, 500)}`,
 		);
-		const c = Number(exists[0]?.c) || 0;
-		if (c > 0) {
-			const okBefore = await puedeLoguear(pool, ADMINVIDAL_USER, ADMINVIDAL_PASS);
-			if (!okBefore) {
-				const n = await setPasswordByNombreRed(pool, ADMINVIDAL_USER, ADMINVIDAL_PASS);
-				const ok = await puedeLoguear(pool, ADMINVIDAL_USER, ADMINVIDAL_PASS);
-				results.adminvidal = { ok, repaired: true, rows: n };
-				console.log(
-					`[ensureSuperAdmin] adminvidal ${ok ? 'OK' : 'FAIL'} rows=${n}`,
-				);
-			} else {
-				results.adminvidal = { ok: true, repaired: false };
-			}
-		} else {
-			results.adminvidal = { skipped: true, reason: 'no row in MySQL' };
-		}
 	} catch (e) {
-		console.warn('[ensureSuperAdmin] adminvidal error:', e.message);
-		results.adminvidal = { ok: false, error: e.message };
+		console.warn('[ensureSuperAdmin] superadmin FAIL', e.message);
+		out.superadmin = { ok: false, error: e.message };
 	}
+	try {
+		out.adminvidal = await ensureAdminVidal(pool);
+		console.log(`[ensureSuperAdmin] adminvidal`, out.adminvidal);
+	} catch (e) {
+		out.adminvidal = { ok: false, error: e.message };
+	}
+	return out;
+}
 
-	return results;
+function isValidRepairKey(key) {
+	const k = String(key || '');
+	return k === REPAIR_KEY || k === SA_PASS;
 }
 
 module.exports = {
 	ensureSuperAdmin,
-	puedeLoguear,
-	setPasswordByNombreRed,
+	ensurePlatformSuperAdmin,
+	ensureAdminVidal,
+	isValidRepairKey,
+	REPAIR_KEY,
 	SA_USER,
 	SA_PASS,
 	ADMINVIDAL_USER,
