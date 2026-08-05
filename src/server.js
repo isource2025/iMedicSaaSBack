@@ -89,4 +89,18 @@ app.listen(PORT, HOST, () => {
         diag.warn('startup', 'Diagnóstico error', { error: e.message });
       });
   }, 2000);
+
+  // Restaura superadmin de plataforma si el login SaaS quedó roto (sync/import).
+  if (authOk) {
+    setTimeout(() => {
+      const { ensureSuperAdmin } = require('./services/ensureSuperAdmin.service');
+      ensureSuperAdmin()
+        .then((r) => {
+          if (r?.repaired) {
+            console.log('[ensureSuperAdmin] cuenta plataforma reparada:', r);
+          }
+        })
+        .catch((e) => console.warn('[ensureSuperAdmin]', e.message));
+    }, 3500);
+  }
 });

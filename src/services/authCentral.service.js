@@ -70,19 +70,24 @@ async function autenticarPlataforma(username, password) {
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
         OR TRIM(COALESCE(p.Rol, '')) = '5'
+        OR COALESCE(pw.Grupo, 0) = 11
       )
-    LIMIT 1
+    ORDER BY CASE WHEN COALESCE(pw.IdEmpresa, 0) = 0 THEN 0 ELSE 1 END
+    LIMIT 3
     `,
 		[normalizarUsername(username)],
 	);
 	if (!rows.length) return null;
-	if (!(await passwordService.verifyPassword(password, rows[0]))) return null;
-	await passwordService.upgradePasswordHashCentral(
-		rows[0].IdEmpresa,
-		rows[0].ValorPersonal,
-		password,
-	);
-	return mapUsuario(rows[0]);
+	for (const row of rows) {
+		if (!(await passwordService.verifyPassword(password, row))) continue;
+		await passwordService.upgradePasswordHashCentral(
+			row.IdEmpresa,
+			row.ValorPersonal,
+			password,
+		);
+		return mapUsuario(row);
+	}
+	return null;
 }
 
 async function autenticarTenant(idEmpresa, username, password) {
