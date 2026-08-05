@@ -358,10 +358,15 @@ const asignarPacienteACama = async (req, res) => {
       });
     }
 
+    // Compat: clientes viejos enviaban EstadoAmbulatorio con valor de clase
+    if (!datos.ClasePaciente && datos.EstadoAmbulatorio) {
+      datos.ClasePaciente = datos.EstadoAmbulatorio;
+    }
+
     const camposRequeridos = [
       'FechaAdmision',
       'HoraAdmision',
-      'EstadoAmbulatorio',
+      'ClasePaciente',
       'bedId',
       'ValorSector',
       'Operador',

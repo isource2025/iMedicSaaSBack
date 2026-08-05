@@ -57,6 +57,11 @@ async function obtenerMovimientosVisita(numeroVisita) {
       m.Diagnostico,
       m.ValorHabitacionCama,
       m.ValorSector,
+      m.ServicioHospital,
+      LTRIM(RTRIM(ISNULL(m.Operador, ''))) AS Operador,
+      m.FechaCarga,
+      m.HoraCarga,
+      LTRIM(RTRIM(ISNULL(sm.Descripcion, m.ServicioHospital))) AS NombreServicio,
       -- Cama: solo existe código, no descripción en imHabitacionCamas
       LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS NombreCama,
       LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
@@ -64,9 +69,12 @@ async function obtenerMovimientosVisita(numeroVisita) {
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaEgreso,0),  '1800-12-28'), 23) AS FechaEgresoISO,
-      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraEgreso,0)-1)*10, 0), 108)  AS HoraEgresoISO
+      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraEgreso,0)-1)*10, 0), 108)  AS HoraEgresoISO,
+      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
+      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraCarga,0)-1)*10, 0), 108) AS HoraCargaISO
     FROM dbo.imVisitaMovimiento m
     LEFT JOIN dbo.imSectores s ON s.Valor = LTRIM(RTRIM(m.ValorSector))
+    LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(m.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
     WHERE m.NumeroVisita = @p0
     ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
   `;
@@ -931,6 +939,7 @@ async function asignarPacienteACama(numeroVisita, datos) {
   const {
     FechaAdmision,
     HoraAdmision,
+    ClasePaciente,
     EstadoAmbulatorio,
     Diagnostico,
     bedId,
@@ -940,8 +949,9 @@ async function asignarPacienteACama(numeroVisita, datos) {
     HoraCarga,
   } = datos;
 
-  if (!FechaAdmision || !HoraAdmision || !EstadoAmbulatorio || !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
-    throw new Error('Faltan datos obligatorios para asignar la cama');
+  const clasePaciente = String(ClasePaciente || '').trim();
+  if (!FechaAdmision || !HoraAdmision || !clasePaciente || !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
+    throw new Error('Faltan datos obligatorios para asignar la cama (incluye ClasePaciente)');
   }
 
   const visitaRows = await executeQuery(
@@ -949,6 +959,7 @@ async function asignarPacienteACama(numeroVisita, datos) {
       SELECT
         IDPaciente,
         ClasePaciente,
+        LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
         FECHAEGRESO,
         LTRIM(RTRIM(ISNULL(VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama
       FROM dbo.imVisita
@@ -1000,6 +1011,12 @@ async function asignarPacienteACama(numeroVisita, datos) {
     );
   }
 
+  // Estado ambulatorio del movimiento: conservar el de la visita (no confundir con ClasePaciente)
+  const estadoAmbMovimiento =
+    String(EstadoAmbulatorio || '').trim() ||
+    String(visita.EstadoAmbulatorio || '').trim() ||
+    ' ';
+
   const query = `
     BEGIN TRY
       BEGIN TRANSACTION;
@@ -1048,7 +1065,7 @@ async function asignarPacienteACama(numeroVisita, datos) {
       SET
         ValorHabitacionCama = @param9,
         ValorSector = @param8,
-        EstadoAmbulatorio = @param3,
+        ClasePaciente = @param10,
         Diagnostico = CASE
           WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
           ELSE @param4
@@ -1067,13 +1084,14 @@ async function asignarPacienteACama(numeroVisita, datos) {
     { value: num },
     { value: FechaAdmision },
     { value: HoraAdmision },
-    { value: EstadoAmbulatorio },
+    { value: estadoAmbMovimiento },
     { value: Diagnostico || null },
     { value: Operador },
     { value: FechaCarga },
     { value: HoraCarga },
     { value: ValorSector },
     { value: bedId },
+    { value: clasePaciente },
   ];
 
   try {
