@@ -58,6 +58,7 @@ const buscarDiagnosticosCie10 = async (termino) => {
     const query = `
       SELECT TOP 100
         Valor as idDiagnostico, 
+        CodigoOMS as CodigoOMS,
         CodigoOMS as codigoCie10, 
         Descripcion as descripcion,
         Sexo as sexo,
@@ -66,15 +67,16 @@ const buscarDiagnosticosCie10 = async (termino) => {
         Memo as memo,
         CIE as cie
       FROM 
-        imdiagnosticos
+        imDiagnosticos
       WHERE 
         CodigoOMS LIKE @p0 OR Descripcion LIKE @p1
       ORDER BY 
         CodigoOMS
     `;
 
-    // El término de búsqueda se utiliza con comodines % para buscar coincidencias parciales
-    const resultado = await executeQuery(query, [`%${termino}%`, `%${termino}%`]);
+    // executeQuery espera objetos { value }; strings crudos dejan el LIKE en undefined
+    const like = `%${termino.trim()}%`;
+    const resultado = await executeQuery(query, [{ value: like }, { value: like }]);
     console.log(`Resultado búsqueda de diagnósticos: ${resultado ? resultado.length : 0} registros encontrados para término "${termino}"`);
     return resultado || [];
   } catch (error) {
@@ -101,6 +103,7 @@ const obtenerDiagnosticoPorId = async (idDiagnostico) => {
     const query = `
       SELECT 
         Valor as idDiagnostico, 
+        CodigoOMS as CodigoOMS,
         CodigoOMS as codigoCie10, 
         Descripcion as descripcion,
         Sexo as sexo,
@@ -109,12 +112,12 @@ const obtenerDiagnosticoPorId = async (idDiagnostico) => {
         Memo as memo,
         CIE as cie
       FROM 
-        imdiagnosticos
+        imDiagnosticos
       WHERE 
         Valor = @p0
     `;
 
-    const resultado = await executeQuery(query, [idDiagnostico]);
+    const resultado = await executeQuery(query, [{ value: idDiagnostico }]);
     return resultado && resultado.length > 0 ? resultado[0] : null;
   } catch (error) {
     console.error(`Error al obtener diagnóstico CIE10 con ID ${idDiagnostico}:`, error);

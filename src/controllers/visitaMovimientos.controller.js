@@ -313,11 +313,92 @@ const obtenerMovimientosRecientes = async (req, res) => {
   }
 };
 
+/**
+ * Lista internados vigentes sin cama asignada
+ */
+const obtenerPacientesInternadosSinCama = async (req, res) => {
+  try {
+    const termino = req.query.termino || req.query.q || '';
+    const data = await visitaMovimientosService.obtenerPacientesInternadosSinCama(termino);
+    res.json({
+      success: true,
+      data,
+      count: data.length,
+    });
+  } catch (error) {
+    console.error('Error al listar internados sin cama:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: 'Error al obtener pacientes internados sin cama',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Asigna una cama libre a un internado sin ubicación
+ */
+const asignarPacienteACama = async (req, res) => {
+  try {
+    const numeroVisita = req.params.numeroVisita;
+    const datos = req.body;
+
+    if (!numeroVisita) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'Se requiere el número de visita',
+      });
+    }
+
+    const numeroVisitaInt = parseInt(numeroVisita, 10);
+    if (isNaN(numeroVisitaInt)) {
+      return res.status(400).json({
+        success: false,
+        mensaje: `El número de visita '${numeroVisita}' no es un número válido`,
+      });
+    }
+
+    const camposRequeridos = [
+      'FechaAdmision',
+      'HoraAdmision',
+      'EstadoAmbulatorio',
+      'bedId',
+      'ValorSector',
+      'Operador',
+      'FechaCarga',
+      'HoraCarga',
+    ];
+    const faltantes = camposRequeridos.filter((c) => !datos[c]);
+    if (faltantes.length) {
+      return res.status(400).json({
+        success: false,
+        mensaje: `Faltan campos requeridos: ${faltantes.join(', ')}`,
+      });
+    }
+
+    const resultado = await visitaMovimientosService.asignarPacienteACama(numeroVisitaInt, datos);
+    res.json({
+      success: true,
+      mensaje: 'Cama asignada correctamente',
+      data: resultado.data,
+    });
+  } catch (error) {
+    console.error('Error al asignar cama:', error);
+    res.status(500).json({
+      success: false,
+      mensaje: error.message || 'Error al asignar la cama',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
   intercambiarCamasPacientes,
-  obtenerMovimientosRecientes
+  obtenerMovimientosRecientes,
+  obtenerPacientesInternadosSinCama,
+  asignarPacienteACama,
 };

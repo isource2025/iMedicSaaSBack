@@ -9,6 +9,10 @@ requests.http
 # Directorio de archivos subidos (no versionar)
 uploads/
 
+# Backups SQL locales
+backups/
+scripts/_schema_diff_*.json
+
 # Artefactos locales / sensibles (no versionar)
 tmp-*.txt
 *-tok.txt

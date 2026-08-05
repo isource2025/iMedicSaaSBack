@@ -13,6 +13,11 @@ router.get(
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.turnosActivosPaciente,
 );
+router.post(
+	'/paciente/:idPaciente/export-general',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.exportGeneralPaciente,
+);
 router.get('/:numeroVisita/detail', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.detalle);
 router.post(
 	'/:numeroVisita/export-selective',

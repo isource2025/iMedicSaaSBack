@@ -112,7 +112,7 @@ async function buscarAdmisiones({
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
   const safePage = Math.max(1, Number(page) || 1);
-  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
+  const safeLimit = Math.min(250, Math.max(1, Number(limit) || 25));
   const offset = (safePage - 1) * safeLimit;
 
   const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn().catch(() => null);
@@ -141,6 +141,25 @@ async function buscarAdmisiones({
       tp.Descripcion AS TipoPacienteDescripcion,
       v.EstadoAmbulatorio,
       ea.Descripcion AS EstadoAmbulatorioDescripcion,
+      LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) AS Diagnostico,
+      LTRIM(RTRIM(ISNULL(d.Descripcion, ''))) AS DiagnosticoDescripcion,
+      LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) AS ServicioHospital,
+      LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) AS LocalizacionEgresado,
+      COALESCE(
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(smEgr.Descripcion, ''))), ''), '0'),
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secEgr.Descripcion, ''))), ''), '0'),
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(sm.Descripcion, ''))), ''), '0'),
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secBed.Descripcion, ''))), ''), '0'),
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secTemp.Descripcion, ''))), ''), '0'),
+        CASE
+          WHEN LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) IN ('', '0') THEN NULL
+          ELSE NULLIF(NULLIF(LTRIM(RTRIM(v.LocalizacionEgresado)), ''), '0')
+        END,
+        CASE
+          WHEN LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) IN ('', '0') THEN NULL
+          ELSE NULLIF(NULLIF(LTRIM(RTRIM(v.ServicioHospital)), ''), '0')
+        END
+      ) AS ServicioEgresoDescripcion,
       CASE
         WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'A' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I' THEN 'Internado'
@@ -152,6 +171,32 @@ async function buscarAdmisiones({
         WHEN UPPER(LTRIM(RTRIM(COALESCE(v.TipoPaciente, '')))) IN ('I', 'INT', 'INTERNADO') THEN 'Internado'
         ELSE 'Sin clasificar'
       END AS TipoAtencion,
+      CASE
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+          OR UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%INTERN%'
+          OR UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%INTERN%'
+          OR UPPER(LTRIM(RTRIM(COALESCE(v.TipoPaciente, '')))) IN ('I', 'INT', 'INTERNADO')
+        THEN
+          CASE
+            WHEN v.FECHAADMISIONS IS NULL THEN NULL
+            ELSE DATEDIFF(
+              day,
+              CAST(v.FECHAADMISIONS AS date),
+              COALESCE(
+                CASE
+                  WHEN TRY_CAST(v.FechaEgreso AS int) IS NOT NULL
+                       AND TRY_CAST(v.FechaEgreso AS int) > 0
+                       AND OBJECT_ID(N'dbo.fn_ClarionDATE2SQL', N'FN') IS NOT NULL
+                       AND CAST(dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS date) >= CAST(v.FECHAADMISIONS AS date)
+                  THEN CAST(dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS date)
+                  ELSE NULL
+                END,
+                CAST(GETDATE() AS date)
+              )
+            ) + 1
+          END
+        ELSE NULL
+      END AS DiasInternacion,
       (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
       (SELECT COUNT(1) FROM dbo.imFacpracticas fp WHERE fp.NumeroVisita = v.NumeroVisita) AS CntPracticas,
       (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
@@ -167,6 +212,22 @@ async function buscarAdmisiones({
     INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
     LEFT JOIN imTipoPaciente tp ON v.TipoPaciente = tp.Valor
     LEFT JOIN imEstadoAmbulatorio ea ON v.EstadoAmbulatorio = ea.Valor
+    LEFT JOIN imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+    LEFT JOIN imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
+      AND LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) NOT IN ('', '0')
+    LEFT JOIN imServiciosMedicos smEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(smEgr.Valor, '')))
+      AND LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) NOT IN ('', '0')
+    LEFT JOIN imSectores secEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(secEgr.Valor, '')))
+      AND LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) NOT IN ('', '0')
+    LEFT JOIN imSectores secTemp ON LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) = LTRIM(RTRIM(ISNULL(secTemp.Valor, '')))
+      AND LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) NOT IN ('', '0')
+    OUTER APPLY (
+      SELECT TOP 1 hc.ValorSector
+      FROM dbo.imHabitacionCamas hc
+      WHERE hc.NumeroVisita = v.NumeroVisita
+      ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+    ) bed
+    LEFT JOIN imSectores secBed ON LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(secBed.Valor, '')))
     ${whereClause}
     ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
     OFFSET @param${params.length} ROWS FETCH NEXT @param${params.length + 1} ROWS ONLY
@@ -199,14 +260,71 @@ async function obtenerResumenAdmision(numeroVisita) {
         p.NumeroDocumento,
         p.NumeroHC,
         CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
-        CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision
+        CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
+        LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(d.Descripcion, ''))) AS DiagnosticoDescripcion,
+        LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) AS ServicioHospital,
+        LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) AS LocalizacionEgresado,
+        COALESCE(
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(smEgr.Descripcion, ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secEgr.Descripcion, ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(sm.Descripcion, ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secBed.Descripcion, ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(secTemp.Descripcion, ''))), ''), '0'),
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) IN ('', '0') THEN NULL
+            ELSE NULLIF(NULLIF(LTRIM(RTRIM(v.LocalizacionEgresado)), ''), '0')
+          END,
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) IN ('', '0') THEN NULL
+            ELSE NULLIF(NULLIF(LTRIM(RTRIM(v.ServicioHospital)), ''), '0')
+          END
+        ) AS ServicioEgresoDescripcion
       FROM imVisita v
       INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+      LEFT JOIN imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+      LEFT JOIN imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
+        AND LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) NOT IN ('', '0')
+      LEFT JOIN imServiciosMedicos smEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(smEgr.Valor, '')))
+        AND LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) NOT IN ('', '0')
+      LEFT JOIN imSectores secEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(secEgr.Valor, '')))
+        AND LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) NOT IN ('', '0')
+      LEFT JOIN imSectores secTemp ON LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) = LTRIM(RTRIM(ISNULL(secTemp.Valor, '')))
+        AND LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) NOT IN ('', '0')
+      OUTER APPLY (
+        SELECT TOP 1 hc.ValorSector
+        FROM dbo.imHabitacionCamas hc
+        WHERE hc.NumeroVisita = v.NumeroVisita
+        ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+      ) bed
+      LEFT JOIN imSectores secBed ON LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(secBed.Valor, '')))
       WHERE v.NumeroVisita = @param0
     `,
     [{ value: numeroVisita }]
   );
   return rows?.[0] || null;
+}
+
+/** Números de visita de un paciente (más recientes primero). */
+async function listarNumerosVisitaPaciente(idPaciente, limit = 100) {
+  const id = Number(idPaciente);
+  if (!Number.isFinite(id) || id <= 0) return [];
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 100));
+  const rows = await executeQuery(
+    `
+      SELECT TOP (@p1) v.NumeroVisita
+      FROM dbo.imVisita v
+      WHERE v.IdPaciente = @p0
+      ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+    `,
+    [
+      { value: id, type: 'Int' },
+      { value: safeLimit, type: 'Int' },
+    ],
+  );
+  return (rows || [])
+    .map((r) => Number(r.NumeroVisita))
+    .filter((n) => Number.isFinite(n) && n > 0);
 }
 
 function _clarionFechaIso(fechaClarion) {
@@ -871,4 +989,5 @@ module.exports = {
   obtenerPracticasPorVisita,
   exportarAdmisionCompleta,
   exportarAdmisionSelectivo,
+  listarNumerosVisitaPaciente,
 };

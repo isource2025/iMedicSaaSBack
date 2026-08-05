@@ -369,6 +369,60 @@ async function listarProfesionales(req, res) {
 	}
 }
 
+async function listarRecursosAgenda(req, res) {
+	try {
+		const agendaRecurso = require('../services/agendaRecurso.service');
+		const todos = String(req.query.todos || '') === '1';
+		const data = todos
+			? await agendaRecurso.listarRecursosConfigurados()
+			: await agendaRecurso.listarRecursosVisibles({
+					matricula: req.matricula,
+					valorPersonal: req.valorPersonal,
+				});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function obtenerSlotsRecurso(req, res) {
+	try {
+		const agendaRecurso = require('../services/agendaRecurso.service');
+		const tipo = String(req.params.tipo || '');
+		const valor = String(req.params.valor || '');
+		const desde = String(req.query.desde || '');
+		const hasta = String(req.query.hasta || req.query.desde || '');
+		const data = await agendaRecurso.generarSlots(tipo, valor, desde, hasta);
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function obtenerHorariosRecurso(req, res) {
+	try {
+		const agendaRecurso = require('../services/agendaRecurso.service');
+		const data = await agendaRecurso.obtenerHorarios(req.params.tipo, req.params.valor);
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function reemplazarHorariosRecurso(req, res) {
+	try {
+		const agendaRecurso = require('../services/agendaRecurso.service');
+		const data = await agendaRecurso.reemplazarHorarios(
+			req.params.tipo,
+			req.params.valor,
+			req.body || {},
+		);
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
 async function obtenerDetalleAtencion(req, res) {
 	try {
 		const id = Number(req.params.idTurno);
@@ -390,6 +444,10 @@ module.exports = {
 	buscarTurnosPorPaciente,
 	obtenerDisponibilidad,
 	listarProfesionales,
+	listarRecursosAgenda,
+	obtenerSlotsRecurso,
+	obtenerHorariosRecurso,
+	reemplazarHorariosRecurso,
 	asignarTurno,
 	actualizarTurno,
 	cancelarTurno,

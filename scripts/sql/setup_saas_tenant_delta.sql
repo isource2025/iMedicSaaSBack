@@ -666,6 +666,29 @@ END
 GO
 
 /*------------------------------------------------------------------------------
+  11) AGENDA POR SECTOR / SERVICIO (horarios de recurso compartido)
+------------------------------------------------------------------------------*/
+IF OBJECT_ID(N'dbo.imAgendaRecursoHorarios', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.imAgendaRecursoHorarios (
+    TipoRecurso       VARCHAR(10)  NOT NULL, -- SECTOR | SERVICIO
+    ValorRecurso      VARCHAR(20)  NOT NULL,
+    Dia               VARCHAR(20)  NOT NULL CONSTRAINT DF_imAgendaRecursoHorarios_Dia DEFAULT '',
+    HoraDesde         INT          NOT NULL,
+    HoraHasta         INT          NOT NULL,
+    IntervaloConsulta INT          NULL,
+    IDConsultorio     VARCHAR(20)  NULL,
+    IdServicio        VARCHAR(20)  NULL,
+    CONSTRAINT PK_imAgendaRecursoHorarios PRIMARY KEY (TipoRecurso, ValorRecurso, Dia, HoraDesde)
+  );
+  CREATE INDEX IX_imAgendaRecursoHorarios_Valor ON dbo.imAgendaRecursoHorarios (TipoRecurso, ValorRecurso);
+  PRINT 'Creada: dbo.imAgendaRecursoHorarios';
+END
+ELSE
+  PRINT 'OK: dbo.imAgendaRecursoHorarios ya existe';
+GO
+
+/*------------------------------------------------------------------------------
   RESUMEN
 ------------------------------------------------------------------------------*/
 PRINT '';
@@ -679,6 +702,7 @@ WHERE schema_id = SCHEMA_ID('dbo')
     'imBotConfig', 'imBotChat',
     'imHCExamenesLabCabecera', 'imHCExamenesLabDetalle', 'imHCExamenesLabDetalleConf',
     'imPedidosEstudiosToma',
+    'imAgendaRecursoHorarios',
     'fn_ClarionDATE2SQL', 'fn_GetIndicadores', 'fn_OcupacionPromedioCamas',
     'vw_iMedic_PedidosEstudiosBase', 'vw_iMedic_PedidosEstudiosImagen', 'vw_iMedic_PedidosInterconsultas'
   )

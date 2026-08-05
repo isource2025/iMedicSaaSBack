@@ -1,6 +1,9 @@
 const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
-const { buildSelectiveExportPdf } = require('../services/admissionSearchExportPdf');
+const {
+  buildSelectiveExportPdf,
+  buildMultiVisitExportPdf,
+} = require('../services/admissionSearchExportPdf');
 
 function parseEvolucionSectorIds(body) {
   const raw = body?.evolucionSectorIds;
@@ -54,7 +57,7 @@ async function buscar(req, res) {
       ...result,
     });
   } catch (error) {
-    console.error('Error en búsqueda integral de admisiones:', error);
+    console.error('Error en b?squeda integral de admisiones:', error);
     res.status(500).json({
       success: false,
       message: 'Error al buscar admisiones',
@@ -68,7 +71,7 @@ async function detalle(req, res) {
     if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'numeroVisita inválido',
+        message: 'numeroVisita inv?lido',
       });
     }
 
@@ -76,7 +79,7 @@ async function detalle(req, res) {
     if (!payload) {
       return res.status(404).json({
         success: false,
-        message: 'Admisión no encontrada',
+        message: 'Admisi?n no encontrada',
       });
     }
 
@@ -85,10 +88,10 @@ async function detalle(req, res) {
       data: payload,
     });
   } catch (error) {
-    console.error('Error al obtener detalle de admisión:', error);
+    console.error('Error al obtener detalle de admisi?n:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener detalle de admisión',
+      message: 'Error al obtener detalle de admisi?n',
     });
   }
 }
@@ -111,7 +114,7 @@ async function exportSelectivo(req, res) {
     if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'numeroVisita inválido',
+        message: 'numeroVisita inv?lido',
       });
     }
 
@@ -122,7 +125,7 @@ async function exportSelectivo(req, res) {
     if (sections.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Seleccioná al menos un tipo de dato para exportar',
+        message: 'Seleccion? al menos un tipo de dato para exportar',
       });
     }
 
@@ -136,7 +139,7 @@ async function exportSelectivo(req, res) {
     if (!exportAll && needDates && !fechaInicio && !fechaFin) {
       return res.status(400).json({
         success: false,
-        message: 'Indicá fecha desde y/o hasta, o activá "Exportar todo"',
+        message: 'Indic? fecha desde y/o hasta, o activ? "Exportar todo"',
       });
     }
 
@@ -152,7 +155,7 @@ async function exportSelectivo(req, res) {
     if (!payload) {
       return res.status(404).json({
         success: false,
-        message: 'Admisión no encontrada',
+        message: 'Admisi?n no encontrada',
       });
     }
 
@@ -168,10 +171,10 @@ async function exportSelectivo(req, res) {
         message: error.message,
       });
     }
-    console.error('Error en export selectivo de admisión:', error);
+    console.error('Error en export selectivo de admisi?n:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al generar la exportación',
+      message: 'Error al generar la exportaci?n',
     });
   }
 }
@@ -182,7 +185,7 @@ async function turnosActivosPaciente(req, res) {
     if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'idPaciente inválido',
+        message: 'idPaciente inv?lido',
       });
     }
     const data = await agendaService.buscarTurnosPorPaciente(idPaciente, { soloActivos: true });
@@ -201,4 +204,81 @@ module.exports = {
   detalle,
   exportSelectivo,
   turnosActivosPaciente,
+  exportGeneralPaciente,
 };
+
+async function exportGeneralPaciente(req, res) {
+  try {
+    const idPaciente = Number(req.params.idPaciente);
+    if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'idPaciente inv?lido',
+      });
+    }
+
+    const body = req.body || {};
+    const rawSections = Array.isArray(body.sections) ? body.sections : [];
+    const sections = rawSections.map(String).filter((s) => EXPORT_SECTIONS.has(s));
+    if (sections.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Seleccion? al menos un tipo de dato para exportar',
+      });
+    }
+
+    const exportAll = body.exportAll !== false;
+    const fechaInicio = body.fechaInicio != null ? String(body.fechaInicio).trim() : '';
+    const fechaFin = body.fechaFin != null ? String(body.fechaFin).trim() : '';
+    const evolucionSectorIds = parseEvolucionSectorIds(body);
+    const evolucionServicioIds = parseEvolucionServicioIds(body);
+
+    const needDates = sectionsRequireDateFilter(sections);
+    if (!exportAll && needDates && !fechaInicio && !fechaFin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Indic? fecha desde y/o hasta, o activ? "Exportar todo"',
+      });
+    }
+
+    const visitas = await admissionSearchService.listarNumerosVisitaPaciente(idPaciente, 80);
+    if (!visitas.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'El paciente no tiene visitas para exportar',
+      });
+    }
+
+    const pdfBuffers = [];
+    for (const nv of visitas) {
+      const payload = await admissionSearchService.exportarAdmisionSelectivo(nv, {
+        sections,
+        exportAll,
+        fechaInicio,
+        fechaFin,
+        evolucionServicioIds,
+        evolucionSectorIds,
+      });
+      if (!payload) continue;
+      pdfBuffers.push(await buildSelectiveExportPdf(payload));
+    }
+
+    const pdfBuf = await buildMultiVisitExportPdf(pdfBuffers);
+    const fileName = `paciente_${idPaciente}_carpeta_${new Date().toISOString().slice(0, 10)}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(pdfBuf);
+  } catch (error) {
+    if (error.code === 'NO_SECTIONS' || error.code === 'NO_VISITS') {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    console.error('Error en export general de paciente:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al generar la exportaci?n general',
+    });
+  }
+}

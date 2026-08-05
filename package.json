@@ -37,7 +37,11 @@
 		"setup:turnero": "node scripts/ejecutar_setup_turnero.js",
 		"audit:turnero": "node scripts/audit_turnero.js",
 		"seed:permisos": "node scripts/seed_permisos.js",
-		"seed:almacen": "node scripts/seed_almacen.js"
+		"seed:almacen": "node scripts/seed_almacen.js",
+		"db:compare-schema": "node scripts/comparar_esquema_sql.js",
+		"db:backup": "node scripts/migrar_bd_a_remoto.js backup",
+		"db:restore": "node scripts/migrar_bd_a_remoto.js restore",
+		"setup:saas-tenant": "node scripts/ejecutar_setup_saas_tenant.js"
 	},
 	"dependencies": {
 		"argon2": "^0.44.0",
@@ -63,7 +67,7 @@
 		"sharp": "^0.33.5",
 		"string-similarity": "^4.0.4",
 		"tesseract.js": "^5.1.1",
-		"uuid": "^14.0.1"
+		"uuid": "^9.0.1"
 	},
 	"devDependencies": {
 		"nodemon": "^2.0.22"

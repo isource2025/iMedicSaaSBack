@@ -27,6 +27,16 @@ router.post(
 	visitaMovimientosController.moverPacienteACamaVacia,
 );
 router.post(
+	'/asignar/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.asignarPacienteACama,
+);
+router.get(
+	'/internados-sin-cama',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	visitaMovimientosController.obtenerPacientesInternadosSinCama,
+);
+router.post(
 	'/intercambiar/:numeroVisita1/:numeroVisita2',
 	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.intercambiarCamasPacientes,

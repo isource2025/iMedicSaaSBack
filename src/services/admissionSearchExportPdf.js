@@ -22,8 +22,10 @@ function safeText(val, maxLen = null) {
   if (val == null || val === '') return '';
   let s = String(val);
   s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-  s = s.replace(/Ð/g, '\n');
+  // Clarion / encoding: Ð y similares se usan como saltos de línea basura
+  s = s.replace(/[\u00D0ÐÞþ]/g, '\n');
   s = s.replace(/\uFFFD/g, '');
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   s = s.replace(/\n{3,}/g, '\n\n');
   if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
   return s;
@@ -326,31 +328,47 @@ function renderIndicacionesGrid(doc, items) {
   sectionTitle(doc, 'Indicaciones');
   const left = doc.page.margins.left;
   const w = contentWidth(doc);
-  const cols = 3;
-  const gap = 6;
+  const cols = 2;
+  const gap = 8;
   const cellW = (w - gap * (cols - 1)) / cols;
-  const pad = 4;
+  const pad = 5;
+
+  const buildLines = (ind, idx) => {
+    const tipo = String(ind.tipo || ind.TipoIndicacion || '').trim().toUpperCase();
+    const desc = safeText(ind.descripcion);
+    const med = safeText(ind.medicamento || ind.AliasMedicamento);
+    const ultima = safeText(ind.ultimaAplicacion || ind.UltimaAplicacion);
+    const proxima = safeText(ind.proximaAplicacion || ind.ProximaAplicacion);
+    const freq = safeText(ind.frecuencia);
+    const prof = safeText(ind.fullName);
+    const obs = safeText(ind.observaciones);
+    const lines = [`#${idx}  Nº ${str(ind.nroIndicacion)}`];
+    if (desc) lines.push(`Desc.: ${desc}`);
+    // Solo mostrar Med. si hay alias distinto de la descripción, o si es medicación
+    if (med && med !== desc) lines.push(`Med.: ${med}`);
+    else if (tipo === 'M' && med) lines.push(`Med.: ${med}`);
+    if (ultima) lines.push(`Aplicación: ${ultima}`);
+    if (proxima) lines.push(`Próxima: ${proxima}`);
+    if (freq) lines.push(`Freq.: ${freq}`);
+    if (prof) lines.push(`Prof.: ${prof}`);
+    if (obs) lines.push(`Obs.: ${obs}`);
+    if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
+      const hij = ind.indicacionesHijas
+        .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
+        .filter(Boolean)
+        .join(' | ');
+      if (hij) lines.push(`Hijas: ${hij}`);
+    }
+    return lines;
+  };
 
   for (let rowStart = 0; rowStart < items.length; rowStart += cols) {
     const rowItems = items.slice(rowStart, rowStart + cols);
     const heights = rowItems.map((ind, idx) => {
-      const lines = [
-        `#${rowStart + idx + 1}  Nº ${str(ind.nroIndicacion)}`,
-        `Desc.: ${safeText(ind.descripcion)}`,
-        `Med.: ${safeText(ind.medicamento)}`,
-        `Freq.: ${safeText(ind.frecuencia)}`,
-        `Prof.: ${safeText(ind.fullName)}`,
-        `Obs.: ${safeText(ind.observaciones)}`,
-      ];
-      if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
-        const hij = ind.indicacionesHijas
-          .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
-          .join(' | ');
-        lines.push(`Hijas: ${hij}`);
-      }
-      doc.font('Helvetica').fontSize(6.3);
+      const lines = buildLines(ind, rowStart + idx + 1);
+      doc.font('Helvetica').fontSize(6.5);
       const h = doc.heightOfString(lines.join('\n'), { width: cellW - pad * 2 });
-      return Math.max(36, h + 12);
+      return Math.max(28, h + 12);
     });
     const cellH = Math.max(...heights);
     ensureSpace(doc, cellH + 8);
@@ -361,29 +379,13 @@ function renderIndicacionesGrid(doc, items) {
       doc.save();
       doc.roundedRect(x, rowTop, cellW, cellH, 3).fill('#ffffff').stroke('#cbd5e1');
       doc.restore();
-
-      const lines = [
-        `#${rowStart + c + 1}  Nº ${str(ind.nroIndicacion)}`,
-        `Desc.: ${safeText(ind.descripcion)}`,
-        `Med.: ${safeText(ind.medicamento)}`,
-        `Freq.: ${safeText(ind.frecuencia)}`,
-        `Prof.: ${safeText(ind.fullName)}`,
-        `Obs.: ${safeText(ind.observaciones)}`,
-      ];
-      if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
-        const hij = ind.indicacionesHijas
-          .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
-          .join(' | ');
-        lines.push(`Hijas: ${hij}`);
-      }
-
-      doc.font('Helvetica').fontSize(6.3).fillColor('#334155').text(lines.join('\n'), x + pad, rowTop + pad, {
+      const lines = buildLines(ind, rowStart + c + 1);
+      doc.font('Helvetica').fontSize(6.5).fillColor('#334155').text(lines.join('\n'), x + pad, rowTop + pad, {
         width: cellW - pad * 2,
       });
     });
 
-    // Reducimos ~50% el espacio vertical entre filas de indicaciones.
-    doc.y = rowTop + cellH + 4;
+    doc.y = rowTop + cellH + 6;
   }
   doc.moveDown(0.2);
 }
@@ -691,12 +693,34 @@ async function buildSelectiveExportPdf(payload) {
 
     if (payload.evolucionesMedicas && payload.evolucionesMedicas.length) {
       sectionTitle(doc, 'Evoluciones médicas');
+      const left = doc.page.margins.left;
+      const w = contentWidth(doc);
       payload.evolucionesMedicas.forEach((e, ei) => {
-        ensureSpace(doc, 34);
+        const body = safeText(e.Evolucion);
         const head = `#${ei + 1} · ${str(e.FechaEv)} ${str(e.HoraEv)} · ${str(e.ProfesionalNombreCompleto)}`;
-        doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(head, { width: contentWidth(doc) });
-        bodyParagraph(doc, safeText(e.Evolucion));
-        doc.moveDown(0.1);
+        doc.font('Helvetica-Bold').fontSize(8);
+        const headH = doc.heightOfString(head, { width: w - 16 });
+        doc.font('Helvetica').fontSize(8);
+        const bodyH = body ? doc.heightOfString(body, { width: w - 16, lineGap: 1 }) : 0;
+        const boxH = Math.max(36, headH + bodyH + 18);
+        ensureSpace(doc, boxH + 10);
+        const top = doc.y;
+        doc.save();
+        doc.roundedRect(left, top, w, boxH, 4).fill(ei % 2 === 0 ? '#f8fafc' : '#ffffff').stroke('#94a3b8');
+        doc.restore();
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(8)
+          .fillColor('#0f172a')
+          .text(head, left + 8, top + 8, { width: w - 16 });
+        if (body) {
+          doc
+            .font('Helvetica')
+            .fontSize(8)
+            .fillColor('#1e293b')
+            .text(body, left + 8, doc.y + 4, { width: w - 16, lineGap: 1 });
+        }
+        doc.y = top + boxH + 8;
       });
     }
 
@@ -795,14 +819,46 @@ async function buildSelectiveExportPdf(payload) {
     }
 
     if (adjuntosResueltos.length) {
-      adjuntosResueltos.forEach((adj) => {
+      const okAdjuntos = [];
+      const failedAdjuntos = [];
+      for (const adj of adjuntosResueltos) {
+        if (adj.kind === 'error') {
+          failedAdjuntos.push(adj);
+          continue;
+        }
+        okAdjuntos.push(adj);
+      }
+
+      if (failedAdjuntos.length) {
+        sectionTitle(doc, 'Adjuntos no incluidos');
+        ensureSpace(doc, 40);
+        doc
+          .font('Helvetica')
+          .fontSize(8)
+          .fillColor('#b91c1c')
+          .text(
+            `No se pudieron obtener ${failedAdjuntos.length} adjunto(s) (timeout o error de conexión al file server). No se agregaron páginas vacías.`,
+            { width: contentWidth(doc) },
+          );
+        doc.moveDown(0.25);
+        failedAdjuntos.forEach((adj) => {
+          const nombre = str(adj.nombreArchivo || 'Adjunto');
+          const id = adj.meta?.IdAdjunto != null ? ` · Id ${adj.meta.IdAdjunto}` : '';
+          const err = adj.error ? ` — ${safeText(adj.error, 120)}` : '';
+          doc.font('Helvetica').fontSize(7.5).fillColor('#7f1d1d').text(`• ${nombre}${id}${err}`, {
+            width: contentWidth(doc),
+          });
+        });
+        doc.moveDown(0.35);
+      }
+
+      okAdjuntos.forEach((adj) => {
         // PDFs: se anexan directo, sin página intermedia.
         if (adj.kind === 'pdf' && adj.buffer) {
           pdfAnnexBuffers.push(adj.buffer);
           return;
         }
 
-        // Para el resto, cada adjunto mantiene su hoja dedicada.
         doc.addPage();
 
         const titulo = str(adj.nombreArchivo || 'Adjunto');
@@ -832,11 +888,6 @@ async function buildSelectiveExportPdf(payload) {
             'Formato no incrustable en PDF; descargá el archivo desde el sistema con el IdAdjunto indicado.',
             { width: contentWidth(doc) }
           );
-        } else {
-          doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(
-            `No se pudo obtener el archivo${adj.error ? `: ${adj.error}` : '.'}`,
-            { width: contentWidth(doc) }
-          );
         }
       });
     }
@@ -847,4 +898,31 @@ async function buildSelectiveExportPdf(payload) {
 
 module.exports = {
   buildSelectiveExportPdf,
+  buildMultiVisitExportPdf,
 };
+
+/**
+ * Une varios PDFs de visitas en uno solo (carpeta / export general).
+ * @param {Buffer[]} pdfBuffers
+ * @returns {Promise<Buffer>}
+ */
+async function buildMultiVisitExportPdf(pdfBuffers) {
+  const buffers = (pdfBuffers || []).filter((b) => b && b.length);
+  if (!buffers.length) {
+    const err = new Error('No hay visitas para exportar');
+    err.code = 'NO_VISITS';
+    throw err;
+  }
+  if (buffers.length === 1) return buffers[0];
+  const mainDoc = await PDFLibDocument.load(buffers[0]);
+  for (let i = 1; i < buffers.length; i++) {
+    try {
+      const annex = await PDFLibDocument.load(buffers[i]);
+      const copied = await mainDoc.copyPages(annex, annex.getPageIndices());
+      copied.forEach((p) => mainDoc.addPage(p));
+    } catch (err) {
+      console.warn('[PDF export] Visita omitida en merge:', err.message);
+    }
+  }
+  return Buffer.from(await mainDoc.save());
+}

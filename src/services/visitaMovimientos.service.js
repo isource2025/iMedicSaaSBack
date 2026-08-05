@@ -15,7 +15,11 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
   const sql = `
     SELECT TOP 1
       NumeroVisita, FechaAdmision, HoraAdmision,
-      FechaEgreso, HoraEgreso, DisposicionEgreso, Diagnostico
+      FechaEgreso, HoraEgreso, DisposicionEgreso, Diagnostico,
+      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
+      LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
+      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS bedId,
+      EstadoAmbulatorio
     FROM imVisitaMovimiento
     WHERE NumeroVisita = @p0
     ORDER BY FechaAdmision DESC, HoraAdmision DESC
@@ -857,11 +861,247 @@ async function obtenerMovimientosRecientes(limite = 10) {
 }
 
 
+/**
+ * Pacientes internados (ClasePaciente = I) vigentes sin cama asignada en imHabitacionCamas.
+ * Usa tablas existentes: imVisita, imPacientes, imHabitacionCamas, imDiagnosticos.
+ * @param {string} [termino] - Nombre, documento o número de visita
+ */
+async function obtenerPacientesInternadosSinCama(termino = '') {
+  const term = typeof termino === 'string' ? termino.trim() : '';
+  const params = [];
+  let filtroBusqueda = '';
+
+  if (term) {
+    const like = `%${term}%`;
+    filtroBusqueda = `
+      AND (
+        p.ApellidoYNombre LIKE @p0
+        OR CAST(p.NumeroDocumento AS varchar(40)) LIKE @p1
+        OR CAST(v.NumeroVisita AS varchar(20)) LIKE @p2
+        OR CAST(ISNULL(p.NumeroHC, '') AS varchar(40)) LIKE @p3
+      )
+    `;
+    params.push({ value: like }, { value: like }, { value: like }, { value: like });
+  }
+
+  const sql = `
+    SELECT TOP 50
+      v.NumeroVisita AS numeroVisita,
+      v.IDPaciente AS idPaciente,
+      LTRIM(RTRIM(ISNULL(p.ApellidoYNombre, ''))) AS apellidoYNombre,
+      LTRIM(RTRIM(ISNULL(CAST(p.NumeroDocumento AS varchar(40)), ''))) AS numeroDocumento,
+      LTRIM(RTRIM(ISNULL(CAST(p.NumeroHC AS varchar(40)), ''))) AS numeroHC,
+      LTRIM(RTRIM(ISNULL(p.Sexo, ''))) AS sexo,
+      CONVERT(varchar(10), v.FECHAADMISIONS, 23) AS fechaAdmision,
+      CONVERT(varchar(5), v.FECHAADMISIONS, 108) AS horaAdmision,
+      LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS valorSector,
+      LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) AS diagnostico,
+      LTRIM(RTRIM(ISNULL(d.Descripcion, ''))) AS diagnosticoDescripcion
+    FROM dbo.imVisita v
+    INNER JOIN dbo.imPacientes p ON p.IDPaciente = v.IDPaciente
+    LEFT JOIN dbo.imDiagnosticos d
+      ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+    WHERE UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+      AND (
+        v.FECHAEGRESO IS NULL
+        OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL
+        OR TRY_CAST(v.FECHAEGRESO AS int) = 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM dbo.imHabitacionCamas hc
+        WHERE hc.NumeroVisita = v.NumeroVisita
+          AND ISNULL(hc.NumeroVisita, 0) <> 0
+      )
+      ${filtroBusqueda}
+    ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+  `;
+
+  return await executeQuery(sql, params);
+}
+
+/**
+ * Asigna por primera vez una cama libre a un internado sin ubicación.
+ * Tablas: imVisitaMovimiento (insert), imHabitacionCamas (ocupar), imVisita (actualizar).
+ */
+async function asignarPacienteACama(numeroVisita, datos) {
+  const num = parseInt(numeroVisita, 10);
+  if (isNaN(num)) throw new Error('Número de visita inválido');
+
+  const {
+    FechaAdmision,
+    HoraAdmision,
+    EstadoAmbulatorio,
+    Diagnostico,
+    bedId,
+    ValorSector,
+    Operador,
+    FechaCarga,
+    HoraCarga,
+  } = datos;
+
+  if (!FechaAdmision || !HoraAdmision || !EstadoAmbulatorio || !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
+    throw new Error('Faltan datos obligatorios para asignar la cama');
+  }
+
+  const visitaRows = await executeQuery(
+    `
+      SELECT
+        IDPaciente,
+        ClasePaciente,
+        FECHAEGRESO,
+        LTRIM(RTRIM(ISNULL(VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama
+      FROM dbo.imVisita
+      WHERE NumeroVisita = @p0
+    `,
+    [{ value: num }],
+  );
+
+  if (!visitaRows?.length) {
+    throw new Error(`No se encontró la visita ${num}`);
+  }
+
+  const visita = visitaRows[0];
+  const fechaEgreso = Number(visita.FECHAEGRESO) || 0;
+  if (fechaEgreso > 0) {
+    throw new Error('La visita ya tiene egreso registrado');
+  }
+
+  const camaOcupada = await executeQuery(
+    `
+      SELECT TOP 1 ValorHabitacionCama, ValorSector
+      FROM dbo.imHabitacionCamas
+      WHERE NumeroVisita = @p0 AND ISNULL(NumeroVisita, 0) <> 0
+    `,
+    [{ value: num }],
+  );
+  if (camaOcupada?.length) {
+    throw new Error(
+      `La visita ya tiene cama asignada (${camaOcupada[0].ValorSector}-${camaOcupada[0].ValorHabitacionCama})`,
+    );
+  }
+
+  const camaDestinoResult = await executeQuery(
+    `
+      SELECT c.ValorHabitacionCama, c.ValorSector, c.ValorEstadoCama, e.Descripcion AS EstadoDescripcion
+      FROM dbo.imHabitacionCamas c
+      LEFT JOIN dbo.imEstadoCama e ON c.ValorEstadoCama = e.Valor
+      WHERE c.ValorHabitacionCama = @p0 AND c.ValorSector = @p1
+    `,
+    [{ value: bedId }, { value: ValorSector }],
+  );
+
+  if (!camaDestinoResult?.length) {
+    throw new Error(`La cama ${bedId} en el sector ${ValorSector} no existe`);
+  }
+  if (camaDestinoResult[0].ValorEstadoCama !== 'U') {
+    throw new Error(
+      `La cama no está disponible. Estado: ${camaDestinoResult[0].EstadoDescripcion || camaDestinoResult[0].ValorEstadoCama}`,
+    );
+  }
+
+  const query = `
+    BEGIN TRY
+      BEGIN TRANSACTION;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM dbo.imVisitaMovimiento
+        WHERE NumeroVisita = @param0 AND FechaAdmision = @param1 AND HoraAdmision = @param2
+      )
+      BEGIN
+        INSERT INTO dbo.imVisitaMovimiento (
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+        )
+        VALUES (
+          @param0, @param1, @param2,
+          @param3, @param4, @param5,
+          @param6, @param7, @param8, @param9, 'O'
+        );
+      END
+      ELSE
+      BEGIN
+        DECLARE @HoraAdj int = @param2 + 1;
+        INSERT INTO dbo.imVisitaMovimiento (
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+        )
+        VALUES (
+          @param0, @param1, @HoraAdj,
+          @param3, @param4, @param5,
+          @param6, @param7, @param8, @param9, 'O'
+        );
+      END;
+
+      UPDATE dbo.imHabitacionCamas
+      SET
+        FechaIngreso = @param1,
+        FechaEgreso = 0,
+        ValorEstadoCama = 'O',
+        NumeroVisita = @param0,
+        Observaciones = 'Asignación inicial de cama'
+      WHERE ValorHabitacionCama = @param9 AND ValorSector = @param8;
+
+      UPDATE dbo.imVisita
+      SET
+        ValorHabitacionCama = @param9,
+        ValorSector = @param8,
+        EstadoAmbulatorio = @param3,
+        Diagnostico = CASE
+          WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
+          ELSE @param4
+        END
+      WHERE NumeroVisita = @param0;
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      ROLLBACK;
+      THROW;
+    END CATCH;
+  `;
+
+  const params = [
+    { value: num },
+    { value: FechaAdmision },
+    { value: HoraAdmision },
+    { value: EstadoAmbulatorio },
+    { value: Diagnostico || null },
+    { value: Operador },
+    { value: FechaCarga },
+    { value: HoraCarga },
+    { value: ValorSector },
+    { value: bedId },
+  ];
+
+  try {
+    await executeQuery(query, params);
+    const movimiento = await obtenerUltimoMovimientoVisita(num);
+    return {
+      success: true,
+      message: 'Cama asignada correctamente',
+      data: {
+        numeroVisita: num,
+        cama: bedId,
+        sector: ValorSector,
+        movimiento,
+      },
+    };
+  } catch (err) {
+    console.error('Error al asignar cama:', err);
+    throw new Error(`Error al asignar la cama: ${err.message}`);
+  }
+}
+
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
   intercambiarCamasPacientes,
-  obtenerMovimientosRecientes
+  obtenerMovimientosRecientes,
+  obtenerPacientesInternadosSinCama,
+  asignarPacienteACama,
 };

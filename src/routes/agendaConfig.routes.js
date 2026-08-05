@@ -28,6 +28,28 @@ router.get(
 	agendaCtrl.listarProfesionales,
 );
 
+// Agendas por sector/servicio (visibles según asignación del profesional)
+router.get(
+	'/recursos',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.listarRecursosAgenda,
+);
+router.get(
+	'/recurso/:tipo/:valor/slots',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.obtenerSlotsRecurso,
+);
+router.get(
+	'/recurso/:tipo/:valor/horarios',
+	requirePermiso('TURNOS.CONFIGURACION.VER'),
+	agendaCtrl.obtenerHorariosRecurso,
+);
+router.put(
+	'/recurso/:tipo/:valor/horarios',
+	requirePermiso('TURNOS.CONFIGURACION.EDITAR'),
+	agendaCtrl.reemplazarHorariosRecurso,
+);
+
 // RAC de enfermería por turno
 router.get(
 	'/turnos/:idTurno/detalle',

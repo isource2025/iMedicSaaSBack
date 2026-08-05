@@ -192,18 +192,34 @@ async function buscarProfesionales({ q, limit = 25 }) {
 	const term = String(q || '').trim();
 	const lim = Math.min(Math.max(Number(limit) || 25, 1), 50);
 	if (term.length < 2) return [];
-	const like = `%${term}%`;
+	const likeAny = `%${term}%`;
+	const likeWord = `% ${term}%`;
+	const likeStart = `${term}%`;
 	const rows = await executeQuery(
 		`SELECT TOP ${lim}
 		        p.Valor AS valorPersonal,
 		        p.Matricula AS matricula,
 		        LTRIM(RTRIM(p.ApellidoNombre)) AS apellidoNombre
 		 FROM dbo.imPersonal p
-		 WHERE p.ApellidoNombre LIKE @p0
+		 WHERE LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) LIKE @p0
+		    OR LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) LIKE @p1
+		    OR CAST(ISNULL(p.Matricula, 0) AS VARCHAR(20)) LIKE @p2
 		    OR CAST(ISNULL(p.Matricula, 0) AS VARCHAR(20)) LIKE @p0
-		    OR CAST(p.Valor AS VARCHAR(20)) LIKE @p0
-		 ORDER BY p.ApellidoNombre`,
-		[{ value: like, type: 'VarChar' }],
+		    OR CAST(p.Valor AS VARCHAR(20)) LIKE @p2
+		 ORDER BY
+		   CASE
+		     WHEN CAST(ISNULL(p.Matricula, 0) AS VARCHAR(20)) = @p3 THEN 0
+		     WHEN CAST(ISNULL(p.Matricula, 0) AS VARCHAR(20)) LIKE @p2 THEN 1
+		     WHEN LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) LIKE @p2 THEN 2
+		     ELSE 3
+		   END,
+		   p.ApellidoNombre`,
+		[
+			{ value: likeAny, type: 'VarChar' },
+			{ value: likeWord, type: 'VarChar' },
+			{ value: likeStart, type: 'VarChar' },
+			{ value: term, type: 'VarChar' },
+		],
 	);
 	return (rows || []).map((r) => ({
 		valorPersonal: Number(r.valorPersonal),
