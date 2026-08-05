@@ -12,14 +12,28 @@ const { JWT_SECRET, ACCESS_TOKEN_EXPIRATION } = require('../config/jwt');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 function resolverRol(userData) {
-	if (userData.RolId != null) {
-		return {
-			id: Number(userData.RolId),
-			nombre: String(userData.RolNombre || '').trim(),
-			nivel: Number(userData.RolNivel || 0),
-		};
+	// Plataforma: Rol SUPER_ADMIN desde join o Grupo 11 con usuario de plataforma
+	const rolNombre = String(userData.RolNombre || '').trim().toUpperCase();
+	if (userData.RolId != null || rolNombre) {
+		const id = userData.RolId != null ? Number(userData.RolId) : rolNombre === 'SUPER_ADMIN' ? 5 : 0;
+		const nombre = rolNombre || String(userData.RolNombre || '').trim();
+		if (nombre) {
+			return {
+				id: id || Number(userData.RolId) || 0,
+				nombre,
+				nivel: Number(userData.RolNivel || (nombre === 'SUPER_ADMIN' ? 200 : 0)),
+			};
+		}
 	}
 	if (Number(userData.Grupo) === 11) {
+		// Grupo 11 + sin rol de join: en plataforma es SUPER_ADMIN; en tenant se mapea a ADMIN
+		const esPlataformaNombre =
+			String(userData.NombreRed || userData.nombrered || '')
+				.trim()
+				.toLowerCase() === 'superadmin';
+		if (esPlataformaNombre) {
+			return { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
+		}
 		return { id: 1, nombre: 'ADMIN', nivel: 100 };
 	}
 	return null;
