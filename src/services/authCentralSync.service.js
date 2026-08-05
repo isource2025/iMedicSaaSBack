@@ -45,6 +45,11 @@ function isBinaryLike(value) {
 
 async function upsertRow(table, pkColumns, row) {
 	if (!row || !isAuthCentralEnabled()) return;
+	// Plataforma (IdEmpresa=0) solo se gestiona por ensureSuperAdmin, nunca por sync tenant.
+	if (row.IdEmpresa != null && Number(row.IdEmpresa) === 0) {
+		console.warn(`[authCentralSync] upsert bloqueado hacia plataforma table=${table}`);
+		return;
+	}
 	const allowed = await getMysqlTableColumns(table);
 	const cols = Object.keys(row).filter((c) => {
 		if (row[c] === undefined) return false;
@@ -88,11 +93,25 @@ function omitColumns(row, excluded = []) {
 }
 
 async function syncPassword(idEmpresa, valorPersonal) {
+	const { isTenantEmpresa, isValidTenantPersonalId, isReservedUsername } = require('../config/tenantIdentity');
+	const emp = Number(idEmpresa);
+	if (!isTenantEmpresa(emp)) {
+		console.warn('[authCentralSync] syncPassword ignorado: IdEmpresa no es tenant', emp);
+		return;
+	}
+	if (!isValidTenantPersonalId(valorPersonal)) {
+		console.warn('[authCentralSync] syncPassword ignorado: ValorPersonal inválido', valorPersonal);
+		return;
+	}
 	const row = await readTenantRow('imPassword', 'ValorPersonal = @p0', [
 		{ value: valorPersonal, type: 'Int' },
 	]);
 	if (!row) return;
-	row.IdEmpresa = Number(idEmpresa);
+	if (isReservedUsername(row.NombreRed ?? row.nombrered)) {
+		console.warn('[authCentralSync] syncPassword ignorado: username reservado plataforma');
+		return;
+	}
+	row.IdEmpresa = emp;
 	// Si el tenant no trae hash (o está vacío), invalidar el de MySQL para no bloquear legacy.
 	const hash = row.PasswordHash ?? row.passwordHash;
 	if (hash == null || String(hash).trim() === '') {
@@ -102,6 +121,9 @@ async function syncPassword(idEmpresa, valorPersonal) {
 }
 
 async function syncPersonal(idEmpresa, valorPersonal) {
+	const { isTenantEmpresa, isValidTenantPersonalId } = require('../config/tenantIdentity');
+	const emp = Number(idEmpresa);
+	if (!isTenantEmpresa(emp) || !isValidTenantPersonalId(valorPersonal)) return;
 	const row = await readTenantRow('imPersonal', 'Valor = @p0', [
 		{ value: valorPersonal, type: 'Int' },
 	]);
@@ -114,7 +136,7 @@ async function syncPersonal(idEmpresa, valorPersonal) {
 		'createdAt',
 		'updatedAt',
 	]);
-	out.IdEmpresa = Number(idEmpresa);
+	out.IdEmpresa = emp;
 	await upsertRow('imPersonal', ['IdEmpresa', 'Valor'], out);
 }
 
@@ -188,31 +210,83 @@ async function removeSector(idEmpresa, valor) {
 	]);
 }
 
-/** Elimina credenciales auth en MySQL si el personal ya no está vinculado a ninguna empresa. */
+/** Elimina credenciales auth en MySQL si el personal ya no está vinculado a ninguna empresa tenant. */
 async function purgePersonalAuthIfOrphan(valorPersonal) {
 	if (!isAuthCentralEnabled()) return;
 	const id = Number(valorPersonal);
+	if (!Number.isFinite(id) || id <= 0) return;
 	const pool = await getAuthCentralPool();
 	const [countRows] = await pool.query(
-		`SELECT COUNT(*) AS c FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ?`,
+		`SELECT COUNT(*) AS c FROM ${q('imPersonalEmpresas')}
+     WHERE IdPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
 		[id],
 	);
 	const count = Number(countRows?.[0]?.c) || 0;
 	if (count > 0) return;
 
-	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ?`, [id]);
-	await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE Valor = ?`, [id]);
-	await mysqlExec(`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ?`, [id]);
+	// Nunca tocar IdEmpresa=0 (plataforma / superadmin).
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonalSectores')}
+     WHERE idPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonal')} WHERE Valor = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPassword')}
+     WHERE ValorPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
 }
 
-/** Elimina del espejo MySQL todo el login de un personal (tras borrado en tenant). */
-async function purgePersonalAuth(valorPersonal) {
+/**
+ * Elimina del espejo MySQL el login de un personal tenant.
+ * Si se pasa idEmpresa, solo borra esa empresa; si no, todas las filas tenant (nunca plataforma).
+ */
+async function purgePersonalAuth(valorPersonal, idEmpresa = null) {
 	if (!isAuthCentralEnabled()) return;
 	const id = Number(valorPersonal);
-	await mysqlExec(`DELETE FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ?`, [id]);
-	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ?`, [id]);
-	await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE Valor = ?`, [id]);
-	await mysqlExec(`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ?`, [id]);
+	if (!Number.isFinite(id) || id <= 0) return;
+	const emp =
+		idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
+			? Number(idEmpresa)
+			: null;
+
+	if (emp != null) {
+		await mysqlExec(`DELETE FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ? AND IdEmpresa = ?`, [
+			id,
+			emp,
+		]);
+		await mysqlExec(
+			`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ? AND IdEmpresa = ?`,
+			[id, emp],
+		);
+		await mysqlExec(`DELETE FROM ${q('imPersonal')} WHERE Valor = ? AND IdEmpresa = ?`, [id, emp]);
+		await mysqlExec(
+			`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ? AND IdEmpresa = ?`,
+			[id, emp],
+		);
+		return;
+	}
+
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonalEmpresas')} WHERE IdPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonalSectores')} WHERE idPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPersonal')} WHERE Valor = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
+	await mysqlExec(
+		`DELETE FROM ${q('imPassword')} WHERE ValorPersonal = ? AND COALESCE(IdEmpresa, 0) > 0`,
+		[id],
+	);
 }
 
 /**

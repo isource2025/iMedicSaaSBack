@@ -47,6 +47,18 @@ async function mysqlUsuarios(idEmpresa) {
 }
 
 async function reconcileEmpresa(idEmpresa, fix = false) {
+	const { isTenantEmpresa } = require('../config/tenantIdentity');
+	if (!isTenantEmpresa(idEmpresa)) {
+		return {
+			idEmpresa,
+			tenant: 0,
+			central: 0,
+			issues: [],
+			skipped: true,
+			reason: 'IdEmpresa de plataforma no se reconcilia',
+			ok: true,
+		};
+	}
 	const issues = [];
 	let tenant = [];
 	let central = [];

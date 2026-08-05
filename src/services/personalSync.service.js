@@ -13,6 +13,12 @@ const {
 	listExportFields,
 	resolveExportFieldIds,
 } = require('../utils/personalExportFields');
+const {
+	isTenantEmpresa,
+	canSyncPasswordRowToTenant,
+	canSyncPersonalRowToTenant,
+	isValidTenantPersonalId,
+} = require('../config/tenantIdentity');
 
 function q(name) {
 	return `\`${String(name).replace(/`/g, '``')}\``;
@@ -84,6 +90,11 @@ async function ensureImPersonalExportColumns() {
 }
 
 function pickSyncRow(fisicoRow, idEmpresa) {
+	if (!isTenantEmpresa(idEmpresa)) {
+		throw Object.assign(new Error('Sync físico solo permite IdEmpresa de tenant (>0)'), {
+			statusCode: 400,
+		});
+	}
 	const out = { IdEmpresa: Number(idEmpresa) };
 	for (const col of PERSONAL_SYNC_COLUMNS) {
 		let v = fisicoRow[col];
@@ -138,7 +149,10 @@ async function syncPersonalDelta(emp, syncRows) {
 
 	for (const row of syncRows) {
 		const id = Number(row.Valor);
-		if (!Number.isFinite(id) || id <= 0) continue;
+		if (!canSyncPersonalRowToTenant(emp, row)) {
+			sinCambio += 1;
+			continue;
+		}
 		const prev = byId.get(id);
 		if (!prev) {
 			nuevos += 1;
@@ -362,6 +376,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 
 	const skipHashCmp = new Set(['passwordhash', 'idempresa']);
 	const mapped = [];
+	let omitidos = 0;
 	for (const fr of fisicoRows) {
 		const row = {};
 		for (const [rawKey, rawVal] of Object.entries(fr)) {
@@ -373,7 +388,10 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		}
 		row.IdEmpresa = emp;
 		const vp = Number(row.ValorPersonal);
-		if (!Number.isFinite(vp) || vp <= 0) continue;
+		if (!canSyncPasswordRowToTenant(emp, row)) {
+			omitidos += 1;
+			continue;
+		}
 		row.ValorPersonal = vp;
 
 		if (mysqlColByLower.has('passwordhash')) {
@@ -492,6 +510,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 	const cambios = Math.max(0, nuevos + actualizados - errores);
 	return {
 		passwords: mapped.length,
+		omitidos,
 		nuevos,
 		actualizados,
 		sinCambio,

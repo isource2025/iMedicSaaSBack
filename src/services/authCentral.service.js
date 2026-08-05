@@ -14,6 +14,29 @@ function normalizarUsername(username) {
 	return String(username || '').trim().toLowerCase();
 }
 
+/** Nombres/Apellido desde imPassword o ApellidoNombre de imPersonal (legacy). */
+function splitApellidoNombre(apellidoNombre) {
+	const s = String(apellidoNombre || '').trim();
+	if (!s) return { nombres: '', apellido: '' };
+	// Formato típico: "Apellido, Nombre" o "Apellido Nombre"
+	if (s.includes(',')) {
+		const [ap, ...rest] = s.split(',');
+		return { apellido: ap.trim(), nombres: rest.join(',').trim() };
+	}
+	const parts = s.split(/\s+/).filter(Boolean);
+	if (parts.length === 1) return { nombres: parts[0], apellido: '' };
+	return { apellido: parts[0], nombres: parts.slice(1).join(' ') };
+}
+
+function isDebilNombre(value) {
+	const s = String(value || '').trim();
+	if (!s) return true;
+	// Valores basura frecuentes: grupo numérico, codigos, "null"
+	if (/^\d+$/.test(s)) return true;
+	if (/^(null|undefined|n\/a)$/i.test(s)) return true;
+	return false;
+}
+
 async function getEmpresasMysqlColumns() {
 	if (empresasMysqlColumnsCache) return empresasMysqlColumnsCache;
 	const rows = await query(
@@ -27,16 +50,39 @@ async function getEmpresasMysqlColumns() {
 	return empresasMysqlColumnsCache;
 }
 
+const PERSONAL_AUTH_SELECT = `
+      p.Matricula AS Matricula,
+      p.ApellidoNombre AS ApellidoNombre,
+      TRIM(COALESCE(p.Rol, '')) AS PersonalRol,
+      r.IdRol AS RolId,
+      r.Nombre AS RolNombre,
+      r.Nivel AS RolNivel
+`;
+
 function mapUsuario(row) {
 	if (!row) return null;
+	let nombres = String(row.Nombres || '').trim();
+	let apellido = String(row.Apellido || '').trim();
+	if (isDebilNombre(nombres) && isDebilNombre(apellido)) {
+		const fromPersonal = splitApellidoNombre(row.ApellidoNombre || row.apellidoNombre);
+		if (!isDebilNombre(fromPersonal.nombres) || !isDebilNombre(fromPersonal.apellido)) {
+			nombres = fromPersonal.nombres;
+			apellido = fromPersonal.apellido;
+		}
+	}
+	// Si el apellido quedó basura y el nombre no, o viceversa, limpiar
+	if (isDebilNombre(nombres)) nombres = '';
+	if (isDebilNombre(apellido)) apellido = '';
+
 	return {
 		ValorPersonal: Number(row.ValorPersonal),
+		IdEmpresa: row.IdEmpresa != null ? Number(row.IdEmpresa) : null,
 		NombreRed: row.NombreRed,
 		Nombrered: row.NombreRed,
 		nombrered: row.NombreRed,
 		Password: row.Password,
-		Nombres: row.Nombres || '',
-		Apellido: row.Apellido || '',
+		Nombres: nombres,
+		Apellido: apellido,
 		CodOperador: row.CodOperador || '',
 		Grupo: row.Grupo != null ? Number(row.Grupo) : null,
 		NumeroDocumento: row.NumeroDocumento || null,
@@ -44,6 +90,7 @@ function mapUsuario(row) {
 		RolId: row.RolId != null ? Number(row.RolId) : null,
 		RolNombre: row.RolNombre || '',
 		RolNivel: row.RolNivel != null ? Number(row.RolNivel) : 0,
+		PersonalRol: row.PersonalRol != null ? String(row.PersonalRol).trim() : '',
 	};
 }
 
@@ -55,24 +102,22 @@ async function query(sql, params = []) {
 
 async function autenticarPlataforma(username, password) {
 	if (!isAuthCentralEnabled()) return null;
+	// Solo filas de plataforma (IdEmpresa=0). Nunca cuentas de hospital.
 	const rows = await query(
 		`
     SELECT
       pw.*,
-      p.Matricula AS Matricula,
-      r.IdRol AS RolId,
-      r.Nombre AS RolNombre,
-      r.Nivel AS RolNivel
+      ${PERSONAL_AUTH_SELECT}
     FROM \`imPassword\` pw
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
-    WHERE ${USER_MATCH} = ?
+    WHERE COALESCE(pw.IdEmpresa, 0) = 0
+      AND ${USER_MATCH} = ?
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
-        OR TRIM(COALESCE(p.Rol, '')) = '5'
+        OR TRIM(COALESCE(p.Rol, '')) COLLATE ${COLLATE} = '5'
         OR COALESCE(pw.Grupo, 0) = 11
       )
-    ORDER BY CASE WHEN COALESCE(pw.IdEmpresa, 0) = 0 THEN 0 ELSE 1 END
     LIMIT 3
     `,
 		[normalizarUsername(username)],
@@ -81,7 +126,7 @@ async function autenticarPlataforma(username, password) {
 	for (const row of rows) {
 		if (!(await passwordService.verifyPassword(password, row))) continue;
 		await passwordService.upgradePasswordHashCentral(
-			row.IdEmpresa,
+			0,
 			row.ValorPersonal,
 			password,
 		);
@@ -97,10 +142,7 @@ async function autenticarTenant(idEmpresa, username, password) {
 		`
     SELECT
       pw.*,
-      p.Matricula AS Matricula,
-      r.IdRol AS RolId,
-      r.Nombre AS RolNombre,
-      r.Nivel AS RolNivel
+      ${PERSONAL_AUTH_SELECT}
     FROM \`imPassword\` pw
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA} AND pe.IdEmpresa = ?
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
@@ -125,16 +167,14 @@ async function autenticarEnTodasLasEmpresas(username, password) {
       pe.IdEmpresa AS idEmpresa,
       TRIM(COALESCE(e.DESCRIPCION, '')) AS descripcionEmpresa,
       pw.*,
-      p.Matricula AS Matricula,
-      r.IdRol AS RolId,
-      r.Nombre AS RolNombre,
-      r.Nivel AS RolNivel
+      ${PERSONAL_AUTH_SELECT}
     FROM \`imPassword\` pw
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
     INNER JOIN \`Empresas\` e ON e.IDEMPRESA = pe.IdEmpresa
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
     WHERE ${USER_MATCH} = ?
+      AND COALESCE(pw.IdEmpresa, 0) > 0
     ORDER BY descripcionEmpresa
     `,
 		[normalizarUsername(username)],
@@ -165,6 +205,8 @@ async function descubrirEmpresas(username) {
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
     INNER JOIN \`Empresas\` e ON e.IDEMPRESA = pe.IdEmpresa
     WHERE ${USER_MATCH} = ?
+      AND COALESCE(pw.IdEmpresa, 0) > 0
+      AND COALESCE(pe.IdEmpresa, 0) > 0
     ORDER BY descripcionEmpresa
     `,
 		[u],

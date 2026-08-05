@@ -96,11 +96,25 @@ app.listen(PORT, HOST, () => {
       const { ensureSuperAdmin } = require('./services/ensureSuperAdmin.service');
       ensureSuperAdmin()
         .then((r) => {
-          if (r?.repaired) {
-            console.log('[ensureSuperAdmin] cuenta plataforma reparada:', r);
+          if (r?.superadmin?.ok) {
+            console.log('[ensureSuperAdmin] plataforma OK');
+          } else if (r && !r.skipped) {
+            console.log('[ensureSuperAdmin]', JSON.stringify(r).slice(0, 400));
           }
         })
         .catch((e) => console.warn('[ensureSuperAdmin]', e.message));
     }, 3500);
+  }
+
+  // Local sin MySQL auth: seed superadmin en SQL Server.
+  if (!authOk) {
+    setTimeout(() => {
+      const { ensureLocalSqlSuperAdmin } = require('./services/ensureLocalSqlSuperAdmin.service');
+      ensureLocalSqlSuperAdmin()
+        .then((r) => {
+          if (r?.ok) console.log('[ensureLocalSqlSuperAdmin] OK', r.source || 'sql');
+        })
+        .catch((e) => console.warn('[ensureLocalSqlSuperAdmin]', e.message));
+    }, 4000);
   }
 });

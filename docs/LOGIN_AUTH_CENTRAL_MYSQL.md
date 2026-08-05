@@ -67,15 +67,33 @@ Si `AUTH_DB_ENABLED=1`:
 
 se intentan resolver primero desde Railway MySQL. Si falla, el backend cae al flujo legacy en SQL Server.
 
-## Importante
+## Identidad multi-tenant (clave compuesta)
 
-La migracion actual es **no destructiva**:
+Clave de login y personal en MySQL:
 
-- no ejecuta `DELETE`,
-- no limpia tablas destino,
-- inserta o actualiza por clave primaria / unica.
+```
+(IdEmpresa, ValorPersonal)
+```
 
-Si existen colisiones de IDs legacy entre tenants (`ValorPersonal`, `IdRol`, `IdPermiso`, etc.), MySQL hara `update` sobre la fila existente en vez de crear otra. Eso no borra datos, pero puede mezclar identidades que compartan la misma clave.
+| Ámbito | IdEmpresa | ValorPersonal |
+|--------|-----------|----------------|
+| Hospital / tenant | `> 0` (catálogo Empresas) | **Mismo id del SQL físico** de esa empresa (sin remapear) |
+| Plataforma SaaS | `0` | Rango reservado `>= PLATFORM_VALOR_MIN` (default `1000000`), p.ej. superadmin |
+
+### Reglas
+
+1. El sync físico → MySQL **solo escribe** filas con `IdEmpresa = empresa tenant`.
+2. `IdEmpresa = 0` es **intocable** por import/sync/reconcile/purge de hospitales.
+3. Usernames reservados (`superadmin`, etc.) **no se copian** del físico a un tenant.
+4. Login de plataforma (`autenticarPlataforma`) solo mira `IdEmpresa = 0`.
+5. Los purges MySQL usan `IdEmpresa > 0` para no borrar el superadmin por coincidencia de `ValorPersonal`.
+
+### Colisiones entre hospitals
+
+Dos hospitales pueden tener el mismo `ValorPersonal` (ej. `7721`) sin choque: viven en `(1,7721)` y `(2,7721)`.  
+**No** se debe modelar la PK solo por `ValorPersonal`.
+
+Si un script legacy migraba sin `IdEmpresa`, puede haber mezclas históricas; la reconciliación y el sync actual respetan la clave compuesta.
 
 ## Reconciliación
 

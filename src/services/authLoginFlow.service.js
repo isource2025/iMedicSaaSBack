@@ -12,31 +12,80 @@ const { JWT_SECRET, ACCESS_TOKEN_EXPIRATION } = require('../config/jwt');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
 
 function resolverRol(userData) {
+	const { isReservedUsername, PLATFORM_EMPRESA_ID } = require('../config/tenantIdentity');
+	const u = String(
+		userData.NombreRed || userData.Nombrered || userData.nombrered || '',
+	)
+		.trim()
+		.toLowerCase();
+	const idEmp = Number(userData.IdEmpresa);
+	const esPlataforma =
+		idEmp === PLATFORM_EMPRESA_ID || isReservedUsername(u);
+
 	// Plataforma: Rol SUPER_ADMIN desde join o Grupo 11 con usuario de plataforma
 	const rolNombre = String(userData.RolNombre || '').trim().toUpperCase();
 	if (userData.RolId != null || rolNombre) {
-		const id = userData.RolId != null ? Number(userData.RolId) : rolNombre === 'SUPER_ADMIN' ? 5 : 0;
+		const id =
+			userData.RolId != null
+				? Number(userData.RolId)
+				: rolNombre === 'SUPER_ADMIN'
+					? 5
+					: rolNombre === 'ADMIN'
+						? 1
+						: 0;
 		const nombre = rolNombre || String(userData.RolNombre || '').trim();
+		// RolId sin nombre útil: no cortar el fallback de Grupo 11
 		if (nombre) {
 			return {
 				id: id || Number(userData.RolId) || 0,
 				nombre,
-				nivel: Number(userData.RolNivel || (nombre === 'SUPER_ADMIN' ? 200 : 0)),
+				nivel: Number(
+					userData.RolNivel ||
+						(nombre === 'SUPER_ADMIN' ? 200 : nombre === 'ADMIN' ? 100 : 0),
+				),
 			};
 		}
 	}
+
+	// imPersonal.Rol numérico sin join (roles desalineados)
+	const personalRol = String(userData.PersonalRol || '').trim();
+	if (personalRol === '5' || personalRol.toUpperCase() === 'SUPER_ADMIN') {
+		return { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
+	}
+	if (personalRol === '1' || personalRol.toUpperCase() === 'ADMIN') {
+		return { id: 1, nombre: 'ADMIN', nivel: 100 };
+	}
+
 	if (Number(userData.Grupo) === 11) {
-		// Grupo 11 + sin rol de join: en plataforma es SUPER_ADMIN; en tenant se mapea a ADMIN
-		const esPlataformaNombre =
-			String(userData.NombreRed || userData.nombrered || '')
-				.trim()
-				.toLowerCase() === 'superadmin';
-		if (esPlataformaNombre) {
+		if (esPlataforma) {
 			return { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
 		}
 		return { id: 1, nombre: 'ADMIN', nivel: 100 };
 	}
+
+	// Cuentas hospital “admin*” de provisión (adminvidal, etc.) → ADMIN
+	if (/^admin[a-z0-9._-]*$/i.test(u) && !esPlataforma) {
+		return { id: 1, nombre: 'ADMIN', nivel: 100 };
+	}
+
 	return null;
+}
+
+function buildDisplayName(usuario, username) {
+	let nombre = String(usuario?.Nombres || '').trim();
+	let apellido = String(usuario?.Apellido || '').trim();
+	if (/^\d+$/.test(nombre)) nombre = '';
+	if (/^\d+$/.test(apellido)) apellido = '';
+	const full = [nombre, apellido].filter(Boolean).join(' ').trim();
+	if (full) return { nombre, apellido, full };
+	const red = String(
+		usuario?.NombreRed ||
+			usuario?.Nombrered ||
+			usuario?.nombrered ||
+			username ||
+			'',
+	).trim();
+	return { nombre: red || 'Usuario', apellido: '', full: red || 'Usuario' };
 }
 
 function buildJwtPayload(userData, idEmpresa, rol) {
@@ -95,6 +144,12 @@ async function completarLogin({
 	userAgent,
 }) {
 	const rolPreliminar = resolverRol(usuario);
+	// Propagar al usuario para exención de sector y permisos (Grupo 11 / admin*)
+	if (rolPreliminar) {
+		if (!usuario.RolNombre) usuario.RolNombre = rolPreliminar.nombre;
+		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
+		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
+	}
 	let esSuperAdmin =
 		rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
 	if (!esSuperAdmin && idEmpresaSesion == null) {
@@ -252,22 +307,25 @@ async function completarLogin({
 		success: true,
 		step: 'COMPLETE',
 		mensaje: 'Inicio de sesión exitoso',
-		usuario: {
-			idCodOperador: usuario.CodOperador,
-			idValorpersonal: usuario.ValorPersonal,
-			matricula:
-				usuario.Matricula != null && Number(usuario.Matricula) > 0
-					? Number(usuario.Matricula)
-					: null,
-			nombre: usuario.Nombres,
-			apellido: usuario.Apellido,
-			nombreRed:
-				usuario.Nombrered ||
-				usuario.nombrered ||
-				usuario.NombreRed ||
-				String(username || '').trim() ||
-				null,
-		},
+		usuario: (() => {
+			const display = buildDisplayName(usuario, username);
+			return {
+				idCodOperador: usuario.CodOperador,
+				idValorpersonal: usuario.ValorPersonal,
+				matricula:
+					usuario.Matricula != null && Number(usuario.Matricula) > 0
+						? Number(usuario.Matricula)
+						: null,
+				nombre: display.nombre,
+				apellido: display.apellido,
+				nombreRed:
+					usuario.Nombrered ||
+					usuario.nombrered ||
+					usuario.NombreRed ||
+					String(username || '').trim() ||
+					null,
+			};
+		})(),
 		rol,
 		permisos,
 		idEmpresa: idEmpresaEfectiva,

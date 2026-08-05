@@ -638,7 +638,8 @@ async function eliminar(valor) {
 		{ value: valor, type: 'Int' },
 	]);
 	try {
-		await authCentralSync.purgePersonalAuth(valor);
+		const tenantId = resolveTenantEmpresaId();
+		await authCentralSync.purgePersonalAuth(valor, tenantId);
 	} catch (e) {
 		console.warn('[personal] purgePersonalAuth MySQL:', e.message);
 	}
