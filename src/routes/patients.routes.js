@@ -72,6 +72,11 @@ router.post(
 	patientsController.registrarEgresoPaciente,
 );
 
+router.get(
+	'/visitas/:numeroVisita/contexto-clinico',
+	requirePermiso('INTERNACION.CAMAS.VER'),
+	patientsController.obtenerContextoClinicoVisita,
+);
 router.get('/visitas/:numeroVisita', requirePermiso('ADMISION.VIGENTES.VER'), patientsController.obtenerVisitaPorNumero);
 router.get('/', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerPacientes);
 router.get('/search', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.buscarPacientes);

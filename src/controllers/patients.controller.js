@@ -754,6 +754,23 @@ const obtenerVisitaPorNumero = async (req, res) => {
 };
 
 /**
+ * Contexto clínico (cama sintética) para seguir cargando HC post-egreso.
+ */
+const obtenerContextoClinicoVisita = async (req, res) => {
+	try {
+		const visitaClinicaService = require('../services/visitaClinica.service');
+		const data = await visitaClinicaService.obtenerContextoClinicoVisita(req.params.numeroVisita);
+		res.json({ success: true, data });
+	} catch (error) {
+		const status = error.statusCode || 500;
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al obtener contexto clínico de la visita',
+		});
+	}
+};
+
+/**
  * Registra el egreso de un paciente
  * @param {Object} req - Objeto de solicitud Express
  * @param {Object} res - Objeto de respuesta Express
@@ -860,6 +877,7 @@ module.exports = {
 	actualizarPaciente,
 	eliminarPaciente,
 	obtenerVisitaPorNumero,
+	obtenerContextoClinicoVisita,
 	registrarEgresoPaciente,
 	obtenerTablasReferencia,
 	obtenerCatalogosLaborales,

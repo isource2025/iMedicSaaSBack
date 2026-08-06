@@ -123,15 +123,18 @@ Cada request autenticado valida `LastActivityAt + idleMinutes > now()` y actuali
 
 ### Funcionamiento
 
-1. Se resuelve el país del IP con `geoip-lite`.
-2. Se consulta `AuthPaisesPermitidos` en MySQL.
-3. Por defecto solo **AR (Argentina)** está activo.
-4. IPs locales/LAN (`127.0.0.1`, `192.168.*`, `10.*`) siempre permitidas (desarrollo).
+1. **Desactivado por defecto** (`GEO_BLOCK_ENABLED=0` o ausente). Starlink/VPN suelen resolver a países ≠ AR.
+2. Si está activo: se resuelve el país del IP con `geoip-lite` y se consulta `AuthPaisesPermitidos`.
+3. Catálogo por defecto: **AR (Argentina)**.
+4. IPs locales/LAN (`127.0.0.1`, `192.168.*`, `10.*`) siempre permitidas cuando el bloqueo está activo.
+
+Prioridad del flag: env `GEO_BLOCK_ENABLED` → `imPlataformaConfig.GEO_BLOCK_ENABLED` → off.
 
 ### Panel de administración
 
 **Super Admin → Seguridad**
 
+- Activar / desactivar geo-blocking
 - Listar países permitidos
 - Activar / desactivar país
 - Agregar nuevo país (ej. `PY` Paraguay)
@@ -141,7 +144,7 @@ Cada request autenticado valida `LastActivityAt + idleMinutes > now()` y actuali
 
 ```
 GET    /api/auth/seguridad/config
-PUT    /api/auth/seguridad/config   { idleTimeoutMinutes }
+PUT    /api/auth/seguridad/config   { idleTimeoutMinutes, geoBlockEnabled }
 GET    /api/auth/seguridad/paises
 POST   /api/auth/seguridad/paises { codigoISO, nombre, activo }
 PATCH  /api/auth/seguridad/paises/:codigo { activo }

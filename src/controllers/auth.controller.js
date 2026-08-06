@@ -321,11 +321,13 @@ const obtenerConfigSeguridad = async (_req, res) => {
 	try {
 		const idleTimeoutMinutes = await sessionService.getIdleTimeoutMinutes();
 		const paises = await geoPolicy.listarPaises();
+		const geoBlockEnabled = await geoPolicy.isGeoBlockEnabled();
 		res.json({
 			success: true,
 			data: {
 				idleTimeoutMinutes,
 				paises,
+				geoBlockEnabled,
 				authCentral: authCentralService.isAuthCentralEnabled(),
 			},
 		});
@@ -336,7 +338,7 @@ const obtenerConfigSeguridad = async (_req, res) => {
 
 const actualizarConfigSeguridad = async (req, res) => {
 	try {
-		const { idleTimeoutMinutes } = req.body || {};
+		const { idleTimeoutMinutes, geoBlockEnabled } = req.body || {};
 		if (idleTimeoutMinutes != null && authCentralService.isAuthCentralEnabled()) {
 			const pool = await require('../config/authCentralDb').getAuthCentralPool();
 			const mins = Math.max(5, Math.min(480, Number(idleTimeoutMinutes)));
@@ -347,7 +349,16 @@ const actualizarConfigSeguridad = async (req, res) => {
 				[String(mins)],
 			);
 		}
-		res.json({ success: true, mensaje: 'Configuración actualizada' });
+		if (geoBlockEnabled !== undefined) {
+			await geoPolicy.setGeoBlockEnabled(Boolean(geoBlockEnabled));
+		}
+		res.json({
+			success: true,
+			mensaje: 'Configuración actualizada',
+			data: {
+				geoBlockEnabled: await geoPolicy.isGeoBlockEnabled(),
+			},
+		});
 	} catch (e) {
 		res.status(500).json({ success: false, mensaje: e.message });
 	}

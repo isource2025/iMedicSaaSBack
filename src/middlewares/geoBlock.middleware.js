@@ -4,6 +4,10 @@ const { getClientIp } = require('../config/security');
 
 async function geoBlockAuth(req, res, next) {
 	try {
+		if (!(await geoPolicy.isGeoBlockEnabled())) {
+			req.geoCountry = 'BYPASS';
+			return next();
+		}
 		const ip = getClientIp(req);
 		const country = await geoPolicy.assertIpPermitida(ip);
 		req.geoCountry = country;

@@ -1,12 +1,71 @@
 /**
  * Política de geo-blocking por país (ISO 3166-1 alpha-2).
- * Por defecto solo Argentina (AR); ampliable desde panel Super Admin.
+ * Desactivado por defecto (GEO_BLOCK_ENABLED=0) — Starlink y VPNs suelen
+ * resolver a países distintos de AR. Activar solo si hace falta.
  */
 const geoip = require('geoip-lite');
 const { isAuthCentralEnabled, getAuthCentralPool } = require('../config/authCentralDb');
 const { isLocalIp } = require('../config/security');
 
 let tablesReady = false;
+/** Cache corto del flag en imPlataformaConfig */
+let geoFlagCache = { value: null, at: 0 };
+const GEO_FLAG_TTL_MS = 30_000;
+
+function parseBoolFlag(raw) {
+	const v = String(raw ?? '')
+		.trim()
+		.toLowerCase();
+	if (['1', 'true', 'on', 'yes', 'si', 'sí'].includes(v)) return true;
+	if (['0', 'false', 'off', 'no'].includes(v)) return false;
+	return null;
+}
+
+/**
+ * Geo-blocking: OFF por defecto.
+ * Prioridad: GEO_BLOCK_ENABLED (env) → imPlataformaConfig GEO_BLOCK_ENABLED → false
+ */
+async function isGeoBlockEnabled() {
+	const fromEnv = parseBoolFlag(process.env.GEO_BLOCK_ENABLED);
+	if (fromEnv !== null) return fromEnv;
+
+	if (!isAuthCentralEnabled()) return false;
+
+	const now = Date.now();
+	if (geoFlagCache.value !== null && now - geoFlagCache.at < GEO_FLAG_TTL_MS) {
+		return geoFlagCache.value;
+	}
+
+	try {
+		const pool = await getAuthCentralPool();
+		const [rows] = await pool.query(
+			`SELECT Valor FROM imPlataformaConfig WHERE Clave = 'GEO_BLOCK_ENABLED' LIMIT 1`,
+		);
+		const parsed = parseBoolFlag(rows[0]?.Valor);
+		geoFlagCache = { value: parsed === true, at: now };
+		return geoFlagCache.value;
+	} catch {
+		geoFlagCache = { value: false, at: now };
+		return false;
+	}
+}
+
+async function setGeoBlockEnabled(activo) {
+	const on = Boolean(activo);
+	if (!isAuthCentralEnabled()) {
+		geoFlagCache = { value: on, at: Date.now() };
+		return on;
+	}
+	const pool = await getAuthCentralPool();
+	await pool.query(
+		`INSERT INTO imPlataformaConfig (Clave, Valor, FechaMod)
+     VALUES ('GEO_BLOCK_ENABLED', ?, NOW())
+     ON DUPLICATE KEY UPDATE Valor = VALUES(Valor), FechaMod = NOW()`,
+		[on ? '1' : '0'],
+	);
+	geoFlagCache = { value: on, at: Date.now() };
+	return on;
+}
 
 async function ensureTables() {
 	if (!isAuthCentralEnabled() || tablesReady) return;
@@ -91,6 +150,9 @@ async function isPaisPermitido(codigoISO) {
 }
 
 async function assertIpPermitida(ip) {
+	if (!(await isGeoBlockEnabled())) {
+		return countryFromIp(ip) || 'BYPASS';
+	}
 	const country = countryFromIp(ip);
 	if (country === 'LOCAL') return country;
 	const ok = await isPaisPermitido(country);
@@ -111,4 +173,6 @@ module.exports = {
 	setPaisActivo,
 	isPaisPermitido,
 	assertIpPermitida,
+	isGeoBlockEnabled,
+	setGeoBlockEnabled,
 };

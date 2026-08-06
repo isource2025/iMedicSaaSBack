@@ -3,8 +3,17 @@ const router = express.Router();
 const medicacionControlController = require('../controllers/medicacionControl.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePropietario } = require('../middlewares/propietario.middleware');
 
 router.use(requireTenant);
+
+const _ownMedicacion = requirePropietario({
+	tabla: 'imInterCtrlMedicamento',
+	pkCol: 'IDCtrlMedica',
+	autorCol: 'OperadorCarga',
+	pkParam: 'idCtrlMedica',
+	failSafe: true,
+});
 
 router.get(
 	'/:numeroVisita',
@@ -24,6 +33,7 @@ router.get(
 router.delete(
 	'/:idCtrlMedica',
 	requirePermiso('INTERNACION.MEDICACION.ELIMINAR'),
+	_ownMedicacion,
 	medicacionControlController.eliminarMedicacion,
 );
 

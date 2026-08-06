@@ -10,7 +10,16 @@ const adjuntosService = require('../services/adjuntos.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePropietario } = require('../middlewares/propietario.middleware');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+
+const _ownAdjunto = requirePropietario({
+  tabla: 'imPedidosEstudiosAdjuntos',
+  pkCol: 'IdAdjunto',
+  autorCol: 'IdOperador',
+  pkParam: 'idAdjunto',
+  failSafe: true,
+});
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
@@ -603,7 +612,11 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
  * DELETE /api/adjuntos/:idAdjunto
  * Eliminar adjunto
  */
-router.delete('/:idAdjunto', requirePermiso('INTERNACION.ADJUNTOS.ELIMINAR'), async (req, res) => {
+router.delete(
+  '/:idAdjunto',
+  requirePermiso('INTERNACION.ADJUNTOS.ELIMINAR'),
+  _ownAdjunto,
+  async (req, res) => {
   try {
     const { idAdjunto } = req.params;
     const userId = resolveUserId(req);

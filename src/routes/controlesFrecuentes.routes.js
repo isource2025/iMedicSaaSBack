@@ -3,8 +3,17 @@ const router = express.Router();
 const controlesFrecuentesController = require('../controllers/controlesFrecuentes.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePropietario } = require('../middlewares/propietario.middleware');
 
 router.use(requireTenant);
+
+const _ownControl = requirePropietario({
+	tabla: 'imInterCtrlFrecuente',
+	pkCol: 'Valor',
+	autorCol: 'OperadorCarga',
+	pkParam: 'valor',
+	failSafe: true,
+});
 
 router.get(
 	'/:numeroVisita/byDate',
@@ -20,6 +29,7 @@ router.post('/', requirePermiso('INTERNACION.SIGNOS_VITALES.CREAR'), controlesFr
 router.delete(
 	'/:valor',
 	requirePermiso('INTERNACION.SIGNOS_VITALES.ELIMINAR'),
+	_ownControl,
 	controlesFrecuentesController.eliminarControl,
 );
 
