@@ -91,13 +91,14 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   if (!fechaEgreso || !horaEgreso) {
     throw new Error('Faltan datos obligatorios: fecha y hora de egreso');
   }
-  
-  // Para compatibilidad con el frontend, usamos disposicionEgreso como estadoAmbulatorio si no se proporciona
-  const estadoAmbulatorio = disposicionEgreso || 1; // Valor predeterminado 1 si no se proporciona
-  const codigoOperador = 'SISTEMA'; // Valor predeterminado si no se proporciona
 
+  const codigoOperador = 'SISTEMA';
   const cDate = convertirFechaAClarion(fechaEgreso);
   const cTime = convertirHoraAClarion(horaEgreso);
+  const disposicion =
+    disposicionEgreso === undefined || disposicionEgreso === null || disposicionEgreso === ''
+      ? null
+      : Number(disposicionEgreso);
 
   const ultimo = await obtenerUltimoMovimientoVisita(num);
   if (!ultimo) {
@@ -108,12 +109,12 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     BEGIN TRY
       BEGIN TRANSACTION;
 
-      -- Actualizar movimiento
+      -- Cerrar último movimiento con datos de egreso (no tocar EstadoAmbulatorio)
       UPDATE imVisitaMovimiento
       SET 
         FechaEgreso = @param1,
         HoraEgreso = @param2,
-        EstadoAmbulatorio = @param5,
+        DisposicionEgreso = @param5,
         Diagnostico = @param6,
         Operador = @param7
       WHERE 
@@ -131,7 +132,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         Observaciones     = ''
       WHERE ValorHabitacionCama = @param8;
 
-            -- Liberar cama
+      -- Cerrar visita
       UPDATE imVisita
       SET 
         FechaEgreso = @param1,
@@ -154,7 +155,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     { value: cTime }, // @param2
     { value: ultimo.FechaAdmision }, // @param3
     { value: ultimo.HoraAdmision }, // @param4
-    { value: estadoAmbulatorio }, // @param5
+    { value: Number.isFinite(disposicion) ? disposicion : null }, // @param5
     { value: diagnostico || null }, // @param6
     { value: codigoOperador }, // @param7
     { value: bedId } // @param8

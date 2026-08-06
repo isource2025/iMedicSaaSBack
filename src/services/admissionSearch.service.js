@@ -134,8 +134,15 @@ async function buscarAdmisiones({
       p.ApellidoYNombre,
       p.NumeroDocumento,
       p.NumeroHC,
+      LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
+      LTRIM(RTRIM(ISNULL(v.NUMEROINTERNACION, ''))) AS NumeroInternacion,
+      LTRIM(RTRIM(ISNULL(suc.Descripcion, ''))) AS CentroSalud,
+      LTRIM(RTRIM(ISNULL(cli.RazonSocial, ''))) AS CoberturaOS,
+      LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) AS Sector,
+      LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorHabitacionCama, v.VALORHABITACIONCAMA), ''))) AS Habitacion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
+      CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS FechaAdmisionDMY,
       v.TipoPaciente,
       v.ClasePaciente,
       tp.Descripcion AS TipoPacienteDescripcion,
@@ -213,6 +220,8 @@ async function buscarAdmisiones({
     LEFT JOIN imTipoPaciente tp ON v.TipoPaciente = tp.Valor
     LEFT JOIN imEstadoAmbulatorio ea ON v.EstadoAmbulatorio = ea.Valor
     LEFT JOIN imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+    LEFT JOIN imClientes cli ON v.CLIENTE = cli.Valor
+    LEFT JOIN dbo.Sucursales suc ON v.IdSucursal = suc.IdSucursal
     LEFT JOIN imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
       AND LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) NOT IN ('', '0')
     LEFT JOIN imServiciosMedicos smEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(smEgr.Valor, '')))
@@ -222,7 +231,7 @@ async function buscarAdmisiones({
     LEFT JOIN imSectores secTemp ON LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) = LTRIM(RTRIM(ISNULL(secTemp.Valor, '')))
       AND LTRIM(RTRIM(ISNULL(v.LocalizacionTemporal, ''))) NOT IN ('', '0')
     OUTER APPLY (
-      SELECT TOP 1 hc.ValorSector
+      SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama
       FROM dbo.imHabitacionCamas hc
       WHERE hc.NumeroVisita = v.NumeroVisita
       ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
@@ -984,10 +993,264 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   return out;
 }
 
+function _trimStr(v, maxLen) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  return maxLen ? s.slice(0, maxLen) : s;
+}
+
+function _toIntOrNull(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _toIntOrZero(v) {
+  const n = _toIntOrNull(v);
+  return n == null ? 0 : n;
+}
+
+/**
+ * Datos principales de admisión (captura legacy) + catálogos para el modal.
+ */
+async function obtenerDatosPrincipales(numeroVisita) {
+  const nv = Number(numeroVisita);
+  if (!Number.isFinite(nv) || nv <= 0) return null;
+
+  const rows = await executeQuery(
+    `
+      SELECT TOP 1
+        v.NUMEROVISITA AS NumeroVisita,
+        v.IDPACIENTE AS IdPaciente,
+        p.ApellidoYNombre,
+        p.NumeroDocumento,
+        p.NumeroHC,
+        LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
+        CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
+        CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
+        CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS FechaAdmisionDMY,
+        LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) AS ClasePaciente,
+        cp.Descripcion AS ClasePacienteDescripcion,
+        LTRIM(RTRIM(ISNULL(v.NUMEROINTERNACION, ''))) AS NumeroInternacion,
+        LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) AS TipoAdmision,
+        ta.Descripcion AS TipoAdmisionDescripcion,
+        v.IdLugarEpisodio,
+        le.Descripcion AS LugarEpisodioDescripcion,
+        v.ORIGENADMISION AS OrigenAdmision,
+        oa.Descripcion AS OrigenAdmisionDescripcion,
+        LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(d.Descripcion, ''))) AS DiagnosticoDescripcion,
+        LTRIM(RTRIM(ISNULL(v.ESTADOAMBULATORIO, ''))) AS EstadoAmbulatorio,
+        ea.Descripcion AS EstadoAmbulatorioDescripcion,
+        v.DOCTORADMISOR AS DoctorAdmisor,
+        LTRIM(RTRIM(ISNULL(docAdm.ApellidoNombre, ''))) AS DoctorAdmisorNombre,
+        v.CLIENTE AS Cliente,
+        LTRIM(RTRIM(ISNULL(cli.RazonSocial, ''))) AS CoberturaOS,
+        v.CONTRATO AS Contrato,
+        LTRIM(RTRIM(ISNULL(conv.Descripcion, ''))) AS ContratoDescripcion,
+        v.DOCTORASISTIENDO AS DoctorAsistiendo,
+        LTRIM(RTRIM(ISNULL(docAsis.ApellidoNombre, ''))) AS DoctorAsistiendoNombre,
+        LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) AS TipoPaciente,
+        tp.Descripcion AS TipoPacienteDescripcion,
+        v.DOCTORCONSULTOR AS DoctorCabecera,
+        LTRIM(RTRIM(ISNULL(docCab.ApellidoNombre, ''))) AS DoctorCabeceraNombre,
+        LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) AS Sector,
+        LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorHabitacionCama, v.VALORHABITACIONCAMA), ''))) AS Habitacion,
+        LTRIM(RTRIM(ISNULL(sec.Descripcion, ''))) AS SectorDescripcion,
+        LTRIM(RTRIM(ISNULL(v.SERVICIOHOSPITAL, ''))) AS ServicioHospital,
+        LTRIM(RTRIM(ISNULL(sm.Descripcion, ''))) AS ServicioHospitalDescripcion,
+        v.FECHAEGRESO AS FechaEgresoClarion,
+        v.HORAEGRESO AS HoraEgresoClarion,
+        CASE
+          WHEN TRY_CAST(v.FechaEgreso AS int) IS NOT NULL AND TRY_CAST(v.FechaEgreso AS int) > 0
+               AND OBJECT_ID(N'dbo.fn_ClarionDATE2SQL', N'FN') IS NOT NULL
+          THEN CONVERT(VARCHAR(10), dbo.fn_ClarionDATE2SQL(v.FechaEgreso), 23)
+          ELSE NULL
+        END AS FechaEgreso,
+        CASE
+          WHEN TRY_CAST(v.HoraEgreso AS int) IS NOT NULL AND TRY_CAST(v.HoraEgreso AS int) > 0
+               AND OBJECT_ID(N'dbo.fn_ClarionTIME2SQL', N'FN') IS NOT NULL
+          THEN CONVERT(VARCHAR(5), dbo.fn_ClarionTIME2SQL(v.HoraEgreso), 108)
+          ELSE NULL
+        END AS HoraEgreso,
+        v.DISPOSICIONEGRESO AS DisposicionEgreso,
+        LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) AS DiagnosticoEgreso,
+        v.OperadorEgreso,
+        LTRIM(RTRIM(ISNULL(suc.Descripcion, ''))) AS CentroSalud
+      FROM dbo.imVisita v
+      INNER JOIN dbo.imPacientes p ON v.IDPACIENTE = p.IdPaciente
+      LEFT JOIN dbo.imClasePaciente cp ON LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(cp.Valor, '')))
+      LEFT JOIN dbo.imTipoAdmision ta ON LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) = LTRIM(RTRIM(ISNULL(ta.Valor, '')))
+      LEFT JOIN dbo.imLugarEpisodio le ON v.IdLugarEpisodio = le.IdLugarEpisodio
+      LEFT JOIN dbo.imOrigenAdmision oa ON v.ORIGENADMISION = oa.Valor
+      LEFT JOIN dbo.imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+      LEFT JOIN dbo.imEstadoAmbulatorio ea ON LTRIM(RTRIM(ISNULL(v.ESTADOAMBULATORIO, ''))) = LTRIM(RTRIM(ISNULL(ea.Valor, '')))
+      LEFT JOIN dbo.imPersonal docAdm ON v.DOCTORADMISOR = docAdm.Valor
+      LEFT JOIN dbo.imPersonal docAsis ON v.DOCTORASISTIENDO = docAsis.Valor
+      LEFT JOIN dbo.imPersonal docCab ON v.DOCTORCONSULTOR = docCab.Valor
+      LEFT JOIN dbo.imClientes cli ON v.CLIENTE = cli.Valor
+      LEFT JOIN dbo.imClientesConvenios conv
+        ON conv.Valor = v.CLIENTE AND conv.Codigo = v.CONTRATO
+      LEFT JOIN dbo.imTipoPaciente tp ON LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(tp.Valor, '')))
+      LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.SERVICIOHOSPITAL, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
+      LEFT JOIN dbo.Sucursales suc ON v.IdSucursal = suc.IdSucursal
+      OUTER APPLY (
+        SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama
+        FROM dbo.imHabitacionCamas hc
+        WHERE hc.NumeroVisita = v.NUMEROVISITA
+        ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+      ) bed
+      LEFT JOIN dbo.imSectores sec ON LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) = LTRIM(RTRIM(ISNULL(sec.Valor, '')))
+      WHERE v.NUMEROVISITA = @param0
+    `,
+    [{ value: nv }],
+  );
+
+  const visita = rows?.[0] || null;
+  if (!visita) return null;
+
+  const catalogos = await obtenerCatalogosAdmision(visita.Cliente);
+
+  return { visita, catalogos };
+}
+
+async function obtenerCatalogosAdmision(clienteId) {
+  const cli = _toIntOrNull(clienteId);
+  const [
+    clasesPaciente,
+    tiposAdmision,
+    tiposPaciente,
+    estadosAmbulatorios,
+    lugaresEpisodio,
+    origenesAdmision,
+    convenios,
+  ] = await Promise.all([
+    executeQuery(`SELECT Valor, Descripcion FROM dbo.imClasePaciente ORDER BY Descripcion`).catch(() => []),
+    executeQuery(`SELECT Valor, Descripcion FROM dbo.imTipoAdmision ORDER BY Descripcion`).catch(() => []),
+    executeQuery(`SELECT Valor, Descripcion FROM dbo.imTipoPaciente ORDER BY Descripcion`).catch(() => []),
+    executeQuery(`SELECT Valor, Descripcion FROM dbo.imEstadoAmbulatorio ORDER BY Descripcion`).catch(() => []),
+    executeQuery(`SELECT IdLugarEpisodio AS Valor, Descripcion FROM dbo.imLugarEpisodio ORDER BY Descripcion`).catch(() => []),
+    executeQuery(`SELECT Valor, Descripcion FROM dbo.imOrigenAdmision ORDER BY Descripcion`).catch(() => []),
+    cli != null && cli > 0
+      ? executeQuery(
+          `
+            SELECT Codigo AS Valor, Descripcion
+            FROM dbo.imClientesConvenios
+            WHERE Valor = @param0
+            ORDER BY Codigo
+          `,
+          [{ value: cli }],
+        ).catch(() => [])
+      : Promise.resolve([]),
+  ]);
+
+  return {
+    clasesPaciente: clasesPaciente || [],
+    tiposAdmision: tiposAdmision || [],
+    tiposPaciente: tiposPaciente || [],
+    estadosAmbulatorios: estadosAmbulatorios || [],
+    lugaresEpisodio: lugaresEpisodio || [],
+    origenesAdmision: origenesAdmision || [],
+    convenios: convenios || [],
+  };
+}
+
+/**
+ * Actualiza campos de "Datos Principales" en imVisita.
+ */
+async function actualizarDatosPrincipales(numeroVisita, body = {}) {
+  const nv = Number(numeroVisita);
+  if (!Number.isFinite(nv) || nv <= 0) {
+    const err = new Error('numeroVisita inválido');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const existing = await executeQuery(
+    `SELECT TOP 1 NUMEROVISITA, FECHAADMISIONS FROM dbo.imVisita WHERE NUMEROVISITA = @param0`,
+    [{ value: nv }],
+  );
+  if (!existing?.length) {
+    const err = new Error('Admisión no encontrada');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  let fechaAdmision = existing[0].FECHAADMISIONS;
+  const fechaStr = _trimStr(body.fechaAdmision);
+  const horaStr = _trimStr(body.horaAdmision);
+  if (fechaStr) {
+    const hm = horaStr && /^\d{1,2}:\d{2}/.test(horaStr) ? horaStr.slice(0, 5) : '00:00';
+    const parsed = new Date(`${fechaStr}T${hm}:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      fechaAdmision = parsed;
+    }
+  }
+
+  const clasePaciente = _trimStr(body.clasePaciente, 1) || ' ';
+  const tipoAdmision = _trimStr(body.tipoAdmision, 1) || ' ';
+  const tipoPaciente = _trimStr(body.tipoPaciente, 1) || null;
+  const numeroInternacion = _trimStr(body.numeroInternacion, 40);
+  const diagnostico = _trimStr(body.diagnostico, 8) || '';
+  const estadoAmbulatorio = _trimStr(body.estadoAmbulatorio, 2) || '';
+  const idLugarEpisodio = _toIntOrNull(body.idLugarEpisodio);
+  const origenAdmision = _toIntOrZero(body.origenAdmision);
+  const doctorAdmisor = _toIntOrZero(body.doctorAdmisor);
+  const doctorAsistiendo = _toIntOrZero(body.doctorAsistiendo);
+  const doctorCabecera = _toIntOrNull(body.doctorCabecera);
+  const cliente = _toIntOrZero(body.cliente);
+  const contrato = _toIntOrZero(body.contrato);
+
+  await executeQuery(
+    `
+      UPDATE dbo.imVisita
+      SET
+        FECHAADMISIONS = @param1,
+        CLASEPACIENTE = @param2,
+        TIPOADMISION = @param3,
+        TIPOPACIENTE = @param4,
+        NUMEROINTERNACION = @param5,
+        DIAGNOSTICO = @param6,
+        ESTADOAMBULATORIO = @param7,
+        IdLugarEpisodio = @param8,
+        ORIGENADMISION = @param9,
+        DOCTORADMISOR = @param10,
+        DOCTORASISTIENDO = @param11,
+        DOCTORCONSULTOR = @param12,
+        CLIENTE = @param13,
+        CONTRATO = @param14
+      WHERE NUMEROVISITA = @param0
+    `,
+    [
+      { value: nv, type: 'Int' },
+      { value: fechaAdmision, type: 'DateTime' },
+      { value: clasePaciente, type: 'VarChar' },
+      { value: tipoAdmision, type: 'VarChar' },
+      { value: tipoPaciente, type: 'VarChar' },
+      { value: numeroInternacion, type: 'VarChar' },
+      { value: diagnostico.padEnd(8, ' ').slice(0, 8), type: 'VarChar' },
+      { value: estadoAmbulatorio, type: 'VarChar' },
+      { value: idLugarEpisodio, type: 'Int' },
+      { value: origenAdmision, type: 'Int' },
+      { value: doctorAdmisor, type: 'Int' },
+      { value: doctorAsistiendo, type: 'Int' },
+      { value: doctorCabecera, type: 'Int' },
+      { value: cliente, type: 'Int' },
+      { value: contrato, type: 'Int' },
+    ],
+  );
+
+  return obtenerDatosPrincipales(nv);
+}
+
 module.exports = {
   buscarAdmisiones,
   obtenerPracticasPorVisita,
   exportarAdmisionCompleta,
   exportarAdmisionSelectivo,
   listarNumerosVisitaPaciente,
+  obtenerDatosPrincipales,
+  actualizarDatosPrincipales,
+  obtenerCatalogosAdmision,
 };

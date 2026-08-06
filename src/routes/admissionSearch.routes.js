@@ -9,6 +9,11 @@ router.use(requireTenant);
 
 router.get('/', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.buscar);
 router.get(
+	'/catalogos',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.catalogosAdmision,
+);
+router.get(
 	'/paciente/:idPaciente/turnos-activos',
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.turnosActivosPaciente,
@@ -19,6 +24,16 @@ router.post(
 	controller.exportGeneralPaciente,
 );
 router.get('/:numeroVisita/detail', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.detalle);
+router.get(
+	'/:numeroVisita/datos-principales',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.datosPrincipales,
+);
+router.put(
+	'/:numeroVisita/datos-principales',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.actualizarDatosPrincipales,
+);
 router.post(
 	'/:numeroVisita/export-selective',
 	requirePermiso('ADMISION.BUSQUEDA.VER'),

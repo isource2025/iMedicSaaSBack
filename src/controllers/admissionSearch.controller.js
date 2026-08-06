@@ -96,6 +96,73 @@ async function detalle(req, res) {
   }
 }
 
+async function datosPrincipales(req, res) {
+  try {
+    const numeroVisita = Number(req.params.numeroVisita);
+    if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'numeroVisita inválido',
+      });
+    }
+
+    const payload = await admissionSearchService.obtenerDatosPrincipales(numeroVisita);
+    if (!payload) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admisión no encontrada',
+      });
+    }
+
+    res.json({ success: true, data: payload });
+  } catch (error) {
+    console.error('Error al obtener datos principales de admisión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener datos principales de admisión',
+    });
+  }
+}
+
+async function actualizarDatosPrincipales(req, res) {
+  try {
+    const numeroVisita = Number(req.params.numeroVisita);
+    if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'numeroVisita inválido',
+      });
+    }
+
+    const payload = await admissionSearchService.actualizarDatosPrincipales(
+      numeroVisita,
+      req.body || {},
+    );
+    res.json({ success: true, data: payload });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    console.error('Error al actualizar datos principales de admisión:', error);
+    res.status(status).json({
+      success: false,
+      message: error.message || 'Error al actualizar datos principales',
+    });
+  }
+}
+
+async function catalogosAdmision(req, res) {
+  try {
+    const clienteId = req.query.cliente != null ? Number(req.query.cliente) : null;
+    const catalogos = await admissionSearchService.obtenerCatalogosAdmision(clienteId);
+    res.json({ success: true, data: catalogos });
+  } catch (error) {
+    console.error('Error al obtener catálogos de admisión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener catálogos de admisión',
+    });
+  }
+}
+
 const EXPORT_SECTIONS = new Set([
   'admision',
   'hcIngreso',
@@ -202,6 +269,9 @@ async function turnosActivosPaciente(req, res) {
 module.exports = {
   buscar,
   detalle,
+  datosPrincipales,
+  actualizarDatosPrincipales,
+  catalogosAdmision,
   exportSelectivo,
   turnosActivosPaciente,
   exportGeneralPaciente,

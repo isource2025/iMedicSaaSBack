@@ -20,6 +20,8 @@ const epicrisisRoutes = require('./routes/epicrisis.routes');
 const indicadoresRoutes = require('./routes/indicadores.routes');
 const empresaRoutes = require('./routes/empresa.routes');
 const catalogsRoutes = require('./routes/catalogs.routes');
+const disposicionEgresoRoutes = require('./routes/disposicionEgreso.routes');
+const clasePacienteRoutes = require('./routes/clasePaciente.routes');
 const provinciaRoutes = require('./routes/provincias.routes');
 const localidadesRoutes = require('./routes/localidades.routes');
 const sexoRoutes = require('./routes/sexo.routes');
@@ -146,6 +148,8 @@ app.use('/api/epicrisis', epicrisisRoutes);
 app.use('/api/indicadores', indicadoresRoutes);
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
+app.use('/api/disposiciones-egreso', disposicionEgresoRoutes);
+app.use('/api/clases-paciente', clasePacienteRoutes);
 app.use('/api/provincias', provinciaRoutes);
 app.use('/api/sexo', sexoRoutes);
 
