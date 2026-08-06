@@ -30,6 +30,28 @@ const catalogsController = {
   },
 
   /**
+   * Obtiene estados ambulatorios desde imEstadoAmbulatorio
+   * @route GET /api/catalogs/estados-ambulatorios
+   */
+  getEstadosAmbulatorios: async (req, res) => {
+    try {
+      const data = await catalogsService.getEstadosAmbulatorios();
+      res.json({
+        success: true,
+        data,
+        message: 'Estados ambulatorios obtenidos correctamente',
+      });
+    } catch (error) {
+      console.error('Error en controlador de estados ambulatorios:', error);
+      res.status(500).json({
+        success: false,
+        data: [],
+        message: error.message || 'Error al obtener estados ambulatorios',
+      });
+    }
+  },
+
+  /**
    * Obtiene todos los diagnósticos CIE10 de la tabla imdiagnosticos
    * @param {Object} req - Objeto de solicitud HTTP
    * @param {Object} res - Objeto de respuesta HTTP

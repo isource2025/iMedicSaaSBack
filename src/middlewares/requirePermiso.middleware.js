@@ -35,6 +35,9 @@ async function _resolverPermisosReq(req) {
 	if (rn === 'MEDICO') {
 		permisos = matriz.permisosDeRol('MEDICO');
 	}
+	if (rn === 'ADMINISTRATIVO') {
+		permisos = matriz.permisosDeRol('ADMINISTRATIVO');
+	}
 	return permisos;
 }
 

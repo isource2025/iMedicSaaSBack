@@ -42,6 +42,27 @@ const catalogsService = {
       return DEFAULT_DISPOSICIONES;
     }
   },
+
+  /**
+   * Obtiene los registros de imEstadoAmbulatorio
+   * @returns {Promise<Array<{Valor: string, Descripcion: string}>>}
+   */
+  getEstadosAmbulatorios: async () => {
+    const query = `
+      SELECT
+        LTRIM(RTRIM(ISNULL(Valor, ''))) AS Valor,
+        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
+      FROM dbo.imEstadoAmbulatorio
+      ORDER BY Descripcion
+    `;
+    const result = await executeQuery(query);
+    return (result || [])
+      .map((item) => ({
+        Valor: String(item.Valor ?? item.valor ?? '').trim(),
+        Descripcion: String(item.Descripcion ?? item.descripcion ?? '').trim(),
+      }))
+      .filter((item) => item.Valor || item.Descripcion);
+  },
 };
 
 module.exports = catalogsService;

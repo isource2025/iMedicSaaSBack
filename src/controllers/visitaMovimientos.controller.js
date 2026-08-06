@@ -204,10 +204,10 @@ const moverPacienteACamaVacia = async (req, res) => {
       });
     }
 
-    // Validar datos requeridos
+    // Validar datos requeridos (EstadoAmbulatorio y Diagnostico son opcionales)
     const camposRequeridos = [
       'FechaAdmision', 'HoraAdmision', 'FechaEgreso', 'HoraEgreso',
-      'EstadoAmbulatorio', 'bedId', 'ValorSector', 'Operador', 'FechaCarga', 'HoraCarga'
+      'bedId', 'ValorSector', 'Operador', 'FechaCarga', 'HoraCarga'
     ];
     
     const camposFaltantes = camposRequeridos.filter(campo => !datosMover[campo]);
@@ -247,10 +247,10 @@ const intercambiarCamasPacientes = async (req, res) => {
     const { numeroVisita1, numeroVisita2 } = req.params;
     const datos = req.body;
 
-    // Validar datos requeridos
+    // Validar datos requeridos (EstadoAmbulatorio y Diagnostico son opcionales)
     const camposRequeridos = [
       'FechaEgreso', 'HoraEgreso', 'FechaAdmision', 'HoraAdmision',
-      'EstadoAmbulatorio', 'Operador', 'FechaCarga', 'HoraCarga'
+      'Operador', 'FechaCarga', 'HoraCarga'
     ];
 
     const camposFaltantes = camposRequeridos.filter(campo => !datos[campo]);

@@ -58,8 +58,8 @@ async function _leerDeBD(idRol) {
  * @returns {Promise<string[]>}
  */
 async function permisosDeRol(idRol, nombreRol) {
-	// ADMIN / SUPER_ADMIN / MEDICO: matriz completa (evita imRolPermisos incompleto
-	// en BD, p. ej. MEDICO sin INTERCONSULTAS o sin lectura de enfermería).
+	// ADMIN / SUPER_ADMIN / MEDICO / ADMINISTRATIVO: matriz completa
+	// (evita imRolPermisos incompleto en auth central / BD tenant).
 	const nombre = nombreRol ? String(nombreRol).trim().toUpperCase() : '';
 	if (nombre === 'ADMIN') {
 		return [...matriz.permisosDeRol('ADMIN')];
@@ -69,6 +69,9 @@ async function permisosDeRol(idRol, nombreRol) {
 	}
 	if (nombre === 'MEDICO') {
 		return [...matriz.permisosDeRol('MEDICO')];
+	}
+	if (nombre === 'ADMINISTRATIVO') {
+		return [...matriz.permisosDeRol('ADMINISTRATIVO')];
 	}
 	if (idRol == null || !Number.isFinite(Number(idRol))) {
 		return matriz.permisosDeRol(nombreRol || null);

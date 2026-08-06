@@ -213,8 +213,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   } = datos;
 
   if (!FechaAdmision || !HoraAdmision || !FechaEgreso || !HoraEgreso || 
-      !EstadoAmbulatorio || !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
-    throw new Error('Faltan datos obligatorios para el movimiento de cama. Se requiere: FechaAdmision, HoraAdmision, FechaEgreso, HoraEgreso, EstadoAmbulatorio, bedId, ValorSector, Operador, FechaCarga, HoraCarga');
+      !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
+    throw new Error('Faltan datos obligatorios para el movimiento de cama. Se requiere: FechaAdmision, HoraAdmision, FechaEgreso, HoraEgreso, bedId, ValorSector, Operador, FechaCarga, HoraCarga');
   }
 
   // Obtener información del último movimiento para cerrar el registro actual
@@ -222,6 +222,16 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   if (!ultimoMovimiento) {
     throw new Error(`No se encontró el último movimiento para la visita ${num}`);
   }
+
+  // Estado/diagnóstico opcionales: conservar el del movimiento actual si no se envían
+  const estadoAmbMovimiento =
+    String(EstadoAmbulatorio || '').trim() ||
+    String(ultimoMovimiento.EstadoAmbulatorio || '').trim() ||
+    ' ';
+  const diagnosticoMovimiento =
+    String(Diagnostico || '').trim() ||
+    String(ultimoMovimiento.Diagnostico || '').trim() ||
+    null;
   
   // Obtener información del paciente de la visita
   const pacienteQuery = `
@@ -390,8 +400,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   const params = [
     { value: FechaEgreso },                 // @param0 - FechaEgreso
     { value: HoraEgreso },                  // @param1 - HoraEgreso
-    { value: EstadoAmbulatorio },           // @param2 - EstadoAmbulatorio
-    { value: Diagnostico || null },         // @param3 - Diagnostico
+    { value: estadoAmbMovimiento },         // @param2 - EstadoAmbulatorio
+    { value: diagnosticoMovimiento },       // @param3 - Diagnostico
     { value: Operador },                    // @param4 - Operador
     { value: num },                         // @param5 - NumeroVisita
     { value: ultimoMovimiento.FechaAdmision }, // @param6 - UltimaFechaAdmision
@@ -468,7 +478,7 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   } = datos;
 
   if (!FechaEgreso || !HoraEgreso || !FechaAdmision || !HoraAdmision || 
-      !EstadoAmbulatorio || !Operador || !FechaCarga || !HoraCarga) {
+      !Operador || !FechaCarga || !HoraCarga) {
     throw new Error('Faltan datos obligatorios para el intercambio de camas');
   }
 
@@ -479,6 +489,15 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   if (!ultimoMovimiento1 || !ultimoMovimiento2) {
     throw new Error(`No se encontró el último movimiento para alguna de las visitas`);
   }
+
+  const estadoAmbSwap =
+    String(EstadoAmbulatorio || '').trim() ||
+    String(ultimoMovimiento1.EstadoAmbulatorio || '').trim() ||
+    ' ';
+  const diagnosticoSwap =
+    String(Diagnostico || '').trim() ||
+    String(ultimoMovimiento1.Diagnostico || '').trim() ||
+    null;
   
   // Obtener información de las camas actuales
   const camasQuery = `
@@ -631,8 +650,8 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   const params = [
     { value: FechaEgreso },                 // @param0 - FechaEgreso
     { value: HoraEgreso },                  // @param1 - HoraEgreso
-    { value: EstadoAmbulatorio },           // @param2 - EstadoAmbulatorio
-    { value: Diagnostico || null },         // @param3 - Diagnostico
+    { value: estadoAmbSwap },               // @param2 - EstadoAmbulatorio
+    { value: diagnosticoSwap },             // @param3 - Diagnostico
     { value: Operador },                    // @param4 - Operador
     { value: num1 },                        // @param5 - NumeroVisita1
     { value: ultimoMovimiento1.FechaAdmision }, // @param6 - UltimaFechaAdmision1

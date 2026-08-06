@@ -14,6 +14,12 @@ router.use(requireAuth, requireTenant);
 router.get('/disposiciones-egreso', catalogsController.getDisposicionesEgreso);
 
 /**
+ * Estados ambulatorios (imEstadoAmbulatorio)
+ * @route GET /api/catalogs/estados-ambulatorios
+ */
+router.get('/estados-ambulatorios', catalogsController.getEstadosAmbulatorios);
+
+/**
  * Ruta para obtener todos los diagnósticos CIE10
  * @route GET /api/catalogs/diagnosticos
  * @returns {Object} Respuesta JSON con todos los diagnósticos CIE10

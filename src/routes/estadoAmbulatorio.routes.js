@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const estadoAmbulatorioController = require('../controllers/estadoAmbulatorio.controller');
+const { requireTenant } = require('../middlewares/requireTenant.middleware');
+
+router.use(requireTenant);
 
 // Ruta para obtener todos los estados ambulatorios
 router.get('/', estadoAmbulatorioController.getEstadosAmbulatorios);

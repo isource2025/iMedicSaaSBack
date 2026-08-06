@@ -37,6 +37,7 @@ const estadoMilitarRoutes = require('./routes/estadoMilitar.routes');
 const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 const coberturaRoutes = require('./routes/cobertura.routes');
 const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
+const estadoAmbulatorioRoutes = require('./routes/estadoAmbulatorio.routes');
 const estadosCivilesRoutes = require('./routes/estadoCivil.routes.js');
 const medicacionControlRoutes = require('./routes/medicacionControl.routes');
 const controlesFrecuentesRoutes = require('./routes/controlesFrecuentes.routes');
@@ -164,6 +165,7 @@ app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administrador
 app.use('/api/renaper', renaperRoutes);
 app.use('/api/cobertura', coberturaRoutes);
 app.use('/api/visita-movimientos', visitaMovimientosRoutes);
+app.use('/api/estados-ambulatorios', estadoAmbulatorioRoutes);
 app.use('/api/estados-civiles', estadosCivilesRoutes);
 app.use('/api/medicacion-control', medicacionControlRoutes);
 app.use('/api/controles-frecuentes', controlesFrecuentesRoutes);
