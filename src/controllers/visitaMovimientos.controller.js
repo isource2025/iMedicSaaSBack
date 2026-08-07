@@ -3,6 +3,7 @@
  * @module controllers/visitaMovimientos.controller
  */
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
+const { requireOperadorCarga } = require('../utils/sessionIdentity');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -121,6 +122,11 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
         });
       }
     }
+
+    const codOperador = requireOperadorCarga(req, res);
+    if (codOperador == null) return;
+    datosEgreso.codOperador = codOperador;
+    datosEgreso.operadorEgreso = codOperador;
 
     console.log(`Llamando a visitaMovimientosService.actualizarUltimoMovimientoVisita con numeroVisita=${numeroVisitaInt} y datosEgreso:`, datosEgreso);
     const resultado = await visitaMovimientosService.actualizarUltimoMovimientoVisita(numeroVisitaInt, datosEgreso);

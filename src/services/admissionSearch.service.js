@@ -184,6 +184,27 @@ async function buscarAdmisiones({
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS FechaAdmisionDMY,
+      CASE
+        WHEN TRY_CAST(v.FechaEgreso AS int) IS NOT NULL
+             AND TRY_CAST(v.FechaEgreso AS int) > 0
+             AND OBJECT_ID(N'dbo.fn_ClarionDATE2SQL', N'FN') IS NOT NULL
+        THEN CONVERT(VARCHAR(10), dbo.fn_ClarionDATE2SQL(v.FechaEgreso), 23)
+        ELSE NULL
+      END AS FechaEgreso,
+      CASE
+        WHEN TRY_CAST(v.HoraEgreso AS int) IS NOT NULL
+             AND TRY_CAST(v.HoraEgreso AS int) > 0
+             AND OBJECT_ID(N'dbo.fn_ClarionTIME2SQL', N'FN') IS NOT NULL
+        THEN CONVERT(VARCHAR(5), dbo.fn_ClarionTIME2SQL(v.HoraEgreso), 108)
+        ELSE NULL
+      END AS HoraEgreso,
+      CASE
+        WHEN TRY_CAST(v.FechaEgreso AS int) IS NOT NULL
+             AND TRY_CAST(v.FechaEgreso AS int) > 0
+             AND OBJECT_ID(N'dbo.fn_ClarionDATE2SQL', N'FN') IS NOT NULL
+        THEN CONVERT(VARCHAR(10), dbo.fn_ClarionDATE2SQL(v.FechaEgreso), 103)
+        ELSE NULL
+      END AS FechaEgresoDMY,
       v.TipoPaciente,
       v.ClasePaciente,
       tp.Descripcion AS TipoPacienteDescripcion,
@@ -1121,6 +1142,22 @@ async function obtenerDatosPrincipales(numeroVisita) {
         v.DISPOSICIONEGRESO AS DisposicionEgreso,
         LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) AS DiagnosticoEgreso,
         v.OperadorEgreso,
+        CASE
+          WHEN v.OperadorEgreso IS NULL OR TRY_CAST(v.OperadorEgreso AS int) IS NULL OR TRY_CAST(v.OperadorEgreso AS int) <= 0
+          THEN ''
+          ELSE LTRIM(RTRIM(
+            CONCAT(
+              NULLIF(LTRIM(RTRIM(ISNULL(pwEgr.Apellido, ''))), ''),
+              CASE
+                WHEN NULLIF(LTRIM(RTRIM(ISNULL(pwEgr.Apellido, ''))), '') IS NOT NULL
+                     AND NULLIF(LTRIM(RTRIM(ISNULL(pwEgr.Nombres, ''))), '') IS NOT NULL
+                THEN ', '
+                ELSE ''
+              END,
+              NULLIF(LTRIM(RTRIM(ISNULL(pwEgr.Nombres, ''))), '')
+            )
+          ))
+        END AS OperadorEgresoNombre,
         ${centro.select}
       FROM dbo.imVisita v
       INNER JOIN dbo.imPacientes p ON v.IDPACIENTE = p.IdPaciente
@@ -1138,6 +1175,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         ON conv.Valor = v.CLIENTE AND conv.Codigo = v.CONTRATO
       LEFT JOIN dbo.imTipoPaciente tp ON LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(tp.Valor, '')))
       LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.SERVICIOHOSPITAL, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
+      LEFT JOIN dbo.imPassword pwEgr ON pwEgr.CodOperador = TRY_CAST(v.OperadorEgreso AS int)
       ${centro.join}
       OUTER APPLY (
         SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama

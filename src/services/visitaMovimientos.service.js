@@ -92,7 +92,12 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     throw new Error('Faltan datos obligatorios: fecha y hora de egreso');
   }
 
-  const codigoOperador = 'SISTEMA';
+  const codOpRaw = datosEgreso.codOperador ?? datosEgreso.operadorEgreso ?? datosEgreso.OperadorEgreso;
+  const codOperador = Number(codOpRaw);
+  if (!Number.isFinite(codOperador) || codOperador <= 0) {
+    throw new Error('Falta CodOperador de sesión para registrar el egreso');
+  }
+
   const cDate = convertirFechaAClarion(fechaEgreso);
   const cTime = convertirHoraAClarion(horaEgreso);
   const disposicion =
@@ -132,13 +137,14 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         Observaciones     = ''
       WHERE ValorHabitacionCama = @param8;
 
-      -- Cerrar visita
+      -- Cerrar visita (incluye quién egresó)
       UPDATE imVisita
       SET 
         FechaEgreso = @param1,
         HoraEgreso = @param2,
         DisposicionEgreso = @param5,
-        DiagnosticoEgreso = @param6
+        DiagnosticoEgreso = @param6,
+        OperadorEgreso = @param9
       WHERE NumeroVisita = @param0;
     
       COMMIT;
@@ -157,8 +163,9 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     { value: ultimo.HoraAdmision }, // @param4
     { value: Number.isFinite(disposicion) ? disposicion : null }, // @param5
     { value: diagnostico || null }, // @param6
-    { value: codigoOperador }, // @param7
-    { value: bedId } // @param8
+    { value: String(codOperador), type: 'VarChar' }, // @param7 movimiento.Operador
+    { value: bedId }, // @param8
+    { value: codOperador, type: 'Int' }, // @param9 visita.OperadorEgreso
   ];
 
   try {
