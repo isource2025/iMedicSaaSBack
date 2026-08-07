@@ -27,6 +27,44 @@ function normalizeDigits(value) {
 
 const practicasNomencladorByTenant = new Map();
 const practicasNomencladorPromiseByTenant = new Map();
+/** Cache por tenant: imVisita.IdSucursal (algunas BDs legacy no lo tienen). */
+const visitaIdSucursalByTenant = new Map();
+
+async function visitaTieneIdSucursal() {
+  const key = (() => {
+    const id = getTenantId();
+    return id != null ? String(id) : '_default';
+  })();
+  if (visitaIdSucursalByTenant.has(key)) return visitaIdSucursalByTenant.get(key);
+  try {
+    const rows = await executeQuery(`
+      SELECT TOP 1 1 AS ok
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo'
+        AND TABLE_NAME = 'imVisita'
+        AND COLUMN_NAME = 'IdSucursal'
+    `);
+    const ok = Array.isArray(rows) && rows.length > 0;
+    visitaIdSucursalByTenant.set(key, ok);
+    return ok;
+  } catch (_) {
+    visitaIdSucursalByTenant.set(key, false);
+    return false;
+  }
+}
+
+function sqlCentroSaludParts(hasIdSucursal) {
+  if (hasIdSucursal) {
+    return {
+      select: `LTRIM(RTRIM(ISNULL(suc.Descripcion, ''))) AS CentroSalud`,
+      join: `LEFT JOIN dbo.Sucursales suc ON v.IdSucursal = suc.IdSucursal`,
+    };
+  }
+  return {
+    select: `CAST('' AS VARCHAR(200)) AS CentroSalud`,
+    join: '',
+  };
+}
 
 async function getPracticasNomencladorResolver() {
   const key = (() => {
@@ -120,6 +158,9 @@ async function buscarAdmisiones({
     ? `(SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios`
     : `CAST(0 AS INT) AS CntLaboratorios`;
 
+  const hasIdSucursal = await visitaTieneIdSucursal();
+  const centro = sqlCentroSaludParts(hasIdSucursal);
+
   const countQuery = `
     SELECT COUNT(1) AS total
     FROM imVisita v
@@ -136,7 +177,7 @@ async function buscarAdmisiones({
       p.NumeroHC,
       LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
       LTRIM(RTRIM(ISNULL(v.NUMEROINTERNACION, ''))) AS NumeroInternacion,
-      LTRIM(RTRIM(ISNULL(suc.Descripcion, ''))) AS CentroSalud,
+      ${centro.select},
       LTRIM(RTRIM(ISNULL(cli.RazonSocial, ''))) AS CoberturaOS,
       LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) AS Sector,
       LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorHabitacionCama, v.VALORHABITACIONCAMA), ''))) AS Habitacion,
@@ -221,7 +262,7 @@ async function buscarAdmisiones({
     LEFT JOIN imEstadoAmbulatorio ea ON v.EstadoAmbulatorio = ea.Valor
     LEFT JOIN imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
     LEFT JOIN imClientes cli ON v.CLIENTE = cli.Valor
-    LEFT JOIN dbo.Sucursales suc ON v.IdSucursal = suc.IdSucursal
+    ${centro.join}
     LEFT JOIN imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
       AND LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) NOT IN ('', '0')
     LEFT JOIN imServiciosMedicos smEgr ON LTRIM(RTRIM(ISNULL(v.LocalizacionEgresado, ''))) = LTRIM(RTRIM(ISNULL(smEgr.Valor, '')))
@@ -1018,6 +1059,9 @@ async function obtenerDatosPrincipales(numeroVisita) {
   const nv = Number(numeroVisita);
   if (!Number.isFinite(nv) || nv <= 0) return null;
 
+  const hasIdSucursal = await visitaTieneIdSucursal();
+  const centro = sqlCentroSaludParts(hasIdSucursal);
+
   const rows = await executeQuery(
     `
       SELECT TOP 1
@@ -1077,7 +1121,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         v.DISPOSICIONEGRESO AS DisposicionEgreso,
         LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) AS DiagnosticoEgreso,
         v.OperadorEgreso,
-        LTRIM(RTRIM(ISNULL(suc.Descripcion, ''))) AS CentroSalud
+        ${centro.select}
       FROM dbo.imVisita v
       INNER JOIN dbo.imPacientes p ON v.IDPACIENTE = p.IdPaciente
       LEFT JOIN dbo.imClasePaciente cp ON LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(cp.Valor, '')))
@@ -1094,7 +1138,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         ON conv.Valor = v.CLIENTE AND conv.Codigo = v.CONTRATO
       LEFT JOIN dbo.imTipoPaciente tp ON LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(tp.Valor, '')))
       LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(v.SERVICIOHOSPITAL, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
-      LEFT JOIN dbo.Sucursales suc ON v.IdSucursal = suc.IdSucursal
+      ${centro.join}
       OUTER APPLY (
         SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama
         FROM dbo.imHabitacionCamas hc

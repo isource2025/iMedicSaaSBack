@@ -57,10 +57,11 @@ async function buscar(req, res) {
       ...result,
     });
   } catch (error) {
-    console.error('Error en b?squeda integral de admisiones:', error);
+    console.error('Error en búsqueda integral de admisiones:', error);
     res.status(500).json({
       success: false,
       message: 'Error al buscar admisiones',
+      detail: error?.message || String(error),
     });
   }
 }
