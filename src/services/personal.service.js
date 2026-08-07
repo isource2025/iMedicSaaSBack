@@ -496,6 +496,31 @@ async function crear(data) {
 			);
 			if (crearUsuario) {
 				try {
+					const idParam = [{ value: nuevoValor, type: 'Int' }];
+					// Huérfanos de una baja incompleta (mismo Valor reutilizado).
+					await executeQuery(
+						`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`,
+						idParam,
+					).catch(() => {});
+					await executeQuery(
+						`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`,
+						idParam,
+					).catch(() => {});
+					await executeQuery(
+						`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`,
+						idParam,
+					).catch(() => {});
+
+					const tenantIdPre = resolveTenantEmpresaId();
+					if (tenantIdPre != null) {
+						await authCentralSync.purgePersonalAuth(nuevoValor, tenantIdPre);
+					}
+
+					// Vínculo empresa antes del login bundle (MySQL exige imPersonalEmpresas).
+					if (tenantIdPre != null) {
+						await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor);
+					}
+
 					await usersService.crearImPasswordParaPersonal(nuevoValor, {
 						NombreRed: nombreRedUsuario,
 						Password: passwordUsuario,
@@ -504,18 +529,38 @@ async function crear(data) {
 						Legajo: String(matriculaFinal),
 						CodOperador: String(matriculaFinal),
 					});
+
+					if (tenantIdPre != null) {
+						await authCentralSync.syncPersonal(tenantIdPre, nuevoValor);
+						await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
+					}
 				} catch (userErr) {
+					await executeQuery(
+						`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`,
+						[{ value: nuevoValor, type: 'Int' }],
+					).catch(() => {});
+					await executeQuery(
+						`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`,
+						[{ value: nuevoValor, type: 'Int' }],
+					).catch(() => {});
 					await executeQuery(
 						`DELETE FROM dbo.imPersonal WHERE Valor = @p0`,
 						[{ value: nuevoValor, type: 'Int' }],
 					).catch(() => {});
+					const tenantIdRollback = resolveTenantEmpresaId();
+					if (tenantIdRollback != null) {
+						await authCentralSync
+							.purgePersonalAuth(nuevoValor, tenantIdRollback)
+							.catch(() => {});
+					}
 					throw userErr;
 				}
-			}
-			const tenantId = resolveTenantEmpresaId();
-			if (tenantId != null) {
-				await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
-				await authCentralSync.syncPersonal(tenantId, nuevoValor);
+			} else {
+				const tenantId = resolveTenantEmpresaId();
+				if (tenantId != null) {
+					await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
+					await authCentralSync.syncPersonal(tenantId, nuevoValor);
+				}
 			}
 			return await obtenerPorId(nuevoValor);
 		} catch (err) {
@@ -634,9 +679,19 @@ async function eliminar(valor) {
 	}
 	const existente = await obtenerPorId(valor);
 	if (!existente) return false;
-	await executeQuery(`DELETE FROM dbo.imPersonal WHERE Valor = @p0`, [
-		{ value: valor, type: 'Int' },
-	]);
+
+	// Orden: hijos / auth primero. Si solo se borra imPersonal, queda imPassword huérfano
+	// y al recrear (mismo Valor = MAX+1) falla con "ya tiene un usuario de acceso".
+	const idParam = [{ value: valor, type: 'Int' }];
+	await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, idParam).catch(
+		() => {},
+	);
+	await executeQuery(`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`, idParam).catch(
+		() => {},
+	);
+	await executeQuery(`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`, idParam).catch(() => {});
+	await executeQuery(`DELETE FROM dbo.imPersonal WHERE Valor = @p0`, idParam);
+
 	try {
 		const tenantId = resolveTenantEmpresaId();
 		await authCentralSync.purgePersonalAuth(valor, tenantId);

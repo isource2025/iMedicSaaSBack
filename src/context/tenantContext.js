@@ -20,8 +20,19 @@ function middlewareFromAuth(req, res, next) {
 	return storage.run({ idEmpresa }, () => next());
 }
 
+/**
+ * Re-entra al ALS con idEmpresa de `req` (ya seteado por JWT).
+ * Obligatorio DESPUÉS de multer/busboy: el parseo multipart puede cortar el
+ * contexto de AsyncLocalStorage y entonces getTenantId() queda null aunque
+ * el login y el JWT tengan empresa (error "Se requiere empresa activa...").
+ */
+function restoreTenantFromRequest(req, res, next) {
+	return middlewareFromAuth(req, res, next);
+}
+
 module.exports = {
 	runWithTenant,
 	getTenantId,
 	middlewareFromAuth,
+	restoreTenantFromRequest,
 };

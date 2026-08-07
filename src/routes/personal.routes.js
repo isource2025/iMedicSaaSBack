@@ -5,6 +5,7 @@ const personalController = require('../controllers/personal.controller');
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
+const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 const uploadFirma = multer({
 	storage: multer.memoryStorage(),
@@ -41,6 +42,7 @@ router.put(
 	'/:id/firma',
 	requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'),
 	uploadFirma.single('archivo'),
+	restoreTenantFromRequest,
 	personalController.actualizarFirmaPersonal,
 );
 router.delete('/:id/firma', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.eliminarFirmaPersonal);

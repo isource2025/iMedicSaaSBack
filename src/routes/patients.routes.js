@@ -6,6 +6,7 @@ const path = require('path');
 const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 const storage = multer.diskStorage({
 	destination: function (req, file, cb) {
@@ -83,8 +84,8 @@ router.get('/search', requirePermiso('ADMISION.PACIENTES.VER'), patientsControll
 router.get('/reference-tables', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerTablasReferencia);
 router.get('/catalogo-laboral', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerCatalogosLaborales);
 router.get('/:id', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerPacientePorId);
-router.post('/', requirePermiso('ADMISION.PACIENTES.CREAR'), upload.single('Foto'), patientsController.crearPaciente);
-router.put('/:id', requirePermiso('ADMISION.PACIENTES.EDITAR'), upload.single('Foto'), patientsController.actualizarPaciente);
+router.post('/', requirePermiso('ADMISION.PACIENTES.CREAR'), upload.single('Foto'), restoreTenantFromRequest, patientsController.crearPaciente);
+router.put('/:id', requirePermiso('ADMISION.PACIENTES.EDITAR'), upload.single('Foto'), restoreTenantFromRequest, patientsController.actualizarPaciente);
 router.delete('/:id', requirePermiso('ADMISION.PACIENTES.ELIMINAR'), patientsController.eliminarPaciente);
 
 module.exports = router;

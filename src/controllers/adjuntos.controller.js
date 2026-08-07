@@ -11,6 +11,7 @@ const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.se
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const { requirePropietario } = require('../middlewares/propietario.middleware');
+const { restoreTenantFromRequest } = require('../context/tenantContext');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
 const _ownAdjunto = requirePropietario({
@@ -142,7 +143,12 @@ router.use(requireTenant);
  * POST /api/adjuntos/upload
  * Subir archivo adjunto para una visita
  */
-router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.single('archivo'), async (req, res) => {
+router.post(
+  '/upload',
+  requirePermiso('INTERNACION.ADJUNTOS.CREAR'),
+  upload.single('archivo'),
+  restoreTenantFromRequest,
+  async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
     const userId = resolveUserId(req);
@@ -264,7 +270,7 @@ router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.sing
       await fs.unlink(req.file.path).catch(() => {});
     }
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       error: error.message || 'Error al subir archivo adjunto'
     });
@@ -275,7 +281,12 @@ router.post('/upload', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.sing
  * POST /api/adjuntos/upload-multiple
  * Subir múltiples archivos adjuntos para una visita
  */
-router.post('/upload-multiple', requirePermiso('INTERNACION.ADJUNTOS.CREAR'), upload.array('archivos', 5), async (req, res) => {
+router.post(
+  '/upload-multiple',
+  requirePermiso('INTERNACION.ADJUNTOS.CREAR'),
+  upload.array('archivos', 5),
+  restoreTenantFromRequest,
+  async (req, res) => {
   try {
     const { numeroVisita, tipoImagen } = req.body;
     const userId = resolveUserId(req);

@@ -3,6 +3,7 @@ const router = express.Router();
 const laboratoriosController = require('../controllers/laboratorios.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 router.use(requireTenant);
 
@@ -10,6 +11,7 @@ router.post(
 	'/upload-ocr',
 	requirePermiso('INTERNACION.ESTUDIOS.CREAR'),
 	laboratoriosController.upload.single('archivo'),
+	restoreTenantFromRequest,
 	laboratoriosController.uploadYProcesarOCR,
 );
 router.post('/save', requirePermiso('INTERNACION.ESTUDIOS.CREAR'), laboratoriosController.guardarExamen);

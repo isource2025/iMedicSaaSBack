@@ -8,6 +8,7 @@ const agendaCtrl = require('../controllers/agenda.controller');
 const racCtrl = require('../controllers/agendaRac.controller');
 const agendaAdjCtrl = require('../controllers/agendaAdjuntos.controller');
 const turneroCtrl = require('../controllers/turnero.controller');
+const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 router.use(requireAuth, requireTenant);
 
@@ -97,6 +98,7 @@ router.post(
 	'/turnos/:idTurno/adjuntos',
 	requirePermiso('TURNOS.AGENDA.EDITAR'),
 	agendaAdjCtrl.uploadMiddleware,
+	restoreTenantFromRequest,
 	agendaAdjCtrl.subirAdjuntoTurno,
 );
 
