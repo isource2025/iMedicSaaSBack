@@ -26,7 +26,7 @@ async function obtenerValorPersonalMedicoTurno(idTurno) {
  * Destinatarios para "nuevo adjunto en visita".
  * - Si idTurno: médico del turno (prioridad).
  * - Si NOTIFICACIONES_ADJUNTOS_VALOR_PERSONAL_LIST: lista fija.
- * - Si no: todos los usuarios activos excepto quien subió.
+ * - Si no: nadie (evitar broadcast a todos los imPassword).
  */
 async function obtenerDestinatariosAdjunto(excluirValorPersonal, idTurno) {
   if (idTurno != null && Number(idTurno) > 0) {
@@ -44,16 +44,12 @@ async function obtenerDestinatariosAdjunto(excluirValorPersonal, idTurno) {
       .filter((n) => Number.isFinite(n) && n > 0 && n !== excluirValorPersonal);
   }
 
-  const rows = await executeQuery(
-    `
-    SELECT p.ValorPersonal
-    FROM dbo.imPassword p
-    WHERE ISNULL(p.MarcadeBaja, 0) = 0
-      AND p.ValorPersonal <> @param0
-    `,
-    [{ value: excluirValorPersonal || 0 }],
+  // Sin lista explícita: no hacer broadcast a todos los usuarios (demoraba
+  // minutos el HTTP y dejaba el front en "Subiendo...").
+  console.log(
+    '[notif adjuntos] Sin NOTIFICACIONES_ADJUNTOS_VALOR_PERSONAL_LIST; omitiendo broadcast masivo.',
   );
-  return (rows || []).map((r) => r.ValorPersonal).filter(Boolean);
+  return [];
 }
 
 /**

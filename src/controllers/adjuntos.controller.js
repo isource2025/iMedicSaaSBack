@@ -11,8 +11,23 @@ const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.se
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const { requirePropietario } = require('../middlewares/propietario.middleware');
-const { restoreTenantFromRequest } = require('../context/tenantContext');
+const { restoreTenantFromRequest, runWithTenant } = require('../context/tenantContext');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+
+/** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
+function enqueueNotificarAdjunto(req, payload) {
+  const idEmpresa = req.idEmpresa ?? req.auth?.idEmpresa ?? null;
+  setImmediate(() => {
+    const run = () => notificarNuevoAdjunto(payload);
+    const p =
+      idEmpresa != null && Number(idEmpresa) > 0
+        ? runWithTenant(Number(idEmpresa), run)
+        : run();
+    Promise.resolve(p).catch((e) =>
+      console.warn('[adjuntos] notificar en background:', e?.message || e),
+    );
+  });
+}
 
 const _ownAdjunto = requirePropietario({
   tabla: 'imPedidosEstudiosAdjuntos',
@@ -252,16 +267,16 @@ router.post(
 
     console.log(`✅ Adjunto registrado en BD por usuario ${userId} para visita ${numeroVisita}`);
 
-    await notificarNuevoAdjunto({
+    res.status(201).json({
+      success: true,
+      data: result
+    });
+
+    enqueueNotificarAdjunto(req, {
       numeroVisita: parseInt(numeroVisita, 10),
       idAdjunto: result.idAdjunto,
       nombreArchivo: req.file.originalname,
       valorPersonalUploader: userId,
-    });
-
-    res.status(201).json({
-      success: true,
-      data: result
     });
   } catch (error) {
     console.error('❌ Error al subir adjunto:', error);
@@ -371,12 +386,6 @@ router.post(
           filePath
         );
         resultados.push(result);
-        await notificarNuevoAdjunto({
-          numeroVisita: parseInt(numeroVisita, 10),
-          idAdjunto: result.idAdjunto,
-          nombreArchivo: file.originalname,
-          valorPersonalUploader: userId,
-        });
       } catch (dbErr) {
         console.error(`❌ Error BD adjunto ${file.originalname}:`, dbErr);
         await fs.unlink(file.path).catch(() => {});
@@ -390,6 +399,15 @@ router.post(
       data: resultados,
       total: resultados.length
     });
+
+    for (const result of resultados) {
+      enqueueNotificarAdjunto(req, {
+        numeroVisita: parseInt(numeroVisita, 10),
+        idAdjunto: result.idAdjunto,
+        nombreArchivo: result.nombreArchivo || result.NombreArchivo,
+        valorPersonalUploader: userId,
+      });
+    }
   } catch (error) {
     console.error('❌ Error al subir adjuntos múltiples:', error);
     

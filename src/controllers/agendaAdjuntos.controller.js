@@ -11,6 +11,21 @@ const adjuntosService = require('../services/adjuntos.service');
 const racService = require('../services/agendaRac.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const { runWithTenant } = require('../context/tenantContext');
+
+function enqueueNotificarAdjunto(req, payload) {
+  const idEmpresa = req.idEmpresa ?? req.auth?.idEmpresa ?? null;
+  setImmediate(() => {
+    const run = () => notificarNuevoAdjunto(payload);
+    const p =
+      idEmpresa != null && Number(idEmpresa) > 0
+        ? runWithTenant(Number(idEmpresa), run)
+        : run();
+    Promise.resolve(p).catch((e) =>
+      console.warn('[agendaAdjuntos] notificar en background:', e?.message || e),
+    );
+  });
+}
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 const FILE_SERVER_FALLBACK_LOCAL =
@@ -134,15 +149,15 @@ async function subirAdjuntoTurno(req, res) {
       filePath,
     );
 
-    await notificarNuevoAdjunto({
+    res.status(201).json({ success: true, data: result });
+
+    enqueueNotificarAdjunto(req, {
       numeroVisita: 0,
       idTurno,
       idAdjunto: result.idAdjunto,
       nombreArchivo: req.file.originalname,
       valorPersonalUploader: userId,
     });
-
-    res.status(201).json({ success: true, data: result });
   } catch (e) {
     if (req.file) await fs.unlink(req.file.path).catch(() => {});
     const code = e?.statusCode || 500;
