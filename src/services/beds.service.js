@@ -8,6 +8,36 @@ const { enrichControlesWithIMC } = require('../utils/antropometria');
  * @returns {Promise<Array>} Lista de camas con información del paciente y diagnóstico
  */
 const obtenerCamas = async () => {
+	// Autoreparar ocupaciones fantasma: cama con la visita pero sector/cama distinto al último movimiento
+	await executeQuery(`
+    UPDATE hc
+    SET
+      FechaIngreso = 0,
+      FechaEgreso = 0,
+      ValorEstadoCama = 'U',
+      NumeroVisita = 0,
+      Observaciones = CASE
+        WHEN LTRIM(RTRIM(ISNULL(hc.Observaciones, ''))) = '' THEN 'Auto-reparación ocupación inconsistente'
+        ELSE hc.Observaciones
+      END
+    FROM dbo.imHabitacionCamas hc
+    CROSS APPLY (
+      SELECT TOP 1
+        LTRIM(RTRIM(ISNULL(m.ValorSector, ''))) AS ValorSector,
+        LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS ValorHabitacionCama
+      FROM dbo.imVisitaMovimiento m
+      WHERE m.NumeroVisita = hc.NumeroVisita
+      ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
+    ) um
+    WHERE ISNULL(hc.NumeroVisita, 0) <> 0
+      AND (
+        LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) <> um.ValorSector
+        OR LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) <> um.ValorHabitacionCama
+      )
+  `).catch((err) => {
+		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
+	});
+
 	const consulta = `
     SELECT 
       hc.*,
@@ -178,16 +208,16 @@ const actualizarEstadoCama = async (id, estado) => {
 			valorEstado = estado; // Usar el valor directamente si no es uno de los predefinidos
 	}
 
-	console.log(`Actualizando cama ID ${id} a estado: ${estado}, valor en DB: ${valorEstado}`);
+	if (!ValorSector) {
+		throw new Error('ValorSector es obligatorio para actualizar el estado de una cama');
+	}
 
-	const whereClause = ValorSector
-		? 'hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param2'
-		: 'hc.ValorHabitacionCama = @param0';
+	console.log(`Actualizando cama ID ${id} (sector ${ValorSector}) a estado: ${estado}, valor en DB: ${valorEstado}`);
 
 	const consulta = `
     UPDATE imHabitacionCamas
     SET ValorEstadoCama = @param1
-    WHERE ValorHabitacionCama = @param0${ValorSector ? ' AND ValorSector = @param2' : ''};
+    WHERE ValorHabitacionCama = @param0 AND ValorSector = @param2;
 
     SELECT 
       hc.*,
@@ -208,12 +238,14 @@ const actualizarEstadoCama = async (id, estado) => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE ${whereClause};
+    WHERE hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param2;
   `;
 
-	const parametros = ValorSector
-		? [{ value: ValorHabitacionCama }, { value: valorEstado }, { value: ValorSector }]
-		: [{ value: ValorHabitacionCama }, { value: valorEstado }];
+	const parametros = [
+		{ value: ValorHabitacionCama },
+		{ value: valorEstado },
+		{ value: ValorSector },
+	];
 
 	try {
 		const resultado = await executeQuery(consulta, parametros);

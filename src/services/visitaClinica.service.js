@@ -31,18 +31,22 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) AS horaIngresoSQL,
       COALESCE(
-        NULLIF(LTRIM(RTRIM(hc.ValorHabitacionCama)), ''),
         NULLIF(LTRIM(RTRIM(um.ValorHabitacionCama)), ''),
+        NULLIF(LTRIM(RTRIM(hc.ValorHabitacionCama)), ''),
         'EGRESO'
       ) AS numeroCama,
       COALESCE(
-        NULLIF(LTRIM(RTRIM(hc.ValorSector)), ''),
         NULLIF(LTRIM(RTRIM(um.ValorSector)), ''),
+        NULLIF(LTRIM(RTRIM(hc.ValorSector)), ''),
         ''
       ) AS sector,
-      LTRIM(RTRIM(ISNULL(COALESCE(hc.Tipo, um.Tipo), 'cama'))) AS Tipo,
+      LTRIM(RTRIM(ISNULL(COALESCE(um.Tipo, hc.Tipo), 'cama'))) AS Tipo,
       CASE
-        WHEN hc.NumeroVisita = v.NumeroVisita THEN hc.ValorEstadoCama
+        WHEN hc.NumeroVisita = v.NumeroVisita
+          AND LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(um.ValorSector, '')))
+          AND LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) = LTRIM(RTRIM(ISNULL(um.ValorHabitacionCama, '')))
+        THEN hc.ValorEstadoCama
+        WHEN um.ValorHabitacionCama IS NOT NULL THEN 'O'
         ELSE 'E'
       END AS ValorEstadoCama,
       ec.Descripcion AS EstadoDescripcion
@@ -52,7 +56,6 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
     LEFT JOIN dbo.imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
     LEFT JOIN dbo.imClientes c ON v.Cliente = c.Valor
     LEFT JOIN dbo.imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    LEFT JOIN dbo.imHabitacionCamas hc ON hc.NumeroVisita = v.NumeroVisita
     OUTER APPLY (
       SELECT TOP 1
         m.ValorHabitacionCama,
@@ -65,8 +68,29 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
       WHERE m.NumeroVisita = v.NumeroVisita
       ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
     ) um
+    OUTER APPLY (
+      SELECT TOP 1
+        bed.ValorHabitacionCama,
+        bed.ValorSector,
+        bed.Tipo,
+        bed.ValorEstadoCama,
+        bed.NumeroVisita
+      FROM dbo.imHabitacionCamas bed
+      WHERE bed.NumeroVisita = v.NumeroVisita
+      ORDER BY
+        CASE
+          WHEN LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(um.ValorSector, '')))
+           AND LTRIM(RTRIM(ISNULL(bed.ValorHabitacionCama, ''))) = LTRIM(RTRIM(ISNULL(um.ValorHabitacionCama, '')))
+          THEN 0 ELSE 1
+        END,
+        CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(bed.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+    ) hc
     LEFT JOIN dbo.imEstadoCama ec ON ec.Valor = CASE
-      WHEN hc.NumeroVisita = v.NumeroVisita THEN hc.ValorEstadoCama
+      WHEN hc.NumeroVisita = v.NumeroVisita
+        AND LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(um.ValorSector, '')))
+        AND LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) = LTRIM(RTRIM(ISNULL(um.ValorHabitacionCama, '')))
+      THEN hc.ValorEstadoCama
+      WHEN um.ValorHabitacionCama IS NOT NULL THEN 'O'
       ELSE 'E'
     END
     WHERE v.NumeroVisita = @p0

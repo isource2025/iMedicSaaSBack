@@ -127,7 +127,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         FechaAdmision = @param3 AND
         HoraAdmision  = @param4;
 
-      -- Liberar cama
+      -- Liberar cama(s) de esta visita (sector+cama; también limpia duplicados por solo nº de cama)
       UPDATE imHabitacionCamas
       SET 
         FechaIngreso      = 0,
@@ -135,7 +135,11 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         ValorEstadoCama   = 'U',
         NumeroVisita      = 0,
         Observaciones     = ''
-      WHERE ValorHabitacionCama = @param8;
+      WHERE NumeroVisita = @param0
+         OR (
+           ValorHabitacionCama = @param8
+           AND ValorSector = @param10
+         );
 
       -- Cerrar visita (incluye quién egresó)
       UPDATE imVisita
@@ -155,6 +159,9 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     END CATCH;
   `;
 
+  const camaEgreso = String(bedId || ultimo.ValorHabitacionCama || ultimo.bedId || '').trim();
+  const sectorEgreso = String(ultimo.ValorSector || '').trim();
+
   const params = [
     { value: num }, // @param0
     { value: cDate }, // @param1
@@ -164,8 +171,9 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     { value: Number.isFinite(disposicion) ? disposicion : null }, // @param5
     { value: diagnostico || null }, // @param6
     { value: String(codOperador), type: 'VarChar' }, // @param7 movimiento.Operador
-    { value: bedId }, // @param8
+    { value: camaEgreso }, // @param8
     { value: codOperador, type: 'Int' }, // @param9 visita.OperadorEgreso
+    { value: sectorEgreso }, // @param10 - sector de la cama a liberar
   ];
 
   try {
@@ -255,7 +263,7 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   const idPaciente = pacienteResult[0].IDPaciente;
   const fechaAdmisionS = pacienteResult[0].FechaAdmisionS;
 
-  // Obtener información de la cama actual para liberarla
+  // Obtener información de la cama actual para liberarla (puede haber duplicados por nº de cama)
   const camaActualQuery = `
     SELECT ValorHabitacionCama, ValorSector 
     FROM imHabitacionCamas 
@@ -266,9 +274,14 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   if (!camaActualResult || camaActualResult.length === 0) {
     throw new Error(`No se encontró la cama actual para la visita ${num}`);
   }
-  
-  const camaActual = camaActualResult[0].ValorHabitacionCama;
-  const sectorActual = camaActualResult[0].ValorSector;
+
+  const sectorPreferido = String(ultimoMovimiento.ValorSector || '').trim();
+  const camaPreferida = camaActualResult.find(
+    (r) => String(r.ValorSector || '').trim() === sectorPreferido,
+  );
+  const camaOrigen = camaPreferida || camaActualResult[0];
+  const camaActual = camaOrigen.ValorHabitacionCama;
+  const sectorActual = camaOrigen.ValorSector;
   
   // En lugar de obtener todos los estados de cama disponibles, simplemente verificaremos
   // si la cama específica que queremos usar tiene el estado 'U' (libre)
@@ -329,7 +342,7 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
         FechaAdmision = @param6 AND
         HoraAdmision = @param7;
       
-      -- 2. Liberar la cama actual
+      -- 2. Liberar TODAS las camas con esta visita (origen + duplicados erróneos por solo nº de cama)
       UPDATE imHabitacionCamas
       SET 
         FechaIngreso = 0,
@@ -337,7 +350,11 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
         ValorEstadoCama = 'U', -- Estado "Libre"
         NumeroVisita = 0,
         Observaciones = ''
-      WHERE ValorHabitacionCama = @param8;
+      WHERE NumeroVisita = @param5
+         OR (
+           ValorHabitacionCama = @param8
+           AND ValorSector = @param15
+         );
       
       -- 3. Crear un nuevo registro en imVisitaMovimiento para la nueva ubicación
       -- Verificar si ya existe un registro con esa combinación de NumeroVisita, FechaAdmision y HoraAdmision
@@ -374,7 +391,7 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
         );
       END;
       
-      -- 4. Actualizar la cama destino
+      -- 4. Actualizar la cama destino (match completo: sector + cama)
       UPDATE imHabitacionCamas
       SET 
         FechaIngreso = @param9,
@@ -382,7 +399,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
         ValorEstadoCama = 'O',
         NumeroVisita = @param5,
         Observaciones = 'Traslado desde cama ' + @param8
-      WHERE ValorHabitacionCama = @param13;
+      WHERE ValorHabitacionCama = @param13
+        AND ValorSector = @param14;
       
       -- 5. Actualizar la visita con la nueva ubicación
       UPDATE imVisita
@@ -419,7 +437,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
     { value: FechaCarga },                  // @param11 - FechaCarga
     { value: HoraCarga },                   // @param12 - HoraCarga
     { value: bedId },                       // @param13 - CamaDestino
-    { value: sectorDestino }                // @param14 - SectorDestino
+    { value: sectorDestino },               // @param14 - SectorDestino
+    { value: sectorActual },                // @param15 - SectorOrigen
   ];
 
   try {
@@ -568,12 +587,14 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
         FechaAdmision = @param9 AND
         HoraAdmision = @param10;
       
-      -- 2. Liberar temporalmente ambas camas (marcarlas como en proceso de intercambio)
+      -- 2. Liberar temporalmente ambas camas (por visita + sector/cama)
       UPDATE imHabitacionCamas
       SET 
         NumeroVisita = 0,
         ValorEstadoCama = 'M' -- Mantenimiento temporal durante el intercambio
-      WHERE ValorHabitacionCama IN (@param11, @param12);
+      WHERE NumeroVisita IN (@param5, @param8)
+         OR (ValorHabitacionCama = @param11 AND ValorSector = @param17)
+         OR (ValorHabitacionCama = @param12 AND ValorSector = @param18);
       
       -- 3. Crear nuevos registros en imVisitaMovimiento para las nuevas ubicaciones
       -- Paciente 1 a Cama 2
@@ -600,7 +621,7 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
         @param15, @param16, @param17, @param11, 'O'
       );
       
-      -- 4. Actualizar las camas con los nuevos pacientes
+      -- 4. Actualizar las camas con los nuevos pacientes (match completo: sector + cama)
       -- Cama 1 ahora con Paciente 2
       UPDATE imHabitacionCamas
       SET 
@@ -609,7 +630,8 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
         ValorEstadoCama = 'O',
         NumeroVisita = @param8,
         Observaciones = 'Intercambio desde cama ' + @param12
-      WHERE ValorHabitacionCama = @param11;
+      WHERE ValorHabitacionCama = @param11
+        AND ValorSector = @param17;
       
       -- Cama 2 ahora con Paciente 1
       UPDATE imHabitacionCamas
@@ -619,7 +641,8 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
         ValorEstadoCama = 'O',
         NumeroVisita = @param5,
         Observaciones = 'Intercambio desde cama ' + @param11
-      WHERE ValorHabitacionCama = @param12;
+      WHERE ValorHabitacionCama = @param12
+        AND ValorSector = @param18;
       
       -- 5. Actualizar las visitas con las nuevas ubicaciones
       -- Visita 1

@@ -296,7 +296,13 @@ async function buscarAdmisiones({
       SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama
       FROM dbo.imHabitacionCamas hc
       WHERE hc.NumeroVisita = v.NumeroVisita
-      ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+      ORDER BY
+        CASE
+          WHEN LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(v.ValorSector, '')))
+           AND LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) = LTRIM(RTRIM(ISNULL(v.ValorHabitacionCama, '')))
+          THEN 0 ELSE 1
+        END,
+        CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
     ) bed
     LEFT JOIN imSectores secBed ON LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(secBed.Valor, '')))
     ${whereClause}
@@ -366,7 +372,12 @@ async function obtenerResumenAdmision(numeroVisita) {
         SELECT TOP 1 hc.ValorSector
         FROM dbo.imHabitacionCamas hc
         WHERE hc.NumeroVisita = v.NumeroVisita
-        ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+        ORDER BY
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(v.ValorSector, '')))
+            THEN 0 ELSE 1
+          END,
+          CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
       ) bed
       LEFT JOIN imSectores secBed ON LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(secBed.Valor, '')))
       WHERE v.NumeroVisita = @param0
@@ -1181,7 +1192,13 @@ async function obtenerDatosPrincipales(numeroVisita) {
         SELECT TOP 1 hc.ValorSector, hc.ValorHabitacionCama
         FROM dbo.imHabitacionCamas hc
         WHERE hc.NumeroVisita = v.NUMEROVISITA
-        ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+        ORDER BY
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(v.VALORSECTOR, '')))
+             AND LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) = LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, '')))
+            THEN 0 ELSE 1
+          END,
+          CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
       ) bed
       LEFT JOIN dbo.imSectores sec ON LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) = LTRIM(RTRIM(ISNULL(sec.Valor, '')))
       WHERE v.NUMEROVISITA = @param0
