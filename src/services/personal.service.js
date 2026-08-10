@@ -886,15 +886,44 @@ function _sniffImageMime(buf) {
 	return 'image/png';
 }
 
+function _toFirmaBuffer(firma) {
+	if (firma == null) return null;
+	if (Buffer.isBuffer(firma)) return firma.length ? firma : null;
+	if (firma instanceof Uint8Array) {
+		const buf = Buffer.from(firma);
+		return buf.length ? buf : null;
+	}
+	if (typeof firma === 'object' && Array.isArray(firma.data)) {
+		const buf = Buffer.from(firma.data);
+		return buf.length ? buf : null;
+	}
+	if (typeof firma === 'string') {
+		const s = firma.trim();
+		if (!s) return null;
+		if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) {
+			const buf = Buffer.from(s, 'hex');
+			return buf.length ? buf : null;
+		}
+		const buf = Buffer.from(s, 'base64');
+		return buf.length ? buf : null;
+	}
+	try {
+		const buf = Buffer.from(firma);
+		return buf.length ? buf : null;
+	} catch {
+		return null;
+	}
+}
+
 async function obtenerFirmaPersonal(valor) {
 	const pool = await getRequestPool();
 	const r = await pool.request().input('v', sql.Int, valor).query(`
 		SELECT Firma FROM dbo.imPersonal WHERE Valor = @v
 	`);
 	const row = r.recordset[0];
-	if (!row || row.Firma == null) return { hasFirma: false };
-	const buf = Buffer.isBuffer(row.Firma) ? row.Firma : Buffer.from(row.Firma);
-	if (!buf.length) return { hasFirma: false };
+	if (!row) return { hasFirma: false };
+	const buf = _toFirmaBuffer(row.Firma);
+	if (!buf) return { hasFirma: false };
 	const mime = _sniffImageMime(buf);
 	return {
 		hasFirma: true,
@@ -903,31 +932,25 @@ async function obtenerFirmaPersonal(valor) {
 	};
 }
 
-/** Firma por matrícula (o Valor) para PDFs clínicos sin permiso de configuración. */
+/**
+ * Firma por matrícula o Valor (ID personal).
+ * Reutiliza la misma lectura que el modal de Personal.
+ */
 async function obtenerFirmaPorMatricula(matricula) {
 	const m = Number(matricula);
 	if (!Number.isFinite(m) || m <= 0) return { hasFirma: false };
 	const pool = await getRequestPool();
 	const r = await pool.request().input('m', sql.Int, m).query(`
-		SELECT TOP 1 Firma
+		SELECT TOP 1 Valor
 		FROM dbo.imPersonal
-		WHERE (Matricula = @m OR Valor = @m)
-		  AND Firma IS NOT NULL
-		  AND DATALENGTH(Firma) > 0
+		WHERE Matricula = @m OR Valor = @m
 		ORDER BY
 			CASE WHEN Valor = @m THEN 0 WHEN Matricula = @m THEN 1 ELSE 2 END,
 			Valor
 	`);
-	const row = r.recordset[0];
-	if (!row || row.Firma == null) return { hasFirma: false };
-	const buf = Buffer.isBuffer(row.Firma) ? row.Firma : Buffer.from(row.Firma);
-	if (!buf.length) return { hasFirma: false };
-	const mime = _sniffImageMime(buf);
-	return {
-		hasFirma: true,
-		mime,
-		dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
-	};
+	const valor = r.recordset[0]?.Valor;
+	if (valor == null) return { hasFirma: false };
+	return obtenerFirmaPersonal(Number(valor));
 }
 
 async function actualizarFirmaPersonal(valor, buffer) {
