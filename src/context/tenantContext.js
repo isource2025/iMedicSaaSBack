@@ -11,12 +11,16 @@ function getTenantId() {
 	return store?.idEmpresa ?? null;
 }
 
+function resolveIdEmpresaFromReq(req) {
+	const raw = req?.idEmpresa ?? req?.auth?.idEmpresa ?? req?.auth?.empresa?.id ?? null;
+	if (raw == null || raw === '') return null;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function middlewareFromAuth(req, res, next) {
-	const raw = req.idEmpresa ?? req.auth?.idEmpresa ?? req.auth?.empresa?.id ?? null;
-	const idEmpresa =
-		raw != null && raw !== '' && Number.isFinite(Number(raw)) && Number(raw) > 0
-			? Number(raw)
-			: null;
+	const idEmpresa = resolveIdEmpresaFromReq(req);
+	if (idEmpresa != null) req.idEmpresa = idEmpresa;
 	return storage.run({ idEmpresa }, () => next());
 }
 
@@ -30,9 +34,25 @@ function restoreTenantFromRequest(req, res, next) {
 	return middlewareFromAuth(req, res, next);
 }
 
+/**
+ * Ejecuta `fn` dentro del ALS del tenant del request.
+ * Usar alrededor de awaits largos (axios al file server) que a veces
+ * dejan getTenantId() en null antes del INSERT clínico.
+ */
+function ensureTenantFromReq(req, fn) {
+	const idEmpresa = resolveIdEmpresaFromReq(req);
+	if (idEmpresa != null) {
+		req.idEmpresa = idEmpresa;
+		return runWithTenant(idEmpresa, fn);
+	}
+	return fn();
+}
+
 module.exports = {
 	runWithTenant,
 	getTenantId,
+	resolveIdEmpresaFromReq,
 	middlewareFromAuth,
 	restoreTenantFromRequest,
+	ensureTenantFromReq,
 };

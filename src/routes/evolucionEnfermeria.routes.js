@@ -12,6 +12,11 @@ router.get(
 	evolucionEnfermeriaController.obtenerEvolucionesPorVisitaYFecha,
 );
 router.post('/', requirePermiso('INTERNACION.EVOLUCION_ENFERMERIA.CREAR'), evolucionEnfermeriaController.crearEvolucion);
+router.put(
+	'/',
+	requirePermiso('INTERNACION.EVOLUCION_ENFERMERIA.EDITAR'),
+	evolucionEnfermeriaController.actualizarEvolucion,
+);
 router.delete(
 	'/',
 	requirePermiso('INTERNACION.EVOLUCION_ENFERMERIA.ELIMINAR'),

@@ -9,9 +9,13 @@ const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 const { requirePropietario } = require('../middlewares/propietario.middleware');
-const { restoreTenantFromRequest, runWithTenant } = require('../context/tenantContext');
+const {
+  restoreTenantFromRequest,
+  runWithTenant,
+  ensureTenantFromReq,
+} = require('../context/tenantContext');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
 /** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
@@ -45,7 +49,10 @@ const FILE_SERVER_FALLBACK_LOCAL =
   process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
   process.env.NODE_ENV !== 'production';
 
+/** IdOperador en imPedidosEstudiosAdjuntos = CodOperador (join imPassword). */
 function resolveUserId(req) {
+  const cod = req.auth?.usuario?.codOperador;
+  if (cod != null && Number.isFinite(Number(cod))) return Number(cod);
   return req.valorPersonal || req.auth?.usuario?.id || null;
 }
 
@@ -153,6 +160,8 @@ const upload = multer({
 });
 
 router.use(requireTenant);
+/** Re-enlaza ALS desde JWT en cada request (multer/async puede perder el contexto). */
+router.use(restoreTenantFromRequest);
 
 /**
  * POST /api/adjuntos/upload
@@ -165,6 +174,7 @@ router.post(
   restoreTenantFromRequest,
   async (req, res) => {
   try {
+    await ensureTenantFromReq(req, async () => {
     const { numeroVisita, tipoImagen } = req.body;
     const userId = resolveUserId(req);
 
@@ -254,15 +264,17 @@ router.post(
       }
     }
 
-    // Guardar referencia en base de datos con PatchServidor
-    const result = await adjuntosService.subirAdjunto(
-      {
-        numeroVisita: parseInt(numeroVisita),
-        idTipoImagen: String(tipoImagen).trim(),
-      },
-      req.file,
-      userId,
-      filePath // Ruta en el servidor SQL
+    // Re-bind ALS tras axios (puede perder tenant antes del INSERT)
+    const result = await ensureTenantFromReq(req, () =>
+      adjuntosService.subirAdjunto(
+        {
+          numeroVisita: parseInt(numeroVisita),
+          idTipoImagen: String(tipoImagen).trim(),
+        },
+        req.file,
+        userId,
+        filePath,
+      ),
     );
 
     console.log(`✅ Adjunto registrado en BD por usuario ${userId} para visita ${numeroVisita}`);
@@ -277,6 +289,7 @@ router.post(
       idAdjunto: result.idAdjunto,
       nombreArchivo: req.file.originalname,
       valorPersonalUploader: userId,
+    });
     });
   } catch (error) {
     console.error('❌ Error al subir adjunto:', error);
@@ -376,14 +389,16 @@ router.post(
       }
 
       try {
-        const result = await adjuntosService.subirAdjunto(
-          {
-            numeroVisita: parseInt(numeroVisita),
-            idTipoImagen: String(tipoImagen).trim(),
-          },
-          file,
-          userId,
-          filePath
+        const result = await ensureTenantFromReq(req, () =>
+          adjuntosService.subirAdjunto(
+            {
+              numeroVisita: parseInt(numeroVisita),
+              idTipoImagen: String(tipoImagen).trim(),
+            },
+            file,
+            userId,
+            filePath,
+          ),
         );
         resultados.push(result);
       } catch (dbErr) {
@@ -643,7 +658,7 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
  */
 router.delete(
   '/:idAdjunto',
-  requirePermiso('INTERNACION.ADJUNTOS.ELIMINAR'),
+  requireAnyPermiso('INTERNACION.ADJUNTOS.ELIMINAR', 'INTERNACION.ADJUNTOS.CREAR'),
   _ownAdjunto,
   async (req, res) => {
   try {

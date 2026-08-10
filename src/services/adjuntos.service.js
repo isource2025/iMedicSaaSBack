@@ -202,6 +202,7 @@ class AdjuntosService {
       RutaArchivo: adj.PatchServidor,
       TipoArchivo: this.getTipoFromNombre(nombreArchivo || adj.PatchServidor || ''),
       TamanioBytes: this.getFileSize(adj.PatchServidor),
+      IdOperador: adj.IdOperador != null ? Number(adj.IdOperador) : null,
       CargadoPor: adj.IdOperador,
       NombreUsuario: adj.NombreOperador || 'Desconocido',
       FechaCarga: adj.Fecha,

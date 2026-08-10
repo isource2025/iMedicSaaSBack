@@ -11,7 +11,7 @@ const adjuntosService = require('../services/adjuntos.service');
 const racService = require('../services/agendaRac.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
-const { runWithTenant } = require('../context/tenantContext');
+const { runWithTenant, restoreTenantFromRequest, ensureTenantFromReq } = require('../context/tenantContext');
 
 function enqueueNotificarAdjunto(req, payload) {
   const idEmpresa = req.idEmpresa ?? req.auth?.idEmpresa ?? null;
@@ -34,6 +34,8 @@ const FILE_SERVER_FALLBACK_LOCAL =
   process.env.NODE_ENV !== 'production';
 
 function resolveUserId(req) {
+  const cod = req.auth?.usuario?.codOperador;
+  if (cod != null && Number.isFinite(Number(cod))) return Number(cod);
   return req.valorPersonal || req.auth?.usuario?.id || null;
 }
 
@@ -91,6 +93,7 @@ async function listarAdjuntosTurno(req, res) {
 async function subirAdjuntoTurno(req, res) {
   const idTurno = Number(req.params.idTurno);
   try {
+    await ensureTenantFromReq(req, async () => {
     await racService.assertAlcanceTurno(idTurno, req);
     const { tipoImagen } = req.body || {};
     const userId = resolveUserId(req);
@@ -138,15 +141,17 @@ async function subirAdjuntoTurno(req, res) {
       }
     }
 
-    const result = await adjuntosService.subirAdjunto(
-      {
-        numeroVisita: 0,
-        idTurno,
-        idTipoImagen: String(tipoImagen).trim(),
-      },
-      req.file,
-      userId,
-      filePath,
+    const result = await ensureTenantFromReq(req, () =>
+      adjuntosService.subirAdjunto(
+        {
+          numeroVisita: 0,
+          idTurno,
+          idTipoImagen: String(tipoImagen).trim(),
+        },
+        req.file,
+        userId,
+        filePath,
+      ),
     );
 
     res.status(201).json({ success: true, data: result });
@@ -158,6 +163,7 @@ async function subirAdjuntoTurno(req, res) {
       nombreArchivo: req.file.originalname,
       valorPersonalUploader: userId,
     });
+    });
   } catch (e) {
     if (req.file) await fs.unlink(req.file.path).catch(() => {});
     const code = e?.statusCode || 500;
@@ -167,6 +173,7 @@ async function subirAdjuntoTurno(req, res) {
 
 module.exports = {
   uploadMiddleware: upload.single('archivo'),
+  restoreTenantFromRequest,
   listarAdjuntosTurno,
   subirAdjuntoTurno,
 };

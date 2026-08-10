@@ -73,6 +73,12 @@ async function permisosDeRol(idRol, nombreRol) {
 	if (nombre === 'ADMINISTRATIVO') {
 		return [...matriz.permisosDeRol('ADMINISTRATIVO')];
 	}
+	if (nombre === 'ENFERMERO') {
+		return [...matriz.permisosDeRol('ENFERMERO')];
+	}
+	if (nombre === 'CARGA_HC') {
+		return [...matriz.permisosDeRol('CARGA_HC')];
+	}
 	if (idRol == null || !Number.isFinite(Number(idRol))) {
 		return matriz.permisosDeRol(nombreRol || null);
 	}

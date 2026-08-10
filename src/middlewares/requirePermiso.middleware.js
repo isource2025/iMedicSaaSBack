@@ -38,6 +38,12 @@ async function _resolverPermisosReq(req) {
 	if (rn === 'ADMINISTRATIVO') {
 		permisos = matriz.permisosDeRol('ADMINISTRATIVO');
 	}
+	if (rn === 'ENFERMERO') {
+		permisos = matriz.permisosDeRol('ENFERMERO');
+	}
+	if (rn === 'CARGA_HC') {
+		permisos = matriz.permisosDeRol('CARGA_HC');
+	}
 	return permisos;
 }
 
