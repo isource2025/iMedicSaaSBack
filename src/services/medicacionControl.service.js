@@ -43,12 +43,21 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
       v.Alias AS NombreMedicamento,
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
-      ind.FormaAdicional
+      ind.FormaAdicional,
+      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
+    ) perOp
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = mc.Profesional OR p.Matricula = mc.Profesional OR p.Valor = pw2.ValorPersonal
+    ) perProf
     WHERE mc.NumeroVisita = @param0
     ORDER BY mc.FechaCarga DESC, mc.HoraCarga DESC, mc.IDCtrlMedica DESC
   `;
@@ -195,12 +204,21 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
       v.Alias AS NombreMedicamento,
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
-      ind.FormaAdicional
+      ind.FormaAdicional,
+      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
+    ) perOp
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = mc.Profesional OR p.Matricula = mc.Profesional OR p.Valor = pw2.ValorPersonal
+    ) perProf
     WHERE mc.NumeroVisita = @param0 
       AND mc.FechaCarga = @param1
     ORDER BY mc.HoraControl ASC, mc.IDCtrlMedica ASC

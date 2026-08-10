@@ -249,6 +249,7 @@ SELECT ${topClause}
   iim.TipoUnidad,
   iim.ProfesionalAsiste,
   p.Nombres + ' ' + p.Apellido AS FullName,
+  per.Matricula AS MatriculaProfesional,
   iim.Frecuencia,
   fa.Intervalo,
   iim.Observaciones,
@@ -299,6 +300,12 @@ SELECT ${topClause}
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+OUTER APPLY (
+  SELECT TOP 1 per0.Matricula
+  FROM dbo.imPersonal AS per0
+  WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
+  ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
+) per
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
@@ -329,6 +336,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 profesional: r.ProfesionalAsiste,
                 OperadorCarga: r.OperadorCarga ?? null, // para control de propiedad
                 fullName: r.FullName,
+                matricula: r.MatriculaProfesional ?? null,
                 frecuencia: r.Frecuencia,
                 intervalo: r.Intervalo,
                 observaciones: r.Observaciones,

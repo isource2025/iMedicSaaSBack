@@ -58,10 +58,19 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
       cf.Talla,
       cf.IMC,
       cf.IdTurno,
-      cf.IdHci
+      cf.IdHci,
+      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
     FROM dbo.imInterCtrlFrecuente AS cf
     LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = cf.OperadorCarga
     LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = cf.Profesional
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
+    ) perOp
+    OUTER APPLY (
+      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
+      WHERE p.Valor = cf.Profesional OR p.Matricula = cf.Profesional OR p.Valor = pw2.ValorPersonal
+    ) perProf
     WHERE cf.NumeroVisita = @param0 
       AND cf.FechaControl = @param1
     ORDER BY cf.HoraControl ASC, cf.Valor ASC

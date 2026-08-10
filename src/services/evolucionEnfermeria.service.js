@@ -10,6 +10,7 @@ const SELECT_EVOLUCION = `
     SELECT 
       ev.NumeroVisita,
       ev.Profesional,
+      per.Matricula AS Matricula,
       COALESCE(
         NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), ''),
         NULLIF(LTRIM(RTRIM(ISNULL(pwOp.Apellido, '') + ' ' + ISNULL(pwOp.Nombres, ''))), '')
@@ -26,7 +27,7 @@ const SELECT_EVOLUCION = `
       NULLIF(LTRIM(RTRIM(pwOp.Nombres)), '') AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
     OUTER APPLY (
-      SELECT TOP 1 p.ApellidoNombre
+      SELECT TOP 1 p.ApellidoNombre, p.Matricula
       FROM dbo.imPersonal p
       WHERE p.Valor = ev.Profesional OR p.Matricula = ev.Profesional
       ORDER BY CASE WHEN p.Valor = ev.Profesional THEN 0 ELSE 1 END
