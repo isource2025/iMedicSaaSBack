@@ -361,6 +361,55 @@ const updateIndicacion = async (req, res) => {
     }
 };
 
+const dejarSinEfecto = async (req, res) => {
+	try {
+		const rol = String(req.rolNombre || req.auth?.rol?.nombre || '')
+			.trim()
+			.toUpperCase();
+		if (rol !== 'MEDICO' && rol !== 'ADMIN' && rol !== 'SUPER_ADMIN') {
+			return res.status(403).json({
+				success: false,
+				mensaje: 'Solo médicos pueden dejar una indicación sin efecto',
+			});
+		}
+
+		const { nroIndicacion } = req.params;
+		const nroIndicacionInt = parseInt(nroIndicacion, 10);
+		if (isNaN(nroIndicacionInt)) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Número de indicación inválido',
+			});
+		}
+
+		const u = req.auth?.usuario || {};
+		const nombreOperador =
+			[u.Apellido || u.apellido, u.Nombres || u.nombres || u.Nombre || u.nombre]
+				.filter(Boolean)
+				.join(', ')
+				.trim() ||
+			u.NombreRed ||
+			u.nombreRed ||
+			'Médico';
+
+		const data = await indicacionesService.dejarSinEfecto(nroIndicacionInt, {
+			nombreOperador,
+		});
+		res.json({
+			success: true,
+			mensaje: 'Indicación dejada sin efecto',
+			data,
+		});
+	} catch (error) {
+		console.error('Error al dejar indicación sin efecto:', error);
+		const status = error.statusCode || 500;
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al dejar la indicación sin efecto',
+		});
+	}
+};
+
 const aplicarIndicacion = async (req, res) => {
     try {
         const { nroIndicacion } = req.params;
@@ -438,4 +487,5 @@ module.exports = {
     updateIndicacion,
     aplicarIndicacion,
     crearIndicacionHija,
+    dejarSinEfecto,
 };

@@ -12,6 +12,14 @@ AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 5)
     INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
     VALUES (5, 'SUPER_ADMIN', 'Administrador de plataforma (multi-empresa)', 200);
 
+IF EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imRoles'
+)
+AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
+    INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
+    VALUES (6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25);
+
 -- 2) Packs modulares por empresa (AGENDA, INTERNACION, FACTURACION)
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES

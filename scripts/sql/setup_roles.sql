@@ -38,6 +38,19 @@ IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 4)
     INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
     VALUES (4, 'ADMINISTRATIVO', 'Personal administrativo', 20);
 
+-- IdRol 5 = SUPER_ADMIN (plataforma; ver setup_super_admin.sql)
+
+IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
+    INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
+    VALUES (6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25);
+ELSE
+    UPDATE dbo.imRoles
+    SET Nombre = 'CARGA_HC',
+        Descripcion = 'Carga de adjuntos en admisiones (con y sin egreso)',
+        Nivel = 25,
+        Activo = 1
+    WHERE IdRol = 6;
+
 -- ============================================================
 -- 3) Migración inicial al campo imPersonal.Rol (varchar(20))
 --    Sólo asigna a quienes hoy NO tienen rol (NULL o vacío).

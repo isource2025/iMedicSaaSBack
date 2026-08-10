@@ -255,9 +255,74 @@ const crearControl = async (data) => {
     }
 };
 
+/**
+ * Actualizar un control frecuente existente (solo campos clínicos).
+ */
+const actualizarControl = async (valor, data) => {
+    const fechaControlClarion = data.fechaControl
+        ? convertirFechaAClarion(data.fechaControl)
+        : null;
+    const horaControlClarion = data.horaControl
+        ? convertirHoraAClarion(String(data.horaControl).length === 5 ? data.horaControl + ':00' : data.horaControl)
+        : null;
+    const peso = data.peso != null ? Number(data.peso) || 0 : null;
+    const talla = data.talla != null ? Number(data.talla) || 0 : null;
+    const imc =
+        peso != null && talla != null ? calcularIMC(peso, talla) : null;
+
+    const sql = `
+        UPDATE dbo.imInterCtrlFrecuente
+        SET
+            FechaControl = COALESCE(@param1, FechaControl),
+            HoraControl = COALESCE(@param2, HoraControl),
+            Pulso = COALESCE(@param3, Pulso),
+            Maximo = COALESCE(@param4, Maximo),
+            Minimo = COALESCE(@param5, Minimo),
+            FrecuenciaRespiratoria = COALESCE(@param6, FrecuenciaRespiratoria),
+            Axilar = COALESCE(@param7, Axilar),
+            Rectal = COALESCE(@param8, Rectal),
+            Hgt = COALESCE(@param9, Hgt),
+            PAMedia = COALESCE(@param10, PAMedia),
+            Saturometria = COALESCE(@param11, Saturometria),
+            Peso = COALESCE(@param12, Peso),
+            Talla = COALESCE(@param13, Talla),
+            IMC = COALESCE(@param14, IMC),
+            Observaciones = COALESCE(@param15, Observaciones)
+        WHERE Valor = @param0
+    `;
+
+    const params = [
+        { value: Number(valor) },
+        { value: fechaControlClarion },
+        { value: horaControlClarion },
+        { value: data.pulso != null ? Number(data.pulso) || 0 : null },
+        { value: data.presionMax != null ? Number(data.presionMax) || 0 : null },
+        { value: data.presionMin != null ? Number(data.presionMin) || 0 : null },
+        { value: data.frecuenciaRespiratoria != null ? Number(data.frecuenciaRespiratoria) || 0 : null },
+        { value: data.temperaturaAxilar != null ? Number(data.temperaturaAxilar) || 0 : null },
+        { value: data.temperaturaRectal != null ? Number(data.temperaturaRectal) || 0 : null },
+        { value: data.glucemia != null ? String(data.glucemia) : null },
+        { value: data.presionMedia != null ? Number(data.presionMedia) || 0 : null },
+        { value: data.saturacion != null ? Number(data.saturacion) || 0 : null },
+        { value: peso },
+        { value: talla },
+        { value: imc },
+        {
+            value:
+                data.observaciones != null
+                    ? normalizarTextoParaClarionAnsi(data.observaciones)
+                    : null,
+        },
+    ];
+
+    await executeQuery(sql, params);
+    return obtenerControlPorId(valor);
+};
+
 module.exports = {
     obtenerControlesPorVisitaYFecha,
     obtenerControlPorId,
     eliminarControl,
     crearControl,
+    actualizarControl,
 };

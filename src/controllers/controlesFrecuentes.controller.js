@@ -212,9 +212,51 @@ const crearControl = async (req, res) => {
     }
 };
 
+const actualizarControl = async (req, res) => {
+	try {
+		const valorInt = parseInt(req.params.valor, 10);
+		if (isNaN(valorInt)) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'ID de control frecuente inválido',
+			});
+		}
+		const data = req.body || {};
+		const resultado = await controlesFrecuentesService.actualizarControl(valorInt, {
+			fechaControl: data.fechaControl,
+			horaControl: data.horaControl,
+			pulso: data.pulso,
+			presionMax: data.presionMax,
+			presionMin: data.presionMin,
+			presionMedia: data.presionMedia,
+			frecuenciaRespiratoria: data.frecuenciaRespiratoria,
+			temperaturaAxilar: data.temperaturaAxilar,
+			temperaturaRectal: data.temperaturaRectal,
+			glucemia: data.glucemia,
+			saturacion: data.saturacion,
+			peso: data.peso,
+			talla: data.talla,
+			observaciones: data.observaciones,
+		});
+		res.json({
+			success: true,
+			mensaje: 'Control frecuente actualizado correctamente',
+			data: resultado,
+		});
+	} catch (error) {
+		console.error('Error al actualizar control frecuente:', error);
+		res.status(500).json({
+			success: false,
+			mensaje: 'Error al actualizar el control frecuente',
+			error: error.message,
+		});
+	}
+};
+
 module.exports = {
     obtenerControlesPorVisitaYFecha,
     obtenerControlPorId,
     eliminarControl,
     crearControl,
+    actualizarControl,
 };

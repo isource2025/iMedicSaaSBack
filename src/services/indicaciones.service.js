@@ -284,6 +284,7 @@ SELECT ${topClause}
   iim.AliasMedicamento,
   iim.Codigo,
   iim.FormaAdicional,
+  iim.OperadorCarga,
   tit.Tipo as TipoIndicacion,
   tit.PromptCodigo,
   tit.Orden as OrdenTipo,
@@ -1224,6 +1225,60 @@ WHERE NroIndicacion = @p31
     return getIndicacionById(nroIndicacion);
 };
 
+/**
+ * Dejar indicación sin efecto (Estado = 'S').
+ * Registra en Observaciones quién y cuándo lo hizo.
+ * @param {number} nroIndicacion
+ * @param {{ nombreOperador: string }} meta
+ */
+const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
+	const rows = await executeQuery(
+		`
+    SELECT TOP 1 NroIndicacion, Estado, Observaciones
+    FROM dbo.imInterIndMedicas
+    WHERE NroIndicacion = @p0 AND ISNULL(NroAdicional, 0) = 0
+    `,
+		[{ value: Number(nroIndicacion) }],
+	);
+	if (!rows.length) {
+		const e = new Error('Indicación no encontrada');
+		e.statusCode = 404;
+		throw e;
+	}
+	if (String(rows[0].Estado || '').trim().toUpperCase() === 'S') {
+		const e = new Error('La indicación ya está sin efecto');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const { fechaCalendarioArgentina, horaWallArgentina } = require('../utils/dateUtils');
+	const fechaIso = fechaCalendarioArgentina();
+	const horaIso = horaWallArgentina(false);
+	const nombre = String(meta.nombreOperador || 'Usuario').trim() || 'Usuario';
+	const nota = `Dejada sin efecto por ${nombre} el ${fechaIso} ${horaIso}`;
+	const obsPrev = String(rows[0].Observaciones || '').trim();
+	const observaciones = limitLength(obsPrev ? `${obsPrev} | ${nota}` : nota, 255);
+
+	await executeQuery(
+		`
+    UPDATE dbo.imInterIndMedicas
+    SET Estado = 'S',
+        FechaExpiro = @p1,
+        HoraExpiro = @p2,
+        Observaciones = @p3
+    WHERE NroIndicacion = @p0
+    `,
+		[
+			{ value: Number(nroIndicacion) },
+			{ value: convertirFechaAClarion(fechaIso) },
+			{ value: convertirHoraAClarion(horaIso + ':00') },
+			{ value: observaciones },
+		],
+	);
+
+	return getIndicacionById(nroIndicacion);
+};
+
 const aplicarIndicacion = async (nroIndicacion, data) => {
 
     try {
@@ -1686,4 +1741,5 @@ module.exports = {
     updateIndicacion,
     aplicarIndicacion,
     crearIndicacionHija,
+    dejarSinEfecto,
 };

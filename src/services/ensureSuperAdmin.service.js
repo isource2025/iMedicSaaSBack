@@ -141,11 +141,22 @@ async function ensurePlatformSuperAdmin(pool) {
 	}
 
 	try {
-		await pool.query(
-			`INSERT INTO \`imRoles\` (IdRol, Nombre, Descripcion, Nivel, Activo)
-       VALUES (5, 'SUPER_ADMIN', 'Administrador de plataforma', 200, 1)
-       ON DUPLICATE KEY UPDATE Nombre='SUPER_ADMIN', Activo=1, Nivel=200`,
-		);
+		const rolesCatalogo = [
+			[1, 'ADMIN', 'Administrador del sistema', 100],
+			[2, 'MEDICO', 'Médico / profesional de salud', 50],
+			[3, 'ENFERMERO', 'Personal de enfermería', 40],
+			[4, 'ADMINISTRATIVO', 'Personal administrativo', 20],
+			[5, 'SUPER_ADMIN', 'Administrador de plataforma', 200],
+			[6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25],
+		];
+		for (const [id, nombre, desc, nivel] of rolesCatalogo) {
+			await pool.query(
+				`INSERT INTO \`imRoles\` (IdRol, Nombre, Descripcion, Nivel, Activo)
+         VALUES (?, ?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE Nombre=VALUES(Nombre), Descripcion=VALUES(Descripcion), Activo=1, Nivel=VALUES(Nivel)`,
+				[id, nombre, desc, nivel],
+			);
+		}
 	} catch (e) {
 		logs.push({ step: 'roles', error: e.message });
 	}

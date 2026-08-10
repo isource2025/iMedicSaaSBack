@@ -58,6 +58,11 @@ router.put(
 	indicacionesController.updateIndicacion,
 );
 router.post(
+	'/:nroIndicacion/sin-efecto',
+	requirePermiso('INTERNACION.INDICACIONES.EDITAR'),
+	indicacionesController.dejarSinEfecto,
+);
+router.post(
 	'/:nroIndicacion/aplicar',
 	requirePermiso('INTERNACION.INDICACIONES.APLICAR'),
 	indicacionesController.aplicarIndicacion,

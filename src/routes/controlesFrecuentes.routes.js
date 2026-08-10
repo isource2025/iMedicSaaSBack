@@ -26,6 +26,12 @@ router.get(
 	controlesFrecuentesController.obtenerControlPorId,
 );
 router.post('/', requirePermiso('INTERNACION.SIGNOS_VITALES.CREAR'), controlesFrecuentesController.crearControl);
+router.put(
+	'/:valor',
+	requirePermiso('INTERNACION.SIGNOS_VITALES.EDITAR'),
+	_ownControl,
+	controlesFrecuentesController.actualizarControl,
+);
 router.delete(
 	'/:valor',
 	requirePermiso('INTERNACION.SIGNOS_VITALES.ELIMINAR'),

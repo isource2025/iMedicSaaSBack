@@ -153,6 +153,7 @@ async function listarRoles() {
       Activo
     FROM dbo.imRoles
     WHERE Activo = 1
+      AND UPPER(LTRIM(RTRIM(Nombre))) <> 'SUPER_ADMIN'
     ORDER BY Nivel DESC, Nombre ASC
     `,
 	);

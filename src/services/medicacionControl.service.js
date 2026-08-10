@@ -354,9 +354,39 @@ const eliminarMedicacion = async (idCtrlMedica) => {
     }
 };
 
+/**
+ * Actualizar medicación suministrada (cantidad / observaciones / unidad).
+ */
+const actualizarMedicacion = async (idCtrlMedica, data = {}) => {
+	const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+	const sql = `
+    UPDATE dbo.imInterCtrlMedicamento
+    SET
+      Cantidad = COALESCE(@p1, Cantidad),
+      CantidadIndicada = COALESCE(@p2, CantidadIndicada),
+      TipoUnidad = COALESCE(@p3, TipoUnidad),
+      Observaciones = COALESCE(@p4, Observaciones)
+    WHERE IDCtrlMedica = @p0
+  `;
+	await executeQuery(sql, [
+		{ value: Number(idCtrlMedica) },
+		{ value: data.cantidad != null ? Number(data.cantidad) : null },
+		{ value: data.cantidadIndicada != null ? Number(data.cantidadIndicada) : null },
+		{ value: data.tipoUnidad != null ? String(data.tipoUnidad).slice(0, 5) : null },
+		{
+			value:
+				data.observaciones != null
+					? normalizarTextoParaClarionAnsi(String(data.observaciones)).slice(0, 255)
+					: null,
+		},
+	]);
+	return obtenerMedicacionPorId(idCtrlMedica);
+};
+
 module.exports = {
     obtenerMedicacionPorVisita,
     obtenerMedicacionPorVisitaYFecha,
     obtenerMedicacionPorId,
     eliminarMedicacion,
+    actualizarMedicacion,
 };

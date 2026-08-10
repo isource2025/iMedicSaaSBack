@@ -172,9 +172,41 @@ const eliminarMedicacion = async (req, res) => {
     }
 };
 
+const actualizarMedicacion = async (req, res) => {
+	try {
+		const idCtrlMedicaInt = parseInt(req.params.idCtrlMedica, 10);
+		if (isNaN(idCtrlMedicaInt)) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'ID de control de medicación inválido',
+			});
+		}
+		const body = req.body || {};
+		const data = await medicacionControlService.actualizarMedicacion(idCtrlMedicaInt, {
+			cantidad: body.cantidad,
+			cantidadIndicada: body.cantidadIndicada,
+			tipoUnidad: body.tipoUnidad,
+			observaciones: body.observaciones,
+		});
+		res.json({
+			success: true,
+			mensaje: 'Medicación actualizada correctamente',
+			data,
+		});
+	} catch (error) {
+		console.error('Error al actualizar medicación:', error);
+		res.status(500).json({
+			success: false,
+			mensaje: 'Error al actualizar el registro de medicación',
+			error: error.message,
+		});
+	}
+};
+
 module.exports = {
     obtenerMedicacionPorVisita,
     obtenerMedicacionPorVisitaYFecha,
     obtenerMedicacionPorId,
     eliminarMedicacion,
+    actualizarMedicacion,
 };

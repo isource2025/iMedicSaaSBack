@@ -85,16 +85,38 @@ async function ensureLocalSqlSuperAdmin() {
 		).catch(() => {});
 	}
 
-	// Asegurar rol SUPER_ADMIN / 5 en imRoles si existe
+	// Asegurar roles de catálogo en imRoles si existe
 	await executeQuery(
 		`
     IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'imRoles')
     BEGIN
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 1)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (1, 'ADMIN', 'Administrador del sistema', 100, 1);
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 2)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (2, 'MEDICO', 'Médico / profesional de salud', 50, 1);
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 3)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (3, 'ENFERMERO', 'Personal de enfermería', 40, 1);
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 4)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (4, 'ADMINISTRATIVO', 'Personal administrativo', 20, 1);
       IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 5)
         INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
         VALUES (5, 'SUPER_ADMIN', 'Administrador de plataforma', 200, 1)
       ELSE
-        UPDATE dbo.imRoles SET Nombre = 'SUPER_ADMIN', Activo = 1, Nivel = 200 WHERE IdRol = 5
+        UPDATE dbo.imRoles SET Nombre = 'SUPER_ADMIN', Activo = 1, Nivel = 200 WHERE IdRol = 5;
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25, 1)
+      ELSE
+        UPDATE dbo.imRoles
+        SET Nombre = 'CARGA_HC',
+            Descripcion = 'Carga de adjuntos en admisiones (con y sin egreso)',
+            Nivel = 25,
+            Activo = 1
+        WHERE IdRol = 6;
     END
     `,
 	).catch(() => {});

@@ -20,7 +20,8 @@
  * back para reflejar los cambios en BD).
  *
  * Roles definidos en imRoles (IDs fijos):
- *   1 = ADMIN, 2 = MEDICO, 3 = ENFERMERO, 4 = ADMINISTRATIVO
+ *   1 = ADMIN, 2 = MEDICO, 3 = ENFERMERO, 4 = ADMINISTRATIVO,
+ *   5 = SUPER_ADMIN, 6 = CARGA_HC
  */
 
 // ============================================================================
@@ -398,18 +399,25 @@ const PLANTILLAS = Object.freeze({
 		'USUARIO.PERFIL.EDITAR',
 	]),
 
+	// ──────────────────────────────────────────────────────────────────────
+	// CARGA_HC — solo adjuntos en admisiones (vigentes y con egreso).
+	// CRUD de adjuntos propios (ownership en API). Sin clínica.
+	// ──────────────────────────────────────────────────────────────────────
 	CARGA_HC: Object.freeze([
 		'DASHBOARD.INICIO.VER',
+
+		'ADMISION.PACIENTES.VER',
+		'ADMISION.BUSQUEDA.VER',
+		'ADMISION.VIGENTES.VER',
+		'ADMISION.TABLA.VER',
+
 		'INTERNACION.CAMAS.VER',
 		'INTERNACION.CAMAS.GESTIONAR',
-		'INTERNACION.ESTUDIOS.VER',
-		'INTERNACION.ESTUDIOS.CREAR',
-		'INTERNACION.PROTOCOLOS.VER',
-		'INTERNACION.PROTOCOLOS.CREAR',
 		'INTERNACION.ADJUNTOS.VER',
 		'INTERNACION.ADJUNTOS.CREAR',
 		'INTERNACION.ADJUNTOS.EDITAR',
 		'INTERNACION.ADJUNTOS.ELIMINAR',
+
 		'USUARIO.PERFIL.VER',
 		'USUARIO.PERFIL.EDITAR',
 	]),

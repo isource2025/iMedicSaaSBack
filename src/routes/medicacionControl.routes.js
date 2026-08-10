@@ -30,6 +30,12 @@ router.get(
 	requirePermiso('INTERNACION.MEDICACION.VER'),
 	medicacionControlController.obtenerMedicacionPorId,
 );
+router.put(
+	'/:idCtrlMedica',
+	requirePermiso('INTERNACION.MEDICACION.EDITAR'),
+	_ownMedicacion,
+	medicacionControlController.actualizarMedicacion,
+);
 router.delete(
 	'/:idCtrlMedica',
 	requirePermiso('INTERNACION.MEDICACION.ELIMINAR'),
