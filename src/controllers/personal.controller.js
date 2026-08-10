@@ -338,6 +338,21 @@ const obtenerFirmaPersonal = async (req, res) => {
 	}
 };
 
+/** Firma por matrícula para exportes PDF (cualquier usuario autenticado del tenant). */
+const obtenerFirmaPorMatricula = async (req, res) => {
+	const matricula = Number(req.params.matricula);
+	if (!Number.isFinite(matricula) || matricula <= 0) {
+		return res.status(400).json({ success: false, mensaje: 'Matrícula inválida' });
+	}
+	try {
+		const data = await personalService.obtenerFirmaPorMatricula(matricula);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.obtenerFirmaPorMatricula] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al obtener firma' });
+	}
+};
+
 const actualizarFirmaPersonal = async (req, res) => {
 	const id = _idInt(req);
 	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
@@ -632,6 +647,7 @@ module.exports = {
 	agregarEmpresaPersonal,
 	quitarEmpresaPersonal,
 	obtenerFirmaPersonal,
+	obtenerFirmaPorMatricula,
 	actualizarFirmaPersonal,
 	eliminarFirmaPersonal,
 	listarSectoresPersonal,

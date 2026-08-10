@@ -31,6 +31,9 @@ router.get('/sync-fisico/estado', requirePermiso('CONFIGURACION.PERSONAL.VER'), 
 router.post('/sync-desde-fisico', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.syncDesdeFisico);
 router.post('/exportar', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.exportarPersonal);
 
+// Firma por matrícula (PDFs clínicos) — antes de /:id
+router.get('/firma/por-matricula/:matricula', personalController.obtenerFirmaPorMatricula);
+
 // Acciones sobre un registro (no van en el form CRUD principal)
 router.get('/:id/servicio', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerServicioPersonal);
 router.put('/:id/servicio', requirePermiso('CONFIGURACION.PERSONAL.EDITAR'), personalController.actualizarServicioPersonal);

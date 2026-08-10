@@ -903,6 +903,29 @@ async function obtenerFirmaPersonal(valor) {
 	};
 }
 
+/** Firma por matrícula (o Valor) para PDFs clínicos sin permiso de configuración. */
+async function obtenerFirmaPorMatricula(matricula) {
+	const m = Number(matricula);
+	if (!Number.isFinite(m) || m <= 0) return { hasFirma: false };
+	const pool = await getRequestPool();
+	const r = await pool.request().input('m', sql.Int, m).query(`
+		SELECT TOP 1 Firma
+		FROM dbo.imPersonal
+		WHERE Matricula = @m OR Valor = @m
+		ORDER BY CASE WHEN Matricula = @m THEN 0 ELSE 1 END, Valor
+	`);
+	const row = r.recordset[0];
+	if (!row || row.Firma == null) return { hasFirma: false };
+	const buf = Buffer.isBuffer(row.Firma) ? row.Firma : Buffer.from(row.Firma);
+	if (!buf.length) return { hasFirma: false };
+	const mime = _sniffImageMime(buf);
+	return {
+		hasFirma: true,
+		mime,
+		dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+	};
+}
+
 async function actualizarFirmaPersonal(valor, buffer) {
 	if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
 		const e = new Error('Archivo de firma vacío');
@@ -1292,6 +1315,7 @@ module.exports = {
 	agregarEmpresaPersonal,
 	quitarEmpresaPersonal,
 	obtenerFirmaPersonal,
+	obtenerFirmaPorMatricula,
 	actualizarFirmaPersonal,
 	eliminarFirmaPersonal,
 	listarSectoresPersonal,
