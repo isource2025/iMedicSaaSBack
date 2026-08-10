@@ -78,6 +78,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
+            per.Valor AS IdPersonal,
             per.Matricula AS Matricula,
             per.ApellidoNombre AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
@@ -85,7 +86,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
             glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
-        LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
+        LEFT JOIN dbo.imPersonal AS per ON (ev.Profecional = per.Matricula OR ev.Profecional = per.Valor)
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ${whereClause}
@@ -169,6 +170,7 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
+            per.Valor AS IdPersonal,
             per.Matricula AS Matricula,
             per.ApellidoNombre AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
@@ -176,7 +178,7 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
             glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
-        LEFT JOIN dbo.imPersonal AS per ON ev.Profecional = per.Matricula
+        LEFT JOIN dbo.imPersonal AS per ON (ev.Profecional = per.Matricula OR ev.Profecional = per.Valor)
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ev.IdHCEvolucion = @param0

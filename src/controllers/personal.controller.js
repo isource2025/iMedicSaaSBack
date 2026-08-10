@@ -353,6 +353,21 @@ const obtenerFirmaPorMatricula = async (req, res) => {
 	}
 };
 
+/** Firma por ID (Valor) para exportes PDF — sin permiso de configuración. */
+const obtenerFirmaPorIdPublic = async (req, res) => {
+	const id = Number(req.params.id);
+	if (!Number.isFinite(id) || id <= 0) {
+		return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	}
+	try {
+		const data = await personalService.obtenerFirmaPersonal(id);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.obtenerFirmaPorIdPublic] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al obtener firma' });
+	}
+};
+
 const actualizarFirmaPersonal = async (req, res) => {
 	const id = _idInt(req);
 	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
@@ -648,6 +663,7 @@ module.exports = {
 	quitarEmpresaPersonal,
 	obtenerFirmaPersonal,
 	obtenerFirmaPorMatricula,
+	obtenerFirmaPorIdPublic,
 	actualizarFirmaPersonal,
 	eliminarFirmaPersonal,
 	listarSectoresPersonal,

@@ -911,8 +911,12 @@ async function obtenerFirmaPorMatricula(matricula) {
 	const r = await pool.request().input('m', sql.Int, m).query(`
 		SELECT TOP 1 Firma
 		FROM dbo.imPersonal
-		WHERE Matricula = @m OR Valor = @m
-		ORDER BY CASE WHEN Matricula = @m THEN 0 ELSE 1 END, Valor
+		WHERE (Matricula = @m OR Valor = @m)
+		  AND Firma IS NOT NULL
+		  AND DATALENGTH(Firma) > 0
+		ORDER BY
+			CASE WHEN Valor = @m THEN 0 WHEN Matricula = @m THEN 1 ELSE 2 END,
+			Valor
 	`);
 	const row = r.recordset[0];
 	if (!row || row.Firma == null) return { hasFirma: false };
