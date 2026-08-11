@@ -241,7 +241,7 @@ async function completarLogin({
 		idEmpresaEfectiva = Number(idEmpresaSesion);
 	}
 
-	const rol = rolPreliminar;
+	let rol = rolPreliminar;
 
 	// Matricula del JWT debe coincidir con imPersonal del tenant (horarios/agenda).
 	if (
@@ -283,21 +283,37 @@ async function completarLogin({
 	}
 
 	let permisos = [];
+	let roles = [];
 	try {
 		const cargarPermisos = async () => {
 			if (idEmpresaEfectiva != null && Number.isFinite(Number(idEmpresaEfectiva))) {
 				const r = await permisosService.permisosDeUsuario(usuario.ValorPersonal);
-				if (r?.permisos?.length) return r.permisos;
+				if (r?.permisos?.length || r?.roles?.length) return r;
 			}
-			if (rol?.id != null) {
-				return permisosService.permisosDeRol(rol.id, rol.nombre);
+			if (rolPreliminar?.id != null) {
+				const p = await permisosService.permisosDeRol(rolPreliminar.id, rolPreliminar.nombre);
+				return {
+					rol: rolPreliminar,
+					roles: [{ ...rolPreliminar, esPrincipal: true }],
+					permisos: p,
+				};
 			}
-			return [];
+			return { rol: null, roles: [], permisos: [] };
 		};
+		let pack;
 		if (idEmpresaEfectiva != null && Number.isFinite(Number(idEmpresaEfectiva))) {
-			permisos = await runWithTenant(Number(idEmpresaEfectiva), cargarPermisos);
+			pack = await runWithTenant(Number(idEmpresaEfectiva), cargarPermisos);
 		} else {
-			permisos = await cargarPermisos();
+			pack = await cargarPermisos();
+		}
+		permisos = pack?.permisos || [];
+		roles = pack?.roles || [];
+		if (pack?.rol) {
+			rol = {
+				id: pack.rol.id,
+				nombre: pack.rol.nombre,
+				nivel: pack.rol.nivel ?? rolPreliminar?.nivel ?? 0,
+			};
 		}
 	} catch (e) {
 		console.error('[auth.login] Error al cargar permisos:', e.message);
@@ -327,6 +343,7 @@ async function completarLogin({
 			};
 		})(),
 		rol,
+		roles,
 		permisos,
 		idEmpresa: idEmpresaEfectiva,
 		sectorSeleccionado: {

@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS `imPersonalEmpresas` (
   KEY `IX_imPersonalEmpresas_Empresa` (`IdEmpresa`)
 );
 
+-- Varios roles por personal (imPersonal.Rol = rol principal para compatibilidad)
+CREATE TABLE IF NOT EXISTS `imPersonalRoles` (
+  `IdEmpresa` INT NOT NULL,
+  `Valor` INT NOT NULL,
+  `IdRol` INT NOT NULL,
+  `EsPrincipal` TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`IdEmpresa`, `Valor`, `IdRol`),
+  KEY `IX_imPersonalRoles_Rol` (`IdRol`),
+  KEY `IX_imPersonalRoles_Personal` (`IdEmpresa`, `Valor`, `EsPrincipal`)
+);
+
 CREATE TABLE IF NOT EXISTS `imSectores` (
   `IdEmpresa` INT NOT NULL DEFAULT 1,
   `Valor` VARCHAR(30) NOT NULL,

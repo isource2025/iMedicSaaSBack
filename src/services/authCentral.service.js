@@ -469,11 +469,71 @@ function mapRolDesdeFila(row) {
 
 /** Rol de un personal en una empresa (catálogo global Railway + imPersonal.Rol). */
 async function obtenerRolDeValorPersonal(idEmpresa, valorPersonal) {
-	if (!isAuthCentralEnabled()) return null;
+	const roles = await listarRolesDeValorPersonal(idEmpresa, valorPersonal);
+	if (!roles.length) return null;
+	const principal = roles.find((r) => r.EsPrincipal) || roles[0];
+	return principal;
+}
+
+let _personalRolesTableReady = false;
+
+async function ensurePersonalRolesTable() {
+	if (_personalRolesTableReady || !isAuthCentralEnabled()) return;
+	await query(`
+    CREATE TABLE IF NOT EXISTS \`imPersonalRoles\` (
+      \`IdEmpresa\` INT NOT NULL,
+      \`Valor\` INT NOT NULL,
+      \`IdRol\` INT NOT NULL,
+      \`EsPrincipal\` TINYINT(1) NOT NULL DEFAULT 0,
+      PRIMARY KEY (\`IdEmpresa\`, \`Valor\`, \`IdRol\`),
+      KEY \`IX_imPersonalRoles_Rol\` (\`IdRol\`),
+      KEY \`IX_imPersonalRoles_Personal\` (\`IdEmpresa\`, \`Valor\`, \`EsPrincipal\`)
+    )
+  `);
+	_personalRolesTableReady = true;
+}
+
+/**
+ * Lista todos los roles de un personal (imPersonalRoles + fallback imPersonal.Rol).
+ * @returns {Promise<Array<{idRol:number,nombre:string,nivel:number,EsPrincipal:boolean,IdRol:number,Nombre:string,...}>>}
+ */
+async function listarRolesDeValorPersonal(idEmpresa, valorPersonal) {
+	if (!isAuthCentralEnabled()) return [];
 	const emp = Number(idEmpresa);
 	const vp = Number(valorPersonal);
-	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) return null;
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) return [];
+
+	await ensurePersonalRolesTable();
+
 	const rows = await query(
+		`
+    SELECT
+      r.IdRol AS RolId,
+      r.Nombre AS RolNombre,
+      r.Descripcion AS Descripcion,
+      r.Nivel AS Nivel,
+      pr.EsPrincipal AS EsPrincipal
+    FROM \`imPersonalRoles\` pr
+    INNER JOIN \`imRoles\` r ON r.IdRol = pr.IdRol AND r.Activo = 1
+    WHERE pr.IdEmpresa = ? AND pr.Valor = ?
+    ORDER BY pr.EsPrincipal DESC, r.Nivel DESC, r.Nombre ASC
+    `,
+		[emp, vp],
+	);
+
+	if (rows.length) {
+		return rows
+			.map((row) => {
+				const mapped = mapRolDesdeFila(row);
+				if (!mapped) return null;
+				const esPrincipal = Number(row.EsPrincipal) === 1;
+				return { ...mapped, EsPrincipal: esPrincipal, esPrincipal };
+			})
+			.filter(Boolean);
+	}
+
+	// Fallback: rol único en imPersonal.Rol (migración / compatibilidad)
+	const legacy = await query(
 		`
     SELECT
       r.IdRol AS RolId,
@@ -489,17 +549,34 @@ async function obtenerRolDeValorPersonal(idEmpresa, valorPersonal) {
     `,
 		[emp, vp],
 	);
-	return mapRolDesdeFila(rows[0] || null);
+	const mapped = mapRolDesdeFila(legacy[0] || null);
+	if (!mapped) return [];
+
+	// Backfill silencioso a imPersonalRoles
+	try {
+		await query(
+			`
+      INSERT IGNORE INTO \`imPersonalRoles\` (IdEmpresa, Valor, IdRol, EsPrincipal)
+      VALUES (?, ?, ?, 1)
+      `,
+			[emp, vp, mapped.idRol],
+		);
+	} catch (e) {
+		console.warn('[authCentral] backfill imPersonalRoles:', e.message);
+	}
+
+	return [{ ...mapped, EsPrincipal: true, esPrincipal: true }];
 }
 
 /**
- * Persiste imPersonal.Rol en Railway (auth central).
+ * Reemplaza los roles de un personal. Mantiene imPersonal.Rol = principal.
  * @param {number} idEmpresa
  * @param {number} valorPersonal
- * @param {number|null} idRol - null para limpiar
+ * @param {number[]} idRoles
+ * @param {number|null} [idRolPrincipal]
  */
-async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
-	if (!isAuthCentralEnabled()) return null;
+async function asignarRolesDeValorPersonal(idEmpresa, valorPersonal, idRoles, idRolPrincipal) {
+	if (!isAuthCentralEnabled()) return [];
 	const emp = Number(idEmpresa);
 	const vp = Number(valorPersonal);
 	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) {
@@ -507,6 +584,14 @@ async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
 		e.statusCode = 400;
 		throw e;
 	}
+
+	const ids = [
+		...new Set(
+			(Array.isArray(idRoles) ? idRoles : [])
+				.map((x) => Number(x))
+				.filter((n) => Number.isFinite(n) && n > 0),
+		),
+	];
 
 	const [pwRows, personalRows] = await Promise.all([
 		query(
@@ -533,24 +618,67 @@ async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
 		throw e;
 	}
 
-	const rolValor =
-		idRol == null || idRol === '' || Number(idRol) === 0 ? null : String(Number(idRol));
+	await ensurePersonalRolesTable();
+
+	let principal =
+		idRolPrincipal != null && Number.isFinite(Number(idRolPrincipal))
+			? Number(idRolPrincipal)
+			: null;
+	if (principal != null && !ids.includes(principal)) {
+		ids.push(principal);
+	}
+	if (principal == null && ids.length) principal = ids[0];
+	if (ids.length === 0) principal = null;
 
 	const pool = await getAuthCentralPool();
-	const [updResult] = await pool.query(
-		`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`,
-		[rolValor, emp, vp],
-	);
-	if (!updResult.affectedRows) {
-		await query(`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol) VALUES (?, ?, ?)`, [
+	const conn = await pool.getConnection();
+	try {
+		await conn.beginTransaction();
+		await conn.query(`DELETE FROM \`imPersonalRoles\` WHERE IdEmpresa = ? AND Valor = ?`, [
 			emp,
 			vp,
-			rolValor,
 		]);
+		for (const idRol of ids) {
+			await conn.query(
+				`INSERT INTO \`imPersonalRoles\` (IdEmpresa, Valor, IdRol, EsPrincipal) VALUES (?, ?, ?, ?)`,
+				[emp, vp, idRol, idRol === principal ? 1 : 0],
+			);
+		}
+		const rolValor = principal != null ? String(principal) : null;
+		const [updResult] = await conn.query(
+			`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`,
+			[rolValor, emp, vp],
+		);
+		if (!updResult.affectedRows) {
+			await conn.query(`INSERT INTO \`imPersonal\` (IdEmpresa, Valor, Rol) VALUES (?, ?, ?)`, [
+				emp,
+				vp,
+				rolValor,
+			]);
+		}
+		await conn.commit();
+	} catch (err) {
+		await conn.rollback();
+		throw err;
+	} finally {
+		conn.release();
 	}
 
-	if (rolValor == null) return null;
-	return obtenerRolDeValorPersonal(emp, vp);
+	return listarRolesDeValorPersonal(emp, vp);
+}
+
+/**
+ * Persiste imPersonal.Rol en Railway (auth central) y sincroniza imPersonalRoles (un solo rol).
+ * @param {number} idEmpresa
+ * @param {number} valorPersonal
+ * @param {number|null} idRol - null para limpiar
+ */
+async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
+	const rolValor =
+		idRol == null || idRol === '' || Number(idRol) === 0 ? null : Number(idRol);
+	const ids = rolValor == null ? [] : [rolValor];
+	const roles = await asignarRolesDeValorPersonal(idEmpresa, valorPersonal, ids, rolValor);
+	return roles[0] || null;
 }
 
 async function obtenerRolPorId(idRol) {
@@ -597,6 +725,8 @@ module.exports = {
 	obtenerRolDeUsuario,
 	eximeSectorPorUsername,
 	obtenerRolDeValorPersonal,
+	listarRolesDeValorPersonal,
+	asignarRolesDeValorPersonal,
 	asignarRolDeValorPersonal,
 	obtenerRolPorId,
 	listarRolesCatalogo,

@@ -2,13 +2,8 @@
  * Servicio de Roles.
  *
  * - Lectura del catálogo `imRoles`.
- * - Asignación de un rol a un personal mediante `imPersonal.Rol` (varchar(20),
- *   guarda el IdRol como string).
- *
- * Decisión de modelado: el rol vive en `imPersonal.Rol`. Un usuario tiene
- * a lo sumo un rol. La tabla `imRoles` actúa como catálogo (no relaciona
- * usuarios). Si más adelante se necesita multi-rol, se agregará una tabla
- * de relación sin tocar este servicio.
+ * - Asignación de uno o varios roles a un personal (`imPersonalRoles` en Railway;
+ *   `imPersonal.Rol` guarda el IdRol principal como string).
  */
 const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
@@ -207,13 +202,24 @@ async function obtenerRolPorId(idRol) {
 }
 
 /**
- * Asigna (o limpia) el rol de un personal.
- *
- * @param {number} valorPersonal - imPersonal.Valor
- * @param {number|null} idRol - IdRol válido de imRoles, o null para limpiar.
- * @returns el rol resultante (o null si quedó sin rol).
+ * Asigna (o limpia) un único rol de un personal (compatibilidad).
+ * Equivale a asignarRolesAPersonal con un solo id.
  */
 async function asignarRolAPersonal(valorPersonal, idRol) {
+	const ids =
+		idRol == null || idRol === '' || idRol === 0 ? [] : [Number(idRol)];
+	const result = await asignarRolesAPersonal(valorPersonal, ids, ids[0] ?? null);
+	return result.principal;
+}
+
+/**
+ * Asigna varios roles a un personal.
+ * @param {number} valorPersonal
+ * @param {number[]} idRoles
+ * @param {number|null} [idRolPrincipal]
+ * @returns {{ roles: object[], principal: object|null }}
+ */
+async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal) {
 	if (!Number.isFinite(Number(valorPersonal))) {
 		const e = new Error('valorPersonal inválido');
 		e.statusCode = 400;
@@ -224,41 +230,59 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 	const idEmpresa = Number(getTenantId());
 	const enRailway = _usaAuthRailway();
 
-	// Limpiar rol
-	if (idRol == null || idRol === '' || idRol === 0) {
-		if (enRailway) {
-			await _asegurarFichaPersonalEnRailway(idEmpresa, vp);
-			await authCentralService.asignarRolDeValorPersonal(idEmpresa, vp, null);
-		} else {
-			await executeQuery(`UPDATE dbo.imPersonal SET Rol = NULL WHERE Valor = @p0`, [
-				{ value: vp, type: 'Int' },
-			]);
-		}
-		await _espejarRolEnFisico(vp, null);
-		return null;
-	}
+	const ids = [
+		...new Set(
+			(Array.isArray(idRoles) ? idRoles : [])
+				.map((x) => Number(x))
+				.filter((n) => Number.isFinite(n) && n > 0),
+		),
+	];
 
-	// Validar que el rol existe y está activo (catálogo Railway en producción)
-	const rol = await obtenerRolPorId(idRol);
-	if (!rol) {
-		const e = new Error('El rol indicado no existe o está inactivo');
-		e.statusCode = 400;
-		throw e;
+	let principalId =
+		idRolPrincipal != null && Number.isFinite(Number(idRolPrincipal))
+			? Number(idRolPrincipal)
+			: null;
+	if (principalId != null && !ids.includes(principalId)) ids.push(principalId);
+	if (principalId == null && ids.length) principalId = ids[0];
+	if (!ids.length) principalId = null;
+
+	for (const id of ids) {
+		const rol = await obtenerRolPorId(id);
+		if (!rol) {
+			const e = new Error(`El rol ${id} no existe o está inactivo`);
+			e.statusCode = 400;
+			throw e;
+		}
 	}
 
 	if (enRailway) {
-		await _asegurarFichaPersonalEnRailway(idEmpresa, vp);
-		const asignado = await authCentralService.asignarRolDeValorPersonal(
+		await _asegurarFichaPersonalEnRailway(idEmpresa, vp, {
+			idRol: principalId ?? undefined,
+		});
+		const mapped = await authCentralService.asignarRolesDeValorPersonal(
 			idEmpresa,
 			vp,
-			rol.IdRol,
+			ids,
+			principalId,
 		);
-		await _espejarRolEnFisico(vp, rol.IdRol);
-		_invalidarCachePermisos(rol.IdRol);
-		return _mapRolCentral(asignado) || rol;
+		await _espejarRolEnFisico(vp, principalId);
+		for (const id of ids) _invalidarCachePermisos(id);
+		const roles = mapped.map((r) => ({
+			...(_mapRolCentral(r) || { IdRol: r.idRol, Nombre: r.nombre }),
+			EsPrincipal: !!(r.EsPrincipal || r.esPrincipal),
+		}));
+		const principal = roles.find((r) => r.EsPrincipal) || roles[0] || null;
+		return { roles, principal };
 	}
 
-	// Legacy: solo SQL físico del tenant
+	// Legacy: un solo rol en SQL físico
+	if (!ids.length) {
+		await executeQuery(`UPDATE dbo.imPersonal SET Rol = NULL WHERE Valor = @p0`, [
+			{ value: vp, type: 'Int' },
+		]);
+		return { roles: [], principal: null };
+	}
+
 	const checkRows = await executeQuery(
 		`SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Valor = @p0`,
 		[{ value: vp, type: 'Int' }],
@@ -269,60 +293,84 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
 		throw e;
 	}
 
+	const rol = await obtenerRolPorId(principalId);
 	await executeQuery(`UPDATE dbo.imPersonal SET Rol = @p1 WHERE Valor = @p0`, [
 		{ value: vp, type: 'Int' },
-		{ value: String(rol.IdRol), type: 'VarChar' },
+		{ value: String(principalId), type: 'VarChar' },
 	]);
-
-	_invalidarCachePermisos(rol.IdRol);
-	return rol;
+	_invalidarCachePermisos(principalId);
+	const principal = rol ? { ...rol, EsPrincipal: true } : null;
+	return { roles: principal ? [principal] : [], principal };
 }
 
 /**
- * Lee el rol de un personal a partir de su Valor.
- * Devuelve null si no tiene rol asignado.
+ * Lee el rol principal de un personal.
  */
 async function obtenerRolDePersonal(valorPersonal) {
-	if (!Number.isFinite(Number(valorPersonal))) return null;
+	const pack = await obtenerRolesDePersonal(valorPersonal);
+	return pack.principal;
+}
+
+/**
+ * Lista roles asignados + principal.
+ * @returns {{ roles: object[], principal: object|null }}
+ */
+async function obtenerRolesDePersonal(valorPersonal) {
+	if (!Number.isFinite(Number(valorPersonal))) {
+		return { roles: [], principal: null };
+	}
 	const vp = Number(valorPersonal);
 	const idEmpresa = Number(getTenantId());
 
 	if (_usaAuthRailway()) {
 		try {
-			const r = await authCentralService.obtenerRolDeValorPersonal(idEmpresa, vp);
-			if (r) return _mapRolCentral(r);
+			const mapped = await authCentralService.listarRolesDeValorPersonal(idEmpresa, vp);
+			if (mapped.length) {
+				const roles = mapped.map((r) => ({
+					...(_mapRolCentral(r) || {
+						IdRol: r.idRol,
+						Nombre: r.nombre,
+						Descripcion: r.Descripcion || '',
+						Nivel: r.nivel ?? 0,
+						Activo: true,
+					}),
+					EsPrincipal: !!(r.EsPrincipal || r.esPrincipal),
+				}));
+				const principal = roles.find((r) => r.EsPrincipal) || roles[0] || null;
+				return { roles, principal };
+			}
 
 			const fisico = await _obtenerRolDePersonalEnFisico(vp);
 			if (fisico) {
 				await _asegurarFichaPersonalEnRailway(idEmpresa, vp);
-				await authCentralService.asignarRolDeValorPersonal(idEmpresa, vp, fisico.IdRol);
-				return fisico;
+				await authCentralService.asignarRolesDeValorPersonal(
+					idEmpresa,
+					vp,
+					[fisico.IdRol],
+					fisico.IdRol,
+				);
+				return {
+					roles: [{ ...fisico, EsPrincipal: true }],
+					principal: { ...fisico, EsPrincipal: true },
+				};
 			}
 		} catch (e) {
 			if (!esErrorEsquemaRoles(e)) {
-				console.warn('[roles] obtenerRolDePersonal Railway:', e.message);
+				console.warn('[roles] obtenerRolesDePersonal Railway:', e.message);
 			}
 		}
-		return null;
+		return { roles: [], principal: null };
 	}
 
 	try {
-		const rows = await executeQuery(
-			`
-    SELECT TOP 1
-      LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS RolId
-    FROM dbo.imPersonal p
-    WHERE p.Valor = @p0
-    `,
-			[{ value: vp, type: 'Int' }],
-		);
-		const rolStr = String(rows[0]?.RolId || '').trim();
-		if (!rolStr) return null;
-		const idRol = Number(rolStr);
-		if (!Number.isFinite(idRol) || idRol <= 0) return null;
-		return obtenerRolPorId(idRol);
+		const fisico = await _obtenerRolDePersonalEnFisico(vp);
+		if (!fisico) return { roles: [], principal: null };
+		return {
+			roles: [{ ...fisico, EsPrincipal: true }],
+			principal: { ...fisico, EsPrincipal: true },
+		};
 	} catch (e) {
-		if (esErrorEsquemaRoles(e)) return null;
+		if (esErrorEsquemaRoles(e)) return { roles: [], principal: null };
 		throw e;
 	}
 }
@@ -331,5 +379,7 @@ module.exports = {
 	listarRoles,
 	obtenerRolPorId,
 	asignarRolAPersonal,
+	asignarRolesAPersonal,
 	obtenerRolDePersonal,
+	obtenerRolesDePersonal,
 };

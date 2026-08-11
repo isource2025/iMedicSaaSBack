@@ -22,8 +22,11 @@
  * Roles definidos en imRoles (IDs fijos):
  *   1 = ADMIN (administrador del sistema),
  *   2 = MEDICO, 3 = ENFERMERO,
- *   4 = ADMINISTRATIVO (solo lectura / VER — no confundir con ADMIN),
+ *   4 = ADMINISTRATIVO (ver todo; gestiona pacientes; sin escritura clínica),
  *   5 = SUPER_ADMIN, 6 = CARGA_HC
+ *
+ * Un usuario puede tener varios roles: los permisos efectivos son la unión
+ * de las plantillas (imPersonalRoles + imPersonal.Rol como principal).
  */
 
 // ============================================================================
@@ -170,13 +173,22 @@ const MODULOS = Object.freeze([
 	},
 ]);
 
-// Helper interno: lista todos los códigos de un submódulo.
+/** Lista todos los códigos de un submódulo. */
 function _todas(modId, subId) {
 	const mod = MODULOS.find((m) => m.id === modId);
 	if (!mod) return [];
 	const sub = mod.submodulos.find((s) => s.id === subId);
 	if (!sub) return [];
 	return sub.acciones.map((a) => `${modId}.${subId}.${a}`);
+}
+
+/** Solo VER en todos los submódulos del módulo que lo exponen. */
+function _soloVer(modId) {
+	const mod = MODULOS.find((m) => m.id === modId);
+	if (!mod) return [];
+	return mod.submodulos
+		.filter((s) => s.acciones.includes(ACCIONES.VER))
+		.map((s) => `${modId}.${s.id}.${ACCIONES.VER}`);
 }
 
 // ============================================================================
@@ -312,54 +324,42 @@ const PLANTILLAS = Object.freeze({
 	]),
 
 	// ──────────────────────────────────────────────────────────────────────
-	// ADMINISTRATIVO — solo lectura (equivalente a personal con permiso VER).
-	// Distinto de ADMIN (administrador del sistema).
+	// ADMINISTRATIVO — ve todo (incl. clínica), gestiona pacientes/admisiones/
+	// camas/agenda. Sin escritura médica ni de enfermería. ≠ ADMIN.
 	// ──────────────────────────────────────────────────────────────────────
 	ADMINISTRATIVO: Object.freeze([
-		'DASHBOARD.INICIO.VER',
-
-		'TURNOS.AGENDA.VER',
-		'TURNOS.EXCEPCIONES.VER',
-		'TURNOS.CONFIGURACION.VER',
-		'TURNOS.TABLA.VER',
-		'TURNOS.ADMIN.VER',
-
-		'ADMISION.PACIENTES.VER',
-		'ADMISION.BUSQUEDA.VER',
-		'ADMISION.VIGENTES.VER',
-		'ADMISION.TABLA.VER',
-
-		'INTERNACION.CAMAS.VER',
-		'INTERNACION.OCUPACION.VER',
-		'INTERNACION.TABLA.VER',
-		'INTERNACION.MOVIMIENTOS.VER',
-
-		'FACTURACION.CONVENIOS.VER',
-		'FACTURACION.RENDICIONES.VER',
-		'FACTURACION.LIQUIDACIONES.VER',
-		'FACTURACION.PRACTICAS.VER',
-		'FACTURACION.TABLA.VER',
-
-		'ALMACEN.STOCK.VER',
-		'ALMACEN.ARTICULOS.VER',
-		'ALMACEN.PROVEEDORES.VER',
-		'ALMACEN.SOLICITUDES.VER',
-		'ALMACEN.ORDENES.VER',
-		'ALMACEN.ACTAS.VER',
-		'ALMACEN.MOVIMIENTOS.VER',
-		'ALMACEN.CONFIG.VER',
-
-		'REPORTES.FACTURACION.VER',
-		'REPORTES.OCUPACION.VER',
-
+		..._soloVer('DASHBOARD'),
+		..._soloVer('TURNOS'),
+		..._soloVer('ADMISION'),
+		..._soloVer('INTERNACION'),
+		..._soloVer('FACTURACION'),
+		..._soloVer('ALMACEN'),
+		..._soloVer('REPORTES'),
 		'CONFIGURACION.PERSONAL.VER',
+
+		..._todas('ADMISION', 'PACIENTES'),
+		'ADMISION.NUEVA.CREAR',
+		..._todas('ADMISION', 'VIGENTES'),
+		'ADMISION.TABLA.EXPORTAR',
+
+		'INTERNACION.CAMAS.CREAR',
+		'INTERNACION.CAMAS.EDITAR',
+		'INTERNACION.CAMAS.ELIMINAR',
+		'INTERNACION.CAMAS.GESTIONAR',
+		'INTERNACION.MOVIMIENTOS.GESTIONAR',
+		'INTERNACION.TABLA.EXPORTAR',
+
+		'TURNOS.AGENDA.CREAR',
+		'TURNOS.AGENDA.EDITAR',
+		'TURNOS.AGENDA.ELIMINAR',
+		'TURNOS.TABLA.EXPORTAR',
 
 		'USUARIO.PERFIL.VER',
 		'USUARIO.PERFIL.EDITAR',
 	]),
 
 	// ──────────────────────────────────────────────────────────────────────
-	// CARGA_HC — solo adjuntos en admisiones (vigentes y con egreso).
+	// CARGA_HC — solo adjuntos (catálogo UI: "Carga de adjuntos").
 	// CRUD de adjuntos propios (ownership en API). Sin clínica.
 	// ──────────────────────────────────────────────────────────────────────
 	CARGA_HC: Object.freeze([

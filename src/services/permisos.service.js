@@ -118,22 +118,40 @@ function esErrorConexionTenant(error) {
 /** Permisos efectivos del usuario logueado (por valorPersonal + empresa del JWT). */
 async function permisosDeUsuario(valorPersonal) {
 	if (!Number.isFinite(Number(valorPersonal))) {
-		return { rol: null, permisos: [] };
+		return { rol: null, roles: [], permisos: [] };
 	}
 	const vp = Number(valorPersonal);
 	const idEmpresa = getTenantId();
 
 	if (authCentralService.isAuthCentralEnabled()) {
 		if (idEmpresa == null || !Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) <= 0) {
-			return { rol: null, permisos: [] };
+			return { rol: null, roles: [], permisos: [] };
 		}
 		try {
-			const mapped = await authCentralService.obtenerRolDeValorPersonal(Number(idEmpresa), vp);
-			if (mapped) {
-				const permisos = await permisosDeRol(mapped.idRol, mapped.nombre);
+			const mappedRoles = await authCentralService.listarRolesDeValorPersonal(
+				Number(idEmpresa),
+				vp,
+			);
+			if (mappedRoles.length) {
+				const set = new Set();
+				for (const mapped of mappedRoles) {
+					const lista = await permisosDeRol(mapped.idRol, mapped.nombre);
+					for (const c of lista) set.add(c);
+				}
+				const principal = mappedRoles.find((r) => r.EsPrincipal || r.esPrincipal) || mappedRoles[0];
 				return {
-					rol: { id: mapped.idRol, nombre: String(mapped.nombre || '').toUpperCase() },
-					permisos,
+					rol: {
+						id: principal.idRol,
+						nombre: String(principal.nombre || '').toUpperCase(),
+						nivel: principal.nivel ?? principal.Nivel ?? 0,
+					},
+					roles: mappedRoles.map((r) => ({
+						id: r.idRol,
+						nombre: String(r.nombre || '').toUpperCase(),
+						nivel: r.nivel ?? r.Nivel ?? 0,
+						esPrincipal: !!(r.EsPrincipal || r.esPrincipal),
+					})),
+					permisos: [...set],
 				};
 			}
 		} catch (e) {
@@ -141,7 +159,7 @@ async function permisosDeUsuario(valorPersonal) {
 				console.warn('[permisos] auth central permisosDeUsuario:', e.message);
 			}
 		}
-		return { rol: null, permisos: [] };
+		return { rol: null, roles: [], permisos: [] };
 	}
 
 	try {
@@ -157,20 +175,22 @@ async function permisosDeUsuario(valorPersonal) {
 			[{ value: vp, type: 'Int' }],
 		);
 		const r = rows[0];
-		if (!r) return { rol: null, permisos: [] };
+		if (!r) return { rol: null, roles: [], permisos: [] };
 		const rolIdRaw = r.RolId != null && r.RolId !== '' ? Number(r.RolId) : null;
 		const rolId = Number.isFinite(rolIdRaw) && rolIdRaw > 0 ? rolIdRaw : null;
-		if (!rolId && Number(r.Grupo) !== 11) return { rol: null, permisos: [] };
+		if (!rolId && Number(r.Grupo) !== 11) return { rol: null, roles: [], permisos: [] };
 		const idRol = Number(r.Grupo) === 11 ? 1 : rolId;
 		const nombre = Number(r.Grupo) === 11 ? 'ADMIN' : null;
 		const permisos = await permisosDeRol(idRol, nombre);
+		const rol = { id: idRol, nombre: String(nombre || '').toUpperCase() };
 		return {
-			rol: { id: idRol, nombre: String(nombre || '').toUpperCase() },
+			rol,
+			roles: [{ ...rol, esPrincipal: true }],
 			permisos,
 		};
 	} catch (e) {
 		if (esErrorEsquemaRoles(e) || esErrorConexionTenant(e)) {
-			return { rol: null, permisos: [] };
+			return { rol: null, roles: [], permisos: [] };
 		}
 		throw e;
 	}

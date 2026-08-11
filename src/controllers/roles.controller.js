@@ -27,21 +27,47 @@ const obtenerPorId = async (req, res) => {
 	}
 };
 
-/** PUT /api/roles/personal/:valor — body: { idRol: number|null } */
+/**
+ * PUT /api/roles/personal/:valor
+ * Body multi: { idRoles: number[], idRolPrincipal?: number|null }
+ * Body legacy: { idRol: number|null }
+ */
 const asignarAPersonal = async (req, res) => {
 	try {
 		const valor = Number(req.params.valor);
 		if (!Number.isFinite(valor)) {
 			return res.status(400).json({ success: false, mensaje: 'Valor de personal inválido' });
 		}
-		const idRolRaw = req.body?.idRol;
-		const idRol =
-			idRolRaw == null || idRolRaw === '' ? null : Number(idRolRaw);
-		const rol = await rolesService.asignarRolAPersonal(valor, idRol);
+
+		const body = req.body || {};
+		let result;
+
+		if (Array.isArray(body.idRoles)) {
+			const idRolPrincipal =
+				body.idRolPrincipal == null || body.idRolPrincipal === ''
+					? null
+					: Number(body.idRolPrincipal);
+			result = await rolesService.asignarRolesAPersonal(valor, body.idRoles, idRolPrincipal);
+		} else {
+			const idRolRaw = body.idRol;
+			const idRol = idRolRaw == null || idRolRaw === '' ? null : Number(idRolRaw);
+			const principal = await rolesService.asignarRolAPersonal(valor, idRol);
+			result = {
+				roles: principal ? [{ ...principal, EsPrincipal: true }] : [],
+				principal,
+			};
+		}
+
+		const n = result.roles.length;
 		res.json({
 			success: true,
-			mensaje: rol ? `Rol "${rol.Nombre}" asignado` : 'Rol eliminado',
-			data: rol,
+			mensaje:
+				n === 0
+					? 'Roles eliminados'
+					: n === 1
+						? `Rol "${result.principal?.Nombre || ''}" asignado`
+						: `${n} roles asignados`,
+			data: result,
 		});
 	} catch (error) {
 		console.error('[roles.asignarAPersonal]', error);
@@ -53,20 +79,20 @@ const asignarAPersonal = async (req, res) => {
 	}
 };
 
-/** GET /api/roles/personal/:valor — devuelve el rol actual de un personal */
+/** GET /api/roles/personal/:valor — roles asignados + principal */
 const obtenerDePersonal = async (req, res) => {
 	try {
 		const valor = Number(req.params.valor);
 		if (!Number.isFinite(valor)) {
 			return res.status(400).json({ success: false, mensaje: 'Valor de personal inválido' });
 		}
-		const data = await rolesService.obtenerRolDePersonal(valor);
+		const data = await rolesService.obtenerRolesDePersonal(valor);
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[roles.obtenerDePersonal]', error);
 		const msg = String(error?.message || '').toLowerCase();
 		if (msg.includes("invalid object name 'imroles'")) {
-			return res.json({ success: true, data: null });
+			return res.json({ success: true, data: { roles: [], principal: null } });
 		}
 		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
 	}

@@ -18,7 +18,7 @@ IF EXISTS (
 )
 AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
     INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
-    VALUES (6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25);
+    VALUES (6, 'CARGA_HC', 'Carga de adjuntos', 25);
 
 -- 2) Packs modulares por empresa (AGENDA, INTERNACION, FACTURACION)
 IF NOT EXISTS (

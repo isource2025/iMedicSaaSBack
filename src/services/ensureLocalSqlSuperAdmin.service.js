@@ -109,11 +109,11 @@ async function ensureLocalSqlSuperAdmin() {
         UPDATE dbo.imRoles SET Nombre = 'SUPER_ADMIN', Activo = 1, Nivel = 200 WHERE IdRol = 5;
       IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
         INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
-        VALUES (6, 'CARGA_HC', 'Carga de adjuntos en admisiones (con y sin egreso)', 25, 1)
+        VALUES (6, 'CARGA_HC', 'Carga de adjuntos', 25, 1)
       ELSE
         UPDATE dbo.imRoles
         SET Nombre = 'CARGA_HC',
-            Descripcion = 'Carga de adjuntos en admisiones (con y sin egreso)',
+            Descripcion = 'Carga de adjuntos',
             Nivel = 25,
             Activo = 1
         WHERE IdRol = 6;

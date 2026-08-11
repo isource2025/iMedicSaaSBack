@@ -284,7 +284,12 @@ async function listarRoles() {
 	);
 	return rows
 		.filter((r) => String(r.Nombre) !== 'SUPER_ADMIN')
-		.map((r) => ({ idRol: r.IdRol, nombre: r.Nombre, descripcion: r.Descripcion, nivel: r.Nivel }));
+		.map((r) => ({
+			idRol: r.IdRol,
+			nombre: String(r.Nombre || ''),
+			descripcion: String(r.Descripcion || '').trim(),
+			nivel: r.Nivel,
+		}));
 }
 
 // ───────────────────────────── usuarios (NUBE) ─────────────────────────────
@@ -297,7 +302,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
       pw.ValorPersonal AS IdPersonal, pw.NombreRed AS Usuario,
       pw.Nombres AS Nombre, pw.Apellido AS Apellido,
       pw.NumeroDocumento AS NumeroDocumento, pw.CodOperador AS CodOperador,
-      r.IdRol AS IdRol, r.Nombre AS RolNombre
+      r.IdRol AS IdRol, r.Nombre AS RolNombre, r.Descripcion AS RolDescripcion
     FROM \`imPersonalEmpresas\` pe
     INNER JOIN \`imPassword\` pw
       ON pw.ValorPersonal = pe.IdPersonal AND pw.IdEmpresa = pe.IdEmpresa
@@ -339,7 +344,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
 			numeroDocumento: String(r.NumeroDocumento || '').trim(),
 			codOperador: r.CodOperador,
 			idRol: r.IdRol != null ? Number(r.IdRol) : null,
-			rol: r.RolNombre || null,
+			rol: String(r.RolDescripcion || r.RolNombre || '').trim() || null,
 			activo: true,
 			sectores,
 		});
