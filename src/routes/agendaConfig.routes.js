@@ -116,11 +116,18 @@ router.get(
 	agendaCtrl.buscarClientes,
 );
 
-// Búsqueda tipos pedidos/estudios (procedimientos y solicitudes)
+// Búsqueda tipos pedidos/estudios (solicitudes de estudios / interconsultas)
 router.get(
 	'/tipos-pedidos-estudios/buscar',
 	requirePermiso('TURNOS.AGENDA.VER'),
 	agendaCtrl.buscarTiposPedidosEstudios,
+);
+
+// Prácticas nomenclador/moduladas (procedimientos realizados en consultorio)
+router.get(
+	'/practicas/buscar',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.buscarPracticasFacturacion,
 );
 
 // Sectores/servicios receptores para pedidos de estudios

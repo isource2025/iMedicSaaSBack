@@ -307,6 +307,18 @@ async function buscarTiposPedidosEstudios(req, res) {
 	}
 }
 
+async function buscarPracticasFacturacion(req, res) {
+	try {
+		const data = await service.buscarPracticasFacturacion({
+			q: req.query.q ? String(req.query.q) : '',
+			limit: req.query.limit ? Number(req.query.limit) : 30,
+		});
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
 async function listarSectoresReceptorEstudios(req, res) {
 	try {
 		const data = await service.listarSectoresReceptorEstudios();
@@ -459,6 +471,7 @@ module.exports = {
 	buscarDiagnosticos,
 	buscarClientes,
 	buscarTiposPedidosEstudios,
+	buscarPracticasFacturacion,
 	listarSectoresReceptorEstudios,
 	obtenerDetalleAtencion,
 };

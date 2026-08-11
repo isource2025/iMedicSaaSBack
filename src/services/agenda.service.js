@@ -1651,6 +1651,42 @@ async function _resolverTipoPedidoEstudio(idTipoPedido) {
 	return estudiosService.resolverTipoPedidoEstudio(idTipoPedido);
 }
 
+/**
+ * Resuelve práctica a facturar desde idPractica (nomenclador/moduladas)
+ * o, legacy, desde idTipoPedido de imTiposPedidosEstudios.
+ */
+async function _resolverPracticaProcedimiento(item) {
+	const idPractica = Number(item?.idPractica);
+	if (Number.isFinite(idPractica) && idPractica > 0) {
+		const protocolosService = require('./protocolos.service');
+		const det = await protocolosService.detallePractica(
+			idPractica,
+			item?.tipoPractica || 'NO',
+		);
+		return {
+			codPractica: Number(det.idPractica) || idPractica,
+			tipoPractica: String(det.tipoPractica || item?.tipoPractica || 'NO')
+				.trim()
+				.toUpperCase()
+				.slice(0, 2) || 'NO',
+		};
+	}
+	const idTipo = Number(item?.idTipoPedido);
+	if (Number.isFinite(idTipo) && idTipo > 0) {
+		const tipo = await _resolverTipoPedidoEstudio(idTipo);
+		const cod = Number(tipo.IdPractica) || 0;
+		if (cod <= 0) {
+			const e = new Error(`Práctica inválida para tipo ${tipo.IdTipoPedido}`);
+			e.statusCode = 400;
+			throw e;
+		}
+		return { codPractica: cod, tipoPractica: 'NO' };
+	}
+	const e = new Error('Procedimiento sin idPractica ni idTipoPedido válido');
+	e.statusCode = 400;
+	throw e;
+}
+
 /** Inserta imFacPracticas + imFacProfesionales (titular, funcion=1). */
 async function _insertarFacPracticaConProfesional({
 	numeroVisita,
@@ -1661,7 +1697,9 @@ async function _insertarFacPracticaConProfesional({
 	matriculaMedico,
 	fechaClarion,
 	horaClarion,
+	tipoPractica = 'NO',
 }) {
+	const tipo = String(tipoPractica || 'NO').trim().toUpperCase().slice(0, 2) || 'NO';
 	const practicaRows = await executeQuery(
 		`INSERT INTO dbo.imFacPracticas (
 			Numero, NumeroVisita, TipoPractica, Practica,
@@ -1670,7 +1708,7 @@ async function _insertarFacPracticaConProfesional({
 			FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
 			NroInforme, NroAutorizacion, IdPaciente
 		) VALUES (
-			0, @p0, 'NO', @p1,
+			0, @p0, @p7, @p1,
 			1, @p2, @p3, 0,
 			@p4, @p2, @p3, @p5,
 			@p2, @p3, 0, 2, 2, 0,
@@ -1685,6 +1723,7 @@ async function _insertarFacPracticaConProfesional({
 			{ value: sector, type: 'VarChar' },
 			{ value: codOp, type: 'Int' },
 			{ value: idPaciente, type: 'Int' },
+			{ value: tipo, type: 'VarChar' },
 		],
 	);
 	const valorPractica = Number(practicaRows[0]?.Valor) || 0;
@@ -2029,13 +2068,7 @@ async function cerrarTurno({
 
 		// 4) Procedimientos realizados en consultorio (uno o N)
 		for (const item of listaProcedimientos) {
-			const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
-			const codPractica = Number(tipo.IdPractica) || 0;
-			if (codPractica <= 0) {
-				const e = new Error(`Práctica inválida para tipo ${tipo.IdTipoPedido}`);
-				e.statusCode = 400;
-				throw e;
-			}
+			const { codPractica, tipoPractica } = await _resolverPracticaProcedimiento(item);
 			const extra = await _insertarFacPracticaConProfesional({
 				numeroVisita,
 				idPaciente: idP,
@@ -2045,6 +2078,7 @@ async function cerrarTurno({
 				matriculaMedico,
 				fechaClarion,
 				horaClarion,
+				tipoPractica,
 			});
 			creados.practicasExtra.push(extra.valorPractica);
 			creados.profesionalesExtra.push(extra.idFacProf);
@@ -2304,8 +2338,7 @@ async function actualizarAtencionPostCierre({
 
 	const practicasExtra = [];
 	for (const item of listaProcedimientos) {
-		const tipo = await _resolverTipoPedidoEstudio(item?.idTipoPedido);
-		const codPractica = Number(tipo.IdPractica) || 0;
+		const { codPractica, tipoPractica } = await _resolverPracticaProcedimiento(item);
 		if (codPractica <= 0) continue;
 		const extra = await _insertarFacPracticaConProfesional({
 			numeroVisita,
@@ -2316,6 +2349,7 @@ async function actualizarAtencionPostCierre({
 			matriculaMedico,
 			fechaClarion,
 			horaClarion,
+			tipoPractica,
 		});
 		practicasExtra.push(extra.valorPractica);
 	}
@@ -2445,6 +2479,12 @@ async function listarSectoresReceptorEstudios() {
  */
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
 	return estudiosService.buscarTiposPedidosEstudios({ q, limit });
+}
+
+/** Prácticas de nomenclador/moduladas para el paso Procedimientos del cierre. */
+async function buscarPracticasFacturacion({ q, limit = 30 }) {
+	const protocolosService = require('./protocolos.service');
+	return protocolosService.buscarPracticas({ q, limit });
 }
 
 /**
@@ -2826,6 +2866,7 @@ module.exports = {
 	buscarDiagnosticos,
 	buscarClientes,
 	buscarTiposPedidosEstudios,
+	buscarPracticasFacturacion,
 	listarSectoresReceptorEstudios,
 	obtenerDetalleAtencionTurno,
 };

@@ -83,6 +83,7 @@ async function buscarPracticas({ q, limit = 30 }) {
 	const lim = Math.min(Math.max(Number(limit) || 30, 1), 80);
 	if (term.length < 2) return [];
 	const like = `%${term}%`;
+	const exactId = /^\d+$/.test(term) ? term : null;
 	const rows = await executeQuery(
 		`SELECT TOP ${lim} *
 		 FROM (
@@ -110,8 +111,13 @@ async function buscarPracticas({ q, limit = 30 }) {
 		   WHERE n.Descripcion LIKE @p0
 		      OR CAST(n.IDPractica AS VARCHAR(20)) LIKE @p0
 		 ) x
-		 ORDER BY x.descripcion`,
-		[{ value: like, type: 'VarChar' }],
+		 ORDER BY
+		   CASE WHEN @p1 IS NOT NULL AND CAST(x.idPractica AS VARCHAR(20)) = @p1 THEN 0 ELSE 1 END,
+		   x.descripcion`,
+		[
+			{ value: like, type: 'VarChar' },
+			{ value: exactId, type: 'VarChar' },
+		],
 	);
 	return (rows || []).map((r) => ({
 		idPractica: Number(r.idPractica),
