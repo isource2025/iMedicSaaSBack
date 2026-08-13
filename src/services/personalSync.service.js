@@ -17,7 +17,7 @@ const {
 	isTenantEmpresa,
 	canSyncPasswordRowToTenant,
 	canSyncPersonalRowToTenant,
-	isValidTenantPersonalId,
+	isPlatformValorPersonal,
 } = require('../config/tenantIdentity');
 
 function q(name) {
@@ -631,16 +631,9 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	const passwords = await syncPasswordsDesdeFisico(emp, pool);
 	const sec = await syncSectoresDesdeFisico(emp, pool);
 	const vinculos = await syncVinculosEmpresa(emp, pool);
+	const roles = await syncRolesDesdeFisico(emp, pool);
 
-	const totalCambios =
-		personal.cambios +
-		passwords.cambios +
-		(sec.asignaciones || 0) +
-		(sec.sectoresCatalogoCambios || 0) +
-		vinculos.cambios;
-
-	return {
-		// UI principal: deltas (0 en re-sync idéntico)
+	const bruto = {
 		personal: personal.cambios,
 		personalTotal: personal.total,
 		personalNuevos: personal.nuevos,
@@ -660,7 +653,24 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 		vinculosTotal: vinculos.ids,
 		vinculosMysql: vinculos.nuevos,
 		vinculosFisico: vinculos.nuevosFisico,
-		sinCambios: totalCambios === 0,
+		rolesAsignados: roles.asignados,
+		rolesYaTenia: roles.yaTenia,
+		rolesSinAsignar: roles.sinRol,
+		rolesPorTipo: roles.porRol,
+	};
+	const informe = buildSyncInforme(bruto);
+	const totalCambios =
+		(Number(bruto.personal) || 0) +
+		(Number(bruto.passwordsEscritos) || 0) +
+		(Number(bruto.sectoresAsignaciones) || 0) +
+		(Number(bruto.sectoresCatalogoCambios) || 0) +
+		(Number(bruto.vinculos) || 0) +
+		(Number(bruto.rolesAsignados) || 0);
+
+	return {
+		...bruto,
+		informe,
+		sinCambios: informe.sinCambios,
 		totalCambios,
 	};
 }
@@ -789,6 +799,221 @@ async function listarParaExport(campos) {
 	});
 
 	return { columns, rows };
+}
+
+/** Roles generales migrables desde el SQL físico. No incluye SUPER_ADMIN (5). */
+const ROLES_GENERALES = new Set([1, 2, 3, 4, 6]);
+
+function inferRolDesdeFisico(row) {
+	const fromRol = Number(String(row?.Rol || '').trim());
+	if (ROLES_GENERALES.has(fromRol)) return fromRol;
+	if (Number(row?.Grupo) === 11) return 1;
+	const esp = Number(row?.ValorEspecialidad);
+	if (esp === 26) return 3;
+	if (Number.isFinite(esp) && esp > 0 && ![7, 9, 26, 27].includes(esp)) return 2;
+	return null;
+}
+
+/**
+ * Completa imPersonalRoles + imPersonal.Rol desde el SQL físico
+ * (Grupo 11 → ADMIN, especialidad 26 → ENFERMERO, resto médico, o Rol ya grabado).
+ * No pisa roles ya asignados en Railway ni SUPER_ADMIN.
+ */
+async function syncRolesDesdeFisico(idEmpresa, pool) {
+	const emp = Number(idEmpresa);
+	await mysqlExec(`
+    CREATE TABLE IF NOT EXISTS \`imPersonalRoles\` (
+      \`IdEmpresa\` INT NOT NULL,
+      \`Valor\` INT NOT NULL,
+      \`IdRol\` INT NOT NULL,
+      \`EsPrincipal\` TINYINT(1) NOT NULL DEFAULT 0,
+      PRIMARY KEY (\`IdEmpresa\`, \`Valor\`, \`IdRol\`),
+      KEY \`IX_imPersonalRoles_Rol\` (\`IdRol\`),
+      KEY \`IX_imPersonalRoles_Personal\` (\`IdEmpresa\`, \`Valor\`, \`EsPrincipal\`)
+    )
+  `);
+
+	let fisicoRows = [];
+	try {
+		const data = await pool.request().query(`
+      SELECT
+        p.Valor,
+        LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS Rol,
+        p.ValorEspecialidad,
+        CAST(ISNULL((
+          SELECT MAX(pw.Grupo) FROM dbo.imPassword pw WHERE pw.ValorPersonal = p.Valor
+        ), 0) AS INT) AS Grupo
+      FROM dbo.imPersonal p
+    `);
+		fisicoRows = data.recordset || [];
+	} catch (e) {
+		console.warn('[personalSync] roles físico:', e.message);
+		return { asignados: 0, yaTenia: 0, sinRol: 0, porRol: {} };
+	}
+
+	const existing = await mysqlQuery(
+		`SELECT Valor FROM ${q('imPersonalRoles')} WHERE IdEmpresa = ?`,
+		[emp],
+	);
+	const have = new Set(
+		(existing || []).map((r) => Number(r.Valor)).filter((n) => Number.isFinite(n)),
+	);
+
+	const toWrite = [];
+	let yaTenia = 0;
+	let sinRol = 0;
+	const porRol = { 1: 0, 2: 0, 3: 0, 4: 0, 6: 0 };
+
+	for (const row of fisicoRows) {
+		if (!canSyncPersonalRowToTenant(emp, row)) continue;
+		const vp = Number(row.Valor);
+		if (!Number.isFinite(vp) || isPlatformValorPersonal(vp)) continue;
+		if (have.has(vp)) {
+			yaTenia += 1;
+			continue;
+		}
+		const idRol = inferRolDesdeFisico(row);
+		if (!idRol) {
+			sinRol += 1;
+			continue;
+		}
+		toWrite.push({ vp, idRol });
+		porRol[idRol] = (porRol[idRol] || 0) + 1;
+	}
+
+	let insertados = 0;
+	for (const lote of chunk(toWrite, 80)) {
+		const flat = [];
+		for (const r of lote) flat.push(emp, r.vp, r.idRol, 1);
+		const valuesSql = lote.map(() => '(?, ?, ?, ?)').join(', ');
+		const ins = await mysqlExec(
+			`INSERT IGNORE INTO ${q('imPersonalRoles')} (IdEmpresa, Valor, IdRol, EsPrincipal)
+       VALUES ${valuesSql}`,
+			flat,
+		);
+		insertados += Number(ins?.affectedRows) || 0;
+		for (const r of lote) {
+			await mysqlExec(
+				`UPDATE ${q('imPersonal')} SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?
+         AND (Rol IS NULL OR TRIM(Rol) = '' OR TRIM(Rol) = '0')`,
+				[String(r.idRol), emp, r.vp],
+			);
+		}
+	}
+
+	return {
+		asignados: insertados,
+		yaTenia,
+		sinRol,
+		porRol: insertados === toWrite.length ? porRol : {},
+	};
+}
+
+const ROL_INFORME_LABEL = {
+	1: { uno: 'admin', muchos: 'admins' },
+	2: { uno: 'médico', muchos: 'médicos' },
+	3: { uno: 'enfermero', muchos: 'enfermeros' },
+	4: { uno: 'administrativo', muchos: 'administrativos' },
+	6: { uno: 'carga HC', muchos: 'carga HC' },
+};
+
+function pushInformeItem(items, cantidad, uno, muchos, opts = {}) {
+	const n = Number(cantidad) || 0;
+	if (n <= 0) return;
+	items.push({
+		cantidad: n,
+		texto: n === 1 ? uno : muchos,
+		extra: opts.extra || null,
+		error: !!opts.error,
+	});
+}
+
+/**
+ * Texto del modal: solo lo que esta corrida escribió (o falló).
+ */
+function buildSyncInforme(r) {
+	const items = [];
+	pushInformeItem(items, r.personalNuevos, 'persona dada de alta', 'personas dadas de alta');
+	pushInformeItem(
+		items,
+		r.personalActualizados,
+		'ficha de personal actualizada',
+		'fichas de personal actualizadas',
+	);
+
+	const errPw = Number(r.passwordsErrores) || 0;
+	if (errPw > 0) {
+		pushInformeItem(
+			items,
+			r.passwordsEscritos,
+			'cuenta de acceso copiada',
+			'cuentas de acceso copiadas',
+		);
+		pushInformeItem(
+			items,
+			errPw,
+			'cuenta no copiada (conflicto de clave u otro error)',
+			'cuentas no copiadas (conflicto de clave u otros errores)',
+			{ error: true },
+		);
+	} else {
+		pushInformeItem(items, r.passwordsNuevos, 'cuenta de acceso nueva', 'cuentas de acceso nuevas');
+		pushInformeItem(
+			items,
+			r.passwordsActualizados,
+			'cuenta de acceso actualizada',
+			'cuentas de acceso actualizadas',
+		);
+	}
+
+	pushInformeItem(
+		items,
+		r.sectoresCatalogoCambios,
+		'sector del catálogo actualizado',
+		'sectores del catálogo actualizados',
+	);
+	pushInformeItem(
+		items,
+		r.sectoresAsignaciones,
+		'asignación de sector distinta a la nube',
+		'asignaciones de sectores distintas a la nube',
+	);
+	pushInformeItem(
+		items,
+		r.vinculos,
+		'vínculo usuario-empresa nuevo',
+		'vínculos usuario-empresa nuevos',
+	);
+
+	const por = r.rolesPorTipo || {};
+	const rolBits = Object.keys(ROL_INFORME_LABEL)
+		.map((id) => {
+			const c = Number(por[id] ?? por[Number(id)] ?? 0);
+			if (c <= 0) return null;
+			const lab = ROL_INFORME_LABEL[id];
+			return `${c} ${c === 1 ? lab.uno : lab.muchos}`;
+		})
+		.filter(Boolean);
+	pushInformeItem(items, r.rolesAsignados, 'rol general asignado', 'roles generales asignados', {
+		extra: rolBits.length ? rolBits.join(', ') : null,
+	});
+
+	const huboCambio = items.some((i) => !i.error);
+	const huboError = items.some((i) => i.error);
+	let mensaje;
+	if (!huboCambio && !huboError) {
+		mensaje = 'La nube ya estaba al día. No hubo cambios respecto a la base física.';
+	} else if (!huboCambio && huboError) {
+		mensaje = 'No se pudo copiar algunas cuentas. El resto ya estaba al día.';
+	} else {
+		mensaje = 'Se aplicaron estos cambios desde la base física:';
+	}
+
+	return {
+		mensaje,
+		sinCambios: !huboCambio && !huboError,
+		items,
+	};
 }
 
 module.exports = {

@@ -229,6 +229,8 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
             LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
+            COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
+            per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,
             uc.Pulso AS CTRL_Pulso,
             uc.Maximo AS CTRL_Maximo,
@@ -247,6 +249,18 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
+        OUTER APPLY (
+            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre
+            FROM dbo.imPersonal p
+            WHERE (pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal)
+               OR p.Valor = hc.IdProfecional
+               OR p.Matricula = hc.IdProfecional
+            ORDER BY CASE
+                WHEN pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal THEN 0
+                WHEN p.Valor = hc.IdProfecional THEN 1
+                ELSE 2
+            END
+        ) per
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
         OUTER APPLY (
             SELECT TOP 1 cf.*
@@ -279,6 +293,8 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
             LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
+            COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
+            per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,
             uc.Pulso AS CTRL_Pulso,
             uc.Maximo AS CTRL_Maximo,
@@ -297,6 +313,18 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
+        OUTER APPLY (
+            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre
+            FROM dbo.imPersonal p
+            WHERE (pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal)
+               OR p.Valor = hc.IdProfecional
+               OR p.Matricula = hc.IdProfecional
+            ORDER BY CASE
+                WHEN pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal THEN 0
+                WHEN p.Valor = hc.IdProfecional THEN 1
+                ELSE 2
+            END
+        ) per
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
         OUTER APPLY (
             SELECT TOP 1 cf.*

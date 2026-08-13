@@ -3,6 +3,33 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+function isTruthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isLocalDevOnly() {
+  return isTruthy(process.env.LOCAL_DEV_ONLY);
+}
+
+/** Hosts permitidos con LOCAL_DEV_ONLY (no producción remota). */
+function isLocalSqlHost(host) {
+  const h = String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  if (!h) return false;
+  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '(local)') return true;
+  // .\\SQLEXPRESS o localhost\\SQLEXPRESS
+  if (h === '.' || h.startsWith('.\\') || h.startsWith('localhost\\') || h.startsWith('127.0.0.1\\')) {
+    return true;
+  }
+  // IPs privadas LAN (opcional si se usa SQL en red local del dev)
+  if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true;
+  if (/^192\.168\.\d+\.\d+$/.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)) return true;
+  return false;
+}
+
 function getPlatformDbName() {
   return process.env.DB_NAME || process.env.DB_DATABASE || '';
 }
@@ -27,6 +54,23 @@ function buildSqlAuthConfig() {
   }
 
   const dbServer = process.env.DB_SERVER;
+  // LOCAL_DEV_ONLY desactiva MySQL Railway; puede usarse con SQL del hospital en red
+  // (181.x / VPN). Solo se bloquea si ALLOW_REMOTE_SQL=0 y el host no es local.
+  const allowRemote =
+    process.env.ALLOW_REMOTE_SQL == null ||
+    isTruthy(process.env.ALLOW_REMOTE_SQL) ||
+    process.env.ALLOW_REMOTE_SQL === '';
+  if (isLocalDevOnly() && !isLocalSqlHost(dbServer) && !allowRemote) {
+    throw new Error(
+      `LOCAL_DEV_ONLY=1 y ALLOW_REMOTE_SQL=0: DB_SERVER="${dbServer}" no es un host local.`,
+    );
+  }
+  if (isLocalDevOnly() && !isLocalSqlHost(dbServer)) {
+    console.warn(
+      `⚠ LOCAL_DEV_ONLY + SQL remota → ${dbServer} (no hay localhost:1433 o se eligió SQL físico de red)`,
+    );
+  }
+
   const server = process.env.DB_INSTANCE
     ? `${dbServer}\\${process.env.DB_INSTANCE}`
     : dbServer;
@@ -140,9 +184,20 @@ function logPlatformDbEnvStatus() {
     );
     return false;
   }
+  if (isLocalDevOnly() && !isLocalSqlHost(process.env.DB_SERVER)) {
+    console.warn(
+      `⚠ LOCAL_DEV_ONLY + SQL remota → ${process.env.DB_SERVER} (SQL físico de red; no hay localhost:1433)`,
+    );
+  } else if (isLocalDevOnly() && !isLocalSqlHost(process.env.DB_SERVER) && process.env.ALLOW_REMOTE_SQL === '0') {
+    console.error(
+      `❌ LOCAL_DEV_ONLY=1 pero DB_SERVER=${process.env.DB_SERVER} no es local — abortar uso de producción`,
+    );
+    return false;
+  }
   const port = process.env.DB_INSTANCE ? '(instancia nombrada)' : (process.env.DB_PORT || 1433);
+  const mode = isLocalDevOnly() ? ' [LOCAL_DEV_ONLY]' : '';
   console.log(
-    `✓ SQL Server plataforma → ${process.env.DB_SERVER}${typeof port === 'number' || String(port).match(/^\d/) ? `:${port}` : ` ${port}`} / ${getPlatformDbName()}`,
+    `✓ SQL Server plataforma${mode} → ${process.env.DB_SERVER}${typeof port === 'number' || String(port).match(/^\d/) ? `:${port}` : ` ${port}`} / ${getPlatformDbName()}`,
   );
   return true;
 }

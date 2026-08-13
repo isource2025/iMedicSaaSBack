@@ -941,12 +941,18 @@ async function obtenerFirmaPorMatricula(matricula) {
 	if (!Number.isFinite(m) || m <= 0) return { hasFirma: false };
 	const pool = await getRequestPool();
 	const r = await pool.request().input('m', sql.Int, m).query(`
-		SELECT TOP 1 Valor
-		FROM dbo.imPersonal
-		WHERE Matricula = @m OR Valor = @m
+		SELECT TOP 1 p.Valor
+		FROM dbo.imPersonal p
+		LEFT JOIN dbo.imPassword pw ON pw.ValorPersonal = p.Valor
+		WHERE p.Matricula = @m OR p.Valor = @m OR pw.CodOperador = @m
 		ORDER BY
-			CASE WHEN Valor = @m THEN 0 WHEN Matricula = @m THEN 1 ELSE 2 END,
-			Valor
+			CASE
+				WHEN p.Valor = @m THEN 0
+				WHEN p.Matricula = @m THEN 1
+				WHEN pw.CodOperador = @m THEN 2
+				ELSE 3
+			END,
+			p.Valor
 	`);
 	const valor = r.recordset[0]?.Valor;
 	if (valor == null) return { hasFirma: false };

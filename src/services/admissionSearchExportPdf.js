@@ -125,6 +125,8 @@ const HCI_IGNORE_KEYS = new Set([
   'NumeroVisita',
   'IdSector',
   'IdProfecional',
+  'IdPersonal',
+  'Matricula',
   'Fecha',
   'FechaFormateada',
   'HoraFormateada',

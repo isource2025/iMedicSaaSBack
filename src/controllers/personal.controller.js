@@ -27,17 +27,13 @@ const estadoSyncFisico = async (_req, res) => {
 const syncDesdeFisico = async (_req, res) => {
 	try {
 		const resumen = await personalSyncService.syncPersonalDesdeFisico(getTenantId());
-		const sinCambios = !!resumen.sinCambios;
-		const pe = Number(resumen.personal) || 0;
-		const pw = Number(resumen.passwordsEscritos) || 0;
-		const errPw = Number(resumen.passwordsErrores) || 0;
 		res.json({
 			success: true,
-			mensaje: sinCambios
-				? 'La nube ya estaba al día (sin cambios respecto a la base física)'
-				: errPw > 0
-					? `Nube actualizada: ${pe} personal, ${pw} cuentas (${errPw} con error)`
-					: `Nube actualizada: ${pe} personal y ${pw} cuentas con cambios`,
+			mensaje:
+				resumen.informe?.mensaje ||
+				(resumen.sinCambios
+					? 'La nube ya estaba al día. No hubo cambios respecto a la base física.'
+					: 'Se aplicaron cambios desde la base física.'),
 			data: resumen,
 		});
 	} catch (error) {

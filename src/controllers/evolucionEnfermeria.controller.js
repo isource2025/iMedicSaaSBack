@@ -1,5 +1,6 @@
 const evolucionEnfermeriaService = require("../services/evolucionEnfermeria.service");
 const { requireProfesional, requireOperadorCarga } = require("../utils/sessionIdentity");
+const { parseDaysFiltro } = require("../utils/dateUtils");
 
 function parseClaveFromQuery(req) {
     const numeroVisitaInt = parseInt(req.query.numeroVisita, 10);
@@ -63,6 +64,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
     try {
         const { numeroVisita } = req.params;
         const fecha = req.query.fecha || req.query.date;
+        const diasFiltro = parseDaysFiltro(req.query.days);
         const numeroVisitaInt = parseInt(numeroVisita, 10);
 
         if (Number.isNaN(numeroVisitaInt)) {
@@ -72,7 +74,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
             });
         }
 
-        if (!fecha) {
+        if (!fecha && diasFiltro !== null) {
             return res.status(400).json({
                 success: false,
                 mensaje: "Fecha es requerida (query param: fecha o date)",
@@ -82,6 +84,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
         const resultado = await evolucionEnfermeriaService.obtenerEvolucionesPorVisitaYFecha(
             numeroVisitaInt,
             fecha,
+            diasFiltro,
         );
 
         res.json({

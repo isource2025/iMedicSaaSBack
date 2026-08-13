@@ -255,9 +255,30 @@ function formatHoraArgentina(value) {
 	});
 }
 
+/** 'all' → null (sin tope); 0 → solo el día; N → N días hacia atrás. */
+function parseDaysFiltro(days) {
+	if (days === 'all' || days === 'todas') return null;
+	if (days === undefined || days === '' || days === '0') return 0;
+	const n = parseInt(String(days), 10);
+	if (!Number.isNaN(n) && n > 0) return n;
+	return 0;
+}
+
+/** Resta días a YYYY-MM-DD en calendario local (evita UTC). */
+function restarDiasISO(fechaISO, dias) {
+	const [y, m, d] = String(fechaISO).split('-').map(Number);
+	const dt = new Date(y, m - 1, d);
+	dt.setDate(dt.getDate() - dias);
+	return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(
+		dt.getDate(),
+	).padStart(2, '0')}`;
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
+	parseDaysFiltro,
+	restarDiasISO,
 	convertirFechaDesdeFormatoClarion,
 	convertirHoraDesdeFormatoClarion,
 	convertirFechaClarionADate,

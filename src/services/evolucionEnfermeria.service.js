@@ -2,6 +2,7 @@ const { executeQuery } = require("../models/db");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
+    restarDiasISO,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 
@@ -37,18 +38,31 @@ const SELECT_EVOLUCION = `
 `;
 
 /**
- * Obtener evoluciones de enfermería por número de visita y fecha
+ * Obtener evoluciones de enfermería por visita y período.
+ * @param {number|null} dias - 0 = el día; N = N días hacia atrás; null = todas
  */
-const obtenerEvolucionesPorVisitaYFecha = async (numeroVisita, fecha) => {
-    const fechaClarion = convertirFechaAClarion(fecha);
+const obtenerEvolucionesPorVisitaYFecha = async (numeroVisita, fecha, dias = 0) => {
+    let whereClause = 'ev.NumeroVisita = @param0';
+    const parametros = [{ value: numeroVisita }];
+
+    if (dias === null) {
+        // todas las de la visita
+    } else if (dias === 0) {
+        whereClause += ' AND ev.FechaControl = @param1';
+        parametros.push({ value: convertirFechaAClarion(fecha) });
+    } else {
+        const fechaDesde = convertirFechaAClarion(restarDiasISO(fecha, dias));
+        const fechaHasta = convertirFechaAClarion(fecha);
+        whereClause += ' AND ev.FechaControl >= @param1 AND ev.FechaControl <= @param2';
+        parametros.push({ value: fechaDesde });
+        parametros.push({ value: fechaHasta });
+    }
 
     const consulta = `
     ${SELECT_EVOLUCION}
-    WHERE ev.NumeroVisita = @param0 
-      AND ev.FechaControl = @param1
-    ORDER BY ev.HoraControl DESC
+    WHERE ${whereClause}
+    ORDER BY ev.FechaControl DESC, ev.HoraControl DESC
   `;
-    const parametros = [{ value: numeroVisita }, { value: fechaClarion }];
 
     try {
         return await executeQuery(consulta, parametros);
