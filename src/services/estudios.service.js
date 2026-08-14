@@ -283,9 +283,9 @@ const SELECT_PEDIDO = `
   CONVERT(varchar(10), pe.FechaPedido, 23) AS FechaPedidoISO,
   CONVERT(varchar(5), pe.FechaPedido, 108) AS HoraPedido,
   pe.IdTipoPedido,
-  LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS TipoPedidoDescripcion,
+  LTRIM(RTRIM(ISNULL(tp.DescPractica, ISNULL(nom.Descripcion, '')))) AS TipoPedidoDescripcion,
   pe.IdPractica AS CodigoPractica,
-  LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS PracticaSolicitada,
+  LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))), ''), ISNULL(nom.Descripcion, '')))) AS PracticaSolicitada,
   LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS NomencladorDescripcion,
   pe.NotasObservacion,
   pe.ValorProfesional AS MatriculaSolicitante,
@@ -336,8 +336,20 @@ const SELECT_PEDIDO = `
 
 const FROM_PEDIDO = `
   FROM dbo.imPedidosEstudios pe
-  LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdTipoPedido = pe.IdTipoPedido
-  LEFT JOIN dbo.imNomenclador nom ON nom.IDPractica = pe.IdPractica
+  OUTER APPLY (
+    SELECT TOP 1 LTRIM(RTRIM(ISNULL(t.DescPractica, ''))) AS DescPractica
+    FROM dbo.imTiposPedidosEstudios t
+    WHERE (ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica)
+       OR (ISNULL(pe.IdTipoPedido, 0) > 0 AND t.IdTipoPedido = pe.IdTipoPedido)
+    ORDER BY
+      CASE WHEN ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica THEN 0 ELSE 1 END,
+      CASE WHEN ISNULL(pe.IdTipoPedido, 0) > 0 AND t.IdTipoPedido = pe.IdTipoPedido THEN 0 ELSE 1 END
+  ) tp
+  OUTER APPLY (
+    SELECT TOP 1 LTRIM(RTRIM(ISNULL(n.Descripcion, ''))) AS Descripcion
+    FROM dbo.imNomenclador n
+    WHERE n.IDPractica = pe.IdPractica
+  ) nom
   LEFT JOIN dbo.imPersonal per ON per.Matricula = pe.ValorProfesional
   LEFT JOIN dbo.imSectores secSol ON LTRIM(RTRIM(secSol.Valor)) = LTRIM(RTRIM(pe.IdSectorSolicitante))
   LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
@@ -410,15 +422,31 @@ async function _obtenerToma(idPedido) {
 	return rows?.[0] || null;
 }
 
-async function resolverTipoPedidoEstudio(idTipoPedido) {
-	const id = Number(idTipoPedido);
-	if (!Number.isFinite(id) || id <= 0) throw _httpError('idTipoPedido inválido');
+async function resolverTipoPedidoEstudio(idTipoPedido, idPractica) {
+	const idTipo = Number(idTipoPedido);
+	const idPrac = Number(idPractica);
+	if (Number.isFinite(idPrac) && idPrac > 0) {
+		const byPrac = await executeQuery(
+			`SELECT TOP 1 IdTipoPedido, DescPractica, IdPractica
+			 FROM dbo.imTiposPedidosEstudios
+			 WHERE IdPractica = @p0
+			 ORDER BY CASE WHEN IdTipoPedido = @p1 THEN 0 ELSE 1 END, IdTipoPedido`,
+			[
+				{ value: idPrac, type: 'Int' },
+				{ value: Number.isFinite(idTipo) && idTipo > 0 ? idTipo : 0, type: 'Int' },
+			],
+		);
+		if (byPrac.length) return byPrac[0];
+	}
+	if (!Number.isFinite(idTipo) || idTipo <= 0) throw _httpError('idTipoPedido inválido');
 	const rows = await executeQuery(
 		`SELECT TOP 1 IdTipoPedido, DescPractica, IdPractica
-		 FROM dbo.imTiposPedidosEstudios WHERE IdTipoPedido = @p0`,
-		[{ value: id, type: 'Int' }],
+		 FROM dbo.imTiposPedidosEstudios
+		 WHERE IdTipoPedido = @p0
+		 ORDER BY IdPractica`,
+		[{ value: idTipo, type: 'Int' }],
 	);
-	if (!rows.length) throw _httpError(`Tipo de pedido/estudio ${id} inexistente`, 404);
+	if (!rows.length) throw _httpError(`Tipo de pedido/estudio ${idTipo} inexistente`, 404);
 	return rows[0];
 }
 
@@ -514,9 +542,12 @@ async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
 		        RTRIM(LTRIM(DescPractica)) AS descripcion,
 		        IdPractica AS idPractica
 		 FROM dbo.imTiposPedidosEstudios
-		 WHERE DescPractica LIKE @p0
-		    OR CAST(IdPractica AS VARCHAR(20)) LIKE @p0
-		    OR CAST(IdTipoPedido AS VARCHAR(20)) LIKE @p0
+		 WHERE (IdTipoPedido IS NULL OR IdTipoPedido <> 33)
+		   AND (
+		     DescPractica LIKE @p0
+		     OR CAST(IdPractica AS VARCHAR(20)) LIKE @p0
+		     OR CAST(IdTipoPedido AS VARCHAR(20)) LIKE @p0
+		   )
 		 ORDER BY DescPractica`,
 		[{ value: like, type: 'VarChar' }],
 	);
@@ -527,15 +558,31 @@ async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
 	}));
 }
 
+function dedupePedidos(rows) {
+	const seen = new Set();
+	const out = [];
+	for (const r of rows || []) {
+		const id = Number(r.IdPedido) || 0;
+		if (id > 0) {
+			if (seen.has(id)) continue;
+			seen.add(id);
+		}
+		out.push(r);
+	}
+	return out;
+}
+
 /**
  * Crea una solicitud de estudio (IdProtocolo = 0).
  * Usado por Agenda (cierre turno) e Internación.
+ * La fila de catálogo se resuelve por IdPractica (lo que eligió el usuario), no solo IdTipoPedido.
  */
 async function crearPedido({
 	idVisita,
 	matriculaSolicitante,
 	sectorSolicitante,
 	idTipoPedido,
+	idPractica,
 	idSectorReceptor,
 	notas,
 	estadoUrgencia,
@@ -553,7 +600,7 @@ async function crearPedido({
 		throw _httpError('El sector receptor es obligatorio');
 	}
 
-	const tipo = await resolverTipoPedidoEstudio(idTipoPedido);
+	const tipo = await resolverTipoPedidoEstudio(idTipoPedido, idPractica);
 	const codPractica = Number(tipo.IdPractica) || 0;
 	if (codPractica <= 0) {
 		throw _httpError(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
@@ -630,7 +677,7 @@ async function listarPorVisita(idVisita) {
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
 		[{ value: Number(idVisita), type: 'Int' }],
 	);
-	return (rows || []).map(mapPedidoRow);
+	return dedupePedidos((rows || []).map(mapPedidoRow));
 }
 
 async function listarPendientesPorSector(sectorReceptor, opts = {}) {
@@ -684,7 +731,7 @@ async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
 		params,
 	);
-	return (rows || []).map(mapPedidoRow);
+	return dedupePedidos((rows || []).map(mapPedidoRow));
 }
 
 async function obtenerPorId(idPedido) {

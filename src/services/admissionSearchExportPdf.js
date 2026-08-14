@@ -82,6 +82,7 @@ const SECTION_LABEL_ES = {
   evoluciones: 'Evoluciones',
   estudios: 'Estudios laboratorio',
   protocolos: 'Protocolos',
+  epicrisis: 'Epicrisis',
   adjuntos: 'Adjuntos',
 };
 
@@ -774,6 +775,31 @@ async function buildSelectiveExportPdf(payload) {
             .join(', ');
           if (names) bodyParagraph(doc, `Prácticas: ${names}`);
         }
+        doc.moveDown(0.1);
+      });
+    }
+
+    if (payload.epicrisis && payload.epicrisis.length) {
+      sectionTitle(doc, 'Epicrisis');
+      payload.epicrisis.forEach((ep) => {
+        ensureSpace(doc, 40);
+        const fecha = str(ep.Fecha || ep.fecha).slice(0, 16);
+        const hora = str(ep.Hora || ep.hora);
+        const prof = str(ep.ProfesionalNombreCompleto || ep.profesionalNombreCompleto);
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(9)
+          .fillColor('#0f172a')
+          .text(['Epicrisis', fecha, hora, prof].filter(Boolean).join(' — '), {
+            width: contentWidth(doc),
+          });
+        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
+        const dx = str(ep.Diagnostico || ep.diagnostico);
+        if (dx) bodyParagraph(doc, `Diagnóstico: ${dx}`);
+        const dxTxt = str(ep.DiagnosticoText || ep.diagnosticoText);
+        if (dxTxt) bodyParagraph(doc, dxTxt);
+        const texto = str(ep.Epicrisis || ep.epicrisis);
+        if (texto) bodyParagraph(doc, texto);
         doc.moveDown(0.1);
       });
     }

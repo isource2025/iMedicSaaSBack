@@ -3,6 +3,7 @@ const { getTenantId } = require('../context/tenantContext');
 const {
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
+	partesFechaHoraArgentina,
 } = require('../utils/dateUtils');
 
 /** Matrícula genérica de sistema/admin en legacy (no es médico de turno). */
@@ -16,6 +17,7 @@ const evolucionesService = require('./evoluciones.service');
 const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
 const estudiosService = require('./estudios.service');
+const epicrisisService = require('./epicrisis.service');
 
 function normalizeLike(value) {
   return `%${String(value || '').trim().replace(/\s+/g, '%')}%`;
@@ -275,6 +277,7 @@ async function buscarAdmisiones({
       ${labCntSql},
       /* iMedicAD: Protocolos clínicos = HCProtocolosPtes.NumeroVisita */
       (SELECT COUNT(1) FROM dbo.HCProtocolosPtes hp WHERE hp.NumeroVisita = v.NumeroVisita) AS CntProtocolos,
+      (SELECT COUNT(1) FROM dbo.imHCEpicrisis ep WHERE ep.IdVisita = v.NumeroVisita) AS CntEpicrisis,
       (SELECT COUNT(1) FROM dbo.imPedidosEstudiosAdjuntos adj WHERE adj.NumeroVisita = v.NumeroVisita) AS CntAdjuntos,
       (SELECT COUNT(1) FROM dbo.imHCEvolucion ev WHERE ev.IdVisita = v.NumeroVisita) AS CntEvoluciones
     FROM imVisita v
@@ -653,6 +656,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     adjuntos,
     estudios,
     protocolos,
+    epicrisis,
   ] = await Promise.all([
     obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
     indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => []),
@@ -663,6 +667,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []),
     obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []),
     protocolosService.listarPorVisita(numeroVisita).catch(() => []),
+    epicrisisService.listarPorVisita(numeroVisita).catch(() => []),
   ]);
   const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
@@ -680,6 +685,7 @@ async function exportarAdmisionCompleta(numeroVisita) {
     evolucionesMedicas,
     estudios,
     protocolos,
+    epicrisis,
   };
 }
 
@@ -690,7 +696,10 @@ function toYmd(val) {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
   if (m) return m[1];
   if (val instanceof Date && !Number.isNaN(val.getTime())) {
-    return val.toISOString().slice(0, 10);
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
   return null;
 }
@@ -787,7 +796,10 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           pe.IdPractica,
           pe.ValorProfesional AS MatriculaSolicitante,
           LTRIM(RTRIM(ISNULL(sol.ApellidoNombre, ''))) AS MedicoSolicitanteNombre,
-          LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS PracticaDescripcion,
+          LTRIM(RTRIM(ISNULL(
+            NULLIF(LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))), ''),
+            nom.Descripcion
+          ))) AS PracticaDescripcion,
           pr.IdProtocolo AS ProtocoloResultadoId,
           pr.FechaResultado,
           pr.FechaCarga,
@@ -811,6 +823,15 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
         LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
         LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
         LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
+        OUTER APPLY (
+          SELECT TOP 1 LTRIM(RTRIM(ISNULL(t.DescPractica, ''))) AS DescPractica
+          FROM dbo.imTiposPedidosEstudios t
+          WHERE (ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica)
+             OR (ISNULL(pe.IdTipoPedido, 0) > 0 AND t.IdTipoPedido = pe.IdTipoPedido)
+          ORDER BY
+            CASE WHEN ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica THEN 0 ELSE 1 END,
+            CASE WHEN ISNULL(pe.IdTipoPedido, 0) > 0 AND t.IdTipoPedido = pe.IdTipoPedido THEN 0 ELSE 1 END
+        ) tp
         OUTER APPLY (
           SELECT TOP 1 Descripcion FROM dbo.imNomenclador WHERE IDPractica = pe.IdPractica
         ) nom
@@ -843,12 +864,18 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
       if (idProt > 0) return Number(adj.IdProtocolo) === idProt;
       return !adj.IdProtocolo || Number(adj.IdProtocolo) === 0;
     });
-    const fechaPedido =
-      e.FechaPedido instanceof Date
-        ? e.FechaPedido.toISOString()
-        : e.FechaPedido
-          ? String(e.FechaPedido)
-          : null;
+    const fechaPedido = (() => {
+      let d = null;
+      if (e.FechaPedido instanceof Date && !Number.isNaN(e.FechaPedido.getTime())) {
+        d = e.FechaPedido;
+      } else if (e.FechaPedido) {
+        const t = Date.parse(String(e.FechaPedido));
+        if (Number.isFinite(t)) d = new Date(t);
+      }
+      if (!d) return e.FechaPedido ? String(e.FechaPedido) : null;
+      const p = partesFechaHoraArgentina(d);
+      return `${p.fecha} ${p.horaCorta}`;
+    })();
     const matriculaSol =
       e.MatriculaSolicitante != null && Number(e.MatriculaSolicitante) > 0
         ? Number(e.MatriculaSolicitante)
@@ -916,6 +943,13 @@ function filterProtocolosClinicos(rows, fechaInicio, fechaFin, exportAll) {
   });
 }
 
+function filterEpicrisis(rows, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => {
+    const ymd = toYmd(r.Fecha) || toYmd(r.fecha);
+    return inDateRange(ymd, fechaInicio, fechaFin, exportAll);
+  });
+}
+
 function filterAdjuntosMeta(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => {
     const ymd = toYmd(r.FechaCarga) || toYmd(r.Fecha);
@@ -932,7 +966,7 @@ function slimLabRow(ex) {
  * Export JSON parcial según secciones y rango de fechas (o todo).
  * @param {number} numeroVisita
  * @param {Object} opts
- * @param {string[]} opts.sections - claves: admision, hcIngreso, practicas, indicaciones, medicamentos, evoluciones, estudios, protocolos, adjuntos
+ * @param {string[]} opts.sections - claves: admision, hcIngreso, practicas, indicaciones, medicamentos, evoluciones, estudios, protocolos, epicrisis, adjuntos
  * @param {boolean} opts.exportAll
  * @param {string} [opts.fechaInicio] YYYY-MM-DD
  * @param {string} [opts.fechaFin] YYYY-MM-DD
@@ -968,6 +1002,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     evo: sections.includes('evoluciones'),
     est: sections.includes('estudios'),
     prot: sections.includes('protocolos'),
+    epi: sections.includes('epicrisis'),
     adj: sections.includes('adjuntos'),
   };
 
@@ -981,6 +1016,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     adjuntos,
     estudiosRaw,
     protocolosRaw,
+    epicrisisRaw,
   ] = await Promise.all([
     need.hc ? obtenerHCIngresoPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.ind
@@ -994,6 +1030,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     need.adj ? adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.est ? obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []) : Promise.resolve([]),
     need.prot ? protocolosService.listarPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.epi ? epicrisisService.listarPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
   ]);
   const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
 
@@ -1048,6 +1085,10 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
   if (sections.includes('protocolos')) {
     out.protocolos = filterProtocolosClinicos(protocolosRaw, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (sections.includes('epicrisis')) {
+    out.epicrisis = filterEpicrisis(epicrisisRaw, fechaInicio, fechaFin, exportAll);
   }
 
   if (sections.includes('adjuntos')) {

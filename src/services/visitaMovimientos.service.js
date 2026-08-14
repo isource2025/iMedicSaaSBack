@@ -3,7 +3,7 @@
  * @module services/visitaMovimientos.service
  */
 const { executeQuery } = require('../models/db');
-const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString } = require('../utils/dateUtils');
+const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString, clarionAIsoCalendario } = require('../utils/dateUtils');
 
 function clarionInt(v) {
   const n = Number(v);
@@ -898,8 +898,8 @@ async function obtenerMovimientosRecientes(limite = 10) {
       
       return {
         ...row,
-        FechaAdmisionFormateada: fechaAdmision ? fechaAdmision.toISOString() : null,
-        FechaEgresoFormateada: fechaEgreso ? fechaEgreso.toISOString() : null,
+        FechaAdmisionFormateada: clarionAIsoCalendario(row.FechaAdmision),
+        FechaEgresoFormateada: clarionAIsoCalendario(row.FechaEgreso),
         HoraAdmisionFormateada: horaAdmision,
         HoraEgresoFormateada: horaEgreso
       };

@@ -92,6 +92,7 @@ async function crear(req, res) {
 			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
 			sectorSolicitante: body.sectorSolicitante,
 			idTipoPedido: body.idTipoPedido,
+			idPractica: body.idPractica,
 			idSectorReceptor: body.idSectorReceptor,
 			notas: body.notas,
 			estadoUrgencia: body.estadoUrgencia,

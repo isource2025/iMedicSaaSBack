@@ -103,17 +103,28 @@ function convertirHoraDesdeFormatoClarion(horaClarion) {
  * @returns {Date|null} - Objeto Date o null
  */
 function convertirFechaClarionADate(fechaClarion) {
-	if (!fechaClarion || fechaClarion <= 0) return null;
-	
+	const n = Number(fechaClarion);
+	if (!Number.isFinite(n) || n <= 0) return null;
 	try {
-		// Epoch Clarion: 28/12/1800
-		const epochClarion = new Date(1800, 11, 28); // 28 Dec 1800
-		const fecha = new Date(epochClarion.getTime() + (fechaClarion * 24 * 60 * 60 * 1000));
-		return fecha;
+		const utc = Date.UTC(1800, 11, 28) + n * 86400000;
+		const d = new Date(utc);
+		return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0);
 	} catch (error) {
 		console.error('Error al convertir fecha Clarion:', error);
 		return null;
 	}
+}
+
+/** Clarion DATE → YYYY-MM-DD de calendario (sin UTC/toISOString). */
+function clarionAIsoCalendario(fechaClarion) {
+	const n = Number(fechaClarion);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	const utc = Date.UTC(1800, 11, 28) + n * 86400000;
+	const d = new Date(utc);
+	const y = d.getUTCFullYear();
+	const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+	const day = String(d.getUTCDate()).padStart(2, '0');
+	return `${y}-${m}-${day}`;
 }
 
 /**
@@ -282,6 +293,7 @@ module.exports = {
 	convertirFechaDesdeFormatoClarion,
 	convertirHoraDesdeFormatoClarion,
 	convertirFechaClarionADate,
+	clarionAIsoCalendario,
 	convertirHoraClarionAString,
 	fechaCalendarioArgentina,
 	fechaIsoOffsetArgentina,
