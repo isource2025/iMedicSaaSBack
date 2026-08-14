@@ -1,5 +1,7 @@
 const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/dateUtils');
 const patientsService = require('../services/patients.service');
+const visitaMovimientosService = require('../services/visitaMovimientos.service');
+const { requireOperadorCarga } = require('../utils/sessionIdentity');
 
 /**
  * Lista pacientes con paginación real.
@@ -832,7 +834,20 @@ const registrarEgresoPaciente = async (req, res) => {
 			}
 		}
 
-		const resultado = await patientsService.registrarEgresoPaciente(egresoData);
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
+
+		const resultado = await visitaMovimientosService.actualizarUltimoMovimientoVisita(
+			egresoData.numeroVisita,
+			{
+				fechaEgreso: egresoData.fechaEgreso,
+				horaEgreso: egresoData.horaEgreso,
+				disposicionEgreso: egresoData.disposicionEgreso,
+				diagnostico: egresoData.diagnosticoEgreso || egresoData.diagnostico || null,
+				bedId: egresoData.bedId,
+				codOperador,
+			},
+		);
 
 		res.json({
 			success: true,

@@ -10,7 +10,13 @@ const axios = require('axios');
 const adjuntosService = require('../services/adjuntos.service');
 const racService = require('../services/agendaRac.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
-const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const {
+  resolveFileServerUrl,
+  pickUploadedFilePath,
+  fileServerUploadOk,
+  isFileServerUnreachable,
+  describeFileServerError,
+} = require('../utils/fileServerUrl');
 const { runWithTenant, restoreTenantFromRequest, ensureTenantFromReq } = require('../context/tenantContext');
 
 function enqueueNotificarAdjunto(req, payload) {
@@ -40,14 +46,7 @@ function resolveUserId(req) {
 }
 
 function isFileServerNetworkError(err) {
-  const code = err && (err.code || (err.cause && err.cause.code));
-  return (
-    code === 'ETIMEDOUT' ||
-    code === 'ECONNREFUSED' ||
-    code === 'ENOTFOUND' ||
-    code === 'EHOSTUNREACH' ||
-    code === 'ECONNABORTED'
-  );
+  return isFileServerUnreachable(err);
 }
 
 const storage = multer.diskStorage({
@@ -124,10 +123,10 @@ async function subirAdjuntoTurno(req, res) {
         timeout: FILE_SERVER_TIMEOUT_MS,
       });
 
-      if (!uploadResponse.data.success) {
+      if (!fileServerUploadOk(uploadResponse.data)) {
         throw new Error(uploadResponse.data.error || 'Error al subir archivo al servidor');
       }
-      filePath = uploadResponse.data.filePath;
+      filePath = pickUploadedFilePath(uploadResponse.data);
       await fs.unlink(req.file.path).catch(() => {});
     } catch (remoteErr) {
       if (FILE_SERVER_FALLBACK_LOCAL && isFileServerNetworkError(remoteErr)) {
@@ -136,7 +135,8 @@ async function subirAdjuntoTurno(req, res) {
         await fs.unlink(req.file.path).catch(() => {});
         return res.status(503).json({
           success: false,
-          mensaje: remoteErr.message || 'No se pudo subir el archivo',
+          mensaje: describeFileServerError(remoteErr),
+          error: describeFileServerError(remoteErr),
         });
       }
     }

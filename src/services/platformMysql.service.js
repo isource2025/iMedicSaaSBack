@@ -44,6 +44,11 @@ const NUMERIC_MYSQL_TYPES = new Set([
 let empresasNumericColsCache = null;
 let empresasColsCache = null;
 
+function invalidateEmpresasColsCache() {
+	empresasColsCache = null;
+	empresasNumericColsCache = null;
+}
+
 /** Todas las columnas de Empresas (lowercase) para features opcionales (ej. TipoServidor). */
 async function getEmpresasCols() {
 	if (empresasColsCache) return empresasColsCache;
@@ -59,6 +64,21 @@ async function getEmpresasCols() {
 			.map((r) => String(r.col).toLowerCase()),
 	);
 	return empresasColsCache;
+}
+
+/** Crea Empresas.FileServerUrl si falta (o refresca el cache si ya existe). */
+async function ensureFileServerUrlColumn() {
+	const cols = await getEmpresasCols();
+	if (cols.has('fileserverurl')) return;
+	try {
+		await mysqlExec(
+			`ALTER TABLE ${q('Empresas')} ADD COLUMN ${q('FileServerUrl')} VARCHAR(500) NULL`,
+		);
+	} catch (e) {
+		if (!/duplicate column|exists/i.test(String(e.message || ''))) throw e;
+	}
+	invalidateEmpresasColsCache();
+	await getEmpresasCols();
 }
 
 /** Columnas numéricas reales de Empresas (para no mandar '' a un INT). */
@@ -258,10 +278,14 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 	if (data.dbUser !== undefined) add('DbUser', data.dbUser || null);
 
 	if (data.fileServerUrl !== undefined || data.FileServerUrl !== undefined) {
+		await ensureFileServerUrlColumn();
 		const cols = await getEmpresasCols();
 		if (cols.has('fileserverurl')) {
 			const raw = data.fileServerUrl !== undefined ? data.fileServerUrl : data.FileServerUrl;
-			add('FileServerUrl', raw != null && String(raw).trim() !== '' ? String(raw).trim().replace(/\/+$/, '') : null);
+			add(
+				'FileServerUrl',
+				raw != null && String(raw).trim() !== '' ? String(raw).trim().replace(/\/+$/, '') : null,
+			);
 		}
 	}
 

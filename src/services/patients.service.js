@@ -3,6 +3,7 @@
  */
 const { executeQuery } = require('../models/db');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
+const visitaMovimientosService = require('./visitaMovimientos.service');
 const { v4: uuidv4 } = require('uuid');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
@@ -879,43 +880,16 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
 	}
 };
 
-/** Registrar egreso */
+/** Registrar egreso — delega al flujo canónico (imVisita + imVisitaMovimiento + imHabitacionCamas). */
 const registrarEgresoPaciente = async (egresoData) => {
-	try {
-		const queryUpdateVisita = `
-			UPDATE imvisitas SET 
-				FechaEgreso=@p1, HoraEgreso=@p2, DisposicionEgreso=@p3,
-				DiagnosticoEgreso=@p4, CodOperadorEgreso=@p5
-			WHERE NumeroVisita=@p0;
-			SELECT NumeroVisita,
-				CONVERT(VARCHAR(10), FechaAdmision, 23) AS fechaAdmision,
-				CONVERT(VARCHAR(5), HoraAdmision, 108) AS horaAdmision,
-				CONVERT(VARCHAR(10), FechaEgreso, 23) AS fechaEgreso,
-				CONVERT(VARCHAR(5), HoraEgreso, 108) AS horaEgreso,
-				DisposicionEgreso AS disposicionEgreso,
-				DiagnosticoEgreso AS diagnosticoEgreso
-			FROM imvisitas WHERE NumeroVisita=@p0;`;
-		const paramsVisita = [
-			{ value: egresoData.numeroVisita },
-			{ value: egresoData.fechaEgreso },
-			{ value: egresoData.horaEgreso },
-			{ value: egresoData.disposicionEgreso },
-			{ value: egresoData.diagnosticoEgreso || null },
-			{ value: egresoData.codOperador || null },
-		];
-		const visitaRows = await executeQuery(queryUpdateVisita, paramsVisita);
-		if (egresoData.bedId) {
-			const qBed = `UPDATE imhabitacioncamastmp SET EstadoCama='DISPONIBLE', IDPaciente=NULL WHERE ValorHabitacionCama=@p0`;
-			await executeQuery(qBed, [{ value: egresoData.bedId }]);
-		}
-		return visitaRows[0];
-	} catch (error) {
-		console.error(
-			`Error al registrar egreso para visita ${egresoData.numeroVisita}:`,
-			error,
-		);
-		throw error;
-	}
+	return visitaMovimientosService.actualizarUltimoMovimientoVisita(egresoData.numeroVisita, {
+		fechaEgreso: egresoData.fechaEgreso,
+		horaEgreso: egresoData.horaEgreso,
+		disposicionEgreso: egresoData.disposicionEgreso,
+		diagnostico: egresoData.diagnosticoEgreso || egresoData.diagnostico || null,
+		bedId: egresoData.bedId,
+		codOperador: egresoData.codOperador || egresoData.operadorEgreso,
+	});
 };
 
 // Consulta combinada en paralelo de SituacionLaboral, NivelEstudios y Ocupacion

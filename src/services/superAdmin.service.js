@@ -456,6 +456,21 @@ async function previewTablaImportable(idEmpresa, tabla, limite) {
 	return nubeTenant.previewTabla(Number(idEmpresa), String(tabla), limite);
 }
 
+function conexionDesdeBody(data) {
+	const conexion = data.conexion && typeof data.conexion === 'object' ? { ...data.conexion } : {};
+	if (data.fileServerUrl !== undefined) conexion.fileServerUrl = data.fileServerUrl;
+	if (data.FileServerUrl !== undefined && conexion.fileServerUrl === undefined) {
+		conexion.fileServerUrl = data.FileServerUrl;
+	}
+	return conexion;
+}
+
+async function persistirConexionSiHay(idEmpresa, data) {
+	const conexion = conexionDesdeBody(data);
+	if (!Object.keys(conexion).length) return;
+	await tenantRegistry.guardarConexionEmpresa(idEmpresa, conexion);
+}
+
 async function actualizarEmpresa(idEmpresa, data) {
 	const desc = String(data.descripcion || '').trim();
 	if (!desc) throw new Error('La descripción es obligatoria');
@@ -465,6 +480,7 @@ async function actualizarEmpresa(idEmpresa, data) {
 		if (data.tipoServidor !== undefined) {
 			await platformMysql.actualizarTipoServidor(idEmpresa, data.tipoServidor);
 		}
+		await persistirConexionSiHay(idEmpresa, data);
 		return obtenerEmpresaDetalle(idEmpresa);
 	}
 
@@ -494,6 +510,7 @@ async function actualizarEmpresa(idEmpresa, data) {
 		],
 	);
 
+	await persistirConexionSiHay(idEmpresa, data);
 	return obtenerEmpresaDetalle(idEmpresa);
 }
 

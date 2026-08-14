@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const notificacionesService = require('./notificaciones.service');
+const { sectorUsuarioCoincideServicio } = require('../utils/sectorServicioMatch');
 
 function _normSector(v) {
 	return String(v || '')
@@ -29,46 +30,67 @@ async function obtenerValorPersonalPorMatricula(matricula) {
 }
 
 /**
- * Profesionales con el sector receptor asignado (imPersonalSectores).
- * IdSectorReceptor suele coincidir con imSectores.Valor / imServicios.Valor (char 3-4).
+ * Profesionales con el sector receptor asignado (imPersonalSectores),
+ * empatando imSectores con imServicios (ECO/ECOG, acentos, etc.).
  */
 async function obtenerDestinatariosSectorReceptor(idSectorReceptor, excluirValorPersonal) {
-	const sector = _normSector(idSectorReceptor);
+	const sector = String(idSectorReceptor || '').trim();
 	if (!sector) return [];
 
 	const excluir = Number(excluirValorPersonal) || 0;
+
+	const srvRows = await executeQuery(
+		`
+    SELECT TOP 1
+      RTRIM(LTRIM(Valor)) AS valor,
+      RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS descripcion
+    FROM dbo.imServicios
+    WHERE LTRIM(RTRIM(Valor)) = LTRIM(RTRIM(@p0))
+    `,
+		[{ value: sector, type: 'VarChar' }],
+	).catch(() => []);
+
+	const secRows = await executeQuery(
+		`
+    SELECT TOP 1
+      RTRIM(LTRIM(Valor)) AS valor,
+      RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS descripcion
+    FROM dbo.imSectores
+    WHERE LTRIM(RTRIM(Valor)) = LTRIM(RTRIM(@p0))
+    `,
+		[{ value: sector, type: 'VarChar' }],
+	).catch(() => []);
+
+	const srv = {
+		valor: String(srvRows?.[0]?.valor || sector).trim(),
+		descripcion: String(srvRows?.[0]?.descripcion || secRows?.[0]?.descripcion || '').trim(),
+	};
+
 	const rows = await executeQuery(
 		`
-    SELECT DISTINCT pw.ValorPersonal
+    SELECT DISTINCT
+      pw.ValorPersonal,
+      RTRIM(LTRIM(ps.idSector)) AS idSector,
+      RTRIM(LTRIM(ISNULL(sec.Descripcion, ''))) AS descripcion
     FROM dbo.imPersonalSectores ps
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = ps.idPersonal
     LEFT JOIN dbo.imSectores sec ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ps.idSector))
-    LEFT JOIN dbo.imServicios srv ON UPPER(LTRIM(RTRIM(srv.Valor))) = @p0
     WHERE ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
-      AND pw.ValorPersonal <> @p1
-      AND (
-        UPPER(LTRIM(RTRIM(ps.idSector))) = @p0
-        OR (
-          srv.Valor IS NOT NULL
-          AND UPPER(LTRIM(RTRIM(ISNULL(sec.Descripcion, '')))) = UPPER(LTRIM(RTRIM(ISNULL(srv.Descripcion, ''))))
-        )
-        OR (
-          UPPER(LTRIM(RTRIM(ISNULL(sec.Descripcion, '')))) LIKE '%OFTAL%'
-          AND (
-            @p0 LIKE 'OFT%'
-            OR UPPER(LTRIM(RTRIM(ISNULL(srv.Descripcion, '')))) LIKE '%OFTAL%'
-          )
-        )
-      )
+      AND pw.ValorPersonal <> @p0
     `,
-		[
-			{ value: sector, type: 'VarChar' },
-			{ value: excluir, type: 'Int' },
-		],
-	);
-	return (rows || [])
-		.map((r) => Number(r.ValorPersonal))
-		.filter((n) => Number.isFinite(n) && n > 0);
+		[{ value: excluir, type: 'Int' }],
+	).catch(() => []);
+
+	const seen = new Set();
+	const out = [];
+	for (const r of rows || []) {
+		const vp = Number(r.ValorPersonal);
+		if (!Number.isFinite(vp) || vp <= 0 || seen.has(vp)) continue;
+		if (!sectorUsuarioCoincideServicio(r, srv)) continue;
+		seen.add(vp);
+		out.push(vp);
+	}
+	return out;
 }
 
 /**

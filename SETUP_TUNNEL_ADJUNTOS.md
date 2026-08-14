@@ -1,5 +1,8 @@
 # Configuración de Túnel para Sistema de Adjuntos - iMedicWs
 
+> **Como Vidal (túnel rápido, te da el link y esconde la consola):**  
+> [`docs/TUNNEL_ADJUNTOS_NUEVA_EMPRESA.md`](docs/TUNNEL_ADJUNTOS_NUEVA_EMPRESA.md)
+
 ## 📋 Resumen del Sistema
 
 El sistema de adjuntos de iMedicWs almacena archivos localmente en un servidor on-premise y guarda las rutas en SQL Server (tabla `imPedidosEstudiosAdjuntos`). 

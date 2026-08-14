@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
+const { sectorUsuarioCoincideServicio } = require('../utils/sectorServicioMatch');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -456,35 +457,50 @@ async function listarSectoresReceptor({ valorPersonal } = {}) {
 	if (!userSecs?.length) return [];
 
 	const matched = all.filter((srv) =>
-		userSecs.some((us) => _sectorUsuarioCoincideServicio(us, srv)),
+		userSecs.some((us) => sectorUsuarioCoincideServicio(us, srv)),
 	);
 	return matched;
 }
 
 /**
- * Empata imSectores (login / imPersonalSectores) con imServicios.Valor receptor.
+ * Un código de login/filtro (imSectores o imServicios) puede mapear a varios
+ * IdSectorReceptor distintos. La bandeja tiene que ver todos.
  */
-function _sectorUsuarioCoincideServicio(userSec, srv) {
-	const id = String(userSec?.idSector || '')
-		.trim()
-		.toUpperCase();
-	const desc = String(userSec?.descripcion || '')
-		.trim()
-		.toUpperCase();
-	const v = String(srv?.valor || '')
-		.trim()
-		.toUpperCase();
-	const d = String(srv?.descripcion || '')
-		.trim()
-		.toUpperCase();
-	if (!v) return false;
-	if (id && id === v) return true;
-	if (desc && d && desc === d) return true;
-	if (desc && d && (desc.includes(d) || d.includes(desc))) return true;
-	if (/OFTAL|OFT\b|^OFT/.test(`${id} ${desc}`)) {
-		if (v.startsWith('OFT') || d.includes('OFTAL')) return true;
+async function expandCodigosReceptor(sectorReceptor) {
+	const raw = String(sectorReceptor || '').trim();
+	if (!raw) return [];
+
+	const allServicios = await listarSectoresReceptor();
+	const secRows = await executeQuery(
+		`
+    SELECT TOP 1
+      RTRIM(LTRIM(Valor)) AS valor,
+      RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS descripcion
+    FROM dbo.imSectores
+    WHERE LTRIM(RTRIM(Valor)) = LTRIM(RTRIM(@p0))
+    `,
+		[{ value: raw, type: 'VarChar' }],
+	).catch(() => []);
+
+	const srvExact = allServicios.find(
+		(s) => String(s.valor || '').trim().toUpperCase() === raw.toUpperCase(),
+	);
+	const userLike = {
+		idSector: raw,
+		descripcion: String(secRows?.[0]?.descripcion || srvExact?.descripcion || '').trim(),
+	};
+
+	const matched = allServicios.filter((srv) => sectorUsuarioCoincideServicio(userLike, srv));
+	const seen = new Set();
+	const codes = [];
+	for (const c of [raw, ...matched.map((s) => s.valor)]) {
+		const t = String(c || '').trim();
+		const k = t.toUpperCase();
+		if (!t || seen.has(k)) continue;
+		seen.add(k);
+		codes.push(t);
 	}
-	return false;
+	return codes;
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
@@ -619,8 +635,11 @@ async function listarPorVisita(idVisita) {
 
 async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	await ensureTomaTable();
-	const sector = _padSector(sectorReceptor);
 	if (!String(sectorReceptor || '').trim()) {
+		throw _httpError('sector receptor requerido');
+	}
+	const codes = await expandCodigosReceptor(sectorReceptor);
+	if (!codes.length) {
 		throw _httpError('sector receptor requerido');
 	}
 	const lim = Math.min(Math.max(Number(opts.limit) || 100, 1), 300);
@@ -630,7 +649,8 @@ async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	const soloIc = opts.soloInterconsultas === true || opts.categoria === 'INTERCONSULTA';
 	const soloEst = opts.soloEstudios === true || opts.categoria === 'ESTUDIO';
 
-	const params = [{ value: sector, type: 'VarChar' }];
+	const params = codes.map((c) => ({ value: c, type: 'VarChar' }));
+	const inList = codes.map((_, i) => `LTRIM(RTRIM(@p${i}))`).join(', ');
 	let whereExtra = '';
 	if (soloIc) {
 		whereExtra += ' AND pe.IdTipoPedido = 33';
@@ -658,7 +678,7 @@ async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	const rows = await executeQuery(
 		`SELECT TOP ${lim} ${SELECT_PEDIDO}
 		 ${FROM_PEDIDO}
-		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) = LTRIM(RTRIM(@p0))
+		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) IN (${inList})
 		   AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
 		   ${whereExtra}
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,

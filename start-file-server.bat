@@ -1,18 +1,19 @@
 @echo off
 setlocal
-set "PORT=9012"
-set "ROOT=E:\adjuntos"
-set "FALLBACK_ROOT=C:\imedic-adjuntos"
+if not defined PORT set "PORT=9012"
+if not defined ROOT set "ROOT=E:\adjuntos"
+if not defined FALLBACK_ROOT set "FALLBACK_ROOT=C:\imedic-adjuntos"
 set "TMP_PS1=%TEMP%\imedic-file-server-runtime.ps1"
 
 echo ========================================
-echo iMedic File Server Standalone
+echo iMedic File Server (rutas como Vidal)
 echo ========================================
 echo Puerto: %PORT%
 echo Root adjuntos: %ROOT%
 echo Fallback root: %FALLBACK_ROOT%
 echo.
 echo Endpoints: GET /health, GET /file, POST /upload, DELETE /file
+echo Guardado: ROOT\{visita} {PACIENTE}\archivo
 echo.
 
 for /f "tokens=1 delims=:" %%N in ('findstr /n /c:":__POWERSHELL__" "%~f0"') do set /a PS_START=%%N+1
@@ -25,7 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%TMP_PS1%"
 echo.
 echo El servidor termino con codigo %ERRORLEVEL%.
 del "%TMP_PS1%" >nul 2>&1
-pause
+if /I not "%IMEDIC_NOPAUSE%"=="1" pause
 endlocal
 exit /b
 
@@ -43,7 +44,7 @@ try {
   Write-Host "WARN: no se pudo usar $RootDir, usando $FallbackRootDir"
   $RootDir = $FallbackRootDir
   if (-not (Test-Path -LiteralPath $RootDir)) {
-    New-Item -Path $RootDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    New-Item -Path $RootDir -ItemType Directory -Force | Out-Null
   }
 }
 
@@ -55,11 +56,46 @@ function Normalize-Path([string]$p) {
   return $x
 }
 
+function Sanitize-Name([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return '' }
+  $x = $s.Trim().ToUpper()
+  $x = $x -replace '[\\/:*?"<>|]', ' '
+  $x = $x -replace '\s+', ' '
+  return $x.Trim()
+}
+
+# Igual que Vidal: \\server\Imagenes\Vidal\{visita} {PACIENTE}\{archivo}
+function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [string]$fileName) {
+  $safeFile = [IO.Path]::GetFileName($fileName)
+  $n = Sanitize-Name $paciente
+  $folder = $null
+  if ($visita -and $n) { $folder = "$visita $n" }
+  elseif ($visita) { $folder = "$visita" }
+  if ($folder) { return (Join-Path (Join-Path $root $folder) $safeFile) }
+  return (Join-Path $root $safeFile)
+}
+
 function Ensure-Parent([string]$filePath) {
   $dir = [System.IO.Path]::GetDirectoryName($filePath)
   if ($dir -and -not (Test-Path -LiteralPath $dir)) {
     New-Item -Path $dir -ItemType Directory -Force | Out-Null
   }
+}
+
+function Add-Cors($res) {
+  $res.Headers['Access-Control-Allow-Origin'] = '*'
+  $res.Headers['Access-Control-Allow-Methods'] = 'GET,POST,DELETE,OPTIONS'
+  $res.Headers['Access-Control-Allow-Headers'] = '*'
+}
+
+function Send-Json($res, [int]$code, [string]$json) {
+  Add-Cors $res
+  $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+  $res.StatusCode = $code
+  $res.ContentType = 'application/json; charset=utf-8'
+  $res.ContentLength64 = $bytes.LongLength
+  $res.OutputStream.Write($bytes, 0, $bytes.Length)
+  $res.Close()
 }
 
 function Find-Bytes([byte[]]$arr,[byte[]]$pattern,[int]$start=0) {
@@ -107,12 +143,27 @@ function Parse-Multipart([byte[]]$body,[string]$contentType) {
   return $parts
 }
 
+function Mime-Of([string]$filePath) {
+  switch ([IO.Path]::GetExtension($filePath).ToLowerInvariant()) {
+    '.pdf'  { return 'application/pdf' }
+    '.jpg'  { return 'image/jpeg' }
+    '.jpeg' { return 'image/jpeg' }
+    '.png'  { return 'image/png' }
+    '.gif'  { return 'image/gif' }
+    '.dcm'  { return 'application/dicom' }
+    '.webm' { return 'video/webm' }
+    '.mp4'  { return 'video/mp4' }
+    default { return 'application/octet-stream' }
+  }
+}
+
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://127.0.0.1:$Port/")
 $listener.Start()
 
 Write-Host "Servidor activo en http://127.0.0.1:$Port"
 Write-Host "Root de archivos: $RootDir"
+Write-Host "Ruta Vidal: $RootDir\{visita} {PACIENTE}\archivo"
 Write-Host "Ctrl+C para detener."
 
 try {
@@ -123,23 +174,29 @@ try {
     try {
       $route = $req.Url.AbsolutePath.ToLowerInvariant()
 
-      if ($req.HttpMethod -eq 'GET' -and $route -eq '/health') {
-        $json = [Text.Encoding]::UTF8.GetBytes('{"success":true,"status":"ok"}')
-        $res.StatusCode = 200
-        $res.ContentType = 'application/json'
-        $res.OutputStream.Write($json,0,$json.Length)
+      if ($req.HttpMethod -eq 'OPTIONS') {
+        Add-Cors $res
+        $res.StatusCode = 204
         $res.Close()
+        continue
+      }
+
+      if ($req.HttpMethod -eq 'GET' -and ($route -eq '/' -or $route -eq '/health')) {
+        $rootEsc = $RootDir.Replace('\','\\')
+        Send-Json $res 200 "{""success"":true,""status"":""ok"",""root"":""$rootEsc"",""port"":$Port,""endpoints"":[""/health"",""/file"",""/upload""]}"
         continue
       }
 
       if ($req.HttpMethod -eq 'GET' -and $route -eq '/file') {
         $p = Normalize-Path $req.QueryString['path']
-        if (-not $p) { $res.StatusCode = 400; $res.Close(); continue }
-        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { $res.StatusCode = 404; $res.Close(); continue }
+        if (-not $p) { Send-Json $res 400 '{"success":false,"error":"path requerido"}'; continue }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Send-Json $res 404 '{"success":false,"error":"Archivo no encontrado"}'; continue }
         $bytes = [IO.File]::ReadAllBytes($p)
+        Add-Cors $res
         $res.StatusCode = 200
-        $res.ContentType = 'application/octet-stream'
+        $res.ContentType = (Mime-Of $p)
         $res.ContentLength64 = $bytes.LongLength
+        $res.AddHeader('Content-Disposition', 'inline; filename="' + [IO.Path]::GetFileName($p) + '"')
         $res.OutputStream.Write($bytes,0,$bytes.Length)
         $res.Close()
         continue
@@ -147,14 +204,11 @@ try {
 
       if ($req.HttpMethod -eq 'DELETE' -and $route -eq '/file') {
         $p = Normalize-Path $req.QueryString['path']
-        if (-not $p) { $res.StatusCode = 400; $res.Close(); continue }
-        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { $res.StatusCode = 404; $res.Close(); continue }
+        if (-not $p) { Send-Json $res 400 '{"success":false,"error":"path requerido"}'; continue }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Send-Json $res 404 '{"success":false,"error":"Archivo no encontrado"}'; continue }
         Remove-Item -LiteralPath $p -Force
-        $json = [Text.Encoding]::UTF8.GetBytes("{""success"":true,""filePath"":""" + $p.Replace('\','\\') + """}")
-        $res.StatusCode = 200
-        $res.ContentType = 'application/json'
-        $res.OutputStream.Write($json,0,$json.Length)
-        $res.Close()
+        $esc = $p.Replace('\','\\')
+        Send-Json $res 200 "{""success"":true,""filePath"":""$esc""}"
         continue
       }
 
@@ -166,6 +220,7 @@ try {
 
         $destPath = $null
         $numeroVisita = $null
+        $nombrePaciente = $null
         $fileName = $null
         [byte[]]$fileBytes = @()
 
@@ -180,37 +235,29 @@ try {
             continue
           }
 
-          $txt = [Text.Encoding]::UTF8.GetString($part.Data)
+          $txt = [Text.Encoding]::UTF8.GetString($part.Data).Trim()
           if ($name -eq 'path' -and $txt) { $destPath = Normalize-Path $txt }
-          if ($name -eq 'numeroVisita' -and $txt) { $numeroVisita = $txt.Trim() }
+          if ($name -eq 'numeroVisita' -and $txt) { $numeroVisita = $txt }
+          if ($name -eq 'nombrePaciente' -and $txt) { $nombrePaciente = $txt }
         }
 
-        if (-not $fileName -or $fileBytes.Length -eq 0) { $res.StatusCode = 400; $res.Close(); continue }
+        if (-not $fileName -or $fileBytes.Length -eq 0) { Send-Json $res 400 '{"success":false,"error":"archivo requerido"}'; continue }
         if (-not $destPath) {
-          if ($numeroVisita) { $destPath = Join-Path (Join-Path $RootDir $numeroVisita) $fileName }
-          else { $destPath = Join-Path $RootDir $fileName }
+          $destPath = Get-VidalDest $RootDir $numeroVisita $nombrePaciente $fileName
         }
 
         Ensure-Parent $destPath
         [IO.File]::WriteAllBytes($destPath, $fileBytes)
 
-        $json = [Text.Encoding]::UTF8.GetBytes("{""success"":true,""filePath"":""" + $destPath.Replace('\','\\') + """}")
-        $res.StatusCode = 201
-        $res.ContentType = 'application/json'
-        $res.OutputStream.Write($json,0,$json.Length)
-        $res.Close()
+        $esc = $destPath.Replace('\','\\')
+        Send-Json $res 201 "{""success"":true,""ok"":true,""filePath"":""$esc"",""path"":""$esc""}"
         continue
       }
 
-      $res.StatusCode = 404
-      $res.Close()
+      Send-Json $res 404 '{"success":false,"error":"Not found"}'
     } catch {
-      $msg = $_.Exception.Message.Replace('"','\"')
-      $json = [Text.Encoding]::UTF8.GetBytes("{""success"":false,""error"":""" + $msg + """}")
-      $res.StatusCode = 500
-      $res.ContentType = 'application/json'
-      $res.OutputStream.Write($json,0,$json.Length)
-      $res.Close()
+      $msg = $_.Exception.Message.Replace('\','\\').Replace('"','\"')
+      Send-Json $res 500 "{""success"":false,""error"":""$msg""}"
     }
   }
 } finally {

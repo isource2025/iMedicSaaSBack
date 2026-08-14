@@ -213,7 +213,7 @@ const moverPacienteACamaVacia = async (req, res) => {
     // Validar datos requeridos (EstadoAmbulatorio y Diagnostico son opcionales)
     const camposRequeridos = [
       'FechaAdmision', 'HoraAdmision', 'FechaEgreso', 'HoraEgreso',
-      'bedId', 'ValorSector', 'Operador', 'FechaCarga', 'HoraCarga'
+      'bedId', 'ValorSector', 'FechaCarga', 'HoraCarga'
     ];
     
     const camposFaltantes = camposRequeridos.filter(campo => !datosMover[campo]);
@@ -224,6 +224,10 @@ const moverPacienteACamaVacia = async (req, res) => {
         mensaje: `Faltan los siguientes campos requeridos: ${camposFaltantes.join(', ')}`
       });
     }
+
+    const codOperador = requireOperadorCarga(req, res);
+    if (codOperador == null) return;
+    datosMover.Operador = String(codOperador);
 
     // Llamar al servicio para mover al paciente
     const resultado = await visitaMovimientosService.moverPacienteACamaVacia(numeroVisitaInt, datosMover);
@@ -256,7 +260,7 @@ const intercambiarCamasPacientes = async (req, res) => {
     // Validar datos requeridos (EstadoAmbulatorio y Diagnostico son opcionales)
     const camposRequeridos = [
       'FechaEgreso', 'HoraEgreso', 'FechaAdmision', 'HoraAdmision',
-      'Operador', 'FechaCarga', 'HoraCarga'
+      'FechaCarga', 'HoraCarga'
     ];
 
     const camposFaltantes = camposRequeridos.filter(campo => !datos[campo]);
@@ -266,6 +270,10 @@ const intercambiarCamasPacientes = async (req, res) => {
         mensaje: `Faltan campos requeridos: ${camposFaltantes.join(', ')}`
       });
     }
+
+    const codOperador = requireOperadorCarga(req, res);
+    if (codOperador == null) return;
+    datos.Operador = String(codOperador);
 
     // Realizar el intercambio
     const resultado = await visitaMovimientosService.intercambiarCamasPacientes(
@@ -375,7 +383,6 @@ const asignarPacienteACama = async (req, res) => {
       'ClasePaciente',
       'bedId',
       'ValorSector',
-      'Operador',
       'FechaCarga',
       'HoraCarga',
     ];
@@ -386,6 +393,10 @@ const asignarPacienteACama = async (req, res) => {
         mensaje: `Faltan campos requeridos: ${faltantes.join(', ')}`,
       });
     }
+
+    const codOperador = requireOperadorCarga(req, res);
+    if (codOperador == null) return;
+    datos.Operador = String(codOperador);
 
     const resultado = await visitaMovimientosService.asignarPacienteACama(numeroVisitaInt, datos);
     res.json({

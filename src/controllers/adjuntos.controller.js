@@ -16,7 +16,13 @@ const {
   runWithTenant,
   ensureTenantFromReq,
 } = require('../context/tenantContext');
-const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const {
+  resolveFileServerUrl,
+  pickUploadedFilePath,
+  fileServerUploadOk,
+  isFileServerUnreachable,
+  describeFileServerError,
+} = require('../utils/fileServerUrl');
 
 /** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
 function enqueueNotificarAdjunto(req, payload) {
@@ -57,14 +63,7 @@ function resolveUserId(req) {
 }
 
 function isFileServerNetworkError(err) {
-  const code = err && (err.code || (err.cause && err.cause.code));
-  return (
-    code === 'ETIMEDOUT' ||
-    code === 'ECONNREFUSED' ||
-    code === 'ENOTFOUND' ||
-    code === 'EHOSTUNREACH' ||
-    code === 'ECONNABORTED'
-  );
+  return isFileServerUnreachable(err);
 }
 
 /**
@@ -238,12 +237,12 @@ router.post(
         timeout: FILE_SERVER_TIMEOUT_MS
       });
 
-      if (!uploadResponse.data.success) {
+      if (!fileServerUploadOk(uploadResponse.data)) {
         await fs.unlink(req.file.path).catch(() => {});
         throw new Error(uploadResponse.data.error || 'Error al subir archivo al servidor');
       }
 
-      filePath = uploadResponse.data.filePath;
+      filePath = pickUploadedFilePath(uploadResponse.data);
       await fs.unlink(req.file.path).catch(() => {});
       console.log(`✅ Archivo guardado en servidor de archivos: ${filePath}`);
     } catch (remoteErr) {
@@ -254,12 +253,9 @@ router.post(
         );
       } else {
         await fs.unlink(req.file.path).catch(() => {});
-        const msg = isFileServerNetworkError(remoteErr)
-          ? 'No se pudo contactar el servidor de archivos (timeout o red). Revise VPN/red y FileServerUrl de la empresa (o FILE_SERVER_URL). Si no usa servidor remoto, defina FILE_SERVER_FALLBACK_LOCAL=1 en .env para guardar en disco del backend.'
-          : remoteErr.message || 'Error al subir archivo';
         return res.status(503).json({
           success: false,
-          error: msg
+          error: describeFileServerError(remoteErr),
         });
       }
     }
@@ -368,13 +364,13 @@ router.post(
           timeout: FILE_SERVER_TIMEOUT_MS
         });
 
-        if (!uploadResponse.data.success) {
+        if (!fileServerUploadOk(uploadResponse.data)) {
           await fs.unlink(file.path).catch(() => {});
           console.error(`❌ Error al subir ${file.originalname} al servidor`);
           continue;
         }
 
-        filePath = uploadResponse.data.filePath;
+        filePath = pickUploadedFilePath(uploadResponse.data);
         await fs.unlink(file.path).catch(() => {});
         console.log(`✅ ${file.originalname} guardado en: ${filePath}`);
       } catch (error) {
@@ -637,10 +633,9 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
         });
       }
 
-      return res.status(500).json({
+      return res.status(503).json({
         success: false,
-        error: 'Error al obtener archivo del servidor de archivos',
-        details: fileError.message
+        error: describeFileServerError(fileError),
       });
     }
   } catch (error) {

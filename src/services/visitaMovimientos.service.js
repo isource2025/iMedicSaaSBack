@@ -5,6 +5,48 @@
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString } = require('../utils/dateUtils');
 
+function clarionInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function visitaYaEgresada(fechaEgreso) {
+  return clarionInt(fechaEgreso) > 0;
+}
+
+/** Si llega "SECTOR-CAMA", devuelve solo el código de cama. */
+function codigoCama(bedId, sector, fallback) {
+  const raw = String(bedId || '').trim();
+  const sec = String(sector || '').trim();
+  const fb = String(fallback || '').trim();
+  if (!raw) return fb;
+  if (sec) {
+    const prefix = `${sec}-`;
+    if (raw.length > prefix.length && raw.slice(0, prefix.length).toUpperCase() === prefix.toUpperCase()) {
+      return raw.slice(prefix.length);
+    }
+  }
+  return raw;
+}
+
+async function obtenerCabeceraVisita(numeroVisita) {
+  const rows = await executeQuery(
+    `
+      SELECT
+        IDPaciente,
+        FechaAdmisionS,
+        LTRIM(RTRIM(ISNULL(ServicioHospital, ''))) AS ServicioHospital,
+        LTRIM(RTRIM(ISNULL(Diagnostico, ''))) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
+        ISNULL(TRY_CAST(FECHAEGRESO AS int), 0) AS FechaEgreso
+      FROM dbo.imVisita
+      WHERE NumeroVisita = @p0
+    `,
+    [{ value: numeroVisita }],
+  );
+  return rows[0] || null;
+}
+
 /**
  * Obtiene el último movimiento de una visita
  */
@@ -19,7 +61,8 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
       LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
       LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
       LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS bedId,
-      EstadoAmbulatorio
+      LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
+      LTRIM(RTRIM(ISNULL(ServicioHospital, ''))) AS ServicioHospital
     FROM imVisitaMovimiento
     WHERE NumeroVisita = @p0
     ORDER BY FechaAdmision DESC, HoraAdmision DESC
@@ -109,12 +152,23 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   if (!ultimo) {
     throw new Error(`No se encontró movimiento anterior para la visita ${num}`);
   }
+  if (visitaYaEgresada(ultimo.FechaEgreso)) {
+    throw new Error(`La visita ${num} ya tiene egreso registrado en el último movimiento`);
+  }
+
+  const cabecera = await obtenerCabeceraVisita(num);
+  if (!cabecera) {
+    throw new Error(`No se encontró la visita ${num}`);
+  }
+  if (visitaYaEgresada(cabecera.FechaEgreso)) {
+    throw new Error(`La visita ${num} ya tiene egreso hospitalario registrado`);
+  }
 
   const query = `
     BEGIN TRY
       BEGIN TRANSACTION;
 
-      -- Cerrar último movimiento con datos de egreso (no tocar EstadoAmbulatorio)
+      -- Cerrar último movimiento con datos de egreso (ClasePaciente de la visita no se toca: sigue Internado)
       UPDATE imVisitaMovimiento
       SET 
         FechaEgreso = @param1,
@@ -127,21 +181,21 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         FechaAdmision = @param3 AND
         HoraAdmision  = @param4;
 
-      -- Liberar cama(s) de esta visita (sector+cama; también limpia duplicados por solo nº de cama)
+      -- Liberar cama(s) de esta visita (sector+cama; también limpia duplicados)
       UPDATE imHabitacionCamas
       SET 
         FechaIngreso      = 0,
         FechaEgreso       = @param1,
         ValorEstadoCama   = 'U',
         NumeroVisita      = 0,
-        Observaciones     = ''
+        Observaciones     = 'Egreso de internación'
       WHERE NumeroVisita = @param0
          OR (
            ValorHabitacionCama = @param8
            AND ValorSector = @param10
          );
 
-      -- Cerrar visita (incluye quién egresó)
+      -- Cerrar visita (ClasePaciente permanece I / internado)
       UPDATE imVisita
       SET 
         FechaEgreso = @param1,
@@ -159,8 +213,8 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     END CATCH;
   `;
 
-  const camaEgreso = String(bedId || ultimo.ValorHabitacionCama || ultimo.bedId || '').trim();
   const sectorEgreso = String(ultimo.ValorSector || '').trim();
+  const camaEgreso = codigoCama(bedId, sectorEgreso, ultimo.ValorHabitacionCama || ultimo.bedId);
 
   const params = [
     { value: num }, // @param0
@@ -212,65 +266,66 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   const num = parseInt(numeroVisita, 10);
   if (isNaN(num)) throw new Error('Número de visita inválido');
 
-  // Validar datos requeridos
-  const { 
-    FechaAdmision, 
-    HoraAdmision, 
-    FechaEgreso, 
-    HoraEgreso, 
-    EstadoAmbulatorio, 
-    Diagnostico, 
-    bedId, 
-    ValorSector, // Campo obligatorio para el sector
+  const {
+    FechaAdmision,
+    HoraAdmision,
+    FechaEgreso,
+    HoraEgreso,
+    EstadoAmbulatorio,
+    Diagnostico,
+    bedId,
+    ValorSector,
     Operador,
     FechaCarga,
-    HoraCarga 
+    HoraCarga,
   } = datos;
 
-  if (!FechaAdmision || !HoraAdmision || !FechaEgreso || !HoraEgreso || 
+  if (!FechaAdmision || !HoraAdmision || !FechaEgreso || !HoraEgreso ||
       !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
     throw new Error('Faltan datos obligatorios para el movimiento de cama. Se requiere: FechaAdmision, HoraAdmision, FechaEgreso, HoraEgreso, bedId, ValorSector, Operador, FechaCarga, HoraCarga');
   }
 
-  // Obtener información del último movimiento para cerrar el registro actual
   const ultimoMovimiento = await obtenerUltimoMovimientoVisita(num);
   if (!ultimoMovimiento) {
     throw new Error(`No se encontró el último movimiento para la visita ${num}`);
   }
+  if (visitaYaEgresada(ultimoMovimiento.FechaEgreso)) {
+    throw new Error(`La visita ${num} ya tiene egreso; no se puede trasladar`);
+  }
 
-  // Estado/diagnóstico opcionales: conservar el del movimiento actual si no se envían
-  const estadoAmbMovimiento =
-    String(EstadoAmbulatorio || '').trim() ||
-    String(ultimoMovimiento.EstadoAmbulatorio || '').trim() ||
-    ' ';
-  const diagnosticoMovimiento =
-    String(Diagnostico || '').trim() ||
-    String(ultimoMovimiento.Diagnostico || '').trim() ||
-    null;
-  
-  // Obtener información del paciente de la visita
-  const pacienteQuery = `
-    SELECT IDPaciente, FechaAdmisionS
-    FROM imVisita
-    WHERE NumeroVisita = @param0
-  `;
-  
-  const pacienteResult = await executeQuery(pacienteQuery, [{ value: num }]);
-  if (!pacienteResult || pacienteResult.length === 0) {
+  const cabecera = await obtenerCabeceraVisita(num);
+  if (!cabecera) {
     throw new Error(`No se encontró información del paciente para la visita ${num}`);
   }
-  
-  const idPaciente = pacienteResult[0].IDPaciente;
-  const fechaAdmisionS = pacienteResult[0].FechaAdmisionS;
+  if (visitaYaEgresada(cabecera.FechaEgreso)) {
+    throw new Error(`La visita ${num} ya tiene egreso hospitalario; no se puede trasladar`);
+  }
 
-  // Obtener información de la cama actual para liberarla (puede haber duplicados por nº de cama)
-  const camaActualQuery = `
-    SELECT ValorHabitacionCama, ValorSector 
-    FROM imHabitacionCamas 
-    WHERE NumeroVisita = @param0
-  `;
-  
-  const camaActualResult = await executeQuery(camaActualQuery, [{ value: num }]);
+  const estadoEnviado = String(EstadoAmbulatorio || '').trim();
+  const diagnosticoEnviado = String(Diagnostico || '').trim();
+  const estadoAmbMovimiento =
+    estadoEnviado ||
+    String(ultimoMovimiento.EstadoAmbulatorio || '').trim() ||
+    String(cabecera.EstadoAmbulatorio || '').trim() ||
+    ' ';
+  const diagnosticoMovimiento =
+    diagnosticoEnviado ||
+    String(ultimoMovimiento.Diagnostico || '').trim() ||
+    String(cabecera.Diagnostico || '').trim() ||
+    null;
+  const servicioHospital =
+    String(ultimoMovimiento.ServicioHospital || '').trim() ||
+    String(cabecera.ServicioHospital || '').trim() ||
+    null;
+
+  const camaActualResult = await executeQuery(
+    `
+      SELECT ValorHabitacionCama, ValorSector
+      FROM imHabitacionCamas
+      WHERE NumeroVisita = @param0
+    `,
+    [{ value: num }],
+  );
   if (!camaActualResult || camaActualResult.length === 0) {
     throw new Error(`No se encontró la cama actual para la visita ${num}`);
   }
@@ -280,120 +335,103 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
     (r) => String(r.ValorSector || '').trim() === sectorPreferido,
   );
   const camaOrigen = camaPreferida || camaActualResult[0];
-  const camaActual = camaOrigen.ValorHabitacionCama;
-  const sectorActual = camaOrigen.ValorSector;
-  
-  // En lugar de obtener todos los estados de cama disponibles, simplemente verificaremos
-  // si la cama específica que queremos usar tiene el estado 'U' (libre)
-  console.log(`Verificando disponibilidad de la cama ${bedId} en el sector ${ValorSector}`);
-  
-  // Verificar que la cama destino exista y esté disponible
-  const camaDestinoQuery = `
-    SELECT c.ValorHabitacionCama, c.ValorSector, c.ValorEstadoCama, e.Descripcion as EstadoDescripcion 
-    FROM imHabitacionCamas c
-    LEFT JOIN imEstadoCama e ON c.ValorEstadoCama = e.Valor
-    WHERE c.ValorHabitacionCama = @param0 AND c.ValorSector = @param1
-  `;
-  
-  const camaDestinoResult = await executeQuery(camaDestinoQuery, [
-    { value: bedId },
-    { value: ValorSector }
-  ]);
-  
+  const camaActual = String(camaOrigen.ValorHabitacionCama || '').trim();
+  const sectorActual = String(camaOrigen.ValorSector || '').trim();
+  const sectorDestino = String(ValorSector || '').trim();
+  const camaDestino = codigoCama(bedId, sectorDestino, bedId);
+
+  const camaDestinoResult = await executeQuery(
+    `
+      SELECT c.ValorHabitacionCama, c.ValorSector, c.ValorEstadoCama, e.Descripcion as EstadoDescripcion
+      FROM imHabitacionCamas c
+      LEFT JOIN imEstadoCama e ON c.ValorEstadoCama = e.Valor
+      WHERE c.ValorHabitacionCama = @param0 AND c.ValorSector = @param1
+    `,
+    [{ value: camaDestino }, { value: sectorDestino }],
+  );
+
   if (!camaDestinoResult || camaDestinoResult.length === 0) {
-    throw new Error(`La cama destino ${bedId} en el sector ${ValorSector} no existe`);
+    throw new Error(`La cama destino ${camaDestino} en el sector ${sectorDestino} no existe`);
   }
-  
+
   const estadoCama = camaDestinoResult[0].ValorEstadoCama;
-  console.log(`Estado de la cama ${bedId} en el sector ${ValorSector}: ${estadoCama}`);
-  
-  // Verificar si la cama está libre (estado 'U')
   if (estadoCama !== 'U') {
-    throw new Error(`La cama destino ${bedId} en el sector ${ValorSector} no está disponible. Estado actual: ${camaDestinoResult[0].EstadoDescripcion || estadoCama}`);
+    throw new Error(`La cama destino ${camaDestino} en el sector ${sectorDestino} no está disponible. Estado actual: ${camaDestinoResult[0].EstadoDescripcion || estadoCama}`);
   }
-  
-  // Usar el sector proporcionado (ahora obligatorio)
-  const sectorDestino = ValorSector;
-  
-  // Verificar que el sector coincida con el de la cama en la base de datos
-  const sectorCamaEnBD = camaDestinoResult[0].ValorSector;
-  if (sectorDestino !== sectorCamaEnBD) {
-    console.warn(`Advertencia: El sector proporcionado (${sectorDestino}) no coincide con el sector de la cama en la base de datos (${sectorCamaEnBD})`);
-  }
-  
-  console.log(`Sector destino: ${sectorDestino}`);
 
 
-  // Realizar la transacción para mover al paciente
   const query = `
     BEGIN TRY
       BEGIN TRANSACTION;
-      
-      -- 1. Cerrar el movimiento actual en imVisitaMovimiento
+
+      -- 1. Egreso de la cama origen (no pisar diagnóstico/estado del tramo cerrado)
       UPDATE imVisitaMovimiento
-      SET 
+      SET
         FechaEgreso = @param0,
         HoraEgreso = @param1,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
         Operador = @param4
-      WHERE 
+      WHERE
         NumeroVisita = @param5 AND
         FechaAdmision = @param6 AND
         HoraAdmision = @param7;
-      
-      -- 2. Liberar TODAS las camas con esta visita (origen + duplicados erróneos por solo nº de cama)
+
+      -- 2. Liberar cama origen (deja FechaEgreso del traslado)
       UPDATE imHabitacionCamas
-      SET 
+      SET
         FechaIngreso = 0,
-        FechaEgreso = 0,
-        ValorEstadoCama = 'U', -- Estado "Libre"
+        FechaEgreso = @param0,
+        ValorEstadoCama = 'U',
         NumeroVisita = 0,
-        Observaciones = ''
+        Observaciones = 'Traslado a cama ' + @param13
       WHERE NumeroVisita = @param5
          OR (
            ValorHabitacionCama = @param8
            AND ValorSector = @param15
          );
-      
-      -- 3. Crear un nuevo registro en imVisitaMovimiento para la nueva ubicación
-      -- Verificar si ya existe un registro con esa combinación de NumeroVisita, FechaAdmision y HoraAdmision
+
+      -- 3. Alta en la cama destino
       IF NOT EXISTS (
-        SELECT 1 FROM imVisitaMovimiento 
+        SELECT 1 FROM imVisitaMovimiento
         WHERE NumeroVisita = @param5 AND FechaAdmision = @param9 AND HoraAdmision = @param10
       )
       BEGIN
         INSERT INTO imVisitaMovimiento (
-          NumeroVisita, FechaAdmision, HoraAdmision, 
-          EstadoAmbulatorio, Diagnostico, Operador, 
-          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
         )
         VALUES (
-          @param5, @param9, @param10, 
-          @param2, @param3, @param4, 
-          @param11, @param12, @param14, @param13, 'O'
+          @param5, @param9, @param10,
+          0, 0,
+          @param2, @param3, @param4,
+          @param11, @param12, @param14, @param13, 'O',
+          @param16, 0
         );
       END
       ELSE
       BEGIN
-        -- Si ya existe, modificamos ligeramente la hora de admisión para evitar duplicados
         DECLARE @NuevaHoraAdmision int = @param10 + 1;
-        
         INSERT INTO imVisitaMovimiento (
-          NumeroVisita, FechaAdmision, HoraAdmision, 
-          EstadoAmbulatorio, Diagnostico, Operador, 
-          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
         )
         VALUES (
-          @param5, @param9, @NuevaHoraAdmision, 
-          @param2, @param3, @param4, 
-          @param11, @param12, @param14, @param13, 'O'
+          @param5, @param9, @NuevaHoraAdmision,
+          0, 0,
+          @param2, @param3, @param4,
+          @param11, @param12, @param14, @param13, 'O',
+          @param16, 0
         );
       END;
-      
-      -- 4. Actualizar la cama destino (match completo: sector + cama)
+
+      -- 4. Ocupar cama destino
       UPDATE imHabitacionCamas
-      SET 
+      SET
         FechaIngreso = @param9,
         FechaEgreso = 0,
         ValorEstadoCama = 'O',
@@ -401,19 +439,22 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
         Observaciones = 'Traslado desde cama ' + @param8
       WHERE ValorHabitacionCama = @param13
         AND ValorSector = @param14;
-      
-      -- 5. Actualizar la visita con la nueva ubicación
+
+      -- 5. Ubicación actual (internación sigue abierta; no pisar Operador de admisión)
       UPDATE imVisita
-      SET 
+      SET
         FechaEgreso = 0,
         HoraEgreso = 0,
         ValorHabitacionCama = @param13,
         ValorSector = @param14,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
-        Operador = @param4
+        EstadoAmbulatorio = CASE
+          WHEN @param17 = 1 THEN @param2 ELSE EstadoAmbulatorio
+        END,
+        Diagnostico = CASE
+          WHEN @param18 = 1 THEN @param3 ELSE Diagnostico
+        END
       WHERE NumeroVisita = @param5;
-      
+
       COMMIT;
     END TRY
     BEGIN CATCH
@@ -423,39 +464,41 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   `;
 
   const params = [
-    { value: FechaEgreso },                 // @param0 - FechaEgreso
-    { value: HoraEgreso },                  // @param1 - HoraEgreso
-    { value: estadoAmbMovimiento },         // @param2 - EstadoAmbulatorio
-    { value: diagnosticoMovimiento },       // @param3 - Diagnostico
-    { value: Operador },                    // @param4 - Operador
-    { value: num },                         // @param5 - NumeroVisita
-    { value: ultimoMovimiento.FechaAdmision }, // @param6 - UltimaFechaAdmision
-    { value: ultimoMovimiento.HoraAdmision },  // @param7 - UltimaHoraAdmision
-    { value: camaActual },                  // @param8 - CamaActual
-    { value: FechaAdmision },               // @param9 - FechaAdmision
-    { value: HoraAdmision },                // @param10 - HoraAdmision
-    { value: FechaCarga },                  // @param11 - FechaCarga
-    { value: HoraCarga },                   // @param12 - HoraCarga
-    { value: bedId },                       // @param13 - CamaDestino
-    { value: sectorDestino },               // @param14 - SectorDestino
-    { value: sectorActual },                // @param15 - SectorOrigen
+    { value: FechaEgreso },
+    { value: HoraEgreso },
+    { value: estadoAmbMovimiento },
+    { value: diagnosticoMovimiento },
+    { value: String(Operador) },
+    { value: num },
+    { value: ultimoMovimiento.FechaAdmision },
+    { value: ultimoMovimiento.HoraAdmision },
+    { value: camaActual },
+    { value: FechaAdmision },
+    { value: HoraAdmision },
+    { value: FechaCarga },
+    { value: HoraCarga },
+    { value: camaDestino },
+    { value: sectorDestino },
+    { value: sectorActual },
+    { value: servicioHospital },
+    { value: estadoEnviado ? 1 : 0 },
+    { value: diagnosticoEnviado ? 1 : 0 },
   ];
 
   try {
     await executeQuery(query, params);
-    
-    // Obtener el nuevo movimiento para confirmar
+
     const nuevoMovimiento = await obtenerUltimoMovimientoVisita(num);
-    
+
     return {
       success: true,
       message: 'Paciente trasladado exitosamente a la nueva cama',
       data: {
         numeroVisita: num,
         camaAnterior: camaActual,
-        camaNueva: bedId,
-        movimiento: nuevoMovimiento
-      }
+        camaNueva: camaDestino,
+        movimiento: nuevoMovimiento,
+      },
     };
   } catch (err) {
     console.error('Error en la transacción de traslado:', err);
@@ -515,17 +558,44 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   if (!ultimoMovimiento1 || !ultimoMovimiento2) {
     throw new Error(`No se encontró el último movimiento para alguna de las visitas`);
   }
+  if (visitaYaEgresada(ultimoMovimiento1.FechaEgreso) || visitaYaEgresada(ultimoMovimiento2.FechaEgreso)) {
+    throw new Error('No se puede intercambiar: alguna de las visitas ya tiene egreso');
+  }
 
-  const estadoAmbSwap =
-    String(EstadoAmbulatorio || '').trim() ||
+  const cab1 = await obtenerCabeceraVisita(num1);
+  const cab2 = await obtenerCabeceraVisita(num2);
+  if (!cab1 || !cab2) {
+    throw new Error('No se encontró una de las visitas');
+  }
+  if (visitaYaEgresada(cab1.FechaEgreso) || visitaYaEgresada(cab2.FechaEgreso)) {
+    throw new Error('No se puede intercambiar: alguna de las visitas ya tiene egreso hospitalario');
+  }
+
+  const estado1 =
     String(ultimoMovimiento1.EstadoAmbulatorio || '').trim() ||
+    String(cab1.EstadoAmbulatorio || '').trim() ||
     ' ';
-  const diagnosticoSwap =
-    String(Diagnostico || '').trim() ||
+  const estado2 =
+    String(ultimoMovimiento2.EstadoAmbulatorio || '').trim() ||
+    String(cab2.EstadoAmbulatorio || '').trim() ||
+    ' ';
+  const diagnostico1 =
     String(ultimoMovimiento1.Diagnostico || '').trim() ||
+    String(cab1.Diagnostico || '').trim() ||
     null;
-  
-  // Obtener información de las camas actuales
+  const diagnostico2 =
+    String(ultimoMovimiento2.Diagnostico || '').trim() ||
+    String(cab2.Diagnostico || '').trim() ||
+    null;
+  const servicio1 =
+    String(ultimoMovimiento1.ServicioHospital || '').trim() ||
+    String(cab1.ServicioHospital || '').trim() ||
+    null;
+  const servicio2 =
+    String(ultimoMovimiento2.ServicioHospital || '').trim() ||
+    String(cab2.ServicioHospital || '').trim() ||
+    null;
+
   const camasQuery = `
     SELECT v.NumeroVisita, hc.ValorHabitacionCama, hc.ValorSector, v.IDPaciente
     FROM imHabitacionCamas hc
@@ -542,7 +612,6 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
     throw new Error(`No se encontraron las camas para ambos pacientes`);
   }
   
-  // Identificar camas y sectores de cada paciente
   const paciente1 = camasResult.find(c => parseInt(c.NumeroVisita) === num1);
   const paciente2 = camasResult.find(c => parseInt(c.NumeroVisita) === num2);
   
@@ -555,120 +624,88 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   const cama2 = paciente2.ValorHabitacionCama;
   const sector2 = paciente2.ValorSector;
   
-  // Realizar la transacción para intercambiar pacientes
   const query = `
     BEGIN TRY
       BEGIN TRANSACTION;
-      
-      -- 1. Cerrar los movimientos actuales en imVisitaMovimiento
-      -- Paciente 1
+
       UPDATE imVisitaMovimiento
-      SET 
-        FechaEgreso = @param0,
-        HoraEgreso = @param1,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
-        Operador = @param4
-      WHERE 
-        NumeroVisita = @param5 AND
-        FechaAdmision = @param6 AND
-        HoraAdmision = @param7;
-      
-      -- Paciente 2
+      SET FechaEgreso = @param0, HoraEgreso = @param1, Operador = @param4
+      WHERE NumeroVisita = @param5 AND FechaAdmision = @param6 AND HoraAdmision = @param7;
+
       UPDATE imVisitaMovimiento
-      SET 
-        FechaEgreso = @param0,
-        HoraEgreso = @param1,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
-        Operador = @param4
-      WHERE 
-        NumeroVisita = @param8 AND
-        FechaAdmision = @param9 AND
-        HoraAdmision = @param10;
-      
-      -- 2. Liberar temporalmente ambas camas (por visita + sector/cama)
+      SET FechaEgreso = @param0, HoraEgreso = @param1, Operador = @param4
+      WHERE NumeroVisita = @param8 AND FechaAdmision = @param9 AND HoraAdmision = @param10;
+
       UPDATE imHabitacionCamas
-      SET 
-        NumeroVisita = 0,
-        ValorEstadoCama = 'M' -- Mantenimiento temporal durante el intercambio
+      SET NumeroVisita = 0, ValorEstadoCama = 'M'
       WHERE NumeroVisita IN (@param5, @param8)
          OR (ValorHabitacionCama = @param11 AND ValorSector = @param17)
          OR (ValorHabitacionCama = @param12 AND ValorSector = @param18);
-      
-      -- 3. Crear nuevos registros en imVisitaMovimiento para las nuevas ubicaciones
-      -- Paciente 1 a Cama 2
+
       INSERT INTO imVisitaMovimiento (
-        NumeroVisita, FechaAdmision, HoraAdmision, 
-        EstadoAmbulatorio, Diagnostico, Operador, 
-        FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+        NumeroVisita, FechaAdmision, HoraAdmision,
+        FechaEgreso, HoraEgreso,
+        EstadoAmbulatorio, Diagnostico, Operador,
+        FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+        ServicioHospital, [Status]
       )
       VALUES (
-        @param5, @param13, @param14, 
-        @param2, @param3, @param4, 
-        @param15, @param16, @param18, @param12, 'O'
+        @param5, @param13, @param14,
+        0, 0,
+        @param2, @param3, @param4,
+        @param15, @param16, @param18, @param12, 'O',
+        @param19, 0
       );
-      
-      -- Paciente 2 a Cama 1
+
       INSERT INTO imVisitaMovimiento (
-        NumeroVisita, FechaAdmision, HoraAdmision, 
-        EstadoAmbulatorio, Diagnostico, Operador, 
-        FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+        NumeroVisita, FechaAdmision, HoraAdmision,
+        FechaEgreso, HoraEgreso,
+        EstadoAmbulatorio, Diagnostico, Operador,
+        FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+        ServicioHospital, [Status]
       )
       VALUES (
-        @param8, @param13, @param14, 
-        @param2, @param3, @param4, 
-        @param15, @param16, @param17, @param11, 'O'
+        @param8, @param13, @param14,
+        0, 0,
+        @param20, @param21, @param4,
+        @param15, @param16, @param17, @param11, 'O',
+        @param22, 0
       );
-      
-      -- 4. Actualizar las camas con los nuevos pacientes (match completo: sector + cama)
-      -- Cama 1 ahora con Paciente 2
+
       UPDATE imHabitacionCamas
-      SET 
+      SET
         FechaIngreso = @param13,
         FechaEgreso = 0,
         ValorEstadoCama = 'O',
         NumeroVisita = @param8,
         Observaciones = 'Intercambio desde cama ' + @param12
-      WHERE ValorHabitacionCama = @param11
-        AND ValorSector = @param17;
-      
-      -- Cama 2 ahora con Paciente 1
+      WHERE ValorHabitacionCama = @param11 AND ValorSector = @param17;
+
       UPDATE imHabitacionCamas
-      SET 
+      SET
         FechaIngreso = @param13,
         FechaEgreso = 0,
         ValorEstadoCama = 'O',
         NumeroVisita = @param5,
         Observaciones = 'Intercambio desde cama ' + @param11
-      WHERE ValorHabitacionCama = @param12
-        AND ValorSector = @param18;
-      
-      -- 5. Actualizar las visitas con las nuevas ubicaciones
-      -- Visita 1
+      WHERE ValorHabitacionCama = @param12 AND ValorSector = @param18;
+
       UPDATE imVisita
-      SET 
+      SET
         FechaEgreso = 0,
         HoraEgreso = 0,
         ValorHabitacionCama = @param12,
-        ValorSector = @param18,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
-        Operador = @param4
+        ValorSector = @param18
       WHERE NumeroVisita = @param5;
-      
-      -- Visita 2
+
       UPDATE imVisita
-      SET 
+      SET
         FechaEgreso = 0,
         HoraEgreso = 0,
         ValorHabitacionCama = @param11,
-        ValorSector = @param17,
-        EstadoAmbulatorio = @param2,
-        Diagnostico = @param3,
-        Operador = @param4
+        ValorSector = @param17
       WHERE NumeroVisita = @param8;
-      
+
       COMMIT;
     END TRY
     BEGIN CATCH
@@ -678,25 +715,29 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   `;
 
   const params = [
-    { value: FechaEgreso },                 // @param0 - FechaEgreso
-    { value: HoraEgreso },                  // @param1 - HoraEgreso
-    { value: estadoAmbSwap },               // @param2 - EstadoAmbulatorio
-    { value: diagnosticoSwap },             // @param3 - Diagnostico
-    { value: Operador },                    // @param4 - Operador
-    { value: num1 },                        // @param5 - NumeroVisita1
-    { value: ultimoMovimiento1.FechaAdmision }, // @param6 - UltimaFechaAdmision1
-    { value: ultimoMovimiento1.HoraAdmision },  // @param7 - UltimaHoraAdmision1
-    { value: num2 },                        // @param8 - NumeroVisita2
-    { value: ultimoMovimiento2.FechaAdmision }, // @param9 - UltimaFechaAdmision2
-    { value: ultimoMovimiento2.HoraAdmision },  // @param10 - UltimaHoraAdmision2
-    { value: cama1 },                       // @param11 - Cama1
-    { value: cama2 },                       // @param12 - Cama2
-    { value: FechaAdmision },               // @param13 - NuevaFechaAdmision
-    { value: HoraAdmision },                // @param14 - NuevaHoraAdmision
-    { value: FechaCarga },                  // @param15 - FechaCarga
-    { value: HoraCarga },                   // @param16 - HoraCarga
-    { value: sector1 },                     // @param17 - Sector1
-    { value: sector2 }                      // @param18 - Sector2
+    { value: FechaEgreso },
+    { value: HoraEgreso },
+    { value: estado1 },
+    { value: diagnostico1 },
+    { value: String(Operador) },
+    { value: num1 },
+    { value: ultimoMovimiento1.FechaAdmision },
+    { value: ultimoMovimiento1.HoraAdmision },
+    { value: num2 },
+    { value: ultimoMovimiento2.FechaAdmision },
+    { value: ultimoMovimiento2.HoraAdmision },
+    { value: cama1 },
+    { value: cama2 },
+    { value: FechaAdmision },
+    { value: HoraAdmision },
+    { value: FechaCarga },
+    { value: HoraCarga },
+    { value: sector1 },
+    { value: sector2 },
+    { value: servicio1 },
+    { value: estado2 },
+    { value: diagnostico2 },
+    { value: servicio2 },
   ];
 
   try {
@@ -1010,6 +1051,8 @@ async function asignarPacienteACama(numeroVisita, datos) {
         IDPaciente,
         ClasePaciente,
         LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
+        LTRIM(RTRIM(ISNULL(ServicioHospital, ''))) AS ServicioHospital,
+        LTRIM(RTRIM(ISNULL(Diagnostico, ''))) AS Diagnostico,
         FECHAEGRESO,
         LTRIM(RTRIM(ISNULL(VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama
       FROM dbo.imVisita
@@ -1042,6 +1085,8 @@ async function asignarPacienteACama(numeroVisita, datos) {
     );
   }
 
+  const camaDestinoCodigo = codigoCama(bedId, ValorSector, bedId);
+
   const camaDestinoResult = await executeQuery(
     `
       SELECT c.ValorHabitacionCama, c.ValorSector, c.ValorEstadoCama, e.Descripcion AS EstadoDescripcion
@@ -1049,11 +1094,11 @@ async function asignarPacienteACama(numeroVisita, datos) {
       LEFT JOIN dbo.imEstadoCama e ON c.ValorEstadoCama = e.Valor
       WHERE c.ValorHabitacionCama = @p0 AND c.ValorSector = @p1
     `,
-    [{ value: bedId }, { value: ValorSector }],
+    [{ value: camaDestinoCodigo }, { value: ValorSector }],
   );
 
   if (!camaDestinoResult?.length) {
-    throw new Error(`La cama ${bedId} en el sector ${ValorSector} no existe`);
+    throw new Error(`La cama ${camaDestinoCodigo} en el sector ${ValorSector} no existe`);
   }
   if (camaDestinoResult[0].ValorEstadoCama !== 'U') {
     throw new Error(
@@ -1061,11 +1106,11 @@ async function asignarPacienteACama(numeroVisita, datos) {
     );
   }
 
-  // Estado ambulatorio del movimiento: conservar el de la visita (no confundir con ClasePaciente)
   const estadoAmbMovimiento =
     String(EstadoAmbulatorio || '').trim() ||
     String(visita.EstadoAmbulatorio || '').trim() ||
     ' ';
+  const servicioHospital = String(visita.ServicioHospital || '').trim() || null;
 
   const query = `
     BEGIN TRY
@@ -1078,13 +1123,17 @@ async function asignarPacienteACama(numeroVisita, datos) {
       BEGIN
         INSERT INTO dbo.imVisitaMovimiento (
           NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
           EstadoAmbulatorio, Diagnostico, Operador,
-          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
         )
         VALUES (
           @param0, @param1, @param2,
+          0, 0,
           @param3, @param4, @param5,
-          @param6, @param7, @param8, @param9, 'O'
+          @param6, @param7, @param8, @param9, 'O',
+          @param11, 0
         );
       END
       ELSE
@@ -1092,13 +1141,17 @@ async function asignarPacienteACama(numeroVisita, datos) {
         DECLARE @HoraAdj int = @param2 + 1;
         INSERT INTO dbo.imVisitaMovimiento (
           NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
           EstadoAmbulatorio, Diagnostico, Operador,
-          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
         )
         VALUES (
           @param0, @param1, @HoraAdj,
+          0, 0,
           @param3, @param4, @param5,
-          @param6, @param7, @param8, @param9, 'O'
+          @param6, @param7, @param8, @param9, 'O',
+          @param11, 0
         );
       END;
 
@@ -1136,12 +1189,13 @@ async function asignarPacienteACama(numeroVisita, datos) {
     { value: HoraAdmision },
     { value: estadoAmbMovimiento },
     { value: Diagnostico || null },
-    { value: Operador },
+    { value: String(Operador) },
     { value: FechaCarga },
     { value: HoraCarga },
     { value: ValorSector },
-    { value: bedId },
+    { value: camaDestinoCodigo },
     { value: clasePaciente },
+    { value: servicioHospital },
   ];
 
   try {
@@ -1152,7 +1206,7 @@ async function asignarPacienteACama(numeroVisita, datos) {
       message: 'Cama asignada correctamente',
       data: {
         numeroVisita: num,
-        cama: bedId,
+        cama: camaDestinoCodigo,
         sector: ValorSector,
         movimiento,
       },
