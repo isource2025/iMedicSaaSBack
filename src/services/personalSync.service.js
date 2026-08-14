@@ -19,6 +19,7 @@ const {
 	canSyncPersonalRowToTenant,
 	isPlatformValorPersonal,
 } = require('../config/tenantIdentity');
+const { permisosDeRol, modulosVisibles } = require('../utils/permisos');
 
 function q(name) {
 	return `\`${String(name).replace(/`/g, '``')}\``;
@@ -127,6 +128,52 @@ function fingerprint(row, cols) {
 	return cols.map((c) => `${c}=${normCmp(row[c])}`).join('\n');
 }
 
+const COL_LABEL = Object.fromEntries(
+	PERSONAL_EXPORT_FIELDS.filter((f) => f.column).map((f) => [f.column, f.label]),
+);
+
+const PW_SKIP_RE = /password|hash|clave|salt/i;
+
+const PW_LABEL = {
+	NombreRed: 'Usuario de red',
+	Grupo: 'Grupo',
+	CodOperador: 'Código operador',
+	Email: 'Email',
+	Mail: 'Email',
+	Estado: 'Estado',
+	Habilitado: 'Habilitado',
+	Activo: 'Activo',
+};
+
+function displayVal(v) {
+	const s = normCmp(v);
+	if (!s) return '—';
+	return s.length > 80 ? `${s.slice(0, 77)}…` : s;
+}
+
+function nombrePersona(row) {
+	const n = String(row?.ApellidoNombre || '').trim();
+	return n || null;
+}
+
+function diffRows(prev, next, cols, labelOf) {
+	const out = [];
+	for (const c of cols) {
+		const low = String(c).toLowerCase();
+		if (low === 'valor' || low === 'idempresa' || low === 'valorpersonal') continue;
+		if (PW_SKIP_RE.test(low)) continue;
+		const a = displayVal(prev?.[c]);
+		const b = displayVal(next?.[c]);
+		if (a === b) continue;
+		out.push({
+			campo: (typeof labelOf === 'function' ? labelOf(c) : null) || COL_LABEL[c] || c,
+			de: a,
+			a: b,
+		});
+	}
+	return out;
+}
+
 /**
  * Escribe solo personal nuevo o modificado. Evita re-contar 100% en cada clic.
  */
@@ -146,6 +193,7 @@ async function syncPersonalDelta(emp, syncRows) {
 	let actualizados = 0;
 	let sinCambio = 0;
 	const toWrite = [];
+	const detalle = [];
 
 	for (const row of syncRows) {
 		const id = Number(row.Valor);
@@ -154,14 +202,27 @@ async function syncPersonalDelta(emp, syncRows) {
 			continue;
 		}
 		const prev = byId.get(id);
+		const nombre = nombrePersona(row) || nombrePersona(prev) || `ID ${id}`;
 		if (!prev) {
 			nuevos += 1;
 			toWrite.push(row);
+			detalle.push({
+				valor: id,
+				nombre,
+				accion: 'alta',
+				campos: [],
+			});
 			continue;
 		}
 		if (fingerprint(row, PERSONAL_SYNC_COLUMNS) !== fingerprint(prev, PERSONAL_SYNC_COLUMNS)) {
 			actualizados += 1;
 			toWrite.push(row);
+			detalle.push({
+				valor: id,
+				nombre,
+				accion: 'actualizacion',
+				campos: diffRows(prev, row, PERSONAL_SYNC_COLUMNS),
+			});
 		} else {
 			sinCambio += 1;
 		}
@@ -193,6 +254,7 @@ async function syncPersonalDelta(emp, syncRows) {
 		nuevos,
 		actualizados,
 		sinCambio,
+		detalle,
 		// Cantidad que “cambiaron” (para UI: 0 si ya estaba al día)
 		cambios: nuevos + actualizados,
 	};
@@ -215,6 +277,7 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 		(existingSec || []).map((r) => [String(r.Valor || '').trim(), normCmp(r.Descripcion)]),
 	);
 	let sectoresCambios = 0;
+	const detalleCatalogo = [];
 	for (const s of secRows) {
 		const valor = String(s.Valor || '').trim();
 		if (!valor) continue;
@@ -222,6 +285,12 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 		const prev = secByValor.get(valor);
 		if (prev === undefined || prev !== normCmp(desc)) {
 			sectoresCambios += 1;
+			detalleCatalogo.push({
+				valor,
+				descripcion: desc,
+				accion: prev === undefined ? 'alta' : 'actualizacion',
+				de: prev === undefined ? '—' : displayVal(prev),
+			});
 			await mysqlExec(
 				`INSERT INTO ${q('imSectores')} (IdEmpresa, Valor, Descripcion)
          VALUES (?, ?, ?)
@@ -268,8 +337,10 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 		return {
 			sectoresCatalogo: secRows.length,
 			sectoresCatalogoCambios: sectoresCambios,
+			detalleCatalogo,
 			asignaciones: 0,
 			asignacionesTotal: asignFisico.length,
+			detalleAsignaciones: [],
 		};
 	}
 
@@ -292,11 +363,40 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 	let onlyNube = 0;
 	for (const k of setNube) if (!setFisico.has(k)) onlyNube += 1;
 
+	const secNombre = new Map(
+		secRows.map((s) => [
+			String(s.Valor || '').trim(),
+			String(s.Descripcion || '').trim() || String(s.Valor || '').trim(),
+		]),
+	);
+
+	const byUser = new Map();
+	function touchSector(idP, accion, idS) {
+		if (!byUser.has(idP)) byUser.set(idP, { valor: idP, agregados: [], quitados: [] });
+		const label = secNombre.get(idS) || idS;
+		if (accion === 'agregado') byUser.get(idP).agregados.push(label);
+		else byUser.get(idP).quitados.push(label);
+	}
+	for (const k of setFisico) {
+		if (!setNube.has(k)) {
+			const [idP, idS] = k.split('\t');
+			touchSector(Number(idP), 'agregado', idS);
+		}
+	}
+	for (const k of setNube) {
+		if (!setFisico.has(k)) {
+			const [idP, idS] = k.split('\t');
+			touchSector(Number(idP), 'quitado', idS);
+		}
+	}
+
 	return {
 		sectoresCatalogo: secRows.length,
 		sectoresCatalogoCambios: sectoresCambios,
+		detalleCatalogo,
 		asignaciones: onlyFisico + onlyNube,
 		asignacionesTotal: asignFisico.length,
+		detalleAsignaciones: [...byUser.values()],
 	};
 }
 
@@ -352,6 +452,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 			cambios: 0,
 			errores: 0,
 			detalleErrores: [],
+			detalle: [],
 		};
 	}
 
@@ -364,6 +465,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 			cambios: 0,
 			errores: 0,
 			detalleErrores: [],
+			detalle: [],
 		};
 	}
 
@@ -426,23 +528,36 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 	let actualizados = 0;
 	let sinCambio = 0;
 	const toWrite = [];
+	const detalle = [];
 	const hashKey = mysqlColByLower.has('passwordhash')
 		? mysqlColByLower.get('passwordhash')
 		: null;
 
 	for (const row of mapped) {
 		const prev = byVp.get(row.ValorPersonal);
+		const nombreRed = String(row.NombreRed || row.nombrered || prev?.NombreRed || '').trim();
 		if (!prev) {
 			nuevos += 1;
 			toWrite.push(row);
+			detalle.push({
+				valor: row.ValorPersonal,
+				nombreRed: nombreRed || null,
+				accion: 'alta',
+				campos: [],
+			});
 			continue;
 		}
 		if (fingerprint(row, cmpCols) !== fingerprint(prev, cmpCols)) {
-			// Clave o datos de cuenta cambiaron en el físico → anular hash SaaS
 			const payload = { ...row };
 			if (hashKey) payload[hashKey] = null;
 			actualizados += 1;
 			toWrite.push(payload);
+			detalle.push({
+				valor: row.ValorPersonal,
+				nombreRed: nombreRed || null,
+				accion: 'actualizacion',
+				campos: diffRows(prev, payload, cmpCols, (c) => PW_LABEL[c] || c),
+			});
 		} else {
 			sinCambio += 1;
 		}
@@ -491,6 +606,8 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 					await insertLote([row]);
 				} catch (rowErr) {
 					errores += 1;
+					const d = detalle.find((x) => x.valor === row.ValorPersonal);
+					if (d) d.accion = 'error';
 					if (detalleErrores.length < 15) {
 						detalleErrores.push({
 							valorPersonal: row.ValorPersonal,
@@ -518,6 +635,7 @@ async function syncPasswordsDesdeFisico(idEmpresa, pool) {
 		written: toWrite.length - errores,
 		errores,
 		detalleErrores,
+		detalle,
 	};
 }
 
@@ -598,6 +716,7 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 		ids: ids.length,
 		nuevos: missingMysql.length,
 		nuevosFisico,
+		detalle: missingMysql.map((valor) => ({ valor })),
 		// UI: solo lo que se agregó en esta corrida
 		cambios: missingMysql.length,
 	};
@@ -633,6 +752,14 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	const vinculos = await syncVinculosEmpresa(emp, pool);
 	const roles = await syncRolesDesdeFisico(emp, pool);
 
+	const namesByValor = new Map();
+	for (const r of syncRows) {
+		const id = Number(r.Valor);
+		if (!Number.isFinite(id)) continue;
+		const n = nombrePersona(r);
+		if (n) namesByValor.set(id, n);
+	}
+
 	const bruto = {
 		personal: personal.cambios,
 		personalTotal: personal.total,
@@ -658,7 +785,15 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 		rolesSinAsignar: roles.sinRol,
 		rolesPorTipo: roles.porRol,
 	};
-	const informe = buildSyncInforme(bruto);
+	const informe = buildSyncInforme({
+		bruto,
+		personal,
+		passwords,
+		sec,
+		vinculos,
+		roles,
+		namesByValor,
+	});
 	const totalCambios =
 		(Number(bruto.personal) || 0) +
 		(Number(bruto.passwordsEscritos) || 0) +
@@ -838,6 +973,7 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 		const data = await pool.request().query(`
       SELECT
         p.Valor,
+        RTRIM(LTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre,
         LTRIM(RTRIM(ISNULL(p.Rol, ''))) AS Rol,
         p.ValorEspecialidad,
         CAST(ISNULL((
@@ -848,7 +984,7 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 		fisicoRows = data.recordset || [];
 	} catch (e) {
 		console.warn('[personalSync] roles físico:', e.message);
-		return { asignados: 0, yaTenia: 0, sinRol: 0, porRol: {} };
+		return { asignados: 0, yaTenia: 0, sinRol: 0, porRol: {}, detalle: [] };
 	}
 
 	const existing = await mysqlQuery(
@@ -877,7 +1013,11 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 			sinRol += 1;
 			continue;
 		}
-		toWrite.push({ vp, idRol });
+		toWrite.push({
+			vp,
+			idRol,
+			nombre: nombrePersona(row) || `ID ${vp}`,
+		});
 		porRol[idRol] = (porRol[idRol] || 0) + 1;
 	}
 
@@ -905,17 +1045,47 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 		asignados: insertados,
 		yaTenia,
 		sinRol,
-		porRol: insertados === toWrite.length ? porRol : {},
+		porRol,
+		detalle: toWrite.map((r) => ({
+			valor: r.vp,
+			nombre: r.nombre,
+			idRol: r.idRol,
+		})),
 	};
 }
 
 const ROL_INFORME_LABEL = {
-	1: { uno: 'admin', muchos: 'admins' },
-	2: { uno: 'médico', muchos: 'médicos' },
-	3: { uno: 'enfermero', muchos: 'enfermeros' },
-	4: { uno: 'administrativo', muchos: 'administrativos' },
-	6: { uno: 'carga HC', muchos: 'carga HC' },
+	1: { uno: 'admin', muchos: 'admins', nombre: 'ADMIN', etiqueta: 'Administrador' },
+	2: { uno: 'médico', muchos: 'médicos', nombre: 'MEDICO', etiqueta: 'Médico' },
+	3: { uno: 'enfermero', muchos: 'enfermeros', nombre: 'ENFERMERO', etiqueta: 'Enfermero' },
+	4: {
+		uno: 'administrativo',
+		muchos: 'administrativos',
+		nombre: 'ADMINISTRATIVO',
+		etiqueta: 'Administrativo',
+	},
+	6: { uno: 'carga HC', muchos: 'carga HC', nombre: 'CARGA_HC', etiqueta: 'Carga de adjuntos' },
 };
+
+function resumenPermisosRol(idRol) {
+	const meta = ROL_INFORME_LABEL[idRol];
+	if (!meta) return null;
+	const codigos = permisosDeRol(meta.nombre);
+	const arbol = modulosVisibles(meta.nombre).map((m) => ({
+		modulo: m.label,
+		items: (m.submodulos || []).map((s) => ({
+			nombre: s.label,
+			acciones: [...(s.acciones || [])],
+		})),
+	}));
+	return {
+		idRol: Number(idRol),
+		nombre: meta.nombre,
+		etiqueta: meta.etiqueta,
+		permisos: codigos.length,
+		modulos: arbol,
+	};
+}
 
 function pushInformeItem(items, cantidad, uno, muchos, opts = {}) {
 	const n = Number(cantidad) || 0;
@@ -928,10 +1098,25 @@ function pushInformeItem(items, cantidad, uno, muchos, opts = {}) {
 	});
 }
 
+function ensureUser(users, valor, namesByValor, fallbackNombre) {
+	const id = Number(valor);
+	if (!Number.isFinite(id) || id <= 0) return null;
+	if (!users.has(id)) {
+		users.set(id, {
+			valor: id,
+			nombre: fallbackNombre || namesByValor.get(id) || `ID ${id}`,
+			cambios: [],
+		});
+	} else if (fallbackNombre && String(users.get(id).nombre).startsWith('ID ')) {
+		users.get(id).nombre = fallbackNombre;
+	}
+	return users.get(id);
+}
+
 /**
- * Texto del modal: solo lo que esta corrida escribió (o falló).
+ * Informe del modal: resumen + detalle por usuario (desplegables).
  */
-function buildSyncInforme(r) {
+function buildSyncInforme({ bruto: r, personal, passwords, sec, vinculos, roles, namesByValor }) {
 	const items = [];
 	pushInformeItem(items, r.personalNuevos, 'persona dada de alta', 'personas dadas de alta');
 	pushInformeItem(
@@ -998,6 +1183,96 @@ function buildSyncInforme(r) {
 		extra: rolBits.length ? rolBits.join(', ') : null,
 	});
 
+	const names = namesByValor instanceof Map ? namesByValor : new Map();
+	const users = new Map();
+
+	for (const d of personal?.detalle || []) {
+		const u = ensureUser(users, d.valor, names, d.nombre);
+		if (!u) continue;
+		u.cambios.push({
+			tipo: 'ficha',
+			accion: d.accion,
+			titulo: d.accion === 'alta' ? 'Ficha dada de alta' : 'Ficha actualizada',
+			campos: d.campos || [],
+		});
+	}
+
+	const errByVp = new Map(
+		(passwords?.detalleErrores || []).map((e) => [Number(e.valorPersonal), e.error]),
+	);
+	for (const d of passwords?.detalle || []) {
+		const u = ensureUser(
+			users,
+			d.valor,
+			names,
+			d.nombreRed ? `${names.get(Number(d.valor)) || d.nombreRed}` : null,
+		);
+		if (!u) continue;
+		const err = errByVp.get(Number(d.valor));
+		const accion = d.accion === 'error' || err ? 'error' : d.accion;
+		u.cambios.push({
+			tipo: 'cuenta',
+			accion,
+			titulo:
+				accion === 'alta'
+					? 'Cuenta de acceso nueva'
+					: accion === 'error'
+					  ? 'Cuenta no copiada'
+					  : 'Cuenta de acceso actualizada',
+			campos: d.campos || [],
+			usuarioRed: d.nombreRed || null,
+			error: err || null,
+		});
+	}
+
+	for (const d of roles?.detalle || []) {
+		const meta = ROL_INFORME_LABEL[d.idRol];
+		const u = ensureUser(users, d.valor, names, d.nombre);
+		if (!u) continue;
+		u.cambios.push({
+			tipo: 'rol',
+			accion: 'asignado',
+			titulo: `Rol asignado: ${meta ? meta.etiqueta : d.idRol}`,
+			idRol: d.idRol,
+		});
+	}
+
+	for (const d of sec?.detalleAsignaciones || []) {
+		const u = ensureUser(users, d.valor, names, null);
+		if (!u) continue;
+		u.cambios.push({
+			tipo: 'sector',
+			accion: 'asignacion',
+			titulo: 'Sectores',
+			agregados: d.agregados || [],
+			quitados: d.quitados || [],
+		});
+	}
+
+	for (const d of vinculos?.detalle || []) {
+		const u = ensureUser(users, d.valor, names, null);
+		if (!u) continue;
+		u.cambios.push({
+			tipo: 'vinculo',
+			accion: 'nuevo',
+			titulo: 'Vínculo con la empresa',
+		});
+	}
+
+	const usuarios = [...users.values()].sort((a, b) =>
+		String(a.nombre).localeCompare(String(b.nombre), 'es'),
+	);
+
+	const porTipo = Object.keys(ROL_INFORME_LABEL)
+		.map((id) => {
+			const c = Number(por[id] ?? por[Number(id)] ?? 0);
+			if (c <= 0) return null;
+			const resumen = resumenPermisosRol(id);
+			if (!resumen) return null;
+			return { ...resumen, usuarios: c };
+		})
+		.filter(Boolean);
+
 	const huboCambio = items.some((i) => !i.error);
 	const huboError = items.some((i) => i.error);
 	let mensaje;
@@ -1013,6 +1288,14 @@ function buildSyncInforme(r) {
 		mensaje,
 		sinCambios: !huboCambio && !huboError,
 		items,
+		usuarios,
+		catalogoSectores: sec?.detalleCatalogo || [],
+		roles: {
+			asignados: Number(r.rolesAsignados) || 0,
+			yaTenia: Number(r.rolesYaTenia) || 0,
+			sinRol: Number(r.rolesSinAsignar) || 0,
+			porTipo,
+		},
 	};
 }
 
