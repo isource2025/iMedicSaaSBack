@@ -805,6 +805,7 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	return {
 		...bruto,
 		informe,
+		usuarios: informe.usuarios,
 		sinCambios: informe.sinCambios,
 		totalCambios,
 	};
@@ -1070,21 +1071,31 @@ const ROL_INFORME_LABEL = {
 function resumenPermisosRol(idRol) {
 	const meta = ROL_INFORME_LABEL[idRol];
 	if (!meta) return null;
-	const codigos = permisosDeRol(meta.nombre);
-	const arbol = modulosVisibles(meta.nombre).map((m) => ({
-		modulo: m.label,
-		items: (m.submodulos || []).map((s) => ({
-			nombre: s.label,
-			acciones: [...(s.acciones || [])],
-		})),
-	}));
-	return {
-		idRol: Number(idRol),
-		nombre: meta.nombre,
-		etiqueta: meta.etiqueta,
-		permisos: codigos.length,
-		modulos: arbol,
-	};
+	try {
+		const codigos = permisosDeRol(meta.nombre);
+		const arbol = modulosVisibles(meta.nombre).map((m) => ({
+			modulo: m.label,
+			items: (m.submodulos || []).map((s) => ({
+				nombre: s.label,
+				acciones: [...(s.acciones || [])],
+			})),
+		}));
+		return {
+			idRol: Number(idRol),
+			nombre: meta.nombre,
+			etiqueta: meta.etiqueta,
+			permisos: codigos.length,
+			modulos: arbol,
+		};
+	} catch {
+		return {
+			idRol: Number(idRol),
+			nombre: meta.nombre,
+			etiqueta: meta.etiqueta,
+			permisos: 0,
+			modulos: [],
+		};
+	}
 }
 
 function pushInformeItem(items, cantidad, uno, muchos, opts = {}) {

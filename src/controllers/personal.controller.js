@@ -34,7 +34,10 @@ const syncDesdeFisico = async (_req, res) => {
 				(resumen.sinCambios
 					? 'La nube ya estaba al día. No hubo cambios respecto a la base física.'
 					: 'Se aplicaron cambios desde la base física.'),
-			data: resumen,
+			data: {
+				...resumen,
+				usuarios: resumen.informe?.usuarios || resumen.usuarios || [],
+			},
 		});
 	} catch (error) {
 		console.error('[personal.syncDesdeFisico] ERROR:', error.message);
