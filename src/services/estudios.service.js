@@ -221,9 +221,8 @@ function mapPedidoRow(row) {
 			: null,
 		MatriculaSolicitante:
 			row.MatriculaSolicitante != null ? Number(row.MatriculaSolicitante) : null,
-		MedicoSolicitanteNombre: row.MedicoSolicitanteNombre
-			? String(row.MedicoSolicitanteNombre).trim()
-			: null,
+		MedicoSolicitanteNombre:
+			String(row.MedicoSolicitanteNombre || '').trim() || null,
 		IdProtocolo: idProtocolo > 0 ? idProtocolo : 0,
 		Cumplido: cumplido,
 		EstadoUrgencia: row.EstadoUrgencia ? String(row.EstadoUrgencia).trim() : null,
@@ -289,7 +288,7 @@ const SELECT_PEDIDO = `
   LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS NomencladorDescripcion,
   pe.NotasObservacion,
   pe.ValorProfesional AS MatriculaSolicitante,
-  per.ApellidoNombre AS MedicoSolicitanteNombre,
+  LTRIM(RTRIM(ISNULL(sol.ApellidoNombre, ''))) AS MedicoSolicitanteNombre,
   pe.IdProtocolo,
   pe.EstadoUrgencia,
   LTRIM(RTRIM(ISNULL(pe.IdSectorSolicitante, ''))) AS SectorSolicitante,
@@ -350,7 +349,42 @@ const FROM_PEDIDO = `
     FROM dbo.imNomenclador n
     WHERE n.IDPractica = pe.IdPractica
   ) nom
-  LEFT JOIN dbo.imPersonal per ON per.Matricula = pe.ValorProfesional
+  OUTER APPLY (
+    SELECT TOP 1 n.ApellidoNombre
+    FROM (
+      SELECT
+        COALESCE(
+          NULLIF(LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), ''),
+          NULLIF(LTRIM(RTRIM(
+            RTRIM(LTRIM(ISNULL(pw.Apellido, ''))) +
+            CASE
+              WHEN LTRIM(RTRIM(ISNULL(pw.Nombres, ''))) = '' THEN ''
+              ELSE ' ' + LTRIM(RTRIM(pw.Nombres))
+            END
+          )), '')
+        ) AS ApellidoNombre,
+        CASE WHEN p.Matricula = pe.ValorProfesional THEN 0 ELSE 1 END AS Ord
+      FROM dbo.imPersonal p
+      LEFT JOIN dbo.imPassword pw ON pw.ValorPersonal = p.Valor
+      WHERE ISNULL(pe.ValorProfesional, 0) <> 0
+        AND (p.Valor = pe.ValorProfesional OR p.Matricula = pe.ValorProfesional)
+      UNION ALL
+      SELECT
+        NULLIF(LTRIM(RTRIM(
+          RTRIM(LTRIM(ISNULL(pw2.Apellido, ''))) +
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(pw2.Nombres, ''))) = '' THEN ''
+            ELSE ' ' + LTRIM(RTRIM(pw2.Nombres))
+          END
+        )), ''),
+        2
+      FROM dbo.imPassword pw2
+      WHERE ISNULL(pe.ValorProfesional, 0) <> 0
+        AND (pw2.ValorPersonal = pe.ValorProfesional OR pw2.CodOperador = pe.ValorProfesional)
+    ) n
+    WHERE NULLIF(LTRIM(RTRIM(ISNULL(n.ApellidoNombre, ''))), '') IS NOT NULL
+    ORDER BY n.Ord
+  ) sol
   LEFT JOIN dbo.imSectores secSol ON LTRIM(RTRIM(secSol.Valor)) = LTRIM(RTRIM(pe.IdSectorSolicitante))
   LEFT JOIN dbo.imSectores secRec ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
   LEFT JOIN dbo.imServicios srv ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))

@@ -497,7 +497,15 @@ async function _solicitantesPedidosPorVisita(numeroVisita) {
         pe.ValorProfesional AS Matricula,
         LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))) AS Nombre
       FROM dbo.imPedidosEstudios pe
-      LEFT JOIN dbo.imPersonal per ON per.Matricula = pe.ValorProfesional
+      OUTER APPLY (
+        SELECT TOP 1 LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre
+        FROM dbo.imPersonal p
+        WHERE ISNULL(pe.ValorProfesional, 0) <> 0
+          AND (p.Valor = pe.ValorProfesional OR p.Matricula = pe.ValorProfesional)
+        ORDER BY
+          CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
+          CASE WHEN p.Matricula = pe.ValorProfesional THEN 0 ELSE 1 END
+      ) per
       WHERE pe.IdVisita = @p0 AND pe.IdProtocolo IS NOT NULL AND pe.IdProtocolo > 0
     `,
 		[{ value: numeroVisita, type: 'Int' }],
@@ -814,7 +822,15 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           LTRIM(RTRIM(ISNULL(tomaPer.ApellidoNombre, ''))) AS NombreToma
         FROM dbo.imPedidosEstudios pe
         LEFT JOIN dbo.imProtocolosResultados pr ON pe.IdProtocolo = pr.IdProtocolo AND pe.IdProtocolo > 0
-        LEFT JOIN dbo.imPersonal sol ON sol.Matricula = pe.ValorProfesional
+        OUTER APPLY (
+          SELECT TOP 1 LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre
+          FROM dbo.imPersonal p
+          WHERE ISNULL(pe.ValorProfesional, 0) <> 0
+            AND (p.Valor = pe.ValorProfesional OR p.Matricula = pe.ValorProfesional)
+          ORDER BY
+            CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
+            CASE WHEN p.Matricula = pe.ValorProfesional THEN 0 ELSE 1 END
+        ) sol
         LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
         LEFT JOIN dbo.imFacPracticas fac ON pe.IdProtocolo > 0 AND (
           fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
