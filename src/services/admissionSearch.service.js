@@ -816,12 +816,13 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           pr.Estado AS EstadoResultado,
           pr.CodOperador AS CodOperadorResultado,
           LTRIM(RTRIM(ISNULL(opRes.ApellidoNombre, ''))) AS OperadorResultadoNombre,
-          fprof.Matricula AS MatriculaRealizador,
-          LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre,
-          toma.Matricula AS MatriculaToma,
-          LTRIM(RTRIM(ISNULL(tomaPer.ApellidoNombre, ''))) AS NombreToma
+          realz.Matricula AS MatriculaRealizador,
+          LTRIM(RTRIM(ISNULL(realz.RealizadorNombre, ''))) AS RealizadorNombre,
+          CAST(NULL AS INT) AS MatriculaToma,
+          CAST(NULL AS VARCHAR(200)) AS NombreToma
         FROM dbo.imPedidosEstudios pe
         LEFT JOIN dbo.imProtocolosResultados pr ON pe.IdProtocolo = pr.IdProtocolo AND pe.IdProtocolo > 0
+        LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
         OUTER APPLY (
           SELECT TOP 1 LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre
           FROM dbo.imPersonal p
@@ -831,14 +832,6 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
             CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
             CASE WHEN p.Matricula = pe.ValorProfesional THEN 0 ELSE 1 END
         ) sol
-        LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
-        LEFT JOIN dbo.imFacPracticas fac ON pe.IdProtocolo > 0 AND (
-          fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
-        )
-        LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
-        LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula
-        LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
-        LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
         OUTER APPLY (
           SELECT TOP 1 LTRIM(RTRIM(ISNULL(t.DescPractica, ''))) AS DescPractica
           FROM dbo.imTiposPedidosEstudios t
@@ -851,6 +844,15 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
         OUTER APPLY (
           SELECT TOP 1 Descripcion FROM dbo.imNomenclador WHERE IDPractica = pe.IdPractica
         ) nom
+        OUTER APPLY (
+          SELECT TOP 1 fprof.Matricula, LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
+          FROM dbo.imFacPracticas fac
+          INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
+          LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula OR realiz.Valor = fprof.Matricula
+          WHERE pe.IdProtocolo > 0 AND (
+            fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
+          )
+        ) realz
         WHERE pe.IdVisita = @param0
         ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC
       `,
@@ -907,7 +909,13 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
       String(e.NombreToma || '').trim() ||
       String(e.OperadorResultadoNombre || '').trim() ||
       '';
-    const resultadoPlain = estudiosService.rtfToPlain(e.ResultadoEstudio || '');
+    const resultadoPlain = (() => {
+      try {
+        return estudiosService.rtfToPlain(e.ResultadoEstudio || '');
+      } catch {
+        return '';
+      }
+    })();
     return {
       id: e.IdPedido,
       IdPedido: e.IdPedido,

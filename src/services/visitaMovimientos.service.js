@@ -82,6 +82,24 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
  * @returns {Promise<Object>} - Resultado con datos actualizados
  */
 
+function _hhmmClarion(horaClarion) {
+  const s = convertirHoraClarionAString(horaClarion);
+  return s ? s.slice(0, 5) : null;
+}
+
+function _mapMovimientoIso(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    FechaAdmisionISO: clarionAIsoCalendario(row.FechaAdmision) || null,
+    FechaEgresoISO: clarionAIsoCalendario(row.FechaEgreso) || null,
+    FechaCargaISO: clarionAIsoCalendario(row.FechaCarga) || null,
+    HoraAdmisionISO: _hhmmClarion(row.HoraAdmision),
+    HoraEgresoISO: _hhmmClarion(row.HoraEgreso),
+    HoraCargaISO: _hhmmClarion(row.HoraCarga),
+  };
+}
+
 /**
  * Obtiene todos los movimientos de una visita
  */
@@ -121,7 +139,8 @@ async function obtenerMovimientosVisita(numeroVisita) {
     WHERE m.NumeroVisita = @p0
     ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
   `;
-  return await executeQuery(sql, [{ value: num }]);
+  const rows = await executeQuery(sql, [{ value: num }]);
+  return (rows || []).map(_mapMovimientoIso);
 }
 
 async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
