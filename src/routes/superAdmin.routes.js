@@ -14,7 +14,9 @@ router.put('/config', requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'), ctrl.config
 router.post('/conexion/probar', requirePermiso('PLATAFORMA.EMPRESAS.CREAR'), ctrl.probarConexionDatos);
 
 router.get('/empresas', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.listarEmpresas);
+router.post('/empresas/alta', requirePermiso('PLATAFORMA.EMPRESAS.CREAR'), ctrl.crearEmpresaAlta);
 router.post('/empresas', requirePermiso('PLATAFORMA.EMPRESAS.CREAR'), ctrl.crearEmpresa);
+router.get('/empresas/:id/checklist', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.obtenerChecklist);
 router.get('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.VER'), ctrl.obtenerEmpresa);
 router.put('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.actualizarEmpresa);
 router.put('/empresas/:id/conexion', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.actualizarConexionEmpresa);

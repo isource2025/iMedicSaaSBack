@@ -353,15 +353,28 @@ async function actualizarPacks(idEmpresa, packsActivos) {
 }
 
 function parseOnboardingConfigJson(raw) {
-	if (!raw) return { sectoresDefecto: [] };
+	if (!raw) return { sectoresDefecto: [], altaCompletada: false };
 	try {
 		const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		return {
 			sectoresDefecto: Array.isArray(o?.sectoresDefecto) ? o.sectoresDefecto.map(String) : [],
+			altaCompletada: !!o?.altaCompletada,
 		};
 	} catch {
-		return { sectoresDefecto: [] };
+		return { sectoresDefecto: [], altaCompletada: false };
 	}
+}
+
+function mergeOnboardingConfig(prevRaw, data) {
+	const prev = parseOnboardingConfigJson(prevRaw);
+	const next = { ...prev };
+	if (data.sectoresDefecto !== undefined) {
+		next.sectoresDefecto = (data.sectoresDefecto || []).map(String);
+	}
+	if (data.altaCompletada !== undefined) {
+		next.altaCompletada = !!data.altaCompletada;
+	}
+	return JSON.stringify(next);
 }
 
 async function obtenerOnboarding(idEmpresa) {
@@ -372,7 +385,7 @@ async function obtenerOnboarding(idEmpresa) {
 		[Number(idEmpresa)],
 	);
 	if (!rows.length) {
-		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [] };
+		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
 	}
 	const r = rows[0];
 	const cfg = parseOnboardingConfigJson(r.ConfigJson);
@@ -383,6 +396,7 @@ async function obtenerOnboarding(idEmpresa) {
 		fechaInicio: r.FechaInicio,
 		fechaCompletado: r.FechaCompletado,
 		sectoresDefecto: cfg.sectoresDefecto,
+		altaCompletada: !!cfg.altaCompletada,
 	};
 }
 
@@ -395,12 +409,8 @@ async function upsertOnboarding(idEmpresa, data) {
 	);
 
 	let configJson = null;
-	if (data.sectoresDefecto !== undefined) {
-		const prev = exists.length ? parseOnboardingConfigJson(exists[0].ConfigJson) : { sectoresDefecto: [] };
-		configJson = JSON.stringify({
-			...prev,
-			sectoresDefecto: (data.sectoresDefecto || []).map(String),
-		});
+	if (data.sectoresDefecto !== undefined || data.altaCompletada !== undefined) {
+		configJson = mergeOnboardingConfig(exists.length ? exists[0].ConfigJson : null, data);
 	}
 
 	if (exists.length) {
@@ -535,6 +545,45 @@ async function contarUsuariosAuth() {
 	return Number(rows[0]?.c) || 0;
 }
 
+async function listarTodosUsuarios(filtro = '') {
+	assertMysql();
+	const qstr = String(filtro || '').trim();
+	let sql = `
+    SELECT
+      pw.ValorPersonal AS IdPersonal,
+      pw.NombreRed AS Usuario,
+      pw.Nombres AS Nombre,
+      pw.Apellido AS Apellido,
+      r.Nombre AS RolNombre,
+      (
+        SELECT GROUP_CONCAT(e.DESCRIPCION SEPARATOR ', ')
+        FROM ${q('imPersonalEmpresas')} pe
+        INNER JOIN ${q('Empresas')} e ON e.IDEMPRESA = pe.IdEmpresa
+        WHERE pe.IdPersonal = pw.ValorPersonal
+      ) AS Empresas
+    FROM ${q('imPassword')} pw
+    LEFT JOIN ${q('imPersonal')} p
+      ON p.Valor = pw.ValorPersonal AND p.IdEmpresa = pw.IdEmpresa
+    LEFT JOIN ${q('imRoles')} r
+      ON CAST(r.IdRol AS CHAR) = TRIM(p.Rol) AND r.Activo = 1
+  `;
+	const params = [];
+	if (qstr) {
+		sql += ` WHERE pw.NombreRed LIKE ? OR pw.Nombres LIKE ? OR pw.Apellido LIKE ?`;
+		params.push(`%${qstr}%`, `%${qstr}%`, `%${qstr}%`);
+	}
+	sql += ` ORDER BY pw.Apellido, pw.Nombres LIMIT 200`;
+	const rows = await mysqlQuery(sql, params);
+	return rows.map((r) => ({
+		idPersonal: Number(r.IdPersonal),
+		usuario: String(r.Usuario || '').trim(),
+		nombre: String(r.Nombre || '').trim(),
+		apellido: String(r.Apellido || '').trim(),
+		rol: r.RolNombre || null,
+		empresas: r.Empresas || '',
+	}));
+}
+
 async function aplicarMigracionInfra() {
 	assertMysql();
 	const fs = require('fs');
@@ -591,6 +640,7 @@ module.exports = {
 	listarConfigPlataforma,
 	guardarConfigPlataforma,
 	contarUsuariosAuth,
+	listarTodosUsuarios,
 	aplicarMigracionInfra,
 	aplicarMigracionPlataforma,
 };

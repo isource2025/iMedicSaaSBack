@@ -62,6 +62,7 @@ function mapEmpresaRow(r) {
 		calle: String(r.calle ?? '').trim(),
 		calle_nro: r.calle_nro != null ? String(r.calle_nro) : '',
 		tipoServidor: normalizeTipoServidor(r.TipoServidor),
+		cantUsuarios: r.CantUsuarios != null ? Number(r.CantUsuarios) : undefined,
 		conexion: {
 			dbServer: r.DbServer != null ? String(r.DbServer) : '',
 			dbPort: r.DbPort != null ? Number(r.DbPort) : null,
@@ -82,6 +83,7 @@ async function listarEmpresas(filtro = '') {
 			emp.packs = await obtenerPacksEmpresa(Number(emp.id));
 			emp.onboarding = await obtenerOnboardingEmpresa(Number(emp.id));
 			emp.suscripcion = await obtenerSuscripcionEmpresa(Number(emp.id));
+			enriquecerEmpresaLista(emp);
 		}
 		return empresas;
 	}
@@ -123,6 +125,7 @@ async function listarEmpresas(filtro = '') {
 		emp.packs = await obtenerPacksEmpresa(Number(emp.id));
 		emp.onboarding = await obtenerOnboardingEmpresa(Number(emp.id));
 		emp.suscripcion = await obtenerSuscripcionEmpresa(Number(emp.id));
+		enriquecerEmpresaLista(emp);
 	}
 	return empresas;
 }
@@ -148,17 +151,30 @@ async function obtenerPacksEmpresa(idEmpresa) {
 }
 
 function parseOnboardingConfigJson(raw) {
-	if (!raw) return { sectoresDefecto: [] };
+	if (!raw) return { sectoresDefecto: [], altaCompletada: false };
 	try {
 		const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		return {
 			sectoresDefecto: Array.isArray(o?.sectoresDefecto)
 				? o.sectoresDefecto.map(String)
 				: [],
+			altaCompletada: !!o?.altaCompletada,
 		};
 	} catch {
-		return { sectoresDefecto: [] };
+		return { sectoresDefecto: [], altaCompletada: false };
 	}
+}
+
+function mergeOnboardingConfig(prevRaw, data) {
+	const prev = parseOnboardingConfigJson(prevRaw);
+	const next = { ...prev };
+	if (data.sectoresDefecto !== undefined) {
+		next.sectoresDefecto = (data.sectoresDefecto || []).map(String);
+	}
+	if (data.altaCompletada !== undefined) {
+		next.altaCompletada = !!data.altaCompletada;
+	}
+	return JSON.stringify(next);
 }
 
 async function obtenerOnboardingEmpresa(idEmpresa) {
@@ -167,7 +183,7 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			return await platformMysql.obtenerOnboarding(idEmpresa);
 		} catch (e) {
 			console.warn('[superAdmin] obtenerOnboardingEmpresa MySQL:', e.message);
-			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [] };
+			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
 		}
 	}
 	try {
@@ -177,7 +193,7 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		if (!rows.length) {
-			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [] };
+			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
 		}
 		const r = rows[0];
 		const cfg = parseOnboardingConfigJson(r.ConfigJson);
@@ -188,9 +204,10 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			fechaInicio: r.FechaInicio,
 			fechaCompletado: r.FechaCompletado,
 			sectoresDefecto: cfg.sectoresDefecto,
+			altaCompletada: !!cfg.altaCompletada,
 		};
 	} catch {
-		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [] };
+		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
 	}
 }
 
@@ -567,12 +584,8 @@ async function upsertOnboarding(idEmpresa, data) {
 		);
 
 		let configJson = null;
-		if (data.sectoresDefecto !== undefined) {
-			const prev = exists.length ? parseOnboardingConfigJson(exists[0].ConfigJson) : { sectoresDefecto: [] };
-			configJson = JSON.stringify({
-				...prev,
-				sectoresDefecto: (data.sectoresDefecto || []).map(String),
-			});
+		if (data.sectoresDefecto !== undefined || data.altaCompletada !== undefined) {
+			configJson = mergeOnboardingConfig(exists.length ? exists[0].ConfigJson : null, data);
 		}
 
 		if (exists.length) {
@@ -1134,6 +1147,14 @@ async function listarUsuariosEmpresa(idEmpresa) {
 }
 
 async function listarTodosUsuarios(filtro = '') {
+	if (useMysqlPlatform()) {
+		try {
+			return await platformMysql.listarTodosUsuarios(filtro);
+		} catch (e) {
+			console.warn('[superAdmin] listarTodosUsuarios MySQL:', e.message);
+			return [];
+		}
+	}
 	const q = String(filtro || '').trim();
 	const params = [];
 	let where = '';
@@ -1263,12 +1284,212 @@ async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {
 	});
 }
 
+function motivoAtencionDesdeLista(emp) {
+	const estado = String(emp.suscripcion?.estado || '').toUpperCase();
+	const esNube = emp.tipoServidor === 'NUBE';
+	const tieneSql = !!(emp.conexion?.dbServer && emp.conexion?.dbName);
+	const altaOk = !!(emp.onboarding?.altaCompletada || emp.onboarding?.completado);
+	const users = Number(emp.cantUsuarios || 0);
+
+	if (!altaOk && users === 0) return 'Alta incompleta';
+	if (!esNube && !tieneSql) return 'Sin conexión SQL';
+	if (estado === 'PRUEBA' && (altaOk || users > 0)) return 'Lista para activar';
+	if (estado === 'SUSPENDIDA') return 'Suspendida';
+	return null;
+}
+
+function enriquecerEmpresaLista(emp) {
+	emp.cantUsuarios = emp.cantUsuarios != null ? Number(emp.cantUsuarios) : 0;
+	emp.altaCompletada = !!(emp.onboarding?.altaCompletada || emp.onboarding?.completado);
+	emp.motivoAtencion = motivoAtencionDesdeLista(emp);
+	return emp;
+}
+
+function checklistItem(id, grupo, label, ok, seccion, extra = {}) {
+	return { id, grupo, label, ok: !!ok, seccion, ...extra };
+}
+
+async function obtenerChecklistEmpresa(idEmpresa, detallePreload = null) {
+	const empresa = detallePreload || (await obtenerEmpresaDetalle(idEmpresa));
+	if (!empresa) {
+		const e = new Error('Empresa no encontrada');
+		e.statusCode = 404;
+		throw e;
+	}
+
+	const esNube = empresa.tipoServidor === 'NUBE';
+	const usuarios = empresa.usuarios || [];
+	const packs = empresa.packs || [];
+	const onb = empresa.onboarding || {};
+	const sub = empresa.suscripcion || {};
+	const conexion = empresa.conexion || {};
+
+	let sectores = [];
+	try {
+		const cat = await obtenerCatalogosTenant(idEmpresa);
+		sectores = cat.sectores || [];
+	} catch {
+		sectores = [];
+	}
+
+	const tieneIdentidad = !!(empresa.descripcion && String(empresa.descripcion).trim());
+	const tieneAdmin = usuarios.length > 0;
+	const tieneSector = sectores.length > 0 || (onb.sectoresDefecto || []).length > 0;
+	const tienePacks = packs.length > 0;
+	const altaOk = !!(onb.altaCompletada || (tieneIdentidad && tieneAdmin && tieneSector && tienePacks));
+	const tieneSql = !!(conexion.dbServer && conexion.dbName);
+	const tieneTunel = !!(conexion.fileServerUrl && String(conexion.fileServerUrl).trim());
+	const conexionOk = esNube || tieneSql;
+	const tieneImporte = sub.importeMensual != null && Number(sub.importeMensual) > 0;
+	const tieneMetodo = !!(sub.metodoPago && String(sub.metodoPago).trim());
+	const comercialOk =
+		!!String(sub.plan || '') &&
+		(String(sub.plan).toUpperCase() === 'STARTER' || tieneImporte || tieneMetodo);
+	const cicloOk = String(sub.estado || '').toUpperCase() === 'ACTIVA';
+
+	const items = [
+		checklistItem('identidad', 'alta', 'Datos de la empresa', tieneIdentidad, 'datos'),
+		checklistItem('packs', 'alta', 'Módulos contratados', tienePacks, 'modulos'),
+		checklistItem('sector', 'alta', 'Sector inicial', tieneSector, 'sectores'),
+		checklistItem('admin', 'alta', 'Usuario administrador', tieneAdmin, 'usuarios'),
+		checklistItem(
+			'conexion',
+			'infra',
+			esNube ? 'Infraestructura en la nube' : 'Conexión SQL del servidor físico',
+			conexionOk,
+			'infra',
+		),
+		checklistItem('tunel', 'infra', 'URL del túnel de adjuntos', tieneTunel, 'infra', { opcional: true }),
+		checklistItem('comercial', 'comercial', 'Plan y datos de cobranza', comercialOk, 'cobranza', {
+			opcional: true,
+		}),
+		checklistItem('ciclo', 'ciclo', 'Suscripción activa', cicloOk, 'cobranza'),
+	];
+
+	const pendientes = items.filter((i) => !i.ok && !i.opcional).length;
+	const listaParaActivar =
+		altaOk && conexionOk && !cicloOk && String(sub.estado || '').toUpperCase() === 'PRUEBA';
+
+	let motivoAtencion = null;
+	if (!altaOk) motivoAtencion = 'Alta incompleta';
+	else if (!esNube && !tieneSql) motivoAtencion = 'Sin conexión SQL';
+	else if (listaParaActivar) motivoAtencion = 'Lista para activar';
+	else if (String(sub.estado || '').toUpperCase() === 'SUSPENDIDA') motivoAtencion = 'Suspendida';
+
+	return {
+		items,
+		altaCompletada: altaOk,
+		listaParaActivar,
+		pendientes,
+		motivoAtencion,
+		tipoServidor: empresa.tipoServidor,
+		estado: sub.estado || 'PRUEBA',
+	};
+}
+
+function badRequest(msg) {
+	const e = new Error(msg);
+	e.statusCode = 400;
+	throw e;
+}
+
+async function resolverIdRolAdmin(idRol) {
+	if (idRol != null && idRol !== '') return Number(idRol);
+	const roles = await nubeTenant.listarRoles().catch(() => []);
+	const admin = roles.find((r) => String(r.nombre).toUpperCase() === 'ADMIN');
+	return admin?.idRol ?? roles[0]?.idRol ?? 1;
+}
+
+async function crearEmpresaAlta(data) {
+	const desc = String(data.descripcion || '').trim();
+	if (!desc) badRequest('La razón social es obligatoria');
+
+	const sector = data.sector || {};
+	const valor = String(sector.valor || '')
+		.trim()
+		.toUpperCase()
+		.slice(0, 3);
+	const sectorDesc = String(sector.descripcion || '').trim();
+	if (!valor || valor.length < 2) badRequest('El código del sector es obligatorio (2-3 caracteres)');
+	if (!sectorDesc) badRequest('La descripción del sector es obligatoria');
+
+	const admin = data.admin || {};
+	if (!String(admin.nombreRed || '').trim() || !String(admin.password || '').trim()) {
+		badRequest('Usuario y contraseña del administrador son obligatorios');
+	}
+	if (!String(admin.apellido || '').trim() || !String(admin.nombres || '').trim()) {
+		badRequest('Apellido y nombres del administrador son obligatorios');
+	}
+
+	const packs = Array.isArray(data.packs) && data.packs.length ? data.packs : ['AGENDA'];
+	const plan = String(data.plan || 'STARTER').toUpperCase();
+	const idRol = await resolverIdRolAdmin(admin.idRol);
+
+	let nuevoId = null;
+	try {
+		const empresa = await crearEmpresa({
+			...data,
+			descripcion: desc,
+			packs,
+			plan,
+			importeMensual: data.importeMensual ?? null,
+		});
+		nuevoId = Number(empresa.id);
+
+		await crearSector({
+			idEmpresa: nuevoId,
+			valor,
+			descripcion: sectorDesc,
+			ambInt: sector.ambInt || 'A',
+		});
+
+		await upsertOnboarding(nuevoId, {
+			pasoActual: 'CONFIG',
+			completado: false,
+			altaCompletada: true,
+			sectoresDefecto: [valor],
+		});
+
+		await crearUsuarioEmpresa(nuevoId, {
+			nombreRed: String(admin.nombreRed).trim(),
+			password: String(admin.password).trim(),
+			apellido: String(admin.apellido).trim(),
+			nombres: String(admin.nombres).trim(),
+			numeroDocumento: admin.numeroDocumento || '',
+			idRol,
+			sectores: [valor],
+		});
+
+		const detalle = await obtenerEmpresaDetalle(nuevoId);
+		const checklist = await obtenerChecklistEmpresa(nuevoId, detalle);
+		return { ...detalle, checklist };
+	} catch (err) {
+		if (nuevoId) {
+			await eliminarEmpresa(nuevoId).catch((e) =>
+				console.warn('[superAdmin] rollback alta empresa', nuevoId, e.message),
+			);
+		}
+		throw err;
+	}
+}
+
 async function obtenerDashboard() {
 	const empresas = await listarEmpresas();
 	const activas = empresas.filter((e) => e.suscripcion?.estado === 'ACTIVA').length;
 	const prueba = empresas.filter((e) => e.suscripcion?.estado === 'PRUEBA').length;
 	const suspendidas = empresas.filter((e) => e.suscripcion?.estado === 'SUSPENDIDA').length;
-	const onboardingPend = empresas.filter((e) => !e.onboarding?.completado).length;
+	const onboardingPend = empresas.filter((e) => !e.onboarding?.completado && !e.onboarding?.altaCompletada).length;
+	const empresasAtencion = empresas
+		.filter((e) => e.motivoAtencion)
+		.slice(0, 12)
+		.map((e) => ({
+			id: e.id,
+			descripcion: e.descripcion,
+			tipoServidor: e.tipoServidor,
+			plan: e.suscripcion?.plan || null,
+			estado: e.suscripcion?.estado || null,
+			motivoAtencion: e.motivoAtencion,
+		}));
 
 	let usuariosTotal = 0;
 	try {
@@ -1288,12 +1509,15 @@ async function obtenerDashboard() {
 		enPrueba: prueba,
 		suspendidas,
 		onboardingPendiente: onboardingPend,
+		pendientesAtencion: empresasAtencion.length,
 		totalUsuarios: usuariosTotal,
 		empresasRecientes: empresas.slice(0, 8),
+		empresasAtencion,
 	};
 }
 
 async function obtenerCatalogos() {
+	const roles = await nubeTenant.listarRoles().catch(() => []);
 	return {
 		packs: PACKS_PRINCIPALES,
 		modulosGenerales: MODULOS_GENERALES,
@@ -1301,7 +1525,7 @@ async function obtenerCatalogos() {
 		planes: PLANES,
 		estadosSuscripcion: ESTADOS_SUSCRIPCION,
 		sectores: [],
-		roles: [],
+		roles,
 	};
 }
 
@@ -1385,6 +1609,8 @@ module.exports = {
 	listarEmpresas,
 	obtenerEmpresaDetalle,
 	crearEmpresa,
+	crearEmpresaAlta,
+	obtenerChecklistEmpresa,
 	actualizarEmpresa,
 	actualizarConexionEmpresa,
 	probarConexionEmpresa,

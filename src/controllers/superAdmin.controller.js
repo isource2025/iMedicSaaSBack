@@ -58,6 +58,25 @@ async function crearEmpresa(req, res) {
 	}
 }
 
+async function crearEmpresaAlta(req, res) {
+	try {
+		const data = await superAdminService.crearEmpresaAlta(req.body);
+		res.status(201).json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
+async function obtenerChecklist(req, res) {
+	try {
+		const id = Number(req.params.id);
+		const data = await superAdminService.obtenerChecklistEmpresa(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 500).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function actualizarEmpresa(req, res) {
 	try {
 		const id = Number(req.params.id);
@@ -297,6 +316,8 @@ module.exports = {
 	listarEmpresas,
 	obtenerEmpresa,
 	crearEmpresa,
+	crearEmpresaAlta,
+	obtenerChecklist,
 	actualizarEmpresa,
 	actualizarConexionEmpresa,
 	probarConexionEmpresa,
