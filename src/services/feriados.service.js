@@ -11,7 +11,7 @@ const {
 } = require('../utils/dateUtils');
 
 const API_BASE = 'https://api.argentinadatos.com/v1/feriados';
-const API_TIMEOUT_MS = 3000;
+const API_TIMEOUT_MS = 8000;
 const SYNC_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LIST_TTL_MS = 60 * 60 * 1000;
 
@@ -20,8 +20,8 @@ const syncAtByTenant = new Map();
 const syncInflightByTenant = new Map();
 const listCacheByTenant = new Map();
 
-const DATE_NAME_RE = /^(fecha|fechaferiado|dia|date)$/i;
-const DESC_NAME_RE = /^(descripcion|descripción|motivo|nombre|observacion|observaciones|detalle)$/i;
+const DATE_NAME_RE = /fecha|feriado|^dia$|^date$/i;
+const DESC_NAME_RE = /descrip|motivo|nombre|observ/i;
 
 function tenantKey() {
 	const id = getTenantId();
@@ -78,10 +78,11 @@ async function descubrirSchema() {
 	let cols;
 	try {
 		cols = await executeQuery(
-			`SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
-			 FROM INFORMATION_SCHEMA.COLUMNS
-			 WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imFeriados'
-			 ORDER BY ORDINAL_POSITION`,
+			`SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT,
+			        COLUMNPROPERTY(OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME), c.COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY
+			 FROM INFORMATION_SCHEMA.COLUMNS c
+			 WHERE c.TABLE_SCHEMA = 'dbo' AND LOWER(c.TABLE_NAME) = 'imferiados'
+			 ORDER BY c.ORDINAL_POSITION`,
 		);
 	} catch (err) {
 		console.warn('[feriados] no se pudo leer esquema:', err?.message || err);
@@ -96,14 +97,30 @@ async function descubrirSchema() {
 		return miss;
 	}
 
-	const fechaCol = cols.find((c) => DATE_NAME_RE.test(String(c.COLUMN_NAME || '').replace(/\s+/g, '')));
-	const descCol = cols.find((c) => DESC_NAME_RE.test(String(c.COLUMN_NAME || '').replace(/\s+/g, '')));
+	const norm = (c) => String(c.COLUMN_NAME || '').replace(/\s+/g, '');
+	const fechaCol =
+		cols.find((c) => /fecha/i.test(norm(c))) ||
+		cols.find((c) => Number(c.IS_IDENTITY) !== 1 && DATE_NAME_RE.test(norm(c)));
+	const descCol = cols.find(
+		(c) => c !== fechaCol && DESC_NAME_RE.test(norm(c)),
+	);
 	if (!fechaCol) {
-		console.warn('[feriados] imFeriados existe pero no hay columna de fecha reconocible');
+		console.warn(
+			'[feriados] imFeriados existe pero no hay columna de fecha. Columnas:',
+			cols.map((c) => c.COLUMN_NAME).join(', '),
+		);
 		const miss = { exists: false };
 		schemaByTenant.set(key, miss);
 		return miss;
 	}
+
+	const extras = cols.filter((c) => {
+		if (c === fechaCol || c === descCol) return false;
+		if (Number(c.IS_IDENTITY) === 1) return false;
+		if (String(c.IS_NULLABLE).toUpperCase() === 'YES') return false;
+		if (c.COLUMN_DEFAULT != null && String(c.COLUMN_DEFAULT).trim() !== '') return false;
+		return true;
+	});
 
 	const schema = {
 		exists: true,
@@ -111,7 +128,18 @@ async function descubrirSchema() {
 		fechaType: String(fechaCol.DATA_TYPE || 'int'),
 		desc: descCol ? String(descCol.COLUMN_NAME) : null,
 		descType: descCol ? String(descCol.DATA_TYPE || 'varchar') : null,
+		extras: extras.map((c) => ({
+			name: String(c.COLUMN_NAME),
+			type: String(c.DATA_TYPE || 'int'),
+		})),
 	};
+	console.log(
+		'[feriados] esquema',
+		schema.fecha,
+		schema.fechaType,
+		schema.desc || '(sin texto)',
+		schema.extras.map((e) => e.name).join(',') || 'sin extras',
+	);
 	schemaByTenant.set(key, schema);
 	return schema;
 }
@@ -167,24 +195,40 @@ async function fechasExistentes(schema, desdeIso, hastaIso) {
 	return map;
 }
 
+function defaultExtraValue(type) {
+	const t = String(type || '').toLowerCase();
+	if (t.includes('char') || t === 'text' || t === 'ntext') return '';
+	if (t === 'bit') return 0;
+	if (isDateType(t)) return '1800-12-28';
+	return 0;
+}
+
+function sqlParamType(dataType) {
+	if (isIntType(dataType)) return 'Int';
+	return undefined;
+}
+
 async function insertarFeriado(schema, iso, nombre) {
-	const fechaCol = bracket(schema.fecha);
 	const fechaVal = valorFechaParaDb(iso, schema.fechaType);
-	const fechaType = isIntType(schema.fechaType) ? 'Int' : undefined;
 	const texto = String(nombre || 'Feriado').slice(0, 200);
+	const cols = [bracket(schema.fecha)];
+	const params = [{ value: fechaVal, type: sqlParamType(schema.fechaType) }];
 	if (schema.desc) {
-		await executeQuery(
-			`INSERT INTO dbo.imFeriados (${fechaCol}, ${bracket(schema.desc)}) VALUES (@p0, @p1)`,
-			[
-				{ value: fechaVal, type: fechaType },
-				{ value: texto },
-			],
-		);
-		return;
+		cols.push(bracket(schema.desc));
+		params.push({ value: texto });
 	}
-	await executeQuery(`INSERT INTO dbo.imFeriados (${fechaCol}) VALUES (@p0)`, [
-		{ value: fechaVal, type: fechaType },
-	]);
+	for (const extra of schema.extras || []) {
+		cols.push(bracket(extra.name));
+		params.push({
+			value: defaultExtraValue(extra.type),
+			type: sqlParamType(extra.type),
+		});
+	}
+	const placeholders = params.map((_, i) => `@p${i}`).join(', ');
+	await executeQuery(
+		`INSERT INTO dbo.imFeriados (${cols.join(', ')}) VALUES (${placeholders})`,
+		params,
+	);
 }
 
 async function completarDescripcion(schema, iso, nombre) {
@@ -211,16 +255,16 @@ async function syncDesdeApi() {
 	if (!schema.exists) return { ok: false, reason: 'no-table' };
 
 	const years = aniosAgenda();
-	let apiRows = [];
-	try {
-		const packs = await Promise.all(years.map((y) => fetchFeriadosAnio(y)));
-		apiRows = packs.flat();
-	} catch (err) {
-		console.warn('[feriados] API ArgentinaDatos:', err?.message || err);
-		return { ok: false, reason: 'api' };
-	}
-
-	if (!apiRows.length) return { ok: true, inserted: 0, updated: 0 };
+	const packs = await Promise.all(
+		years.map((y) =>
+			fetchFeriadosAnio(y).catch((err) => {
+				console.warn('[feriados] API año', y, err?.message || err);
+				return [];
+			}),
+		),
+	);
+	const apiRows = packs.flat();
+	if (!apiRows.length) return { ok: false, reason: 'api' };
 
 	const desde = `${years[0]}-01-01`;
 	const hasta = `${years[years.length - 1]}-12-31`;
@@ -257,7 +301,8 @@ async function syncDesdeApi() {
 	}
 
 	invalidarListCache();
-	return { ok: true, inserted, updated };
+	const missing = apiRows.filter((r) => !existentes.has(r.fecha)).length;
+	return { ok: true, inserted, updated, missing };
 }
 
 async function ensureFeriados() {
@@ -271,11 +316,12 @@ async function ensureFeriados() {
 		try {
 			const schema = await descubrirSchema();
 			if (!schema.exists) {
-				syncAtByTenant.set(key, Date.now());
 				return { skipped: true, reason: 'no-table' };
 			}
 			const result = await syncDesdeApi();
-			if (result.ok) syncAtByTenant.set(key, Date.now());
+			if (result.ok && Number(result.missing || 0) === 0) {
+				syncAtByTenant.set(key, Date.now());
+			}
 			return result;
 		} catch (err) {
 			console.warn('[feriados] ensure:', err?.message || err);
@@ -325,12 +371,14 @@ async function listarEnRango(desdeIso, hastaIso, opts = {}) {
 		.map(([fecha, nombre]) => ({ fecha, nombre: nombre || 'Feriado' }))
 		.sort((a, b) => a.fecha.localeCompare(b.fecha));
 
-	listCacheByTenant.set(key, {
-		desde,
-		hasta,
-		items,
-		expires: Date.now() + LIST_TTL_MS,
-	});
+	if (items.length) {
+		listCacheByTenant.set(key, {
+			desde,
+			hasta,
+			items,
+			expires: Date.now() + LIST_TTL_MS,
+		});
+	}
 	return items;
 }
 
