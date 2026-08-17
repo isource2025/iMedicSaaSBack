@@ -678,7 +678,7 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
 async function crearUsuarioEmpresa(idEmpresa, body) {
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
 	}
 	return runWithTenant(idEmpresa, async () => {
@@ -893,7 +893,7 @@ async function crearSector(data) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.crearSector(idEmpresa, { valor: data.valor, descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -952,7 +952,7 @@ async function actualizarSector(valor, data) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(idEmpresa)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.actualizarSector(idEmpresa, valor, { descripcion: data.descripcion, ambInt: data.ambInt });
 	}
 
@@ -997,7 +997,7 @@ async function eliminarSector(valor, idEmpresa) {
 		throw e;
 	}
 
-	if (await esEmpresaNube(tenantId)) {
+	if (await gestionAuthEnRailway()) {
 		return nubeTenant.eliminarSector(tenantId, valor);
 	}
 
@@ -1436,21 +1436,12 @@ async function crearEmpresaAlta(data) {
 		});
 		nuevoId = Number(empresa.id);
 
-		await crearSector({
-			idEmpresa: nuevoId,
+		const sectorBody = {
 			valor,
 			descripcion: sectorDesc,
 			ambInt: sector.ambInt || 'A',
-		});
-
-		await upsertOnboarding(nuevoId, {
-			pasoActual: 'CONFIG',
-			completado: false,
-			altaCompletada: true,
-			sectoresDefecto: [valor],
-		});
-
-		await crearUsuarioEmpresa(nuevoId, {
+		};
+		const adminBody = {
 			nombreRed: String(admin.nombreRed).trim(),
 			password: String(admin.password).trim(),
 			apellido: String(admin.apellido).trim(),
@@ -1458,7 +1449,28 @@ async function crearEmpresaAlta(data) {
 			numeroDocumento: admin.numeroDocumento || '',
 			idRol,
 			sectores: [valor],
-		});
+		};
+
+		// Auth/gestión vive en Railway: el alta no exige SQL físico ni túnel.
+		if (await gestionAuthEnRailway()) {
+			await nubeTenant.crearSector(nuevoId, sectorBody);
+			await upsertOnboarding(nuevoId, {
+				pasoActual: 'CONFIG',
+				completado: false,
+				altaCompletada: true,
+				sectoresDefecto: [valor],
+			});
+			await nubeTenant.crearUsuarioEmpresa(nuevoId, adminBody);
+		} else {
+			await crearSector({ idEmpresa: nuevoId, ...sectorBody });
+			await upsertOnboarding(nuevoId, {
+				pasoActual: 'CONFIG',
+				completado: false,
+				altaCompletada: true,
+				sectoresDefecto: [valor],
+			});
+			await crearUsuarioEmpresa(nuevoId, adminBody);
+		}
 
 		const detalle = await obtenerEmpresaDetalle(nuevoId);
 		const checklist = await obtenerChecklistEmpresa(nuevoId, detalle);
