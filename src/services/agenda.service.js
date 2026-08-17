@@ -28,6 +28,7 @@ const {
 	horasTurnoEquivalentes,
 } = require('../utils/agendaCatalogos');
 const agendaConfig = require('./agendaConfig.service');
+const feriadosService = require('./feriados.service');
 
 const DIA_POR_JS = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
 
@@ -617,10 +618,11 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 	const desdeClarion = convertirFechaAClarion(desdeIso);
 	const hastaClarion = convertirFechaAClarion(hastaIso);
 
-	const [horarios, noHorarios, turnosData] = await Promise.all([
+	const [horarios, noHorarios, turnosData, feriados] = await Promise.all([
 		agendaConfig.obtenerHorariosPorMatricula(m),
 		_cargarNoHorarios(m, desdeClarion, hastaClarion),
 		_cargarTurnos(m, desdeClarion, hastaClarion),
+		feriadosService.listarEnRangoConEnsure(desdeIso, hastaIso).catch(() => []),
 	]);
 
 	const sectorPersonalMed = await _sectorPersonalAsignado(m);
@@ -632,6 +634,20 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 		const fechaClarion = convertirFechaAClarion(fechaIso);
 		const diaNombre = _diaSemana(cursor);
 		const diaCfg = horarios.dias.find((d) => d.dia === diaNombre);
+
+		const feriado = feriadosService.feriadoEnFecha(fechaIso, feriados);
+		if (feriado) {
+			diasOut.push({
+				fecha: fechaIso,
+				dia: diaNombre,
+				bloqueado: true,
+				motivo: 'feriado',
+				motivoLabel: feriado.nombre || 'Feriado',
+				slots: [],
+			});
+			cursor.setDate(cursor.getDate() + 1);
+			continue;
+		}
 
 		if (_diaBloqueado(fechaClarion, noHorarios)) {
 			diasOut.push({
@@ -767,11 +783,18 @@ async function listarDiasConAgenda(matricula, desdeIso, hastaIso) {
 	const fechas = (data.dias || [])
 		.filter((d) => !d.bloqueado && Array.isArray(d.slots) && d.slots.length > 0)
 		.map((d) => String(d.fecha).slice(0, 10));
+	const feriados = (data.dias || [])
+		.filter((d) => d.motivo === 'feriado')
+		.map((d) => ({
+			fecha: String(d.fecha).slice(0, 10),
+			nombre: d.motivoLabel || 'Feriado',
+		}));
 	return {
 		matricula: data.matricula,
 		desde: desdeIso,
 		hasta: hastaIso,
 		fechas,
+		feriados,
 	};
 }
 
@@ -1092,9 +1115,18 @@ async function asignarTurno({
 		throw e;
 	}
 
-	// Validar slot contra horarios configurados / no-horarios
+	// Validar slot contra horarios configurados / no-horarios / feriados
 	const grilla = await generarSlots(m, fecha, fecha);
 	const dia = grilla.dias[0];
+	if (dia?.motivo === 'feriado') {
+		const e = new Error(
+			dia.motivoLabel
+				? `No se pueden asignar turnos en feriado: ${dia.motivoLabel}`
+				: 'No se pueden asignar turnos en un feriado nacional',
+		);
+		e.statusCode = 409;
+		throw e;
+	}
 	if (!esSobreturno && (!dia || dia.bloqueado)) {
 		const e = new Error('La fecha está bloqueada para este profesional');
 		e.statusCode = 409;

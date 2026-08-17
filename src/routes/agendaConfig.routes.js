@@ -180,6 +180,11 @@ router.delete(
 
 // Agenda operativa (slots / turnos) — rutas con :matricula al final
 router.get(
+	'/feriados',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.listarFeriados,
+);
+router.get(
 	'/:matricula/dias-agenda',
 	requirePermiso('TURNOS.AGENDA.VER'),
 	agendaCtrl.obtenerDiasConAgenda,

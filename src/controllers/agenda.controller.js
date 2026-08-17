@@ -1,4 +1,5 @@
 const service = require('../services/agenda.service');
+const feriadosService = require('../services/feriados.service');
 const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/matriculaTenant');
 
 function _codOperadorSesion(req) {
@@ -43,6 +44,22 @@ async function obtenerDiasConAgenda(req, res) {
 			});
 		}
 		const data = await service.listarDiasConAgenda(m, String(desde), String(hasta));
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
+async function listarFeriados(req, res) {
+	try {
+		const { desde, hasta } = req.query;
+		if (!desde || !hasta) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Query params desde y hasta (YYYY-MM-DD) son requeridos',
+			});
+		}
+		const data = await feriadosService.listarEnRangoConEnsure(String(desde), String(hasta));
 		res.json({ success: true, data });
 	} catch (e) {
 		_err(res, e);
@@ -451,6 +468,7 @@ async function obtenerDetalleAtencion(req, res) {
 module.exports = {
 	obtenerSlots,
 	obtenerDiasConAgenda,
+	listarFeriados,
 	obtenerResumen,
 	listarTurnos,
 	buscarTurnosPorPaciente,

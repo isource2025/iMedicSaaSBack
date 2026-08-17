@@ -7,6 +7,7 @@ const empresaService = require('./empresa.service');
 const superAdminService = require('./superAdmin.service');
 const sessionService = require('./session.service');
 const { runWithTenant } = require('../context/tenantContext');
+const feriadosService = require('./feriados.service');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, ACCESS_TOKEN_EXPIRATION } = require('../config/jwt');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
@@ -317,6 +318,10 @@ async function completarLogin({
 		}
 	} catch (e) {
 		console.error('[auth.login] Error al cargar permisos:', e.message);
+	}
+
+	if (idEmpresaEfectiva != null && Number.isFinite(Number(idEmpresaEfectiva))) {
+		feriadosService.scheduleEnsure(Number(idEmpresaEfectiva));
 	}
 
 	return {

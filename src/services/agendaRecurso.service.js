@@ -17,6 +17,7 @@ const {
 	intervaloMinAClarion,
 	clarionAIntervaloMin,
 } = require('../utils/agendaCatalogos');
+const feriadosService = require('./feriados.service');
 
 const TIPOS = new Set(['SECTOR', 'SERVICIO']);
 
@@ -343,7 +344,8 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 	const hastaClarion = convertirFechaAClarion(hastaIso);
 	const sectorKey = t === 'SECTOR' ? v : v;
 
-	const turnos = await executeQuery(
+	const [turnos, feriados] = await Promise.all([
+		executeQuery(
 		`
 		SELECT t.IdTurno, t.FechaAsignada, t.Hora, t.Sector, t.Profesional, t.IDPaciente, t.Status,
 		       t.Observaciones, t.EsSobreturno,
@@ -358,7 +360,9 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 			{ value: hastaClarion, type: 'Int' },
 			{ value: sectorKey, type: 'VarChar' },
 		],
-	).catch(() => []);
+		).catch(() => []),
+		feriadosService.listarEnRangoConEnsure(desdeIso, hastaIso).catch(() => []),
+	]);
 
 	const turnoMap = new Map();
 	for (const row of turnos || []) {
@@ -376,6 +380,19 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 	while (cursor <= hasta) {
 		const fechaIso = _isoDate(cursor);
 		const diaNombre = _diaSemana(cursor);
+		const feriado = feriadosService.feriadoEnFecha(fechaIso, feriados);
+		if (feriado) {
+			diasOut.push({
+				fecha: fechaIso,
+				dia: diaNombre,
+				bloqueado: true,
+				motivo: 'feriado',
+				motivoLabel: feriado.nombre || 'Feriado',
+				slots: [],
+			});
+			cursor.setDate(cursor.getDate() + 1);
+			continue;
+		}
 		const diaCfg = horarios.dias.find((d) => d.dia === diaNombre);
 		const slots = [];
 
