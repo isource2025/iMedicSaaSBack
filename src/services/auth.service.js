@@ -5,6 +5,7 @@ const tenantRegistry = require('./tenantRegistry.service');
 const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
+const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 
 function mapSectorRow(r) {
 	return {
@@ -431,10 +432,12 @@ const descubrirEmpresasLogin = async (username) => {
     }
 
     const found = await tenantRegistry.descubrirEmpresasPorUsuario(username);
-    const empresas = found.map((e) => ({
-      idEmpresa: e.idEmpresa,
-      descripcionEmpresa: e.descripcionEmpresa,
-    }));
+    const empresas = dedupeEmpresasPorId(
+      found.map((e) => ({
+        idEmpresa: e.idEmpresa,
+        descripcionEmpresa: e.descripcionEmpresa,
+      })),
+    );
 
     const eximeSector = await eximeSectorPorUsername(username);
     return { empresas, esSuperAdmin: false, requiereSector: !eximeSector };
@@ -499,7 +502,7 @@ const obtenerEmpresasPorUsuarioEnTenant = async (username) => {
 
     const parametros = [{ value: username, type: 'VarChar' }];
     const resultado = await executeQuery(consulta, parametros);
-    return resultado || [];
+    return dedupeEmpresasPorId(resultado || []);
   } catch (error) {
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes("invalid object name 'impersonalempresas'")) {

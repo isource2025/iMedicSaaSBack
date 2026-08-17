@@ -13,6 +13,7 @@ const {
 	getClientIp,
 } = require('../config/security');
 const authCentralService = require('../services/authCentral.service');
+const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 
 function normalizarUsername(username) {
 	return String(username || '').trim().toLowerCase();
@@ -96,7 +97,7 @@ const inicioSesion = async (req, res) => {
 		return res.json(payload);
 	} catch (error) {
 		if (error.message === 'MULTI_EMPRESA' || error.statusCode === 200) {
-			const empresas = error.empresas || [];
+			const empresas = dedupeEmpresasPorId(error.empresas || []);
 			const temp = signTempToken(username);
 			await authAudit.logEvent({
 				ip,

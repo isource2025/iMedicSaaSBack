@@ -8,6 +8,7 @@ const superAdminService = require('./superAdmin.service');
 const sessionService = require('./session.service');
 const { runWithTenant } = require('../context/tenantContext');
 const feriadosService = require('./feriados.service');
+const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, ACCESS_TOKEN_EXPIRATION } = require('../config/jwt');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
@@ -176,7 +177,9 @@ async function completarLogin({
 	try {
 		empresasUsuario = esSuperAdmin
 			? await authService.obtenerTodasEmpresas()
-			: await authService.obtenerEmpresasPorUsuario(username, idEmpresaSesion);
+			: dedupeEmpresasPorId(
+					await authService.obtenerEmpresasPorUsuario(username, idEmpresaSesion),
+				);
 
 		idEmpresaEfectiva = await authService.resolverIdEmpresaLogin({
 			idEmpresaSesion,

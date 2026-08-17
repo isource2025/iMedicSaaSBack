@@ -1,5 +1,6 @@
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
 const passwordService = require('./password.service');
+const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 
 /** Evita "Illegal mix of collations" entre tablas importadas con distinto utf8mb4 */
 const COLLATE = 'utf8mb4_unicode_ci';
@@ -187,9 +188,11 @@ async function autenticarEnTodasLasEmpresas(username, password) {
 			idEmpresa: Number(row.idEmpresa),
 			descripcionEmpresa: String(row.descripcionEmpresa || '').trim(),
 			usuario: mapUsuario(row),
+			Grupo: row.Grupo,
+			RolNombre: row.RolNombre,
 		});
 	}
-	return matches;
+	return dedupeEmpresasPorId(matches);
 }
 
 async function descubrirEmpresas(username) {
@@ -197,26 +200,29 @@ async function descubrirEmpresas(username) {
 	const u = normalizarUsername(username);
 	const rows = await query(
 		`
-    SELECT DISTINCT
+    SELECT
       pe.IdEmpresa AS idEmpresa,
       TRIM(COALESCE(e.DESCRIPCION, '')) AS descripcionEmpresa,
-      pw.ValorPersonal AS valorPersonal
+      MIN(pw.ValorPersonal) AS valorPersonal
     FROM \`imPassword\` pw
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA}
     INNER JOIN \`Empresas\` e ON e.IDEMPRESA = pe.IdEmpresa
     WHERE ${USER_MATCH} = ?
       AND COALESCE(pw.IdEmpresa, 0) > 0
       AND COALESCE(pe.IdEmpresa, 0) > 0
+    GROUP BY pe.IdEmpresa, e.DESCRIPCION
     ORDER BY descripcionEmpresa
     `,
 		[u],
 	);
-	return rows.map((row) => ({
-		idEmpresa: Number(row.idEmpresa),
-		descripcionEmpresa: String(row.descripcionEmpresa || '').trim(),
-		valorPersonal: Number(row.valorPersonal),
-		fuente: 'auth_central',
-	}));
+	return dedupeEmpresasPorId(
+		rows.map((row) => ({
+			idEmpresa: Number(row.idEmpresa),
+			descripcionEmpresa: String(row.descripcionEmpresa || '').trim(),
+			valorPersonal: Number(row.valorPersonal),
+			fuente: 'auth_central',
+		})),
+	);
 }
 
 async function obtenerSectores(username, idEmpresa) {

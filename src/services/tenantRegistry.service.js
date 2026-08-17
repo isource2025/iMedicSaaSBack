@@ -13,6 +13,7 @@ const { encrypt } = require('../utils/dbCrypto');
 const authCentralService = require('./authCentral.service');
 const passwordService = require('./password.service');
 const { AUTH_FAIL_MESSAGE } = require('../config/security');
+const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 
 const DISCOVER_MAX = Number(process.env.TENANT_DISCOVER_MAX) || 25;
 
@@ -177,7 +178,9 @@ async function descubrirEmpresasPorUsuario(username) {
 	}
 
 	if (found.length) {
-		return found.sort((a, b) => a.descripcionEmpresa.localeCompare(b.descripcionEmpresa));
+		return dedupeEmpresasPorId(found).sort((a, b) =>
+			a.descripcionEmpresa.localeCompare(b.descripcionEmpresa),
+		);
 	}
 
 	return [];
@@ -248,17 +251,18 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
 			const matchesCentral = await authCentralService.autenticarEnTodasLasEmpresas(u, p);
-			if (matchesCentral.length > 1) {
+			const uniqueCentral = dedupeEmpresasPorId(matchesCentral);
+			if (uniqueCentral.length > 1) {
 				const e = new Error('MULTI_EMPRESA');
 				e.statusCode = 409;
-				e.empresas = matchesCentral.map((m) => ({
+				e.empresas = uniqueCentral.map((m) => ({
 					idEmpresa: m.idEmpresa,
 					descripcionEmpresa: m.descripcionEmpresa,
 				}));
 				throw e;
 			}
-			if (matchesCentral.length === 1) {
-				const { idEmpresa, usuario } = matchesCentral[0];
+			if (uniqueCentral.length === 1) {
+				const { idEmpresa, usuario } = uniqueCentral[0];
 				return { idEmpresa, usuario };
 			}
 
@@ -302,17 +306,23 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 		throw e;
 	}
 
-	if (matches.length > 1) {
+	const uniqueMatches = dedupeEmpresasPorId(matches);
+	if (!uniqueMatches.length) {
+		const e = new Error(AUTH_FAIL_MESSAGE);
+		e.statusCode = 401;
+		throw e;
+	}
+	if (uniqueMatches.length > 1) {
 		const e = new Error('MULTI_EMPRESA');
 		e.statusCode = 409;
-		e.empresas = matches.map((m) => ({
+		e.empresas = uniqueMatches.map((m) => ({
 			idEmpresa: m.idEmpresa,
 			descripcionEmpresa: m.descripcionEmpresa,
 		}));
 		throw e;
 	}
 
-	const { idEmpresa, usuario } = matches[0];
+	const { idEmpresa, usuario } = uniqueMatches[0];
 	return { idEmpresa, usuario };
 }
 
@@ -331,7 +341,7 @@ async function empresasDelUsuarioEnTenant(idEmpresa, username) {
          OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@user)))
       ORDER BY e.DESCRIPCION
     `);
-		if (rows.recordset?.length) return rows.recordset;
+		if (rows.recordset?.length) return dedupeEmpresasPorId(rows.recordset);
 	} catch (err) {
 		const msg = String(err?.message || '').toLowerCase();
 		if (!msg.includes('impersonalempresas')) throw err;
