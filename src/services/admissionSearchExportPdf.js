@@ -202,13 +202,67 @@ function hciTituloSeccion(fieldKey) {
   return HCI_SECCIONES_CONFIG[pref] || null;
 }
 
+const HCI_LABEL_WORDS = [
+  'HEMIDIAFRAGMAS',
+  'SENOSCOSTOFRENICOS',
+  'CAMPOSPULMONARES',
+  'CIRCULACIONCOLATERAL',
+  'ESTADONUTRICIONAL',
+  'IMPRESIONGENERAL',
+  'PESOHABITUAL',
+  'PESOACTUAL',
+  'SILUETACARDIO',
+  'CONCLUSIONES',
+  'LINFANGITIS',
+  'ADENOMEGALIAS',
+  'NUTRICIONAL',
+  'PULMONARES',
+  'CIRCULACION',
+  'COLATERAL',
+  'IMPRESION',
+  'GENERAL',
+  'HABITUAL',
+  'ACTUAL',
+  'ESTADO',
+  'CAMPOS',
+  'SILUETA',
+  'CARDIO',
+  'SENOS',
+  'PESO',
+];
+
+function hciTitleWords(s) {
+  return String(s || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function hciSplitAllCaps(blob) {
+  const words = HCI_LABEL_WORDS.slice().sort((a, b) => b.length - a.length);
+  let rest = String(blob || '').toUpperCase();
+  const parts = [];
+  while (rest) {
+    const hit = words.find((w) => rest.startsWith(w));
+    if (hit) {
+      parts.push(hit);
+      rest = rest.slice(hit.length);
+      continue;
+    }
+    parts.push(rest);
+    break;
+  }
+  return parts.join(' ');
+}
+
 function hciLabelCampo(key) {
   const norm = String(key || '').toUpperCase();
   const sinPrefijo = norm.replace(/^[A-Z]+_/, '');
-  return sinPrefijo
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, (s) => s.toUpperCase())
-    .trim();
+  if (!sinPrefijo) return norm;
+  if (sinPrefijo.includes('_')) return hciTitleWords(sinPrefijo.replace(/_/g, ' '));
+  return hciTitleWords(hciSplitAllCaps(sinPrefijo));
 }
 
 function buildHcDisplaySections(row) {
