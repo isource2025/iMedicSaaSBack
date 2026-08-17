@@ -1,4 +1,5 @@
 const { executeQuery } = require("../models/db");
+const { jsonSafe } = require("../utils/jsonSafe");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
@@ -276,7 +277,7 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
 
     try {
         const resultado = await executeQuery(sql, params);
-        return resultado;
+        return jsonSafe(resultado || []);
     } catch (error) {
         console.error("Error al obtener HC de Ingreso por visita:", error);
         throw error;

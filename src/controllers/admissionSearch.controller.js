@@ -1,9 +1,15 @@
 const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
+const { jsonSafe } = require('../utils/jsonSafe');
 const {
   buildSelectiveExportPdf,
   buildMultiVisitExportPdf,
 } = require('../services/admissionSearchExportPdf');
+
+function publicErrorDetail(error) {
+  const raw = error?.message || String(error || '');
+  return String(raw).slice(0, 400);
+}
 
 function parseEvolucionSectorIds(body) {
   const raw = body?.evolucionSectorIds;
@@ -72,7 +78,7 @@ async function detalle(req, res) {
     if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'numeroVisita inv?lido',
+        message: 'numeroVisita inválido',
       });
     }
 
@@ -80,19 +86,20 @@ async function detalle(req, res) {
     if (!payload) {
       return res.status(404).json({
         success: false,
-        message: 'Admisi?n no encontrada',
+        message: 'Admisión no encontrada',
       });
     }
 
     res.json({
       success: true,
-      data: payload,
+      data: jsonSafe(payload),
     });
   } catch (error) {
-    console.error('Error al obtener detalle de admisi?n:', error);
+    console.error('Error al obtener detalle de admisión:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener detalle de admisi?n',
+      message: 'Error al obtener detalle de admisión',
+      detail: publicErrorDetail(error),
     });
   }
 }

@@ -17,7 +17,28 @@ const evolucionesService = require('./evoluciones.service');
 const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
 const estudiosService = require('./estudios.service');
-const epicrisisService = require('./epicrisis.service');
+const { jsonSafe } = require('../utils/jsonSafe');
+
+function getEpicrisisService() {
+  return require('./epicrisis.service');
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Evita que un throw síncrono (p. ej. require circular) tumbe Promise.all. */
+function settled(factory, fallback) {
+  try {
+    return Promise.resolve(factory()).catch((err) => {
+      console.error('[admission-search]', err?.message || err);
+      return fallback;
+    });
+  } catch (err) {
+    console.error('[admission-search sync]', err?.message || err);
+    return Promise.resolve(fallback);
+  }
+}
 
 function normalizeLike(value) {
   return `%${String(value || '').trim().replace(/\s+/g, '%')}%`;
@@ -666,35 +687,35 @@ async function exportarAdmisionCompleta(numeroVisita) {
     protocolos,
     epicrisis,
   ] = await Promise.all([
-    obtenerHCIngresoPorVisita(numeroVisita).catch(() => []),
-    indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => []),
-    obtenerPracticasPorVisita(numeroVisita).catch(() => []),
-    medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []),
-    laboratoriosService.obtenerExamenesPorVisita(numeroVisita).catch(() => []),
-    evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => []),
-    adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []),
-    obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []),
-    protocolosService.listarPorVisita(numeroVisita).catch(() => []),
-    epicrisisService.listarPorVisita(numeroVisita).catch(() => []),
+    settled(() => obtenerHCIngresoPorVisita(numeroVisita), []),
+    settled(() => indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000), []),
+    settled(() => obtenerPracticasPorVisita(numeroVisita), []),
+    settled(() => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita), []),
+    settled(() => laboratoriosService.obtenerExamenesPorVisita(numeroVisita), []),
+    settled(() => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), []),
+    settled(() => adjuntosService.getAdjuntosPorVisita(numeroVisita), []),
+    settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []),
+    settled(() => protocolosService.listarPorVisita(numeroVisita), []),
+    settled(() => getEpicrisisService().listarPorVisita(numeroVisita), []),
   ]);
-  const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
+  const indicaciones = filterIndicacionesClinicas(asArray(indicacionesRaw));
 
-  return {
+  return jsonSafe({
     generadoEn: new Date().toISOString(),
     admision: visita,
-    historialClinico: historiaClinica,
-    practicasPaciente,
+    historialClinico: asArray(historiaClinica),
+    practicasPaciente: asArray(practicasPaciente),
     practicas: {
-      laboratorios: practicasLaboratorio,
-      adjuntos,
+      laboratorios: asArray(practicasLaboratorio),
+      adjuntos: asArray(adjuntos),
     },
-    medicamentos,
+    medicamentos: asArray(medicamentos),
     indicaciones,
-    evolucionesMedicas,
-    estudios,
-    protocolos,
-    epicrisis,
-  };
+    evolucionesMedicas: asArray(evolucionesMedicas),
+    estudios: asArray(estudios),
+    protocolos: asArray(protocolos),
+    epicrisis: asArray(epicrisis),
+  });
 }
 
 /** YYYY-MM-DD o null si no se puede inferir */
@@ -1042,21 +1063,21 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     protocolosRaw,
     epicrisisRaw,
   ] = await Promise.all([
-    need.hc ? obtenerHCIngresoPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.hc ? settled(() => obtenerHCIngresoPorVisita(numeroVisita), []) : Promise.resolve([]),
     need.ind
-      ? indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000).catch(() => [])
+      ? settled(() => indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000), [])
       : Promise.resolve([]),
-    need.prac ? obtenerPracticasPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
-    need.med ? medicacionControlService.obtenerMedicacionPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.prac ? settled(() => obtenerPracticasPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.med ? settled(() => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita), []) : Promise.resolve([]),
     need.evo
-      ? evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null).catch(() => [])
+      ? settled(() => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), [])
       : Promise.resolve([]),
-    need.adj ? adjuntosService.getAdjuntosPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
-    need.est ? obtenerEstudiosPorVisitaAd(numeroVisita).catch(() => []) : Promise.resolve([]),
-    need.prot ? protocolosService.listarPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
-    need.epi ? epicrisisService.listarPorVisita(numeroVisita).catch(() => []) : Promise.resolve([]),
+    need.adj ? settled(() => adjuntosService.getAdjuntosPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.est ? settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []) : Promise.resolve([]),
+    need.prot ? settled(() => protocolosService.listarPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.epi ? settled(() => getEpicrisisService().listarPorVisita(numeroVisita), []) : Promise.resolve([]),
   ]);
-  const indicaciones = filterIndicacionesClinicas(indicacionesRaw);
+  const indicaciones = filterIndicacionesClinicas(asArray(indicacionesRaw));
 
   const out = {
     generadoEn: new Date().toISOString(),
@@ -1128,7 +1149,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     }));
   }
 
-  return out;
+  return jsonSafe(out);
 }
 
 function _trimStr(v, maxLen) {
