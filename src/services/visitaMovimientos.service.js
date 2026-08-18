@@ -119,6 +119,7 @@ const SQL_MOVIMIENTO_SELECT = `
       LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS NombreCama,
       LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
       NULLIF(LTRIM(RTRIM(ISNULL(d.Descripcion, ''))), '') AS DiagnosticoDescripcion,
+      NULLIF(LTRIM(RTRIM(ISNULL(disp.Descripcion, ''))), '') AS DisposicionEgresoDescripcion,
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaEgreso,0),  '1800-12-28'), 23) AS FechaEgresoISO,
@@ -136,6 +137,15 @@ const SQL_MOVIMIENTO_JOINS = `
       WHERE LTRIM(RTRIM(ISNULL(dx.CodigoOMS, ''))) = LTRIM(RTRIM(ISNULL(m.Diagnostico, '')))
       ORDER BY dx.Valor
     ) d
+    OUTER APPLY (
+      SELECT TOP 1 LTRIM(RTRIM(de.Descripcion)) AS Descripcion
+      FROM dbo.imDisposicionEgreso de
+      WHERE TRY_CAST(LTRIM(RTRIM(CAST(de.Valor AS varchar(20)))) AS int) IS NOT NULL
+        AND TRY_CAST(LTRIM(RTRIM(CAST(m.DisposicionEgreso AS varchar(20)))) AS int) IS NOT NULL
+        AND TRY_CAST(LTRIM(RTRIM(CAST(de.Valor AS varchar(20)))) AS int)
+          = TRY_CAST(LTRIM(RTRIM(CAST(m.DisposicionEgreso AS varchar(20)))) AS int)
+      ORDER BY de.Valor
+    ) disp
     OUTER APPLY (
       SELECT TOP 1 COALESCE(
         NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), ''),
@@ -339,6 +349,45 @@ async function completarNombresOperador(rows) {
   });
 }
 
+async function completarDescripcionesDisposicion(rows) {
+  if (!rows?.length) return rows;
+  const pendientes = rows.filter(
+    (r) =>
+      Number(r.DisposicionEgreso) > 0 &&
+      !String(r.DisposicionEgresoDescripcion || r.disposicionEgresoDescripcion || '').trim(),
+  );
+  if (!pendientes.length) return rows;
+
+  let cat = [];
+  try {
+    cat = await executeQuery(
+      `SELECT Valor, LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion FROM dbo.imDisposicionEgreso`,
+    );
+  } catch (err) {
+    console.warn('[movimientos] disposiciones:', err.message);
+    cat = [
+      { Valor: 1, Descripcion: 'ALTA MEDICA' },
+      { Valor: 2, Descripcion: 'DERIVADO' },
+      { Valor: 3, Descripcion: 'DEFUNCION' },
+      { Valor: 4, Descripcion: 'ALTA VOLUNTARIA' },
+    ];
+  }
+  const byCode = new Map();
+  for (const c of cat || []) {
+    const desc = String(c.Descripcion || '').trim();
+    if (!desc) continue;
+    byCode.set(String(Number(c.Valor)), desc);
+    byCode.set(String(c.Valor ?? '').trim().toLowerCase(), desc);
+  }
+  return rows.map((r) => {
+    if (String(r.DisposicionEgresoDescripcion || '').trim()) return r;
+    const code = String(r.DisposicionEgreso ?? '').trim();
+    if (!code || !(Number(code) > 0)) return r;
+    const desc = byCode.get(String(Number(code))) || byCode.get(code.toLowerCase()) || '';
+    return desc ? { ...r, DisposicionEgresoDescripcion: desc } : r;
+  });
+}
+
 async function idsAlternativosMovimiento(num) {
   const rows = await executeQuery(
     `
@@ -377,7 +426,9 @@ async function obtenerMovimientosVisita(numeroVisita) {
   if (!rows.length) {
     rows = await queryMovimientoInicialDesdeCabecera(num);
   }
-  return completarNombresOperador(rows.map(_mapMovimientoIso));
+  return completarDescripcionesDisposicion(
+    await completarNombresOperador(rows.map(_mapMovimientoIso)),
+  );
 }
 
 async function camasOcupadasPorVisita(numeroVisita) {
