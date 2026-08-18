@@ -657,6 +657,100 @@ async function crearPedido({
 	return result;
 }
 
+function _idsAutorSesion({ matricula, valorPersonal, codOperador }) {
+	const ids = [];
+	for (const v of [matricula, valorPersonal, codOperador]) {
+		const n = Number(v);
+		if (Number.isFinite(n) && n > 0 && !ids.includes(n)) ids.push(n);
+	}
+	return ids;
+}
+
+/** Pendiente = sin toma y sin resultado. Tomado/respondido: nadie edita ni borra, ni el admin. */
+async function _assertPedidoPendienteDelCreador(idPedido, sesion) {
+	const ped = await obtenerPorId(idPedido);
+	if (!ped) throw _httpError('Pedido no encontrado', 404);
+	if (ped.Cumplido || Number(ped.IdProtocolo) > 0) {
+		throw _httpError('El pedido ya fue respondido. Solo se puede visualizar.', 409);
+	}
+	if (ped.Tomado) {
+		throw _httpError('El pedido ya fue tomado. Solo se puede visualizar.', 409);
+	}
+	const autor = Number(ped.MatriculaSolicitante);
+	const ids = _idsAutorSesion(sesion || {});
+	if (!Number.isFinite(autor) || autor <= 0 || !ids.includes(autor)) {
+		throw _httpError(
+			'Solo quien creó el pedido puede modificarlo o eliminarlo mientras está pendiente.',
+			403,
+		);
+	}
+	return ped;
+}
+
+async function actualizarPedido({
+	idPedido,
+	matricula,
+	valorPersonal,
+	codOperador,
+	idTipoPedido,
+	idPractica,
+	idSectorReceptor,
+	notas,
+	estadoUrgencia,
+}) {
+	const id = Number(idPedido);
+	if (!Number.isFinite(id) || id <= 0) throw _httpError('idPedido inválido');
+	await _assertPedidoPendienteDelCreador(id, { matricula, valorPersonal, codOperador });
+
+	if (!String(idSectorReceptor || '').trim()) {
+		throw _httpError('El sector receptor es obligatorio');
+	}
+	const tipo = await resolverTipoPedidoEstudio(idTipoPedido, idPractica);
+	const codPractica = Number(tipo.IdPractica) || 0;
+	if (codPractica <= 0) {
+		throw _httpError(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
+	}
+	const urgRaw = String(estadoUrgencia || 'Normal').trim();
+	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
+
+	await executeQuery(
+		`UPDATE dbo.imPedidosEstudios
+		 SET NotasObservacion = @p1,
+		     IdPractica = @p2,
+		     EstadoUrgencia = @p3,
+		     IdSectorReceptor = @p4,
+		     IdTipoPedido = @p5
+		 WHERE IdPedido = @p0
+		   AND (IdProtocolo IS NULL OR IdProtocolo = 0)`,
+		[
+			{ value: id, type: 'Int' },
+			{ value: _s(notas, 5000), type: 'VarChar' },
+			{ value: codPractica, type: 'Int' },
+			{ value: urgencia, type: 'VarChar' },
+			{ value: _padSector(idSectorReceptor), type: 'VarChar' },
+			{ value: Number(tipo.IdTipoPedido), type: 'Int' },
+		],
+	);
+	return obtenerPorId(id);
+}
+
+async function eliminarPedido({ idPedido, matricula, valorPersonal, codOperador }) {
+	const id = Number(idPedido);
+	if (!Number.isFinite(id) || id <= 0) throw _httpError('idPedido inválido');
+	await _assertPedidoPendienteDelCreador(id, { matricula, valorPersonal, codOperador });
+	await ensureTomaTable();
+	await executeQuery(`DELETE FROM dbo.imPedidosEstudiosToma WHERE IdPedido = @p0`, [
+		{ value: id, type: 'Int' },
+	]);
+	await executeQuery(
+		`DELETE FROM dbo.imPedidosEstudios
+		 WHERE IdPedido = @p0
+		   AND (IdProtocolo IS NULL OR IdProtocolo = 0)`,
+		[{ value: id, type: 'Int' }],
+	);
+	return { idPedido: id };
+}
+
 async function listarPorVisita(idVisita) {
 	await ensureTomaTable();
 	const rows = await executeQuery(
@@ -993,6 +1087,8 @@ async function cumplirPedido({
 
 module.exports = {
 	crearPedido,
+	actualizarPedido,
+	eliminarPedido,
 	listarPorVisita,
 	listarPendientesPorSector,
 	obtenerPorId,

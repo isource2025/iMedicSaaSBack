@@ -112,6 +112,58 @@ async function crear(req, res) {
 	}
 }
 
+async function actualizar(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const body = req.body || {};
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del operador',
+			});
+		}
+		const data = await estudiosService.actualizarPedido({
+			idPedido,
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req),
+			idTipoPedido: body.idTipoPedido,
+			idPractica: body.idPractica,
+			idSectorReceptor: body.idSectorReceptor,
+			notas: body.notas,
+			estadoUrgencia: body.estadoUrgencia,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[estudios] actualizar:', err.message);
+		return _err(res, err);
+	}
+}
+
+async function eliminar(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del operador',
+			});
+		}
+		const data = await estudiosService.eliminarPedido({
+			idPedido,
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req),
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[estudios] eliminar:', err.message);
+		return _err(res, err);
+	}
+}
+
 async function cumplir(req, res) {
 	try {
 		const idPedido = Number(req.params.idPedido);
@@ -210,6 +262,8 @@ module.exports = {
 	listarPendientes,
 	obtenerPorId,
 	crear,
+	actualizar,
+	eliminar,
 	cumplir,
 	tomar,
 	liberar,
