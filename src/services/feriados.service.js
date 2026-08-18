@@ -399,10 +399,104 @@ function feriadoEnFecha(fechaIso, feriados) {
 	return (feriados || []).find((f) => f.fecha === key) || null;
 }
 
+function assertIso(iso) {
+	const day = String(iso || '').slice(0, 10);
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+		const err = new Error('La fecha debe ser YYYY-MM-DD');
+		err.status = 400;
+		throw err;
+	}
+	return day;
+}
+
+function httpError(status, message) {
+	const err = new Error(message);
+	err.status = status;
+	return err;
+}
+
+async function listarTodos() {
+	return listarEnRango('1990-01-01', '2100-12-31', { skipCache: true });
+}
+
+async function crearFeriado(iso, nombre) {
+	const schema = await descubrirSchema();
+	if (!schema.exists) throw httpError(404, 'No existe la tabla imFeriados');
+	const fecha = assertIso(iso);
+	const texto = String(nombre || '').trim().slice(0, 200);
+	if (schema.desc && !texto) throw httpError(400, 'La descripción es obligatoria');
+	const existentes = await fechasExistentes(schema, fecha, fecha);
+	if (existentes.has(fecha)) throw httpError(409, 'Ya existe un feriado en esa fecha');
+	await insertarFeriado(schema, fecha, texto || 'Feriado');
+	invalidarListCache();
+	return { fecha, nombre: texto || 'Feriado' };
+}
+
+async function actualizarFeriado(isoActual, { fecha: isoNueva, nombre } = {}) {
+	const schema = await descubrirSchema();
+	if (!schema.exists) throw httpError(404, 'No existe la tabla imFeriados');
+	const actual = assertIso(isoActual);
+	const nueva = isoNueva ? assertIso(isoNueva) : actual;
+	const texto = String(nombre || '').trim().slice(0, 200);
+	if (schema.desc && !texto) throw httpError(400, 'La descripción es obligatoria');
+
+	const actuales = await fechasExistentes(schema, actual, actual);
+	if (!actuales.has(actual)) throw httpError(404, 'No se encontró el feriado');
+
+	if (nueva !== actual) {
+		const conflicto = await fechasExistentes(schema, nueva, nueva);
+		if (conflicto.has(nueva)) throw httpError(409, 'Ya existe un feriado en esa fecha');
+	}
+
+	const sets = [`${bracket(schema.fecha)} = @p1`];
+	const params = [
+		{
+			value: valorFechaParaDb(actual, schema.fechaType),
+			type: isIntType(schema.fechaType) ? 'Int' : undefined,
+		},
+		{
+			value: valorFechaParaDb(nueva, schema.fechaType),
+			type: isIntType(schema.fechaType) ? 'Int' : undefined,
+		},
+	];
+	if (schema.desc) {
+		sets.push(`${bracket(schema.desc)} = @p2`);
+		params.push({ value: texto });
+	}
+
+	await executeQuery(
+		`UPDATE dbo.imFeriados SET ${sets.join(', ')} WHERE ${bracket(schema.fecha)} = @p0`,
+		params,
+	);
+	invalidarListCache();
+	return { fecha: nueva, nombre: texto || actuales.get(actual) || 'Feriado' };
+}
+
+async function eliminarFeriado(iso) {
+	const schema = await descubrirSchema();
+	if (!schema.exists) throw httpError(404, 'No existe la tabla imFeriados');
+	const fecha = assertIso(iso);
+	await executeQuery(
+		`DELETE FROM dbo.imFeriados WHERE ${bracket(schema.fecha)} = @p0`,
+		[
+			{
+				value: valorFechaParaDb(fecha, schema.fechaType),
+				type: isIntType(schema.fechaType) ? 'Int' : undefined,
+			},
+		],
+	);
+	invalidarListCache();
+	return { deleted: true, fecha };
+}
+
 module.exports = {
 	ensureFeriados,
 	scheduleEnsure,
 	listarEnRango,
 	listarEnRangoConEnsure,
+	listarTodos,
+	crearFeriado,
+	actualizarFeriado,
+	eliminarFeriado,
 	feriadoEnFecha,
 };
