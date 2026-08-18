@@ -147,6 +147,45 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
   }
 };
 
+function parseNumeroVisitaParam(req, res) {
+  const numeroVisitaInt = parseInt(req.params.numeroVisita, 10);
+  if (!Number.isFinite(numeroVisitaInt) || numeroVisitaInt <= 0) {
+    res.status(400).json({
+      success: false,
+      mensaje: 'Número de visita inválido',
+    });
+    return null;
+  }
+  return numeroVisitaInt;
+}
+
+/**
+ * Previsualiza conflictos de revertir egreso (solo ADMIN).
+ */
+const consultarEstadoRevertirEgreso = async (req, res) => {
+  try {
+    if (!(await esAdminClinico(req))) {
+      return res.status(403).json({
+        success: false,
+        mensaje: 'Solo un administrador puede revertir un egreso',
+      });
+    }
+
+    const numeroVisitaInt = parseNumeroVisitaParam(req, res);
+    if (!numeroVisitaInt) return undefined;
+
+    const data = await visitaMovimientosService.consultarEstadoRevertirEgreso(numeroVisitaInt);
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error al consultar estado de revertir egreso:', error);
+    const code = error.statusCode || 500;
+    return res.status(code).json({
+      success: false,
+      mensaje: error.message || 'No se pudo revisar el egreso',
+    });
+  }
+};
+
 /**
  * Revierte el egreso hospitalario (solo ADMIN).
  */
@@ -159,13 +198,8 @@ const revertirEgresoVisita = async (req, res) => {
       });
     }
 
-    const numeroVisitaInt = parseInt(req.params.numeroVisita, 10);
-    if (!Number.isFinite(numeroVisitaInt) || numeroVisitaInt <= 0) {
-      return res.status(400).json({
-        success: false,
-        mensaje: 'Número de visita inválido',
-      });
-    }
+    const numeroVisitaInt = parseNumeroVisitaParam(req, res);
+    if (!numeroVisitaInt) return undefined;
 
     const resultado = await visitaMovimientosService.revertirEgresoVisita(numeroVisitaInt);
     return res.json({
@@ -454,6 +488,7 @@ const asignarPacienteACama = async (req, res) => {
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
+  consultarEstadoRevertirEgreso,
   revertirEgresoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,

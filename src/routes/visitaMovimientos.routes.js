@@ -21,6 +21,11 @@ router.put(
 	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.actualizarUltimoMovimientoVisita,
 );
+router.get(
+	'/revertir-egreso/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.consultarEstadoRevertirEgreso,
+);
 router.post(
 	'/revertir-egreso/:numeroVisita',
 	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
