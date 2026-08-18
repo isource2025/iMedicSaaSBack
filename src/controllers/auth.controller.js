@@ -256,11 +256,22 @@ const sesionActual = async (req, res) => {
 			/* keep JWT matricula */
 		}
 	}
+	const idEmpresa = req.idEmpresa ?? req.auth?.idEmpresa ?? null;
+	let modulosEmpresa = null;
+	if (idEmpresa != null && Number(idEmpresa) > 0) {
+		try {
+			const superAdminService = require('../services/superAdmin.service');
+			modulosEmpresa = await superAdminService.obtenerModulosEmpresaActiva(Number(idEmpresa));
+		} catch (e) {
+			console.warn('[auth.me] modulosEmpresa:', e.message);
+		}
+	}
 	return res.json({
 		success: true,
 		usuario,
 		rol: req.auth?.rol || null,
-		idEmpresa: req.idEmpresa ?? req.auth?.idEmpresa ?? null,
+		idEmpresa,
+		modulosEmpresa,
 		idleTimeoutMinutes: await sessionService.getIdleTimeoutMinutes(req.idEmpresa),
 	});
 };

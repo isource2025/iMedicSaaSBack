@@ -17,7 +17,6 @@ const {
 	PLANES,
 	ESTADOS_SUSCRIPCION,
 	packsActivosToModulos,
-	todosModulosHabilitados,
 } = require('../utils/empresaModulos');
 
 function useMysqlPlatform() {
@@ -1571,7 +1570,7 @@ async function obtenerModulosEmpresaActiva(idEmpresa) {
 	const packs = await obtenerPacksEmpresa(idEmpresa);
 	return {
 		packs,
-		modulosHabilitados: todosModulosHabilitados(),
+		modulosHabilitados: packsActivosToModulos(packs),
 		modulosGenerales: [...MODULOS_GENERALES],
 	};
 }

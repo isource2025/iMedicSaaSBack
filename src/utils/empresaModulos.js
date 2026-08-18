@@ -34,11 +34,10 @@ const PACKS_PRINCIPALES = Object.freeze([
 	},
 ]);
 
-/** Siempre habilitados (menú general). */
+/** Siempre habilitados (menú general). Almacén es pack contratado, no general. */
 const MODULOS_GENERALES = Object.freeze([
 	'DASHBOARD',
 	'ADMISION',
-	'ALMACEN',
 	'REPORTES',
 	'CONFIGURACION',
 	'USUARIO',
