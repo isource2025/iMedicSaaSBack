@@ -140,11 +140,8 @@ const SQL_MOVIMIENTO_JOINS = `
     OUTER APPLY (
       SELECT TOP 1 LTRIM(RTRIM(de.Descripcion)) AS Descripcion
       FROM dbo.imDisposicionEgreso de
-      WHERE TRY_CAST(LTRIM(RTRIM(CAST(de.Valor AS varchar(20)))) AS int) IS NOT NULL
-        AND TRY_CAST(LTRIM(RTRIM(CAST(m.DisposicionEgreso AS varchar(20)))) AS int) IS NOT NULL
-        AND TRY_CAST(LTRIM(RTRIM(CAST(de.Valor AS varchar(20)))) AS int)
-          = TRY_CAST(LTRIM(RTRIM(CAST(m.DisposicionEgreso AS varchar(20)))) AS int)
-      ORDER BY de.Valor
+      WHERE TRY_CAST(de.Valor AS int) > 0
+        AND TRY_CAST(de.Valor AS int) = TRY_CAST(m.DisposicionEgreso AS int)
     ) disp
     OUTER APPLY (
       SELECT TOP 1 COALESCE(
@@ -184,9 +181,34 @@ async function queryMovimientosPorNumero(num) {
   const rows = await executeQuery(
     `
     SELECT ${SQL_MOVIMIENTO_SELECT}
-    FROM dbo.imVisitaMovimiento m
+    FROM (
+      SELECT
+        m.NumeroVisita,
+        m.FechaAdmision,
+        m.HoraAdmision,
+        m.FechaEgreso,
+        m.HoraEgreso,
+        COALESCE(
+          NULLIF(TRY_CAST(m.DisposicionEgreso AS int), 0),
+          NULLIF(TRY_CAST(v.DisposicionEgreso AS int), 0),
+          0
+        ) AS DisposicionEgreso,
+        COALESCE(
+          NULLIF(LTRIM(RTRIM(ISNULL(m.Diagnostico, ''))), ''),
+          NULLIF(LTRIM(RTRIM(ISNULL(v.DiagnosticoEgreso, ''))), ''),
+          LTRIM(RTRIM(ISNULL(v.Diagnostico, '')))
+        ) AS Diagnostico,
+        m.ValorHabitacionCama,
+        m.ValorSector,
+        m.ServicioHospital,
+        m.Operador,
+        m.FechaCarga,
+        m.HoraCarga
+      FROM dbo.imVisitaMovimiento m
+      LEFT JOIN dbo.imVisita v ON v.NumeroVisita = m.NumeroVisita
+      WHERE m.NumeroVisita = @p0
+    ) m
     ${SQL_MOVIMIENTO_JOINS}
-    WHERE m.NumeroVisita = @p0
     ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
     `,
     [{ value: num }],
@@ -351,9 +373,11 @@ async function completarNombresOperador(rows) {
 
 async function completarDescripcionesDisposicion(rows) {
   if (!rows?.length) return rows;
+  const codeOf = (r) => Number(r.DisposicionEgreso ?? r.disposicionEgreso);
   const pendientes = rows.filter(
     (r) =>
-      Number(r.DisposicionEgreso) > 0 &&
+      Number.isFinite(codeOf(r)) &&
+      codeOf(r) > 0 &&
       !String(r.DisposicionEgresoDescripcion || r.disposicionEgresoDescripcion || '').trim(),
   );
   if (!pendientes.length) return rows;
@@ -374,16 +398,19 @@ async function completarDescripcionesDisposicion(rows) {
   }
   const byCode = new Map();
   for (const c of cat || []) {
-    const desc = String(c.Descripcion || '').trim();
+    const desc = String(c.Descripcion ?? c.descripcion ?? '').trim();
     if (!desc) continue;
-    byCode.set(String(Number(c.Valor)), desc);
-    byCode.set(String(c.Valor ?? '').trim().toLowerCase(), desc);
+    const valor = c.Valor ?? c.valor;
+    byCode.set(String(Number(valor)), desc);
+    byCode.set(String(valor ?? '').trim().toLowerCase(), desc);
   }
   return rows.map((r) => {
-    if (String(r.DisposicionEgresoDescripcion || '').trim()) return r;
-    const code = String(r.DisposicionEgreso ?? '').trim();
-    if (!code || !(Number(code) > 0)) return r;
-    const desc = byCode.get(String(Number(code))) || byCode.get(code.toLowerCase()) || '';
+    if (String(r.DisposicionEgresoDescripcion || r.disposicionEgresoDescripcion || '').trim()) {
+      return r;
+    }
+    const n = codeOf(r);
+    if (!Number.isFinite(n) || n <= 0) return r;
+    const desc = byCode.get(String(n)) || '';
     return desc ? { ...r, DisposicionEgresoDescripcion: desc } : r;
   });
 }
