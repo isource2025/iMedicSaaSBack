@@ -144,36 +144,60 @@ const SQL_MOVIMIENTO_JOINS = `
         AND TRY_CAST(de.Valor AS int) = TRY_CAST(m.DisposicionEgreso AS int)
     ) disp
     OUTER APPLY (
-      SELECT TOP 1 COALESCE(
-        NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), ''),
-        NULLIF(LTRIM(RTRIM(
-          CONCAT(
-            NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
-            CASE
-              WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
-                   AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
-              THEN ', '
-              ELSE ''
-            END,
-            NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
+      SELECT TOP 1 nom.OperadorNombre
+      FROM (
+        SELECT COALESCE(
+          NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), ''),
+          NULLIF(LTRIM(RTRIM(
+            CONCAT(
+              NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
+              CASE
+                WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
+                     AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
+                THEN ', '
+                ELSE ''
+              END,
+              NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
+            )
+          )), '')
+        ) AS OperadorNombre,
+        0 AS prio
+        FROM dbo.imPassword pw
+        LEFT JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
+        WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
+          AND LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> '0'
+          AND (
+            LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) = LTRIM(RTRIM(m.Operador))
+            OR CAST(pw.ValorPersonal AS varchar(40)) = LTRIM(RTRIM(m.Operador))
+            OR (
+              TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+              AND (
+                pw.ValorPersonal = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+                OR TRY_CAST(CAST(pw.CodOperador AS varchar(40)) AS int) = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+              )
+            )
+            OR LOWER(LTRIM(RTRIM(ISNULL(pw.NombreRed, '')))) = LOWER(LTRIM(RTRIM(m.Operador)))
           )
-        )), '')
-      ) AS OperadorNombre
-      FROM dbo.imPassword pw
-      LEFT JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
-      WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
-        AND (
-          LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) = LTRIM(RTRIM(m.Operador))
-          OR (
-            TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
-            AND pw.ValorPersonal = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+        UNION ALL
+        SELECT LTRIM(RTRIM(per2.ApellidoNombre)) AS OperadorNombre, 1 AS prio
+        FROM dbo.imPersonal per2
+        WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
+          AND LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> '0'
+          AND NULLIF(LTRIM(RTRIM(ISNULL(per2.ApellidoNombre, ''))), '') IS NOT NULL
+          AND (
+            CAST(per2.Valor AS varchar(40)) = LTRIM(RTRIM(m.Operador))
+            OR CAST(ISNULL(per2.Matricula, 0) AS varchar(40)) = LTRIM(RTRIM(m.Operador))
+            OR (
+              TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+              AND (
+                per2.Valor = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+                OR per2.Matricula = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+              )
+            )
           )
-          OR LOWER(LTRIM(RTRIM(ISNULL(pw.NombreRed, '')))) = LOWER(LTRIM(RTRIM(m.Operador)))
-        )
-      ORDER BY CASE
-        WHEN NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), '') IS NOT NULL THEN 0
-        ELSE 1
-      END
+      ) nom
+      WHERE NULLIF(LTRIM(RTRIM(ISNULL(nom.OperadorNombre, ''))), '') IS NOT NULL
+      ORDER BY nom.prio
     ) op
 `;
 
@@ -190,18 +214,32 @@ async function queryMovimientosPorNumero(num) {
         m.HoraEgreso,
         COALESCE(
           NULLIF(TRY_CAST(m.DisposicionEgreso AS int), 0),
-          NULLIF(TRY_CAST(v.DisposicionEgreso AS int), 0),
+          CASE
+            WHEN ROW_NUMBER() OVER (ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC) = 1
+            THEN NULLIF(TRY_CAST(v.DisposicionEgreso AS int), 0)
+            ELSE NULL
+          END,
           0
         ) AS DisposicionEgreso,
-        COALESCE(
-          NULLIF(LTRIM(RTRIM(ISNULL(m.Diagnostico, ''))), ''),
-          NULLIF(LTRIM(RTRIM(ISNULL(v.DiagnosticoEgreso, ''))), ''),
-          LTRIM(RTRIM(ISNULL(v.Diagnostico, '')))
-        ) AS Diagnostico,
+        CASE
+          WHEN NULLIF(LTRIM(RTRIM(ISNULL(m.Diagnostico, ''))), '') IS NOT NULL
+          THEN LTRIM(RTRIM(m.Diagnostico))
+          WHEN ROW_NUMBER() OVER (ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC) = 1
+          THEN COALESCE(
+            NULLIF(LTRIM(RTRIM(ISNULL(v.DiagnosticoEgreso, ''))), ''),
+            LTRIM(RTRIM(ISNULL(v.Diagnostico, '')))
+          )
+          ELSE ''
+        END AS Diagnostico,
         m.ValorHabitacionCama,
         m.ValorSector,
         m.ServicioHospital,
-        m.Operador,
+        COALESCE(
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0'),
+          ''
+        ) AS Operador,
         m.FechaCarga,
         m.HoraCarga
       FROM dbo.imVisitaMovimiento m
@@ -242,7 +280,11 @@ async function queryMovimientoInicialDesdeCabecera(num) {
         LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama,
         LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS ValorSector,
         v.ServicioHospital,
-        LTRIM(RTRIM(ISNULL(v.OPERADOR, ''))) AS Operador,
+        COALESCE(
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0'),
+          ''
+        ) AS Operador,
         ISNULL(TRY_CAST(v.FechaCarga AS int), 0) AS FechaCarga,
         ISNULL(TRY_CAST(v.HoraCarga AS int), 0) AS HoraCarga
       FROM dbo.imVisita v
@@ -257,6 +299,12 @@ async function queryMovimientoInicialDesdeCabecera(num) {
     [{ value: num }],
   );
   return rows || [];
+}
+
+function _codigoOperadorRow(row) {
+  const raw = String(row?.Operador ?? row?.operador ?? '').trim();
+  if (!raw || raw === '0') return '';
+  return raw;
 }
 
 function _nombreVisibleOperador(row) {
@@ -277,7 +325,7 @@ async function completarNombresOperador(rows) {
   const pendientes = rows.filter((r) => !String(r.OperadorNombre || r.operadorNombre || '').trim());
   if (!pendientes.length) return rows;
 
-  const raws = [...new Set(pendientes.map((r) => String(r.Operador ?? '').trim()).filter(Boolean))];
+  const raws = [...new Set(pendientes.map((r) => _codigoOperadorRow(r)).filter(Boolean))];
   if (!raws.length) return rows;
 
   const params = [];
@@ -318,21 +366,29 @@ async function completarNombresOperador(rows) {
   }
 
   let personal = [];
-  if (nums.length) {
-    try {
-      const pParams = nums.map((n) => ({ value: n, type: 'Int' }));
-      const pIn = pParams.map((_, i) => `@p${i}`).join(',');
-      personal = await executeQuery(
-        `
-        SELECT Valor, Matricula, LTRIM(RTRIM(ISNULL(ApellidoNombre, ''))) AS ApellidoNombre
-        FROM dbo.imPersonal
-        WHERE Valor IN (${pIn}) OR Matricula IN (${pIn})
-        `,
-        pParams,
-      );
-    } catch (err) {
-      console.warn('[movimientos] nombres operador (personal):', err.message);
+  try {
+    const pParams = [];
+    const pPh = (value, type) => {
+      pParams.push({ value, type });
+      return `@p${pParams.length - 1}`;
+    };
+    const strIn = raws.map((v) => pPh(v, 'VarChar'));
+    const numIn = nums.map((n) => pPh(n, 'Int'));
+    let whereP = `CAST(Valor AS varchar(40)) IN (${strIn.join(',')})
+      OR CAST(ISNULL(Matricula, 0) AS varchar(40)) IN (${strIn.join(',')})`;
+    if (numIn.length) {
+      whereP += ` OR Valor IN (${numIn.join(',')}) OR Matricula IN (${numIn.join(',')})`;
     }
+    personal = await executeQuery(
+      `
+      SELECT Valor, Matricula, LTRIM(RTRIM(ISNULL(ApellidoNombre, ''))) AS ApellidoNombre
+      FROM dbo.imPersonal
+      WHERE ${whereP}
+      `,
+      pParams,
+    );
+  } catch (err) {
+    console.warn('[movimientos] nombres operador (personal):', err.message);
   }
 
   const byKey = new Map();
@@ -361,7 +417,7 @@ async function completarNombresOperador(rows) {
 
   return rows.map((r) => {
     if (String(r.OperadorNombre || r.operadorNombre || '').trim()) return r;
-    const op = String(r.Operador ?? '').trim();
+    const op = _codigoOperadorRow(r);
     if (!op) return r;
     const nom =
       byKey.get(op.toLowerCase()) ||
