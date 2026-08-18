@@ -47,6 +47,10 @@ function _usaAuthRailway() {
 	return idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0;
 }
 
+async function _siAdminAsignarServicios() {
+	return;
+}
+
 function _parseApellidoNombre(apellidoNombre) {
 	const s = String(apellidoNombre || '').trim();
 	if (!s) return { apellido: '', nombres: '' };
@@ -272,6 +276,7 @@ async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal) {
 			EsPrincipal: !!(r.EsPrincipal || r.esPrincipal),
 		}));
 		const principal = roles.find((r) => r.EsPrincipal) || roles[0] || null;
+		await _siAdminAsignarServicios(vp, roles);
 		return { roles, principal };
 	}
 
@@ -300,7 +305,9 @@ async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal) {
 	]);
 	_invalidarCachePermisos(principalId);
 	const principal = rol ? { ...rol, EsPrincipal: true } : null;
-	return { roles: principal ? [principal] : [], principal };
+	const pack = { roles: principal ? [principal] : [], principal };
+	await _siAdminAsignarServicios(vp, pack.roles);
+	return pack;
 }
 
 /**

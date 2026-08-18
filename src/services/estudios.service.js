@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
-const { sectorUsuarioCoincideServicio } = require('../utils/sectorServicioMatch');
+const personalServicios = require('./personalServicios.service');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -504,24 +504,11 @@ async function listarSectoresReceptor({ valorPersonal } = {}) {
 	const vp = Number(valorPersonal);
 	if (!Number.isFinite(vp) || vp <= 0) return all;
 
-	const userSecs = await executeQuery(
-		`
-    SELECT
-      RTRIM(LTRIM(ps.idSector)) AS idSector,
-      RTRIM(LTRIM(ISNULL(s.Descripcion, ''))) AS descripcion
-    FROM dbo.imPersonalSectores ps
-    LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idSector))
-    WHERE ps.idPersonal = @p0
-    `,
-		[{ value: vp, type: 'Int' }],
-	).catch(() => []);
-
-	if (!userSecs?.length) return [];
-
-	const matched = all.filter((srv) =>
-		userSecs.some((us) => sectorUsuarioCoincideServicio(us, srv)),
+	const codes = new Set(
+		(await personalServicios.codigosDePersonal(vp)).map((c) => c.toUpperCase()),
 	);
-	return matched;
+	if (!codes.size) return [];
+	return all.filter((srv) => codes.has(String(srv.valor || '').trim().toUpperCase()));
 }
 
 /**
@@ -531,38 +518,7 @@ async function listarSectoresReceptor({ valorPersonal } = {}) {
 async function expandCodigosReceptor(sectorReceptor) {
 	const raw = String(sectorReceptor || '').trim();
 	if (!raw) return [];
-
-	const allServicios = await listarSectoresReceptor();
-	const secRows = await executeQuery(
-		`
-    SELECT TOP 1
-      RTRIM(LTRIM(Valor)) AS valor,
-      RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS descripcion
-    FROM dbo.imSectores
-    WHERE LTRIM(RTRIM(Valor)) = LTRIM(RTRIM(@p0))
-    `,
-		[{ value: raw, type: 'VarChar' }],
-	).catch(() => []);
-
-	const srvExact = allServicios.find(
-		(s) => String(s.valor || '').trim().toUpperCase() === raw.toUpperCase(),
-	);
-	const userLike = {
-		idSector: raw,
-		descripcion: String(secRows?.[0]?.descripcion || srvExact?.descripcion || '').trim(),
-	};
-
-	const matched = allServicios.filter((srv) => sectorUsuarioCoincideServicio(userLike, srv));
-	const seen = new Set();
-	const codes = [];
-	for (const c of [raw, ...matched.map((s) => s.valor)]) {
-		const t = String(c || '').trim();
-		const k = t.toUpperCase();
-		if (!t || seen.has(k)) continue;
-		seen.add(k);
-		codes.push(t);
-	}
-	return codes;
+	return [raw];
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {

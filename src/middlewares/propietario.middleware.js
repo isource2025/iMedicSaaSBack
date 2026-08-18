@@ -187,4 +187,4 @@ function requirePropietario({
 	};
 }
 
-module.exports = { requirePropietario };
+module.exports = { requirePropietario, esAdminClinico };

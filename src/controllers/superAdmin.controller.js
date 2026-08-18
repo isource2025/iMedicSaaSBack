@@ -282,6 +282,34 @@ async function eliminarSector(req, res) {
 	}
 }
 
+async function crearServicio(req, res) {
+	try {
+		const data = await superAdminService.crearServicio(req.body);
+		res.status(201).json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
+async function actualizarServicio(req, res) {
+	try {
+		const data = await superAdminService.actualizarServicio(req.params.valor, req.body);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
+async function eliminarServicio(req, res) {
+	try {
+		const idEmpresa = Number(req.query.idEmpresa ?? req.body?.idEmpresa);
+		const data = await superAdminService.eliminarServicio(req.params.valor, idEmpresa);
+		res.json({ success: true, data });
+	} catch (e) {
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function configPlataforma(req, res) {
 	try {
 		if (req.method === 'GET' || req.method === 'get') {
@@ -337,6 +365,9 @@ module.exports = {
 	crearSector,
 	actualizarSector,
 	eliminarSector,
+	crearServicio,
+	actualizarServicio,
+	eliminarServicio,
 	modulosEmpresa,
 	configPlataforma,
 	authReconcile,

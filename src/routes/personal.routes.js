@@ -53,6 +53,10 @@ router.delete('/:id/firma', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), 
 router.get('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarSectoresPersonal);
 router.post('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.agregarSectorPersonal);
 router.delete('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.quitarSectorPersonal);
+router.get('/:id/servicios-pedidos', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarServiciosPedidosPersonal);
+router.post('/:id/servicios-pedidos', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.agregarServicioPedidosPersonal);
+router.delete('/:id/servicios-pedidos', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.quitarServicioPedidosPersonal);
+router.put('/:id/asignaciones', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.reemplazarAsignacionesPersonal);
 
 router.get('/:id/codigos-facturacion', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCodigosFacturacionPersonal);
 router.post('/:id/codigos-facturacion', requirePermiso('CONFIGURACION.PERSONAL.CREAR'), personalController.crearCodigoFacturacionPersonal);

@@ -39,6 +39,10 @@ router.post('/sectores', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl
 router.put('/sectores/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarSector);
 router.delete('/sectores/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.eliminarSector);
 
+router.post('/servicios', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.crearServicio);
+router.put('/servicios/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarServicio);
+router.delete('/servicios/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.eliminarServicio);
+
 router.get('/usuarios', requirePermiso('PLATAFORMA.USUARIOS.VER'), ctrl.listarUsuarios);
 
 router.post(

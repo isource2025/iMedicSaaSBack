@@ -353,15 +353,16 @@ async function actualizarPacks(idEmpresa, packsActivos) {
 }
 
 function parseOnboardingConfigJson(raw) {
-	if (!raw) return { sectoresDefecto: [], altaCompletada: false };
+	if (!raw) return { sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	try {
 		const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		return {
 			sectoresDefecto: Array.isArray(o?.sectoresDefecto) ? o.sectoresDefecto.map(String) : [],
+			serviciosDefecto: Array.isArray(o?.serviciosDefecto) ? o.serviciosDefecto.map(String) : [],
 			altaCompletada: !!o?.altaCompletada,
 		};
 	} catch {
-		return { sectoresDefecto: [], altaCompletada: false };
+		return { sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	}
 }
 
@@ -370,6 +371,9 @@ function mergeOnboardingConfig(prevRaw, data) {
 	const next = { ...prev };
 	if (data.sectoresDefecto !== undefined) {
 		next.sectoresDefecto = (data.sectoresDefecto || []).map(String);
+	}
+	if (data.serviciosDefecto !== undefined) {
+		next.serviciosDefecto = (data.serviciosDefecto || []).map(String);
 	}
 	if (data.altaCompletada !== undefined) {
 		next.altaCompletada = !!data.altaCompletada;
@@ -385,7 +389,7 @@ async function obtenerOnboarding(idEmpresa) {
 		[Number(idEmpresa)],
 	);
 	if (!rows.length) {
-		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
+		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	}
 	const r = rows[0];
 	const cfg = parseOnboardingConfigJson(r.ConfigJson);
@@ -396,6 +400,7 @@ async function obtenerOnboarding(idEmpresa) {
 		fechaInicio: r.FechaInicio,
 		fechaCompletado: r.FechaCompletado,
 		sectoresDefecto: cfg.sectoresDefecto,
+		serviciosDefecto: cfg.serviciosDefecto || [],
 		altaCompletada: !!cfg.altaCompletada,
 	};
 }
@@ -409,7 +414,7 @@ async function upsertOnboarding(idEmpresa, data) {
 	);
 
 	let configJson = null;
-	if (data.sectoresDefecto !== undefined || data.altaCompletada !== undefined) {
+	if (data.sectoresDefecto !== undefined || data.serviciosDefecto !== undefined || data.altaCompletada !== undefined) {
 		configJson = mergeOnboardingConfig(exists.length ? exists[0].ConfigJson : null, data);
 	}
 

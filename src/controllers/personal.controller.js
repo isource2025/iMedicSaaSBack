@@ -460,6 +460,85 @@ const quitarSectorPersonal = async (req, res) => {
 	}
 };
 
+const listarServiciosPedidosPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		const data = await personalService.listarServiciosPedidosPersonal(id);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.listarServiciosPedidosPersonal] ERROR:', error.message);
+		res.status(500).json({ success: false, mensaje: 'Error al listar servicios' });
+	}
+};
+
+const agregarServicioPedidosPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		const data = await personalService.agregarServicioPedidosPersonal(
+			id,
+			req.body?.idServicio,
+		);
+		res.status(201).json({ success: true, mensaje: 'Servicio asignado', data });
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.agregarServicioPedidosPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al asignar servicio',
+		});
+	}
+};
+
+const quitarServicioPedidosPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		let idServicio = req.query?.idServicio || req.body?.idServicio;
+		if (Array.isArray(idServicio)) idServicio = idServicio[0];
+		if (!idServicio) {
+			return res.status(400).json({ success: false, mensaje: 'idServicio es obligatorio' });
+		}
+		const data = await personalService.quitarServicioPedidosPersonal(id, idServicio);
+		res.json({ success: true, mensaje: 'Servicio quitado', data });
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.quitarServicioPedidosPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al quitar servicio',
+		});
+	}
+};
+
+const reemplazarAsignacionesPersonal = async (req, res) => {
+	const id = _idInt(req);
+	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+	try {
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		const data = await personalService.reemplazarAsignacionesPersonal(id, {
+			sectores: req.body?.sectores,
+			servicios: req.body?.servicios,
+		});
+		res.json({ success: true, mensaje: 'Asignaciones actualizadas', data });
+	} catch (error) {
+		const status = error.statusCode || 500;
+		console.error('[personal.reemplazarAsignacionesPersonal] ERROR:', error.message);
+		res.status(status).json({
+			success: false,
+			mensaje: error.message || 'Error al guardar asignaciones',
+		});
+	}
+};
+
 const listarCodigosFacturacionPersonal = async (req, res) => {
 	const id = _idInt(req);
 	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
@@ -668,6 +747,10 @@ module.exports = {
 	listarSectoresPersonal,
 	agregarSectorPersonal,
 	quitarSectorPersonal,
+	listarServiciosPedidosPersonal,
+	agregarServicioPedidosPersonal,
+	quitarServicioPedidosPersonal,
+	reemplazarAsignacionesPersonal,
 	listarCodigosFacturacionPersonal,
 	crearCodigoFacturacionPersonal,
 	actualizarCodigoFacturacionPersonal,

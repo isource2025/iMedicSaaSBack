@@ -173,14 +173,21 @@ async function removePersonalEmpresa(idEmpresa, idPersonal) {
 }
 
 async function syncPersonalSectores(idEmpresa, idPersonal) {
+	if (!isAuthCentralEnabled()) return;
+	const emp = Number(idEmpresa);
+	const id = Number(idPersonal);
+	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ? AND idPersonal = ?`, [
+		emp,
+		id,
+	]);
 	const rows = await executeQuery(
 		`SELECT idPersonal, idSector FROM dbo.imPersonalSectores WHERE idPersonal = @p0`,
-		[{ value: idPersonal, type: 'Int' }],
+		[{ value: id, type: 'Int' }],
 	);
 	for (const row of rows || []) {
 		await upsertRow('imPersonalSectores', ['IdEmpresa', 'idPersonal', 'idSector'], {
 			...row,
-			IdEmpresa: Number(idEmpresa),
+			IdEmpresa: emp,
 		});
 	}
 }
@@ -208,6 +215,51 @@ async function removeSector(idEmpresa, valor) {
 		Number(idEmpresa),
 		String(valor),
 	]);
+}
+
+async function syncServicio(idEmpresa, valor) {
+	const row = await readTenantRow('imServicios', 'LTRIM(RTRIM(Valor)) = @p0', [
+		{ value: String(valor), type: 'VarChar' },
+	]);
+	if (!row) return;
+	row.IdEmpresa = Number(idEmpresa);
+	await upsertRow('imServicios', ['IdEmpresa', 'Valor'], row);
+}
+
+async function removeServicio(idEmpresa, valor) {
+	if (!isAuthCentralEnabled()) return;
+	await mysqlExec(`DELETE FROM ${q('imServicios')} WHERE IdEmpresa = ? AND Valor = ?`, [
+		Number(idEmpresa),
+		String(valor),
+	]);
+}
+
+async function syncPersonalServicios(idEmpresa, idPersonal) {
+	if (!isAuthCentralEnabled()) return;
+	const emp = Number(idEmpresa);
+	const id = Number(idPersonal);
+	await mysqlExec(
+		`CREATE TABLE IF NOT EXISTS ${q('imPersonalServicios')} (
+			IdEmpresa INT NOT NULL,
+			idPersonal INT NOT NULL,
+			idServicio VARCHAR(20) NOT NULL,
+			PRIMARY KEY (IdEmpresa, idPersonal, idServicio)
+		)`,
+	);
+	await mysqlExec(`DELETE FROM ${q('imPersonalServicios')} WHERE IdEmpresa = ? AND idPersonal = ?`, [
+		emp,
+		id,
+	]);
+	const rows = await executeQuery(
+		`SELECT idPersonal, idServicio FROM dbo.imPersonalServicios WHERE idPersonal = @p0`,
+		[{ value: id, type: 'Int' }],
+	).catch(() => []);
+	for (const row of rows || []) {
+		await upsertRow('imPersonalServicios', ['IdEmpresa', 'idPersonal', 'idServicio'], {
+			...row,
+			IdEmpresa: emp,
+		});
+	}
 }
 
 /** Elimina credenciales auth en MySQL si el personal ya no está vinculado a ninguna empresa tenant. */
@@ -332,6 +384,9 @@ module.exports = {
 	removePersonalSector,
 	syncSector,
 	removeSector,
+	syncServicio,
+	removeServicio,
+	syncPersonalServicios,
 	purgePersonalAuthIfOrphan,
 	purgePersonalAuth,
 	syncUserLoginBundle,

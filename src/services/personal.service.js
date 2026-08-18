@@ -18,6 +18,7 @@ const {
 } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const usersService = require('./users.service');
+const personalServicios = require('./personalServicios.service');
 
 const ADMIN_VALOR_THRESHOLD = 900000; // Valor >= 900000 se considera "reservado" (admin/sistema)
 
@@ -1050,6 +1051,56 @@ async function quitarSectorPersonal(valor, idSector) {
 	return listarSectoresPersonal(valor);
 }
 
+async function listarServiciosPedidosPersonal(valor) {
+	return personalServicios.listar(valor);
+}
+
+async function agregarServicioPedidosPersonal(valor, idServicio) {
+	return personalServicios.agregar(valor, idServicio);
+}
+
+async function quitarServicioPedidosPersonal(valor, idServicio) {
+	return personalServicios.quitar(valor, idServicio);
+}
+
+async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
+	const vp = Number(valor);
+	if (Array.isArray(sectores)) {
+		await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
+			{ value: vp, type: 'Int' },
+		]);
+		const seen = new Set();
+		for (const raw of sectores) {
+			const sid = strOrNull(raw);
+			if (!sid || seen.has(sid)) continue;
+			seen.add(sid);
+			await executeQuery(
+				`INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@p0, @p1)`,
+				[
+					{ value: vp, type: 'Int' },
+					{ value: sid, type: 'VarChar' },
+				],
+			);
+		}
+		const tenantId = resolveTenantEmpresaId();
+		if (tenantId != null) {
+			await authCentralSync.syncPersonalSectores(tenantId, vp);
+		}
+	}
+	let srvList = null;
+	if (Array.isArray(servicios)) {
+		srvList = await personalServicios.reemplazar(vp, servicios);
+		const tenantId = resolveTenantEmpresaId();
+		if (tenantId != null) {
+			await authCentralSync.syncPersonalServicios(tenantId, vp);
+		}
+	}
+	return {
+		sectores: await listarSectoresPersonal(vp),
+		servicios: srvList != null ? srvList : await personalServicios.listar(vp),
+	};
+}
+
 const LIM_COD_ASOC = 8;
 const LIM_COD_FAC = 30;
 
@@ -1354,6 +1405,10 @@ module.exports = {
 	listarSectoresPersonal,
 	agregarSectorPersonal,
 	quitarSectorPersonal,
+	listarServiciosPedidosPersonal,
+	agregarServicioPedidosPersonal,
+	quitarServicioPedidosPersonal,
+	reemplazarAsignacionesPersonal,
 	listarCodigosFacturacionPersonal,
 	crearCodigoFacturacionPersonal,
 	actualizarCodigoFacturacionPersonal,

@@ -159,13 +159,23 @@ async function esRolAdmin(idRol) {
 	return String(rows[0]?.Nombre || '').toUpperCase() === 'ADMIN';
 }
 
-/** ADMIN recibe todos los sectores de la empresa; el resto usa la lista enviada. */
+/** Si mandan lista (aunque vacía), esa es la asignación. ADMIN solo recibe todos si no mandaron lista. */
 async function resolverSectoresUsuario(idEmpresa, idRol, sectores) {
+	if (Array.isArray(sectores)) return sectores.map(String);
 	if (await esRolAdmin(idRol)) {
 		const todos = await listarSectores(idEmpresa);
 		return todos.map((s) => s.id);
 	}
-	return Array.isArray(sectores) ? sectores.map(String) : null;
+	return null;
+}
+
+async function resolverServiciosUsuario(idEmpresa, idRol, servicios) {
+	if (Array.isArray(servicios)) return servicios.map(String);
+	if (await esRolAdmin(idRol)) {
+		const todos = await listarServicios(idEmpresa);
+		return todos.map((s) => s.id);
+	}
+	return null;
 }
 
 function fechaClarionHoy() {
@@ -276,6 +286,146 @@ async function eliminarSector(idEmpresa, valor) {
 	return { ok: true, id };
 }
 
+// ───────────────────────────── servicios (NUBE) ─────────────────────────────
+
+async function ensureServiciosTables(idEmpresa) {
+	const emp = Number(idEmpresa);
+	await mysqlExec(
+		`CREATE TABLE IF NOT EXISTS \`imServicios\` (
+			\`IdEmpresa\` INT NOT NULL,
+			\`Valor\` VARCHAR(20) NOT NULL,
+			\`Descripcion\` VARCHAR(200) NULL,
+			PRIMARY KEY (\`IdEmpresa\`, \`Valor\`)
+		)`,
+	);
+	await mysqlExec(
+		`CREATE TABLE IF NOT EXISTS \`imPersonalServicios\` (
+			\`IdEmpresa\` INT NOT NULL,
+			\`idPersonal\` INT NOT NULL,
+			\`idServicio\` VARCHAR(20) NOT NULL,
+			PRIMARY KEY (\`IdEmpresa\`, \`idPersonal\`, \`idServicio\`)
+		)`,
+	);
+	return emp;
+}
+
+async function listarServicios(idEmpresa) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const rows = await mysqlQuery(
+		`SELECT Valor, Descripcion FROM \`imServicios\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
+		[emp],
+	);
+	return rows.map((s) => ({
+		id: String(s.Valor || '').trim(),
+		descripcion: String(s.Descripcion || s.Valor || '').trim(),
+	}));
+}
+
+async function crearServicio(idEmpresa, { valor, descripcion }) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const cod = String(valor || '').trim().toUpperCase().slice(0, 20);
+	const desc = String(descripcion || '').trim();
+	if (!cod) {
+		const e = new Error('El código del servicio es obligatorio');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (!desc) {
+		const e = new Error('La descripción del servicio es obligatoria');
+		e.statusCode = 400;
+		throw e;
+	}
+	const dup = await mysqlQuery(
+		`SELECT Valor FROM \`imServicios\` WHERE IdEmpresa = ? AND Valor = ? LIMIT 1`,
+		[emp, cod],
+	);
+	if (dup.length) {
+		const e = new Error('Ya existe un servicio con ese código');
+		e.statusCode = 409;
+		throw e;
+	}
+	const colMap = await columnasMeta('imServicios');
+	const campos = ['IdEmpresa', 'Valor', 'Descripcion'];
+	const valores = [emp, cod, desc];
+	completarObligatorias(colMap, campos, valores);
+	await mysqlExec(
+		`INSERT INTO \`imServicios\` (${campos.map((c) => `\`${c}\``).join(', ')})
+     VALUES (${campos.map(() => '?').join(', ')})`,
+		valores,
+	);
+	return { id: cod, descripcion: desc };
+}
+
+async function actualizarServicio(idEmpresa, valor, { descripcion }) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const id = String(valor || '').trim().toUpperCase();
+	const desc = String(descripcion || '').trim();
+	if (!desc) {
+		const e = new Error('La descripción es obligatoria');
+		e.statusCode = 400;
+		throw e;
+	}
+	await mysqlExec(`UPDATE \`imServicios\` SET Descripcion = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+		desc,
+		emp,
+		id,
+	]);
+	return { id, descripcion: desc };
+}
+
+async function eliminarServicio(idEmpresa, valor) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const id = String(valor || '').trim().toUpperCase();
+	const enUso = await mysqlQuery(
+		`SELECT 1 FROM \`imPersonalServicios\` WHERE IdEmpresa = ? AND idServicio = ? LIMIT 1`,
+		[emp, id],
+	);
+	if (enUso.length) {
+		const e = new Error('No se puede eliminar: el servicio está asignado a personal');
+		e.statusCode = 409;
+		throw e;
+	}
+	await mysqlExec(`DELETE FROM \`imServicios\` WHERE IdEmpresa = ? AND Valor = ?`, [emp, id]);
+	return { ok: true, id };
+}
+
+async function reemplazarServiciosUsuario(idEmpresa, idPersonal, servicios) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const id = Number(idPersonal);
+	await mysqlExec(`DELETE FROM \`imPersonalServicios\` WHERE IdEmpresa = ? AND idPersonal = ?`, [
+		emp,
+		id,
+	]);
+	for (const raw of servicios || []) {
+		const sid = String(raw || '').trim();
+		if (!sid) continue;
+		try {
+			await mysqlExec(
+				`INSERT INTO \`imPersonalServicios\` (IdEmpresa, idPersonal, idServicio) VALUES (?, ?, ?)`,
+				[emp, id, sid],
+			);
+		} catch (e) {
+			console.warn('[nube] asignar servicio', sid, e.message);
+		}
+	}
+}
+
+async function listarServiciosDeUsuario(idEmpresa, idPersonal) {
+	const emp = await ensureServiciosTables(idEmpresa);
+	const rows = await mysqlQuery(
+		`SELECT ps.idServicio AS id, s.Descripcion AS descripcion
+		 FROM \`imPersonalServicios\` ps
+		 LEFT JOIN \`imServicios\` s
+		   ON s.IdEmpresa = ps.IdEmpresa AND s.Valor = ps.idServicio
+		 WHERE ps.IdEmpresa = ? AND ps.idPersonal = ?`,
+		[emp, Number(idPersonal)],
+	);
+	return (rows || []).map((s) => ({
+		id: String(s.id || '').trim(),
+		descripcion: String(s.descripcion || s.id || '').trim(),
+	}));
+}
+
 // ───────────────────────────── roles (NUBE) ─────────────────────────────
 
 async function listarRoles() {
@@ -336,6 +486,12 @@ async function listarUsuariosEmpresa(idEmpresa) {
 		} catch {
 			sectores = [];
 		}
+		let servicios = [];
+		try {
+			servicios = await listarServiciosDeUsuario(id, idPersonal);
+		} catch {
+			servicios = [];
+		}
 		usuarios.push({
 			idPersonal,
 			usuario: String(r.Usuario || '').trim(),
@@ -347,6 +503,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
 			rol: String(r.RolDescripcion || r.RolNombre || '').trim() || null,
 			activo: true,
 			sectores,
+			servicios,
 		});
 	}
 	return usuarios;
@@ -442,7 +599,7 @@ function mapMysqlDuplicateToHttp(err) {
 
 async function crearUsuarioEmpresa(idEmpresa, body) {
 	const emp = Number(idEmpresa);
-	const { nombreRed, password, apellido, nombres, numeroDocumento, legajo, codOperador, idRol, sectores } = body;
+	const { nombreRed, password, apellido, nombres, numeroDocumento, legajo, codOperador, idRol, sectores, servicios } = body;
 	if (!nombreRed?.trim() || !password?.trim()) {
 		const e = new Error('Usuario de red y contraseña son obligatorios');
 		e.statusCode = 400;
@@ -522,6 +679,11 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		}
 	}
 
+	const serviciosAsignar = await resolverServiciosUsuario(emp, idRol, servicios);
+	if (serviciosAsignar != null) {
+		await reemplazarServiciosUsuario(emp, valorPersonal, serviciosAsignar);
+	}
+
 	const lista = await listarUsuariosEmpresa(idEmpresa);
 	return lista.find((u) => u.idPersonal === valorPersonal) || lista[lista.length - 1];
 }
@@ -577,6 +739,11 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 				console.warn('[nube] reasignar sector', idSector, e.message);
 			}
 		}
+	}
+
+	const serviciosAsignar = await resolverServiciosUsuario(emp, body.idRol, body.servicios);
+	if (serviciosAsignar != null) {
+		await reemplazarServiciosUsuario(emp, id, serviciosAsignar);
 	}
 
 	const lista = await listarUsuariosEmpresa(idEmpresa);
@@ -910,6 +1077,12 @@ module.exports = {
 	crearSector,
 	actualizarSector,
 	eliminarSector,
+	listarServicios,
+	crearServicio,
+	actualizarServicio,
+	eliminarServicio,
+	reemplazarServiciosUsuario,
+	resolverServiciosUsuario,
 	listarRoles,
 	listarUsuariosEmpresa,
 	asegurarFichaPersonal,

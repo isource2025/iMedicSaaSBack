@@ -150,17 +150,20 @@ async function obtenerPacksEmpresa(idEmpresa) {
 }
 
 function parseOnboardingConfigJson(raw) {
-	if (!raw) return { sectoresDefecto: [], altaCompletada: false };
+	if (!raw) return { sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	try {
 		const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		return {
 			sectoresDefecto: Array.isArray(o?.sectoresDefecto)
 				? o.sectoresDefecto.map(String)
 				: [],
+			serviciosDefecto: Array.isArray(o?.serviciosDefecto)
+				? o.serviciosDefecto.map(String)
+				: [],
 			altaCompletada: !!o?.altaCompletada,
 		};
 	} catch {
-		return { sectoresDefecto: [], altaCompletada: false };
+		return { sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	}
 }
 
@@ -169,6 +172,9 @@ function mergeOnboardingConfig(prevRaw, data) {
 	const next = { ...prev };
 	if (data.sectoresDefecto !== undefined) {
 		next.sectoresDefecto = (data.sectoresDefecto || []).map(String);
+	}
+	if (data.serviciosDefecto !== undefined) {
+		next.serviciosDefecto = (data.serviciosDefecto || []).map(String);
 	}
 	if (data.altaCompletada !== undefined) {
 		next.altaCompletada = !!data.altaCompletada;
@@ -182,7 +188,7 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			return await platformMysql.obtenerOnboarding(idEmpresa);
 		} catch (e) {
 			console.warn('[superAdmin] obtenerOnboardingEmpresa MySQL:', e.message);
-			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
+			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 		}
 	}
 	try {
@@ -192,7 +198,7 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			[{ value: idEmpresa, type: 'Int' }],
 		);
 		if (!rows.length) {
-			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
+			return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 		}
 		const r = rows[0];
 		const cfg = parseOnboardingConfigJson(r.ConfigJson);
@@ -203,10 +209,11 @@ async function obtenerOnboardingEmpresa(idEmpresa) {
 			fechaInicio: r.FechaInicio,
 			fechaCompletado: r.FechaCompletado,
 			sectoresDefecto: cfg.sectoresDefecto,
+			serviciosDefecto: cfg.serviciosDefecto || [],
 			altaCompletada: !!cfg.altaCompletada,
 		};
 	} catch {
-		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], altaCompletada: false };
+		return { pasoActual: 'DATOS', completado: false, notas: '', sectoresDefecto: [], serviciosDefecto: [], altaCompletada: false };
 	}
 }
 
@@ -583,7 +590,7 @@ async function upsertOnboarding(idEmpresa, data) {
 		);
 
 		let configJson = null;
-		if (data.sectoresDefecto !== undefined || data.altaCompletada !== undefined) {
+		if (data.sectoresDefecto !== undefined || data.serviciosDefecto !== undefined || data.altaCompletada !== undefined) {
 			configJson = mergeOnboardingConfig(exists.length ? exists[0].ConfigJson : null, data);
 		}
 
@@ -691,6 +698,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 			codOperador,
 			idRol,
 			sectores,
+			servicios,
 		} = body;
 
 		if (!nombreRed?.trim() || !password?.trim()) {
@@ -743,6 +751,14 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 				if (!String(err.message || '').includes('ya tiene asignado')) throw err;
 			}
 		}
+
+		const serviciosAsignar =
+			(await nubeTenant.resolverServiciosUsuario(idEmpresa, idRol, servicios)) ??
+			(Array.isArray(servicios)
+				? servicios
+				: (await obtenerOnboardingEmpresa(idEmpresa)).serviciosDefecto || []);
+		await require('./personalServicios.service').reemplazar(valorPersonal, serviciosAsignar);
+		await authCentralSync.syncPersonalServicios(idEmpresa, valorPersonal).catch(() => {});
 
 		await authCentralSync.syncUserLoginBundle(idEmpresa, valorPersonal);
 
@@ -822,6 +838,14 @@ async function actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body, opt
 				} catch (err) {
 					if (!String(err.message || '').includes('ya tiene asignado')) throw err;
 				}
+			}
+		}
+
+		const serviciosAsignar = await nubeTenant.resolverServiciosUsuario(idEmpresa, body.idRol, body.servicios);
+		if (serviciosAsignar != null) {
+			await require('./personalServicios.service').reemplazar(idPersonal, serviciosAsignar);
+			if (syncToRailway) {
+				await authCentralSync.syncPersonalServicios(idEmpresa, idPersonal).catch(() => {});
 			}
 		}
 
@@ -1020,6 +1044,109 @@ async function eliminarSector(valor, idEmpresa) {
 	});
 }
 
+async function crearServicio(data) {
+	const idEmpresa = Number(data.idEmpresa);
+	if (!Number.isFinite(idEmpresa) || idEmpresa <= 0) {
+		const e = new Error('idEmpresa es obligatorio para crear servicios en el tenant');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	if (await gestionAuthEnRailway()) {
+		return nubeTenant.crearServicio(idEmpresa, { valor: data.valor, descripcion: data.descripcion });
+	}
+
+	return runWithTenant(idEmpresa, async () => {
+		const valor = String(data.valor || '').trim().toUpperCase().slice(0, 20);
+		const descripcion = String(data.descripcion || '').trim();
+		if (!valor) {
+			const e = new Error('El código del servicio es obligatorio');
+			e.statusCode = 400;
+			throw e;
+		}
+		if (!descripcion) {
+			const e = new Error('La descripción del servicio es obligatoria');
+			e.statusCode = 400;
+			throw e;
+		}
+		const dup = await tenantDb.executeQuery(
+			`SELECT TOP 1 Valor FROM dbo.imServicios WHERE LTRIM(RTRIM(Valor)) = @p0`,
+			[{ value: valor, type: 'VarChar' }],
+		);
+		if (dup.length) {
+			const e = new Error('Ya existe un servicio con ese código');
+			e.statusCode = 409;
+			throw e;
+		}
+		await tenantDb.executeQuery(
+			`INSERT INTO dbo.imServicios (Valor, Descripcion) VALUES (@p0, @p1)`,
+			[
+				{ value: valor, type: 'VarChar' },
+				{ value: descripcion, type: 'VarChar' },
+			],
+		);
+		await authCentralSync.syncServicio(idEmpresa, valor).catch(() => {});
+		return { id: valor, descripcion };
+	});
+}
+
+async function actualizarServicio(valor, data) {
+	const idEmpresa = Number(data.idEmpresa);
+	if (!Number.isFinite(idEmpresa) || idEmpresa <= 0) {
+		const e = new Error('idEmpresa es obligatorio para actualizar servicios del tenant');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (await gestionAuthEnRailway()) {
+		return nubeTenant.actualizarServicio(idEmpresa, valor, { descripcion: data.descripcion });
+	}
+	return runWithTenant(idEmpresa, async () => {
+		const id = String(valor || '').trim().toUpperCase();
+		const descripcion = String(data.descripcion || '').trim();
+		if (!descripcion) {
+			const e = new Error('La descripción es obligatoria');
+			e.statusCode = 400;
+			throw e;
+		}
+		await tenantDb.executeQuery(`UPDATE dbo.imServicios SET Descripcion = @p1 WHERE LTRIM(RTRIM(Valor)) = @p0`, [
+			{ value: id, type: 'VarChar' },
+			{ value: descripcion, type: 'VarChar' },
+		]);
+		await authCentralSync.syncServicio(idEmpresa, id).catch(() => {});
+		return { id, descripcion };
+	});
+}
+
+async function eliminarServicio(valor, idEmpresa) {
+	const tenantId = Number(idEmpresa);
+	if (!Number.isFinite(tenantId) || tenantId <= 0) {
+		const e = new Error('idEmpresa es obligatorio para eliminar servicios del tenant');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (await gestionAuthEnRailway()) {
+		return nubeTenant.eliminarServicio(tenantId, valor);
+	}
+	return runWithTenant(tenantId, async () => {
+		const id = String(valor || '').trim().toUpperCase();
+		await require('./personalServicios.service').ensureTable();
+		const enUso = await tenantDb.executeQuery(
+			`SELECT TOP 1 1 FROM dbo.imPersonalServicios WHERE LTRIM(RTRIM(idServicio)) = @p0`,
+			[{ value: id, type: 'VarChar' }],
+		);
+		if (enUso.length) {
+			const e = new Error('No se puede eliminar: el servicio está asignado a personal');
+			e.statusCode = 409;
+			throw e;
+		}
+		await tenantDb.executeQuery(`DELETE FROM dbo.imServicios WHERE LTRIM(RTRIM(Valor)) = @p0`, [
+			{ value: id, type: 'VarChar' },
+		]);
+		await authCentralSync.removeServicio(tenantId, id).catch(() => {});
+		return { ok: true, id };
+	});
+}
+
 async function upsertSuscripcion(idEmpresa, data) {
 	if (useMysqlPlatform()) {
 		try {
@@ -1125,6 +1252,15 @@ async function listarUsuariosEmpresa(idEmpresa) {
 				} catch {
 					sectores = [];
 				}
+				let servicios = [];
+				try {
+					servicios = (await require('./personalServicios.service').listar(idPersonal)).map((s) => ({
+						id: s.idServicio,
+						descripcion: s.Descripcion || s.idServicio,
+					}));
+				} catch {
+					servicios = [];
+				}
 				usuarios.push({
 					idPersonal,
 					usuario: String(r.Usuario || '').trim(),
@@ -1136,6 +1272,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
 					rol: r.IdRol != null ? rolNombrePorId.get(Number(r.IdRol)) || null : null,
 					activo: r.EstadoPersonal == null || Number(r.EstadoPersonal) === 1,
 					sectores,
+					servicios,
 				});
 			}
 			return usuarios;
@@ -1536,6 +1673,7 @@ async function obtenerCatalogos() {
 		planes: PLANES,
 		estadosSuscripcion: ESTADOS_SUSCRIPCION,
 		sectores: [],
+		servicios: [],
 		roles,
 	};
 }
@@ -1549,17 +1687,25 @@ async function obtenerCatalogosTenant(idEmpresa) {
 
 	if (await gestionAuthEnRailway()) {
 		const sectores = await nubeTenant.listarSectores(idEmpresa).catch(() => []);
-		return { ...base, sectores, roles };
+		const servicios = await nubeTenant.listarServicios(idEmpresa).catch(() => []);
+		return { ...base, sectores, servicios, roles };
 	}
 
 	return runWithTenant(idEmpresa, async () => {
 		const sectores = await sectoresService.obtenerSectores().catch(() => []);
+		const srvRows = await tenantDb
+			.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`)
+			.catch(() => []);
 		return {
 			...base,
 			sectores: (sectores || []).map((s) => ({
 				id: String(s.IdSector ?? s.idSector ?? ''),
 				descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
 				ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
+			})),
+			servicios: (srvRows || []).map((s) => ({
+				id: String(s.Valor || '').trim(),
+				descripcion: String(s.Descripcion || s.Valor || '').trim(),
 			})),
 			roles,
 		};
@@ -1642,6 +1788,9 @@ module.exports = {
 	crearSector,
 	actualizarSector,
 	eliminarSector,
+	crearServicio,
+	actualizarServicio,
+	eliminarServicio,
 	obtenerDashboard,
 	obtenerCatalogos,
 	obtenerCatalogosTenant,

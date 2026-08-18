@@ -1,5 +1,13 @@
 const estudiosService = require('../services/estudios.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
+const { esAdminClinico } = require('../middlewares/propietario.middleware');
+
+async function _veTodosLosServicios(req) {
+	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre || '').trim().toUpperCase();
+	const id = Number(req.auth?.rol?.id);
+	if (rn === 'SUPER_ADMIN' || id === 5) return true;
+	return esAdminClinico(req);
+}
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
@@ -187,8 +195,9 @@ async function listarSectores(req, res) {
 		const soloMios =
 			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
 			String(req.query.soloMios || '').toLowerCase() === 'true';
+		const todosServicios = await _veTodosLosServicios(req);
 		const data = await estudiosService.listarSectoresReceptor({
-			valorPersonal: soloMios ? req.valorPersonal : null,
+			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
