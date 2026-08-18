@@ -137,42 +137,36 @@ const SQL_MOVIMIENTO_JOINS = `
       ORDER BY dx.Valor
     ) d
     OUTER APPLY (
-      SELECT TOP 1 n.Nombre AS OperadorNombre
-      FROM (
-        SELECT
-          COALESCE(
-            NULLIF(LTRIM(RTRIM(
-              CONCAT(
-                NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
-                CASE
-                  WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
-                       AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
-                  THEN ', '
-                  ELSE ''
-                END,
-                NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
-              )
-            )), ''),
-            NULLIF(LTRIM(RTRIM(ISNULL(pw.NombreRed, ''))), '')
-          ) AS Nombre,
-          0 AS Ord
-        FROM dbo.imPassword pw
-        WHERE TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
-          AND (
-            pw.CodOperador = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
-            OR pw.ValorPersonal = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+      SELECT TOP 1 COALESCE(
+        NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), ''),
+        NULLIF(LTRIM(RTRIM(
+          CONCAT(
+            NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
+            CASE
+              WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
+                   AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
+              THEN ', '
+              ELSE ''
+            END,
+            NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
           )
-        UNION ALL
-        SELECT LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), 1
-        FROM dbo.imPersonal p
-        WHERE TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
-          AND (
-            p.Valor = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
-            OR p.Matricula = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+        )), '')
+      ) AS OperadorNombre
+      FROM dbo.imPassword pw
+      LEFT JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
+      WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
+        AND (
+          LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) = LTRIM(RTRIM(m.Operador))
+          OR (
+            TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+            AND pw.ValorPersonal = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
           )
-      ) n
-      WHERE NULLIF(LTRIM(RTRIM(n.Nombre)), '') IS NOT NULL
-      ORDER BY n.Ord
+          OR LOWER(LTRIM(RTRIM(ISNULL(pw.NombreRed, '')))) = LOWER(LTRIM(RTRIM(m.Operador)))
+        )
+      ORDER BY CASE
+        WHEN NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), '') IS NOT NULL THEN 0
+        ELSE 1
+      END
     ) op
 `;
 
@@ -233,6 +227,118 @@ async function queryMovimientoInicialDesdeCabecera(num) {
   return rows || [];
 }
 
+function _nombreVisibleOperador(row) {
+  const personal = String(row.PersonalNombre || row.ApellidoNombre || '').trim();
+  if (personal) return personal;
+  const ap = String(row.Apellido || '').trim();
+  const no = String(row.Nombres || '').trim();
+  if (ap && no) return `${ap}, ${no}`;
+  if (ap || no) return ap || no;
+  const red = String(row.NombreRed || '').trim();
+  if (red && !/^\d+$/.test(red)) return red;
+  return '';
+}
+
+/** Sarmiento/Clarion: CodOperador es texto; el nombre suele estar en imPersonal. */
+async function completarNombresOperador(rows) {
+  if (!rows?.length) return rows;
+  const pendientes = rows.filter((r) => !String(r.OperadorNombre || r.operadorNombre || '').trim());
+  if (!pendientes.length) return rows;
+
+  const raws = [...new Set(pendientes.map((r) => String(r.Operador ?? '').trim()).filter(Boolean))];
+  if (!raws.length) return rows;
+
+  const params = [];
+  const ph = (value, type) => {
+    params.push({ value, type });
+    return `@p${params.length - 1}`;
+  };
+  const strPh = raws.map((v) => ph(v, 'VarChar'));
+  const nums = [...new Set(raws.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n !== 0))];
+  const numPh = nums.map((n) => ph(n, 'Int'));
+
+  let where = `LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) IN (${strPh.join(',')})
+    OR LOWER(LTRIM(RTRIM(ISNULL(pw.NombreRed, '')))) IN (${strPh.map((p) => `LOWER(${p})`).join(',')})`;
+  if (numPh.length) {
+    where += ` OR pw.ValorPersonal IN (${numPh.join(',')})
+      OR TRY_CAST(LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) AS int) IN (${numPh.join(',')})`;
+  }
+
+  let found = [];
+  try {
+    found = await executeQuery(
+      `
+      SELECT
+        LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) AS CodOperador,
+        pw.ValorPersonal,
+        LTRIM(RTRIM(ISNULL(pw.NombreRed, ''))) AS NombreRed,
+        LTRIM(RTRIM(ISNULL(pw.Apellido, ''))) AS Apellido,
+        LTRIM(RTRIM(ISNULL(pw.Nombres, ''))) AS Nombres,
+        LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))) AS PersonalNombre
+      FROM dbo.imPassword pw
+      LEFT JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
+      WHERE ${where}
+      `,
+      params,
+    );
+  } catch (err) {
+    console.warn('[movimientos] nombres operador (password):', err.message);
+  }
+
+  let personal = [];
+  if (nums.length) {
+    try {
+      const pParams = nums.map((n) => ({ value: n, type: 'Int' }));
+      const pIn = pParams.map((_, i) => `@p${i}`).join(',');
+      personal = await executeQuery(
+        `
+        SELECT Valor, Matricula, LTRIM(RTRIM(ISNULL(ApellidoNombre, ''))) AS ApellidoNombre
+        FROM dbo.imPersonal
+        WHERE Valor IN (${pIn}) OR Matricula IN (${pIn})
+        `,
+        pParams,
+      );
+    } catch (err) {
+      console.warn('[movimientos] nombres operador (personal):', err.message);
+    }
+  }
+
+  const byKey = new Map();
+  const put = (key, nombre) => {
+    const k = String(key ?? '').trim().toLowerCase();
+    if (!k || !nombre || byKey.has(k)) return;
+    byKey.set(k, nombre);
+  };
+  for (const r of found || []) {
+    const nom = _nombreVisibleOperador(r);
+    if (!nom) continue;
+    put(r.CodOperador, nom);
+    put(r.ValorPersonal, nom);
+    put(r.NombreRed, nom);
+    const nCod = Number(r.CodOperador);
+    if (Number.isFinite(nCod)) put(String(nCod), nom);
+    const nVp = Number(r.ValorPersonal);
+    if (Number.isFinite(nVp)) put(String(nVp), nom);
+  }
+  for (const r of personal || []) {
+    const nom = String(r.ApellidoNombre || '').trim();
+    if (!nom) continue;
+    put(r.Valor, nom);
+    put(r.Matricula, nom);
+  }
+
+  return rows.map((r) => {
+    if (String(r.OperadorNombre || r.operadorNombre || '').trim()) return r;
+    const op = String(r.Operador ?? '').trim();
+    if (!op) return r;
+    const nom =
+      byKey.get(op.toLowerCase()) ||
+      (Number.isFinite(Number(op)) ? byKey.get(String(Number(op))) : '') ||
+      '';
+    return nom ? { ...r, OperadorNombre: nom } : r;
+  });
+}
+
 async function idsAlternativosMovimiento(num) {
   const rows = await executeQuery(
     `
@@ -271,7 +377,7 @@ async function obtenerMovimientosVisita(numeroVisita) {
   if (!rows.length) {
     rows = await queryMovimientoInicialDesdeCabecera(num);
   }
-  return rows.map(_mapMovimientoIso);
+  return completarNombresOperador(rows.map(_mapMovimientoIso));
 }
 
 async function camasOcupadasPorVisita(numeroVisita) {
