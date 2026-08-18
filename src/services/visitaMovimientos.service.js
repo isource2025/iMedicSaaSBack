@@ -100,15 +100,7 @@ function _mapMovimientoIso(row) {
   };
 }
 
-/**
- * Obtiene todos los movimientos de una visita
- */
-async function obtenerMovimientosVisita(numeroVisita) {
-  const num = parseInt(numeroVisita, 10);
-  if (isNaN(num)) throw new Error(`Visita inválida: ${numeroVisita}`);
-
-  const sql = `
-    SELECT
+const SQL_MOVIMIENTO_SELECT = `
       m.NumeroVisita,
       m.FechaAdmision,
       m.HoraAdmision,
@@ -124,18 +116,18 @@ async function obtenerMovimientosVisita(numeroVisita) {
       m.FechaCarga,
       m.HoraCarga,
       LTRIM(RTRIM(ISNULL(sm.Descripcion, m.ServicioHospital))) AS NombreServicio,
-      -- Cama: solo existe código, no descripción en imHabitacionCamas
       LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS NombreCama,
       LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
       NULLIF(LTRIM(RTRIM(ISNULL(d.Descripcion, ''))), '') AS DiagnosticoDescripcion,
-      -- Fechas como ISO string para el frontend
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaEgreso,0),  '1800-12-28'), 23) AS FechaEgresoISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraEgreso,0)-1)*10, 0), 108)  AS HoraEgresoISO,
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraCarga,0)-1)*10, 0), 108) AS HoraCargaISO
-    FROM dbo.imVisitaMovimiento m
+`;
+
+const SQL_MOVIMIENTO_JOINS = `
     LEFT JOIN dbo.imSectores s ON s.Valor = LTRIM(RTRIM(m.ValorSector))
     LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(m.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
     OUTER APPLY (
@@ -182,11 +174,104 @@ async function obtenerMovimientosVisita(numeroVisita) {
       WHERE NULLIF(LTRIM(RTRIM(n.Nombre)), '') IS NOT NULL
       ORDER BY n.Ord
     ) op
+`;
+
+async function queryMovimientosPorNumero(num) {
+  const rows = await executeQuery(
+    `
+    SELECT ${SQL_MOVIMIENTO_SELECT}
+    FROM dbo.imVisitaMovimiento m
+    ${SQL_MOVIMIENTO_JOINS}
     WHERE m.NumeroVisita = @p0
     ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
-  `;
-  const rows = await executeQuery(sql, [{ value: num }]);
-  return (rows || []).map(_mapMovimientoIso);
+    `,
+    [{ value: num }],
+  );
+  return rows || [];
+}
+
+/** Alta inicial en imVisita (cama/sector) cuando no hubo insert en imVisitaMovimiento. */
+async function queryMovimientoInicialDesdeCabecera(num) {
+  const rows = await executeQuery(
+    `
+    SELECT ${SQL_MOVIMIENTO_SELECT}
+    FROM (
+      SELECT
+        v.NumeroVisita,
+        CASE
+          WHEN v.FECHAADMISIONS IS NULL THEN 0
+          ELSE DATEDIFF(day, '1800-12-28', CAST(v.FECHAADMISIONS AS date))
+        END AS FechaAdmision,
+        CASE
+          WHEN v.FECHAADMISIONS IS NULL THEN 0
+          ELSE (DATEDIFF(millisecond, CAST(CAST(v.FECHAADMISIONS AS date) AS datetime), v.FECHAADMISIONS) / 10) + 1
+        END AS HoraAdmision,
+        ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) AS FechaEgreso,
+        ISNULL(TRY_CAST(v.HoraEgreso AS int), 0) AS HoraEgreso,
+        v.DisposicionEgreso,
+        COALESCE(
+          NULLIF(LTRIM(RTRIM(ISNULL(v.DiagnosticoEgreso, ''))), ''),
+          LTRIM(RTRIM(ISNULL(v.Diagnostico, '')))
+        ) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama,
+        LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS ValorSector,
+        v.ServicioHospital,
+        LTRIM(RTRIM(ISNULL(v.OPERADOR, ''))) AS Operador,
+        ISNULL(TRY_CAST(v.FechaCarga AS int), 0) AS FechaCarga,
+        ISNULL(TRY_CAST(v.HoraCarga AS int), 0) AS HoraCarga
+      FROM dbo.imVisita v
+      WHERE v.NumeroVisita = @p0
+        AND (
+          LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) <> ''
+          OR LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) <> ''
+        )
+    ) m
+    ${SQL_MOVIMIENTO_JOINS}
+    `,
+    [{ value: num }],
+  );
+  return rows || [];
+}
+
+async function idsAlternativosMovimiento(num) {
+  const rows = await executeQuery(
+    `
+      SELECT TRY_CAST(NULLIF(LTRIM(RTRIM(ISNULL(NUMEROINTERNACION, ''))), '') AS int) AS ni
+      FROM dbo.imVisita
+      WHERE NumeroVisita = @p0
+    `,
+    [{ value: num }],
+  );
+  const ni = Number(rows?.[0]?.ni);
+  if (!Number.isFinite(ni) || ni <= 0 || ni === num) return [];
+  const otraVisita = await executeQuery(
+    `SELECT TOP 1 NumeroVisita FROM dbo.imVisita WHERE NumeroVisita = @p0`,
+    [{ value: ni }],
+  );
+  if (otraVisita?.length) return [];
+  return [ni];
+}
+
+/**
+ * Obtiene todos los movimientos de una visita.
+ * Si no hay pases en imVisitaMovimiento, muestra el alta inicial de imVisita.
+ */
+async function obtenerMovimientosVisita(numeroVisita) {
+  const num = parseInt(numeroVisita, 10);
+  if (isNaN(num)) throw new Error(`Visita inválida: ${numeroVisita}`);
+
+  let rows = await queryMovimientosPorNumero(num);
+  if (!rows.length) {
+    const alts = await idsAlternativosMovimiento(num);
+    for (const alt of alts) {
+      rows = await queryMovimientosPorNumero(alt);
+      if (rows.length) break;
+    }
+  }
+  if (!rows.length) {
+    rows = await queryMovimientoInicialDesdeCabecera(num);
+  }
+  return rows.map(_mapMovimientoIso);
 }
 
 async function camasOcupadasPorVisita(numeroVisita) {
