@@ -725,13 +725,29 @@ async function listarFunciones() {
 }
 
 async function listarServicios() {
-	const rows = await executeQuery(
-		`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`,
-	);
-	return rows.map((r) => ({
-		valor: String(r.Valor || '').trim(),
-		descripcion: String(r.Descripcion || '').trim(),
-	}));
+	const mapRows = (rows) =>
+		(rows || [])
+			.map((r) => ({
+				valor: String(r.Valor || '').trim(),
+				descripcion: String(r.Descripcion || r.Valor || '').trim(),
+			}))
+			.filter((r) => r.valor);
+	try {
+		return mapRows(
+			await executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`),
+		);
+	} catch (err) {
+		try {
+			return mapRows(
+				await executeQuery(
+					`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`,
+				),
+			);
+		} catch (err2) {
+			console.warn('[personal.listarServicios]', err2?.message || err?.message);
+			return [];
+		}
+	}
 }
 
 async function listarCategorias() {
@@ -983,18 +999,24 @@ async function eliminarFirmaPersonal(valor) {
 }
 
 async function listarSectoresPersonal(valor) {
-	const rows = await executeQuery(
-		`SELECT ps.idSector, RTRIM(LTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion
-		 FROM dbo.imPersonalSectores ps
-		 INNER JOIN dbo.imSectores s ON ps.idSector = s.Valor
-		 WHERE ps.idPersonal = @p0
-		 ORDER BY s.Descripcion`,
-		[{ value: valor, type: 'Int' }],
-	);
-	return rows.map((r) => ({
-		idSector: String(r.idSector || '').trim(),
-		Descripcion: String(r.Descripcion || '').trim(),
-	}));
+	try {
+		const rows = await executeQuery(
+			`SELECT RTRIM(LTRIM(ps.idSector)) AS idSector,
+			        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idSector))) AS Descripcion
+			 FROM dbo.imPersonalSectores ps
+			 LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idSector))
+			 WHERE ps.idPersonal = @p0
+			 ORDER BY ISNULL(s.Descripcion, ps.idSector)`,
+			[{ value: valor, type: 'Int' }],
+		);
+		return (rows || []).map((r) => ({
+			idSector: String(r.idSector || '').trim(),
+			Descripcion: String(r.Descripcion || '').trim(),
+		})).filter((r) => r.idSector);
+	} catch (err) {
+		console.warn('[personal.listarSectoresPersonal]', err?.message);
+		return [];
+	}
 }
 
 async function agregarSectorPersonal(valor, idSector) {

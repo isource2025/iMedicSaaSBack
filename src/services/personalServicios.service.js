@@ -8,7 +8,8 @@ function _code(v) {
 
 async function ensureTable() {
 	if (_tableReady) return;
-	await executeQuery(`
+	try {
+		await executeQuery(`
 		IF OBJECT_ID(N'dbo.imPersonalServicios', N'U') IS NULL
 		BEGIN
 			CREATE TABLE dbo.imPersonalServicios (
@@ -20,25 +21,45 @@ async function ensureTable() {
 				ON dbo.imPersonalServicios (idServicio);
 		END
 	`);
-	_tableReady = true;
+		_tableReady = true;
+	} catch (err) {
+		console.warn('[personalServicios] ensureTable:', err?.message || err);
+	}
+}
+
+function _mapRows(rows) {
+	return (rows || [])
+		.map((r) => ({
+			idServicio: _code(r.idServicio),
+			Descripcion: _code(r.Descripcion) || _code(r.idServicio),
+		}))
+		.filter((r) => r.idServicio);
 }
 
 async function listar(valorPersonal) {
 	await ensureTable();
 	const vp = Number(valorPersonal);
-	const rows = await executeQuery(
-		`SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
+	const sqlConCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
 		        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idServicio))) AS Descripcion
 		 FROM dbo.imPersonalServicios ps
 		 LEFT JOIN dbo.imServicios s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idServicio))
 		 WHERE ps.idPersonal = @p0
-		 ORDER BY ISNULL(s.Descripcion, ps.idServicio)`,
-		[{ value: vp, type: 'Int' }],
-	);
-	const list = (rows || []).map((r) => ({
-		idServicio: _code(r.idServicio),
-		Descripcion: _code(r.Descripcion) || _code(r.idServicio),
-	})).filter((r) => r.idServicio);
+		 ORDER BY ISNULL(s.Descripcion, ps.idServicio)`;
+	const sqlSinCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
+		        RTRIM(LTRIM(ps.idServicio)) AS Descripcion
+		 FROM dbo.imPersonalServicios ps
+		 WHERE ps.idPersonal = @p0`;
+	let list = [];
+	try {
+		list = _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+	} catch (err) {
+		try {
+			list = _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
+		} catch (err2) {
+			console.warn('[personalServicios] listar:', err2?.message || err?.message);
+			return [];
+		}
+	}
 
 	if (list.length) return list;
 
@@ -52,21 +73,20 @@ async function listar(valorPersonal) {
 	try {
 		await agregar(vp, vs);
 	} catch (err) {
-		if (Number(err?.statusCode) !== 409) throw err;
+		if (Number(err?.statusCode) !== 409) {
+			console.warn('[personalServicios] legacy:', err?.message || err);
+			return [{ idServicio: vs, Descripcion: vs }];
+		}
 	}
-	const again = await executeQuery(
-		`SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
-		        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idServicio))) AS Descripcion
-		 FROM dbo.imPersonalServicios ps
-		 LEFT JOIN dbo.imServicios s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idServicio))
-		 WHERE ps.idPersonal = @p0
-		 ORDER BY ISNULL(s.Descripcion, ps.idServicio)`,
-		[{ value: vp, type: 'Int' }],
-	);
-	return (again || []).map((r) => ({
-		idServicio: _code(r.idServicio),
-		Descripcion: _code(r.Descripcion) || _code(r.idServicio),
-	})).filter((r) => r.idServicio);
+	try {
+		return _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+	} catch {
+		try {
+			return _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
+		} catch {
+			return [{ idServicio: vs, Descripcion: vs }];
+		}
+	}
 }
 
 async function agregar(valorPersonal, idServicio) {

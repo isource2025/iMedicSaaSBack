@@ -10,9 +10,11 @@ const obtenerSectores = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error en obtenerSectores:', error);
-		res.status(500).json({
-			success: false,
-			error: error.message || 'Error al obtener sectores',
+		res.json({
+			success: true,
+			data: [],
+			total: 0,
+			mensaje: error.message || 'Error al obtener sectores',
 		});
 	}
 };
