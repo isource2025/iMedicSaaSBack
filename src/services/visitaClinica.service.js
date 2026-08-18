@@ -30,6 +30,7 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
       sm.Descripcion AS ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) AS horaIngresoSQL,
+      CONVERT(VARCHAR(10), DATEADD(day, NULLIF(TRY_CAST(v.FechaEgreso AS int), 0), '1800-12-28'), 103) AS fechaEgresoSQL,
       COALESCE(
         NULLIF(LTRIM(RTRIM(um.ValorHabitacionCama)), ''),
         NULLIF(LTRIM(RTRIM(hc.ValorHabitacionCama)), ''),
@@ -137,6 +138,7 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
 		servicioMedicoDescripcion: r.ServicioMedicoDescripcion || '',
 		fechaIngresoSQL: r.fechaIngresoSQL || '',
 		horaIngresoSQL: r.horaIngresoSQL || '',
+		fechaEgresoSQL: r.fechaEgresoSQL || '',
 		egresada,
 		fechaEgresoClarion: r.fechaEgresoClarion != null ? Number(r.fechaEgresoClarion) : 0,
 		Observaciones: egresada ? 'Visita egresada — se puede agregar información clínica' : '',
