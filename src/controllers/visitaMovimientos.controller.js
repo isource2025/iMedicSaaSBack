@@ -114,11 +114,11 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
     }
 
     // Validar diagnostico si se proporciona
-    if (datosEgreso.diagnostico !== undefined && datosEgreso.diagnostico !== null) {
-      if (typeof datosEgreso.diagnostico !== 'string' || datosEgreso.diagnostico.length > 6) {
+    if (datosEgreso.diagnostico !== undefined && datosEgreso.diagnostico !== null && datosEgreso.diagnostico !== '') {
+      if (typeof datosEgreso.diagnostico !== 'string' || datosEgreso.diagnostico.trim().length > 8) {
         return res.status(400).json({
           success: false,
-          mensaje: 'El diagnóstico debe ser una cadena de texto con máximo 6 caracteres'
+          mensaje: 'El diagnóstico debe ser una cadena de texto con máximo 8 caracteres'
         });
       }
     }
@@ -140,7 +140,7 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
     console.error('Error al actualizar último movimiento de visita:', error);
     res.status(500).json({
       success: false,
-      mensaje: 'Error al actualizar el último movimiento de la visita',
+      mensaje: error.message || 'Error al actualizar el último movimiento de la visita',
       error: error.message
     });
   }

@@ -162,9 +162,12 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
 
   const cDate = convertirFechaAClarion(fechaEgreso);
   const cTime = convertirHoraAClarion(horaEgreso);
+  if (cDate == null || cTime == null) {
+    throw new Error('Fecha u hora de egreso inválida');
+  }
   const disposicion =
     disposicionEgreso === undefined || disposicionEgreso === null || disposicionEgreso === ''
-      ? null
+      ? 0
       : Number(disposicionEgreso);
 
   const ultimo = await obtenerUltimoMovimientoVisita(num);
@@ -183,70 +186,80 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     throw new Error(`La visita ${num} ya tiene egreso hospitalario registrado`);
   }
 
+  const diagRaw = String(diagnostico || '').trim().slice(0, 8);
+  const fechaAdm = clarionInt(ultimo.FechaAdmision);
+  const horaAdm = clarionInt(ultimo.HoraAdmision);
+
   const query = `
     BEGIN TRY
       BEGIN TRANSACTION;
 
-      -- Cerrar último movimiento con datos de egreso (ClasePaciente de la visita no se toca: sigue Internado)
-      UPDATE imVisitaMovimiento
-      SET 
+      UPDATE dbo.imVisitaMovimiento
+      SET
         FechaEgreso = @param1,
         HoraEgreso = @param2,
         DisposicionEgreso = @param5,
-        Diagnostico = @param6,
+        Diagnostico = CASE
+          WHEN LTRIM(RTRIM(@param6)) = '' THEN Diagnostico
+          ELSE @param6
+        END,
         Operador = @param7
-      WHERE 
-        NumeroVisita   = @param0 AND
+      WHERE
+        NumeroVisita = @param0 AND
         FechaAdmision = @param3 AND
-        HoraAdmision  = @param4;
+        HoraAdmision = @param4;
 
-      -- Liberar cama(s) de esta visita (sector+cama; también limpia duplicados)
-      UPDATE imHabitacionCamas
-      SET 
-        FechaIngreso      = 0,
-        FechaEgreso       = @param1,
-        ValorEstadoCama   = 'U',
-        NumeroVisita      = 0,
-        Observaciones     = 'Egreso de internación'
+      UPDATE dbo.imHabitacionCamas
+      SET
+        FechaIngreso = 0,
+        FechaEgreso = @param1,
+        ValorEstadoCama = 'U',
+        NumeroVisita = 0,
+        Observaciones = 'Egreso de internación'
       WHERE NumeroVisita = @param0
          OR (
-           ValorHabitacionCama = @param8
-           AND ValorSector = @param10
+           @param11 = 1
+           AND LTRIM(RTRIM(ValorHabitacionCama)) = LTRIM(RTRIM(@param8))
+           AND LTRIM(RTRIM(ValorSector)) = LTRIM(RTRIM(@param10))
          );
 
-      -- Cerrar visita (ClasePaciente permanece I / internado)
-      UPDATE imVisita
-      SET 
+      UPDATE dbo.imVisita
+      SET
         FechaEgreso = @param1,
         HoraEgreso = @param2,
         DisposicionEgreso = @param5,
-        DiagnosticoEgreso = @param6,
+        DiagnosticoEgreso = CASE
+          WHEN LTRIM(RTRIM(@param6)) = '' THEN ISNULL(DiagnosticoEgreso, Diagnostico)
+          ELSE @param6
+        END,
         OperadorEgreso = @param9
       WHERE NumeroVisita = @param0;
-    
+
       COMMIT;
     END TRY
     BEGIN CATCH
-      ROLLBACK;
+      IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
       THROW;
     END CATCH;
   `;
 
   const sectorEgreso = String(ultimo.ValorSector || '').trim();
   const camaEgreso = codigoCama(bedId, sectorEgreso, ultimo.ValorHabitacionCama || ultimo.bedId);
+  const liberarPorCama = sectorEgreso && camaEgreso ? 1 : 0;
 
   const params = [
-    { value: num }, // @param0
-    { value: cDate }, // @param1
-    { value: cTime }, // @param2
-    { value: ultimo.FechaAdmision }, // @param3
-    { value: ultimo.HoraAdmision }, // @param4
-    { value: Number.isFinite(disposicion) ? disposicion : null }, // @param5
-    { value: diagnostico || null }, // @param6
-    { value: String(codOperador), type: 'VarChar' }, // @param7 movimiento.Operador
-    { value: camaEgreso }, // @param8
-    { value: codOperador, type: 'Int' }, // @param9 visita.OperadorEgreso
-    { value: sectorEgreso }, // @param10 - sector de la cama a liberar
+    { value: num },
+    { value: cDate, type: 'Int' },
+    { value: cTime, type: 'Int' },
+    { value: fechaAdm, type: 'Int' },
+    { value: horaAdm, type: 'Int' },
+    { value: Number.isFinite(disposicion) ? disposicion : 0, type: 'Int' },
+    { value: diagRaw },
+    { value: String(codOperador) },
+    { value: camaEgreso || '' },
+    { value: String(codOperador) },
+    { value: sectorEgreso || '' },
+    { value: liberarPorCama, type: 'Int' },
   ];
 
   try {
@@ -260,7 +273,8 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     };
   } catch (err) {
     console.error('Error en transacción de egreso:', err);
-    throw new Error('Error al actualizar el último movimiento de la visita');
+    const detail = err && (err.originalError?.info?.message || err.message);
+    throw new Error(detail || 'Error al actualizar el último movimiento de la visita');
   }
 }
 
