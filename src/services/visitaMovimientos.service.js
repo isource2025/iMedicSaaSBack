@@ -120,32 +120,14 @@ async function obtenerMovimientosVisita(numeroVisita) {
       m.ValorSector,
       m.ServicioHospital,
       LTRIM(RTRIM(ISNULL(m.Operador, ''))) AS Operador,
-      LTRIM(RTRIM(
-        COALESCE(
-          NULLIF(LTRIM(RTRIM(
-            CONCAT(
-              NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
-              CASE
-                WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
-                     AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
-                THEN ', '
-                ELSE ''
-              END,
-              NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
-            )
-          )), ''),
-          NULLIF(LTRIM(RTRIM(ISNULL(pw.NombreRed, ''))), ''),
-          NULLIF(LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))), ''),
-          LTRIM(RTRIM(ISNULL(m.Operador, '')))
-        )
-      )) AS OperadorNombre,
+      NULLIF(LTRIM(RTRIM(ISNULL(op.OperadorNombre, ''))), '') AS OperadorNombre,
       m.FechaCarga,
       m.HoraCarga,
       LTRIM(RTRIM(ISNULL(sm.Descripcion, m.ServicioHospital))) AS NombreServicio,
       -- Cama: solo existe código, no descripción en imHabitacionCamas
       LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS NombreCama,
       LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
-      LTRIM(RTRIM(ISNULL(d.Descripcion, m.Diagnostico))) AS DiagnosticoDescripcion,
+      NULLIF(LTRIM(RTRIM(ISNULL(d.Descripcion, ''))), '') AS DiagnosticoDescripcion,
       -- Fechas como ISO string para el frontend
       CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
       CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
@@ -156,9 +138,50 @@ async function obtenerMovimientosVisita(numeroVisita) {
     FROM dbo.imVisitaMovimiento m
     LEFT JOIN dbo.imSectores s ON s.Valor = LTRIM(RTRIM(m.ValorSector))
     LEFT JOIN dbo.imServiciosMedicos sm ON LTRIM(RTRIM(ISNULL(m.ServicioHospital, ''))) = LTRIM(RTRIM(ISNULL(sm.Valor, '')))
-    LEFT JOIN dbo.imDiagnosticos d ON LTRIM(RTRIM(ISNULL(m.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
-    LEFT JOIN dbo.imPassword pw ON pw.CodOperador = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
-    LEFT JOIN dbo.imPersonal per ON per.Valor = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+    OUTER APPLY (
+      SELECT TOP 1 LTRIM(RTRIM(dx.Descripcion)) AS Descripcion
+      FROM dbo.imDiagnosticos dx
+      WHERE LTRIM(RTRIM(ISNULL(dx.CodigoOMS, ''))) = LTRIM(RTRIM(ISNULL(m.Diagnostico, '')))
+      ORDER BY dx.Valor
+    ) d
+    OUTER APPLY (
+      SELECT TOP 1 n.Nombre AS OperadorNombre
+      FROM (
+        SELECT
+          COALESCE(
+            NULLIF(LTRIM(RTRIM(
+              CONCAT(
+                NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), ''),
+                CASE
+                  WHEN NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, ''))), '') IS NOT NULL
+                       AND NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '') IS NOT NULL
+                  THEN ', '
+                  ELSE ''
+                END,
+                NULLIF(LTRIM(RTRIM(ISNULL(pw.Nombres, ''))), '')
+              )
+            )), ''),
+            NULLIF(LTRIM(RTRIM(ISNULL(pw.NombreRed, ''))), '')
+          ) AS Nombre,
+          0 AS Ord
+        FROM dbo.imPassword pw
+        WHERE TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+          AND (
+            pw.CodOperador = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+            OR pw.ValorPersonal = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+          )
+        UNION ALL
+        SELECT LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))), 1
+        FROM dbo.imPersonal p
+        WHERE TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+          AND (
+            p.Valor = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+            OR p.Matricula = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+          )
+      ) n
+      WHERE NULLIF(LTRIM(RTRIM(n.Nombre)), '') IS NOT NULL
+      ORDER BY n.Ord
+    ) op
     WHERE m.NumeroVisita = @p0
     ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
   `;
