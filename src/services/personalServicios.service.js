@@ -169,6 +169,8 @@ async function reemplazar(valorPersonal, servicios) {
 	}
 	return listar(vp);
 }
+
+async function asignarTodos(valorPersonal) {
 	await ensureTable();
 	const vp = Number(valorPersonal);
 	const all = await executeQuery(
