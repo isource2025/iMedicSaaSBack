@@ -1237,7 +1237,9 @@ async function obtenerDatosPrincipales(numeroVisita) {
           ELSE NULL
         END AS HoraEgreso,
         v.DISPOSICIONEGRESO AS DisposicionEgreso,
+        LTRIM(RTRIM(ISNULL(de.Descripcion, ''))) AS DisposicionEgresoDescripcion,
         LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) AS DiagnosticoEgreso,
+        LTRIM(RTRIM(ISNULL(dEgr.Descripcion, ''))) AS DiagnosticoEgresoDescripcion,
         v.OperadorEgreso,
         CASE
           WHEN v.OperadorEgreso IS NULL OR TRY_CAST(v.OperadorEgreso AS int) IS NULL OR TRY_CAST(v.OperadorEgreso AS int) <= 0
@@ -1263,6 +1265,8 @@ async function obtenerDatosPrincipales(numeroVisita) {
       LEFT JOIN dbo.imLugarEpisodio le ON v.IdLugarEpisodio = le.IdLugarEpisodio
       LEFT JOIN dbo.imOrigenAdmision oa ON v.ORIGENADMISION = oa.Valor
       LEFT JOIN dbo.imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
+      LEFT JOIN dbo.imDiagnosticos dEgr ON LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) = LTRIM(RTRIM(ISNULL(dEgr.CodigoOMS, '')))
+      LEFT JOIN dbo.imDisposicionEgreso de ON TRY_CAST(v.DISPOSICIONEGRESO AS int) = TRY_CAST(de.Valor AS int)
       LEFT JOIN dbo.imEstadoAmbulatorio ea ON LTRIM(RTRIM(ISNULL(v.ESTADOAMBULATORIO, ''))) = LTRIM(RTRIM(ISNULL(ea.Valor, '')))
       LEFT JOIN dbo.imPersonal docAdm ON v.DOCTORADMISOR = docAdm.Valor
       LEFT JOIN dbo.imPersonal docAsis ON v.DOCTORASISTIENDO = docAsis.Valor

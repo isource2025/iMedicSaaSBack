@@ -181,28 +181,22 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   const diagRaw = String(diagnostico || '').trim().slice(0, 8);
 
   const ultimo = await obtenerUltimoMovimientoVisita(num);
+  if (!ultimo) {
+    throw new Error(`No se encontró el movimiento actual de la visita ${num}`);
+  }
   const cabecera = await obtenerCabeceraVisita(num);
   if (!cabecera) {
     throw new Error(`No se encontró la visita ${num}`);
   }
 
-  const camas = await camasOcupadasPorVisita(num);
-  const movimientoAbierto = !!(ultimo && !visitaYaEgresada(ultimo.FechaEgreso));
-  const camaOcupada = (camas || []).length > 0;
-  const visitaEgresada = visitaYaEgresada(cabecera.FechaEgreso);
-
-  if (!movimientoAbierto && !camaOcupada && visitaEgresada) {
-    return {
-      success: true,
-      message: 'Egreso ya registrado',
-      data: ultimo,
-    };
-  }
+  const sectorActual = String(ultimo.ValorSector || '').trim();
+  const camaActual = codigoCama(bedId, sectorActual, ultimo.ValorHabitacionCama || ultimo.bedId);
 
   const pool = await getRequestPool();
   const tx = new sql.Transaction(pool);
   await tx.begin();
   try {
+    // Solo el movimiento ACTUAL (último ingreso). Los pases de cama ya cerraron el anterior.
     const reqMov = new sql.Request(tx);
     reqMov.input('nv', sql.Int, num);
     reqMov.input('feg', sql.Int, cDate);
@@ -210,20 +204,35 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     reqMov.input('disp', sql.Int, disposicion);
     reqMov.input('diag', sql.VarChar(8), diagRaw);
     const movRes = await reqMov.query(`
-      UPDATE dbo.imVisitaMovimiento
+      ;WITH actual AS (
+        SELECT TOP 1 NumeroVisita, FechaAdmision, HoraAdmision
+        FROM dbo.imVisitaMovimiento
+        WHERE NumeroVisita = @nv
+        ORDER BY FechaAdmision DESC, HoraAdmision DESC
+      )
+      UPDATE m
       SET
         FechaEgreso = @feg,
         HoraEgreso = @heg,
-        DisposicionEgreso = CASE WHEN @disp = 0 THEN DisposicionEgreso ELSE @disp END,
-        Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN Diagnostico ELSE @diag END
-      WHERE NumeroVisita = @nv
-        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+        DisposicionEgreso = CASE WHEN @disp = 0 THEN m.DisposicionEgreso ELSE @disp END,
+        Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN m.Diagnostico ELSE @diag END
+      FROM dbo.imVisitaMovimiento m
+      INNER JOIN actual a
+        ON m.NumeroVisita = a.NumeroVisita
+       AND m.FechaAdmision = a.FechaAdmision
+       AND m.HoraAdmision = a.HoraAdmision
     `);
+    if (!movRes?.rowsAffected?.[0]) {
+      throw new Error('No se pudo actualizar el movimiento actual de cama');
+    }
 
+    // Libera solo la cama de la ubicación actual (la que todavía tiene esta visita)
     const reqCama = new sql.Request(tx);
     reqCama.input('nv', sql.Int, num);
     reqCama.input('feg', sql.Int, cDate);
-    const camaRes = await reqCama.query(`
+    reqCama.input('cama', sql.VarChar(20), camaActual || '');
+    reqCama.input('sec', sql.VarChar(20), sectorActual || '');
+    await reqCama.query(`
       UPDATE dbo.imHabitacionCamas
       SET
         FechaIngreso = 0,
@@ -232,6 +241,14 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         NumeroVisita = 0,
         Observaciones = 'Egreso'
       WHERE TRY_CAST(NumeroVisita AS int) = @nv
+        AND (
+          LTRIM(RTRIM(@cama)) = ''
+          OR LTRIM(RTRIM(@sec)) = ''
+          OR (
+            LTRIM(RTRIM(ValorHabitacionCama)) = LTRIM(RTRIM(@cama))
+            AND LTRIM(RTRIM(ValorSector)) = LTRIM(RTRIM(@sec))
+          )
+        )
     `);
 
     const reqVis = new sql.Request(tx);
@@ -248,7 +265,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         HoraEgreso = @heg,
         DisposicionEgreso = CASE WHEN @disp = 0 THEN DisposicionEgreso ELSE @disp END,
         DiagnosticoEgreso = CASE
-          WHEN LTRIM(RTRIM(@diag)) = '' THEN ISNULL(DiagnosticoEgreso, Diagnostico)
+          WHEN LTRIM(RTRIM(@diag)) = '' THEN DiagnosticoEgreso
           ELSE @diag
         END,
         OperadorEgreso = @op
@@ -260,15 +277,19 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     const chkRes = await chk.query(`
       SELECT
         (SELECT COUNT(*) FROM dbo.imHabitacionCamas WHERE TRY_CAST(NumeroVisita AS int) = @nv) AS Camas,
-        (SELECT COUNT(*) FROM dbo.imVisitaMovimiento
-          WHERE NumeroVisita = @nv AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0) AS MovAbiertos
+        (
+          SELECT TOP 1 ISNULL(TRY_CAST(FechaEgreso AS int), 0)
+          FROM dbo.imVisitaMovimiento
+          WHERE NumeroVisita = @nv
+          ORDER BY FechaAdmision DESC, HoraAdmision DESC
+        ) AS FechaEgresoActual
     `);
     const leftover = chkRes.recordset?.[0] || {};
     if (Number(leftover.Camas) > 0) {
-      throw new Error(`No se pudo liberar la cama de la visita ${num} (sigue ocupada)`);
+      throw new Error(`No se pudo liberar la cama actual de la visita ${num}`);
     }
-    if (Number(leftover.MovAbiertos) > 0) {
-      throw new Error(`No se pudo cerrar el movimiento de cama de la visita ${num}`);
+    if (clarionInt(leftover.FechaEgresoActual) <= 0) {
+      throw new Error('El movimiento actual de cama sigue abierto después del egreso');
     }
 
     await tx.commit();
@@ -276,13 +297,8 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     const ultimoTras = await obtenerUltimoMovimientoVisita(num);
     return {
       success: true,
-      message: 'Movimiento actualizado y cama liberada',
+      message: 'Egreso registrado',
       data: ultimoTras,
-      meta: {
-        movimientosCerrados: movRes?.rowsAffected?.[0] || 0,
-        camasLiberadas: camaRes?.rowsAffected?.[0] || 0,
-        reparacion: visitaEgresada,
-      },
     };
   } catch (err) {
     try {

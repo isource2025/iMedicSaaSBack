@@ -38,36 +38,6 @@ const obtenerCamas = async () => {
 		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
 	});
 
-	// Visita con egreso hospitalario pero cama todavía ocupada (egreso parcial)
-	await executeQuery(`
-    UPDATE hc
-    SET
-      FechaIngreso = 0,
-      FechaEgreso = ISNULL(TRY_CAST(v.FechaEgreso AS int), 0),
-      ValorEstadoCama = 'U',
-      NumeroVisita = 0,
-      Observaciones = 'Egreso'
-    FROM dbo.imHabitacionCamas hc
-    INNER JOIN dbo.imVisita v ON v.NumeroVisita = hc.NumeroVisita
-    WHERE ISNULL(hc.NumeroVisita, 0) <> 0
-      AND ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
-  `).catch((err) => {
-		console.warn('No se pudo autoreparar camas de visitas ya egresadas:', err?.message || err);
-	});
-
-	await executeQuery(`
-    UPDATE m
-    SET
-      FechaEgreso = ISNULL(TRY_CAST(v.FechaEgreso AS int), 0),
-      HoraEgreso = ISNULL(TRY_CAST(v.HoraEgreso AS int), 0)
-    FROM dbo.imVisitaMovimiento m
-    INNER JOIN dbo.imVisita v ON v.NumeroVisita = m.NumeroVisita
-    WHERE ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
-      AND ISNULL(TRY_CAST(m.FechaEgreso AS int), 0) = 0
-  `).catch((err) => {
-		console.warn('No se pudo cerrar movimientos de visitas ya egresadas:', err?.message || err);
-	});
-
 	const consulta = `
     SELECT 
       hc.*,
