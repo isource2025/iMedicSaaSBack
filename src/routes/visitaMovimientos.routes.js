@@ -22,6 +22,11 @@ router.put(
 	visitaMovimientosController.actualizarUltimoMovimientoVisita,
 );
 router.post(
+	'/revertir-egreso/:numeroVisita',
+	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	visitaMovimientosController.revertirEgresoVisita,
+);
+router.post(
 	'/mover/:numeroVisita',
 	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
 	visitaMovimientosController.moverPacienteACamaVacia,

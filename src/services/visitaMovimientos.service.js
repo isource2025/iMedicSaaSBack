@@ -684,6 +684,158 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
 }
 
 /**
+ * Revierte un egreso hospitalario (solo admin).
+ * Restaura imVisita, reabre el último imVisitaMovimiento y vuelve a ocupar
+ * la cama en imHabitacionCamas si sigue libre.
+ */
+async function revertirEgresoVisita(numeroVisita) {
+  const num = parseInt(numeroVisita, 10);
+  if (isNaN(num)) throw new Error('Visita inválida');
+
+  const visRows = await executeQuery(
+    `
+      SELECT
+        ISNULL(TRY_CAST(FECHAEGRESO AS int), 0) AS FechaEgreso,
+        LTRIM(RTRIM(ISNULL(VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama,
+        LTRIM(RTRIM(ISNULL(VALORSECTOR, ''))) AS ValorSector
+      FROM dbo.imVisita
+      WHERE NumeroVisita = @p0
+    `,
+    [{ value: num }],
+  );
+  const visita = visRows?.[0];
+  if (!visita) throw new Error(`No se encontró la visita ${num}`);
+  if (!visitaYaEgresada(visita.FechaEgreso)) {
+    throw new Error('La visita no tiene egreso hospitalario para revertir');
+  }
+
+  const ultimo = await obtenerUltimoMovimientoVisita(num);
+  const sector = String(ultimo?.ValorSector || visita.ValorSector || '').trim();
+  const cama = codigoCama(
+    ultimo?.ValorHabitacionCama || ultimo?.bedId || visita.ValorHabitacionCama,
+    sector,
+    visita.ValorHabitacionCama,
+  );
+  const fechaIngresoMov = clarionInt(ultimo?.FechaAdmision);
+
+  const pool = await getRequestPool();
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    if (cama && sector) {
+      const reqBed = new sql.Request(tx);
+      reqBed.input('cama', sql.VarChar(20), cama);
+      reqBed.input('sec', sql.VarChar(20), sector);
+      const bedRes = await reqBed.query(`
+        SELECT TOP 1
+          LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
+          LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
+          LTRIM(RTRIM(ISNULL(ValorEstadoCama, ''))) AS ValorEstadoCama,
+          ISNULL(TRY_CAST(NumeroVisita AS int), 0) AS NumeroVisita
+        FROM dbo.imHabitacionCamas
+        WHERE LTRIM(RTRIM(ValorHabitacionCama)) = LTRIM(RTRIM(@cama))
+          AND LTRIM(RTRIM(ValorSector)) = LTRIM(RTRIM(@sec))
+      `);
+      const bed = bedRes.recordset?.[0];
+      if (!bed) {
+        throw new Error(`No se encontró la cama ${cama} en el sector ${sector}`);
+      }
+      const ocupante = Number(bed.NumeroVisita) || 0;
+      if (ocupante > 0 && ocupante !== num) {
+        const err = new Error(
+          `La cama ${cama} (${sector}) está ocupada por la visita ${ocupante}. Liberarla o trasladar antes de revertir el egreso.`,
+        );
+        err.statusCode = 409;
+        throw err;
+      }
+      const estado = String(bed.ValorEstadoCama || '').trim().toUpperCase();
+      if (ocupante !== num && estado && estado !== 'U') {
+        const err = new Error(
+          `La cama ${cama} (${sector}) no está libre (estado ${estado}). No se puede revertir el egreso.`,
+        );
+        err.statusCode = 409;
+        throw err;
+      }
+
+      const reqOcc = new sql.Request(tx);
+      reqOcc.input('nv', sql.Int, num);
+      reqOcc.input('cama', sql.VarChar(20), cama);
+      reqOcc.input('sec', sql.VarChar(20), sector);
+      reqOcc.input('fi', sql.Int, fechaIngresoMov);
+      await reqOcc.query(`
+        UPDATE dbo.imHabitacionCamas
+        SET
+          FechaIngreso = CASE WHEN @fi > 0 THEN @fi ELSE FechaIngreso END,
+          FechaEgreso = 0,
+          ValorEstadoCama = 'O',
+          NumeroVisita = @nv,
+          Observaciones = ''
+        WHERE LTRIM(RTRIM(ValorHabitacionCama)) = LTRIM(RTRIM(@cama))
+          AND LTRIM(RTRIM(ValorSector)) = LTRIM(RTRIM(@sec))
+      `);
+    }
+
+    if (ultimo) {
+      const reqMov = new sql.Request(tx);
+      reqMov.input('nv', sql.Int, num);
+      reqMov.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
+      reqMov.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
+      await reqMov.query(`
+        UPDATE dbo.imVisitaMovimiento
+        SET
+          FechaEgreso = 0,
+          HoraEgreso = 0,
+          DisposicionEgreso = 0,
+          EstadoCama = 'O'
+        WHERE NumeroVisita = @nv
+          AND FechaAdmision = @fa
+          AND HoraAdmision = @ha
+      `);
+    }
+
+    const reqVis = new sql.Request(tx);
+    reqVis.input('nv', sql.Int, num);
+    reqVis.input('cama', sql.VarChar(20), cama || '');
+    reqVis.input('sec', sql.VarChar(20), sector || '');
+    await reqVis.query(`
+      UPDATE dbo.imVisita
+      SET
+        FechaEgreso = 0,
+        HoraEgreso = 0,
+        DisposicionEgreso = 0,
+        DiagnosticoEgreso = '',
+        OperadorEgreso = 0,
+        ValorHabitacionCama = CASE
+          WHEN LTRIM(RTRIM(@cama)) = '' THEN ValorHabitacionCama
+          ELSE @cama
+        END,
+        ValorSector = CASE
+          WHEN LTRIM(RTRIM(@sec)) = '' THEN ValorSector
+          ELSE @sec
+        END
+      WHERE NumeroVisita = @nv
+    `);
+
+    await tx.commit();
+    return {
+      success: true,
+      message: cama
+        ? `Egreso revertido. Paciente de nuevo en ${cama} (${sector}).`
+        : 'Egreso revertido. La visita no tenía cama asignada.',
+      data: { numeroVisita: num, cama, sector },
+    };
+  } catch (err) {
+    try {
+      await tx.rollback();
+    } catch (_) {
+      /* transacción ya abortada */
+    }
+    console.error('Error al revertir egreso:', err);
+    throw err;
+  }
+}
+
+/**
  * Mueve un paciente de una cama a otra, actualizando todos los registros necesarios
  * @param {number} numeroVisita - Número de visita del paciente
  * @param {Object} datos - Datos para el movimiento
@@ -1658,6 +1810,7 @@ async function asignarPacienteACama(numeroVisita, datos) {
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
+  revertirEgresoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
   intercambiarCamasPacientes,

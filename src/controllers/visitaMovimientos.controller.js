@@ -4,6 +4,7 @@
  */
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
+const { esAdminClinico } = require('../middlewares/propietario.middleware');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -142,6 +143,42 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
       success: false,
       mensaje: error.message || 'Error al actualizar el último movimiento de la visita',
       error: error.message
+    });
+  }
+};
+
+/**
+ * Revierte el egreso hospitalario (solo ADMIN).
+ */
+const revertirEgresoVisita = async (req, res) => {
+  try {
+    if (!(await esAdminClinico(req))) {
+      return res.status(403).json({
+        success: false,
+        mensaje: 'Solo un administrador puede revertir un egreso',
+      });
+    }
+
+    const numeroVisitaInt = parseInt(req.params.numeroVisita, 10);
+    if (!Number.isFinite(numeroVisitaInt) || numeroVisitaInt <= 0) {
+      return res.status(400).json({
+        success: false,
+        mensaje: 'Número de visita inválido',
+      });
+    }
+
+    const resultado = await visitaMovimientosService.revertirEgresoVisita(numeroVisitaInt);
+    return res.json({
+      success: true,
+      mensaje: resultado.message,
+      data: resultado.data,
+    });
+  } catch (error) {
+    console.error('Error al revertir egreso:', error);
+    const code = error.statusCode || 500;
+    return res.status(code).json({
+      success: false,
+      mensaje: error.message || 'Error al revertir el egreso',
     });
   }
 };
@@ -417,6 +454,7 @@ const asignarPacienteACama = async (req, res) => {
 module.exports = {
   obtenerUltimoMovimientoVisita,
   actualizarUltimoMovimientoVisita,
+  revertirEgresoVisita,
   obtenerMovimientosVisita,
   moverPacienteACamaVacia,
   intercambiarCamasPacientes,
