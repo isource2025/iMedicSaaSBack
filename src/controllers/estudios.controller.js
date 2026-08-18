@@ -3,7 +3,7 @@ const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 
 async function _veTodosLosServicios(req) {
-	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre || '').trim().toUpperCase();
+	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
 	const id = Number(req.auth?.rol?.id);
 	if (rn === 'SUPER_ADMIN' || id === 5) return true;
 	return esAdminClinico(req);
