@@ -2,7 +2,7 @@
  * Servicio para gestión de movimientos de visitas
  * @module services/visitaMovimientos.service
  */
-const { executeQuery } = require('../models/db');
+const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString, clarionAIsoCalendario } = require('../utils/dateUtils');
 
 function clarionInt(v) {
@@ -143,13 +143,25 @@ async function obtenerMovimientosVisita(numeroVisita) {
   return (rows || []).map(_mapMovimientoIso);
 }
 
+async function camasOcupadasPorVisita(numeroVisita) {
+  return executeQuery(
+    `
+      SELECT
+        LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
+        LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector
+      FROM dbo.imHabitacionCamas
+      WHERE NumeroVisita = @p0 AND ISNULL(NumeroVisita, 0) <> 0
+    `,
+    [{ value: numeroVisita }],
+  );
+}
+
 async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   const num = parseInt(numeroVisita, 10);
   if (isNaN(num)) throw new Error('Visita inválida');
 
   const { fechaEgreso, horaEgreso, disposicionEgreso, diagnostico, bedId } = datosEgreso;
-  
-  // Validar los campos obligatorios que envía el frontend
+
   if (!fechaEgreso || !horaEgreso) {
     throw new Error('Faltan datos obligatorios: fecha y hora de egreso');
   }
@@ -165,113 +177,119 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   if (cDate == null || cTime == null) {
     throw new Error('Fecha u hora de egreso inválida');
   }
-  const disposicion =
-    disposicionEgreso === undefined || disposicionEgreso === null || disposicionEgreso === ''
-      ? 0
-      : Number(disposicionEgreso);
+  const disposicion = Number.isFinite(Number(disposicionEgreso)) ? Number(disposicionEgreso) : 0;
+  const diagRaw = String(diagnostico || '').trim().slice(0, 8);
 
   const ultimo = await obtenerUltimoMovimientoVisita(num);
-  if (!ultimo) {
-    throw new Error(`No se encontró movimiento anterior para la visita ${num}`);
-  }
-  if (visitaYaEgresada(ultimo.FechaEgreso)) {
-    throw new Error(`La visita ${num} ya tiene egreso registrado en el último movimiento`);
-  }
-
   const cabecera = await obtenerCabeceraVisita(num);
   if (!cabecera) {
     throw new Error(`No se encontró la visita ${num}`);
   }
-  if (visitaYaEgresada(cabecera.FechaEgreso)) {
-    throw new Error(`La visita ${num} ya tiene egreso hospitalario registrado`);
+
+  const camas = await camasOcupadasPorVisita(num);
+  const movimientoAbierto = !!(ultimo && !visitaYaEgresada(ultimo.FechaEgreso));
+  const camaOcupada = (camas || []).length > 0;
+  const visitaEgresada = visitaYaEgresada(cabecera.FechaEgreso);
+
+  if (!movimientoAbierto && !camaOcupada && visitaEgresada) {
+    return {
+      success: true,
+      message: 'Egreso ya registrado',
+      data: ultimo,
+    };
   }
 
-  const diagRaw = String(diagnostico || '').trim().slice(0, 8);
-  const fechaAdm = clarionInt(ultimo.FechaAdmision);
-  const horaAdm = clarionInt(ultimo.HoraAdmision);
-
-  const query = `
-    BEGIN TRY
-      BEGIN TRANSACTION;
-
+  const pool = await getRequestPool();
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    const reqMov = new sql.Request(tx);
+    reqMov.input('nv', sql.Int, num);
+    reqMov.input('feg', sql.Int, cDate);
+    reqMov.input('heg', sql.Int, cTime);
+    reqMov.input('disp', sql.Int, disposicion);
+    reqMov.input('diag', sql.VarChar(8), diagRaw);
+    const movRes = await reqMov.query(`
       UPDATE dbo.imVisitaMovimiento
       SET
-        FechaEgreso = @param1,
-        HoraEgreso = @param2,
-        DisposicionEgreso = @param5,
-        Diagnostico = CASE
-          WHEN LTRIM(RTRIM(@param6)) = '' THEN Diagnostico
-          ELSE @param6
-        END,
-        Operador = @param7
-      WHERE
-        NumeroVisita = @param0 AND
-        FechaAdmision = @param3 AND
-        HoraAdmision = @param4;
+        FechaEgreso = @feg,
+        HoraEgreso = @heg,
+        DisposicionEgreso = CASE WHEN @disp = 0 THEN DisposicionEgreso ELSE @disp END,
+        Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN Diagnostico ELSE @diag END
+      WHERE NumeroVisita = @nv
+        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+    `);
 
+    const reqCama = new sql.Request(tx);
+    reqCama.input('nv', sql.Int, num);
+    reqCama.input('feg', sql.Int, cDate);
+    const camaRes = await reqCama.query(`
       UPDATE dbo.imHabitacionCamas
       SET
         FechaIngreso = 0,
-        FechaEgreso = @param1,
+        FechaEgreso = @feg,
         ValorEstadoCama = 'U',
         NumeroVisita = 0,
-        Observaciones = 'Egreso de internación'
-      WHERE NumeroVisita = @param0
-         OR (
-           @param11 = 1
-           AND LTRIM(RTRIM(ValorHabitacionCama)) = LTRIM(RTRIM(@param8))
-           AND LTRIM(RTRIM(ValorSector)) = LTRIM(RTRIM(@param10))
-         );
+        Observaciones = 'Egreso'
+      WHERE TRY_CAST(NumeroVisita AS int) = @nv
+    `);
 
+    const reqVis = new sql.Request(tx);
+    reqVis.input('nv', sql.Int, num);
+    reqVis.input('feg', sql.Int, cDate);
+    reqVis.input('heg', sql.Int, cTime);
+    reqVis.input('disp', sql.Int, disposicion);
+    reqVis.input('diag', sql.VarChar(8), diagRaw);
+    reqVis.input('op', sql.VarChar(20), String(codOperador));
+    await reqVis.query(`
       UPDATE dbo.imVisita
       SET
-        FechaEgreso = @param1,
-        HoraEgreso = @param2,
-        DisposicionEgreso = @param5,
+        FechaEgreso = @feg,
+        HoraEgreso = @heg,
+        DisposicionEgreso = CASE WHEN @disp = 0 THEN DisposicionEgreso ELSE @disp END,
         DiagnosticoEgreso = CASE
-          WHEN LTRIM(RTRIM(@param6)) = '' THEN ISNULL(DiagnosticoEgreso, Diagnostico)
-          ELSE @param6
+          WHEN LTRIM(RTRIM(@diag)) = '' THEN ISNULL(DiagnosticoEgreso, Diagnostico)
+          ELSE @diag
         END,
-        OperadorEgreso = @param9
-      WHERE NumeroVisita = @param0;
+        OperadorEgreso = @op
+      WHERE NumeroVisita = @nv
+    `);
 
-      COMMIT;
-    END TRY
-    BEGIN CATCH
-      IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-      THROW;
-    END CATCH;
-  `;
+    const chk = new sql.Request(tx);
+    chk.input('nv', sql.Int, num);
+    const chkRes = await chk.query(`
+      SELECT
+        (SELECT COUNT(*) FROM dbo.imHabitacionCamas WHERE TRY_CAST(NumeroVisita AS int) = @nv) AS Camas,
+        (SELECT COUNT(*) FROM dbo.imVisitaMovimiento
+          WHERE NumeroVisita = @nv AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0) AS MovAbiertos
+    `);
+    const leftover = chkRes.recordset?.[0] || {};
+    if (Number(leftover.Camas) > 0) {
+      throw new Error(`No se pudo liberar la cama de la visita ${num} (sigue ocupada)`);
+    }
+    if (Number(leftover.MovAbiertos) > 0) {
+      throw new Error(`No se pudo cerrar el movimiento de cama de la visita ${num}`);
+    }
 
-  const sectorEgreso = String(ultimo.ValorSector || '').trim();
-  const camaEgreso = codigoCama(bedId, sectorEgreso, ultimo.ValorHabitacionCama || ultimo.bedId);
-  const liberarPorCama = sectorEgreso && camaEgreso ? 1 : 0;
+    await tx.commit();
 
-  const params = [
-    { value: num },
-    { value: cDate, type: 'Int' },
-    { value: cTime, type: 'Int' },
-    { value: fechaAdm, type: 'Int' },
-    { value: horaAdm, type: 'Int' },
-    { value: Number.isFinite(disposicion) ? disposicion : 0, type: 'Int' },
-    { value: diagRaw },
-    { value: String(codOperador) },
-    { value: camaEgreso || '' },
-    { value: String(codOperador) },
-    { value: sectorEgreso || '' },
-    { value: liberarPorCama, type: 'Int' },
-  ];
-
-  try {
-    await executeQuery(query, params);
-
-    const actualizado = await obtenerUltimoMovimientoVisita(num);
+    const ultimoTras = await obtenerUltimoMovimientoVisita(num);
     return {
       success: true,
       message: 'Movimiento actualizado y cama liberada',
-      data: actualizado
+      data: ultimoTras,
+      meta: {
+        movimientosCerrados: movRes?.rowsAffected?.[0] || 0,
+        camasLiberadas: camaRes?.rowsAffected?.[0] || 0,
+        reparacion: visitaEgresada,
+      },
     };
   } catch (err) {
+    try {
+      await tx.rollback();
+    } catch (_) {
+      /* transacción ya abortada */
+    }
     console.error('Error en transacción de egreso:', err);
     const detail = err && (err.originalError?.info?.message || err.message);
     throw new Error(detail || 'Error al actualizar el último movimiento de la visita');
