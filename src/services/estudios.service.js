@@ -531,24 +531,73 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 	const codes = [
 		...new Set(sectores.map((s) => String(s.valor || '').trim()).filter(Boolean)),
 	];
-	if (!codes.length) return { estudios: 0, interconsultas: 0 };
+	const vacio = {
+		estudios: 0,
+		interconsultas: 0,
+		urgentes: 0,
+		porServicio: [],
+	};
+	if (!codes.length) return vacio;
 
 	const params = codes.map((c) => ({ value: c, type: 'VarChar' }));
 	const inList = codes.map((_, i) => `LTRIM(RTRIM(@p${i}))`).join(', ');
 	const rows = await executeQuery(
 		`SELECT
+		    LTRIM(RTRIM(pe.IdSectorReceptor)) AS valor,
 		    ISNULL(SUM(CASE WHEN ISNULL(pe.IdTipoPedido, 0) <> 33 THEN 1 ELSE 0 END), 0) AS estudios,
-		    ISNULL(SUM(CASE WHEN pe.IdTipoPedido = 33 THEN 1 ELSE 0 END), 0) AS interconsultas
+		    ISNULL(SUM(CASE WHEN pe.IdTipoPedido = 33 THEN 1 ELSE 0 END), 0) AS interconsultas,
+		    ISNULL(SUM(CASE
+		      WHEN NULLIF(LTRIM(RTRIM(ISNULL(CAST(pe.EstadoUrgencia AS varchar(40)), ''))), '') IS NOT NULL
+		      THEN 1 ELSE 0
+		    END), 0) AS urgentes
 		 FROM dbo.imPedidosEstudios pe
 		 LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
 		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) IN (${inList})
 		   AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
-		   AND toma.IdPedido IS NULL`,
+		   AND toma.IdPedido IS NULL
+		 GROUP BY LTRIM(RTRIM(pe.IdSectorReceptor))`,
 		params,
 	);
+
+	const byCode = new Map();
+	for (const r of rows || []) {
+		const key = String(r.valor || '').trim().toUpperCase();
+		if (!key) continue;
+		byCode.set(key, {
+			estudios: Number(r.estudios) || 0,
+			interconsultas: Number(r.interconsultas) || 0,
+			urgentes: Number(r.urgentes) || 0,
+		});
+	}
+
+	const porServicio = sectores
+		.map((s) => {
+			const hit = byCode.get(String(s.valor).trim().toUpperCase()) || {
+				estudios: 0,
+				interconsultas: 0,
+				urgentes: 0,
+			};
+			return {
+				valor: s.valor,
+				descripcion: s.descripcion || s.valor,
+				estudios: hit.estudios,
+				interconsultas: hit.interconsultas,
+				urgentes: hit.urgentes,
+				total: hit.estudios + hit.interconsultas,
+			};
+		})
+		.sort(
+			(a, b) =>
+				b.total - a.total ||
+				b.urgentes - a.urgentes ||
+				String(a.descripcion).localeCompare(String(b.descripcion), 'es'),
+		);
+
 	return {
-		estudios: Number(rows?.[0]?.estudios) || 0,
-		interconsultas: Number(rows?.[0]?.interconsultas) || 0,
+		estudios: porServicio.reduce((n, s) => n + s.estudios, 0),
+		interconsultas: porServicio.reduce((n, s) => n + s.interconsultas, 0),
+		urgentes: porServicio.reduce((n, s) => n + s.urgentes, 0),
+		porServicio,
 	};
 }
 
