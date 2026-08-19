@@ -484,7 +484,37 @@ async function resolverTipoPedidoEstudio(idTipoPedido, idPractica) {
 	return rows[0];
 }
 
+function _mapServiciosRows(rows) {
+	return (rows || [])
+		.map((r) => ({
+			valor: String(r.valor || '').trim(),
+			descripcion: String(r.descripcion || '').trim(),
+			prefijos: String(r.prefijosPractica || '')
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean),
+		}))
+		.filter((s) => s.valor);
+}
+
 async function listarSectoresReceptor({ valorPersonal } = {}) {
+	const vp = Number(valorPersonal);
+	if (Number.isFinite(vp) && vp > 0) {
+		await personalServicios.ensureTable();
+		const rows = await executeQuery(
+			`SELECT RTRIM(LTRIM(s.Valor)) AS valor, RTRIM(LTRIM(s.Descripcion)) AS descripcion,
+			        RTRIM(LTRIM(ISNULL(s.PrefijosPractica, ''))) AS prefijosPractica
+			 FROM dbo.imServicios s
+			 INNER JOIN dbo.imPersonalServicios ps
+			   ON UPPER(LTRIM(RTRIM(ps.idServicio))) = UPPER(LTRIM(RTRIM(s.Valor)))
+			 WHERE ps.idPersonal = @p0
+			   AND LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+			 ORDER BY s.Descripcion`,
+			[{ value: vp, type: 'Int' }],
+		);
+		return _mapServiciosRows(rows);
+	}
+
 	const rows = await executeQuery(
 		`SELECT RTRIM(LTRIM(Valor)) AS valor, RTRIM(LTRIM(Descripcion)) AS descripcion,
 		        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
@@ -492,23 +522,34 @@ async function listarSectoresReceptor({ valorPersonal } = {}) {
 		 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
 		 ORDER BY Descripcion`,
 	);
-	const all = rows.map((r) => ({
-		valor: String(r.valor || '').trim(),
-		descripcion: String(r.descripcion || '').trim(),
-		prefijos: String(r.prefijosPractica || '')
-			.split(',')
-			.map((s) => s.trim())
-			.filter(Boolean),
-	}));
+	return _mapServiciosRows(rows);
+}
 
-	const vp = Number(valorPersonal);
-	if (!Number.isFinite(vp) || vp <= 0) return all;
+async function contarLibresPorServicios({ valorPersonal } = {}) {
+	await ensureTomaTable();
+	const sectores = await listarSectoresReceptor({ valorPersonal });
+	const codes = [
+		...new Set(sectores.map((s) => String(s.valor || '').trim()).filter(Boolean)),
+	];
+	if (!codes.length) return { estudios: 0, interconsultas: 0 };
 
-	const codes = new Set(
-		(await personalServicios.codigosDePersonal(vp)).map((c) => c.toUpperCase()),
+	const params = codes.map((c) => ({ value: c, type: 'VarChar' }));
+	const inList = codes.map((_, i) => `LTRIM(RTRIM(@p${i}))`).join(', ');
+	const rows = await executeQuery(
+		`SELECT
+		    ISNULL(SUM(CASE WHEN ISNULL(pe.IdTipoPedido, 0) <> 33 THEN 1 ELSE 0 END), 0) AS estudios,
+		    ISNULL(SUM(CASE WHEN pe.IdTipoPedido = 33 THEN 1 ELSE 0 END), 0) AS interconsultas
+		 FROM dbo.imPedidosEstudios pe
+		 LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
+		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) IN (${inList})
+		   AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
+		   AND toma.IdPedido IS NULL`,
+		params,
 	);
-	if (!codes.size) return [];
-	return all.filter((srv) => codes.has(String(srv.valor || '').trim().toUpperCase()));
+	return {
+		estudios: Number(rows?.[0]?.estudios) || 0,
+		interconsultas: Number(rows?.[0]?.interconsultas) || 0,
+	};
 }
 
 /**
@@ -1091,6 +1132,7 @@ module.exports = {
 	eliminarPedido,
 	listarPorVisita,
 	listarPendientesPorSector,
+	contarLibresPorServicios,
 	obtenerPorId,
 	tomarPedido,
 	liberarPedido,

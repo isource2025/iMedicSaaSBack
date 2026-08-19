@@ -27,6 +27,7 @@ const eliminar = requireAnyPermiso(
 
 router.get('/tipos/buscar', ver, estudiosController.buscarTipos);
 router.get('/sectores-receptor', ver, estudiosController.listarSectores);
+router.get('/pendientes/conteo', ver, estudiosController.contarLibres);
 router.get('/pendientes', ver, estudiosController.listarPendientes);
 router.get('/visita/:idVisita', ver, estudiosController.listarPorVisita);
 router.get('/:idPedido', ver, estudiosController.obtenerPorId);

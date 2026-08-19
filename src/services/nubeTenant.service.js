@@ -302,10 +302,13 @@ async function ensureServiciosTables(idEmpresa) {
 		`CREATE TABLE IF NOT EXISTS \`imPersonalServicios\` (
 			\`IdEmpresa\` INT NOT NULL,
 			\`idPersonal\` INT NOT NULL,
-			\`idServicio\` VARCHAR(20) NOT NULL,
+			\`idServicio\` VARCHAR(50) NOT NULL,
 			PRIMARY KEY (\`IdEmpresa\`, \`idPersonal\`, \`idServicio\`)
 		)`,
 	);
+	await mysqlExec(
+		`ALTER TABLE \`imPersonalServicios\` MODIFY idServicio VARCHAR(50) NOT NULL`,
+	).catch(() => {});
 	return emp;
 }
 

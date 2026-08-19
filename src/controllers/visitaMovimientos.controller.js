@@ -201,7 +201,12 @@ const revertirEgresoVisita = async (req, res) => {
     const numeroVisitaInt = parseNumeroVisitaParam(req, res);
     if (!numeroVisitaInt) return undefined;
 
-    const resultado = await visitaMovimientosService.revertirEgresoVisita(numeroVisitaInt);
+    const codOperador = requireOperadorCarga(req, res);
+    if (codOperador == null) return;
+
+    const resultado = await visitaMovimientosService.revertirEgresoVisita(numeroVisitaInt, {
+      codOperador,
+    });
     return res.json({
       success: true,
       mensaje: resultado.message,

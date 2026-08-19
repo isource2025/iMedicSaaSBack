@@ -28,6 +28,25 @@ async function getRequestPool(opts = {}) {
   return resolvePool(!!opts.platform);
 }
 
+const LENGTH_TYPES = new Set(['VarChar', 'NVarChar', 'Char', 'NChar', 'Binary', 'VarBinary']);
+
+/** sql.VarChar sin longitud en node-mssql queda en VARCHAR(1) y trunca/rompe inserts. */
+function resolveMssqlType(parametro) {
+  const typeName = parametro && parametro.type;
+  if (!typeName) return undefined;
+  if (typeof typeName !== 'string') return typeName;
+  const t = sql[typeName];
+  if (t == null) return undefined;
+  if (LENGTH_TYPES.has(typeName) && typeof t === 'function') {
+    const n = Number(parametro.length);
+    return t(Number.isFinite(n) && n > 0 ? n : sql.MAX);
+  }
+  if ((typeName === 'Decimal' || typeName === 'Numeric') && typeof t === 'function') {
+    return t(Number(parametro.precision) || 18, parametro.scale != null ? Number(parametro.scale) : 2);
+  }
+  return t;
+}
+
 /**
  * Ejecuta una consulta SQL y devuelve los resultados
  * @param {string} consulta - Consulta SQL a ejecutar
@@ -51,10 +70,10 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
         if (process.env.NODE_ENV === 'development') {
           console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value, `Tipo: ${parametro.type || 'auto'}`);
         }
-        
+
         // Si se especifica un tipo, usarlo; si no, dejar que SQL Server lo infiera
         if (parametro.type) {
-          request.input(nombreParametro, sql[parametro.type], parametro.value);
+          request.input(nombreParametro, resolveMssqlType(parametro), parametro.value);
         } else {
           request.input(nombreParametro, parametro.value);
         }

@@ -237,7 +237,12 @@ async function queryMovimientosPorNumero(num) {
         COALESCE(
           NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))), ''), '0'),
           NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
-          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0'),
+          CASE
+            WHEN ROW_NUMBER() OVER (ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC) = 1
+             AND ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
+            THEN NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0')
+            ELSE NULL
+          END,
           ''
         ) AS Operador,
         m.FechaCarga,
@@ -574,6 +579,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     reqMov.input('heg', sql.Int, cTime);
     reqMov.input('disp', sql.Int, disposicion);
     reqMov.input('diag', sql.VarChar(8), diagRaw);
+    reqMov.input('op', sql.VarChar(20), String(codOperador));
     const movRes = await reqMov.query(`
       ;WITH actual AS (
         SELECT TOP 1 NumeroVisita, FechaAdmision, HoraAdmision
@@ -586,7 +592,12 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         FechaEgreso = @feg,
         HoraEgreso = @heg,
         DisposicionEgreso = CASE WHEN @disp = 0 THEN m.DisposicionEgreso ELSE @disp END,
-        Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN m.Diagnostico ELSE @diag END
+        Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN m.Diagnostico ELSE @diag END,
+        Operador = CASE
+          WHEN LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))) IN ('', '0')
+          THEN @op
+          ELSE m.Operador
+        END
       FROM dbo.imVisitaMovimiento m
       INNER JOIN actual a
         ON m.NumeroVisita = a.NumeroVisita
@@ -941,7 +952,7 @@ async function consultarEstadoRevertirEgreso(numeroVisita) {
  * Revierte un egreso hospitalario (solo admin).
  * Solo restaura la misma cama. Si esa cama no está disponible, no se toca nada.
  */
-async function revertirEgresoVisita(numeroVisita) {
+async function revertirEgresoVisita(numeroVisita, opciones = {}) {
   const ctx = await resolverContextoRevertirEgreso(numeroVisita);
   if (!ctx.puedeRevertir) {
     const err = new Error(ctx.mensaje);
@@ -997,6 +1008,8 @@ async function revertirEgresoVisita(numeroVisita) {
       reqMov.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
       reqMov.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
       reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : String(ultimo.EstadoCama || '').trim());
+      const codOp = Number(opciones.codOperador);
+      reqMov.input('op', sql.VarChar(20), Number.isFinite(codOp) && codOp > 0 ? String(codOp) : '');
       await reqMov.query(`
         UPDATE dbo.imVisitaMovimiento
         SET
@@ -1006,6 +1019,12 @@ async function revertirEgresoVisita(numeroVisita) {
           EstadoCama = CASE
             WHEN LTRIM(RTRIM(@estado)) = '' THEN EstadoCama
             ELSE @estado
+          END,
+          Operador = CASE
+            WHEN LTRIM(RTRIM(@op)) = '' THEN Operador
+            WHEN LTRIM(RTRIM(ISNULL(CAST(Operador AS varchar(40)), ''))) IN ('', '0')
+            THEN @op
+            ELSE Operador
           END
         WHERE NumeroVisita = @nv
           AND FechaAdmision = @fa

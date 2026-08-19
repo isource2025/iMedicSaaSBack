@@ -998,6 +998,27 @@ async function eliminarFirmaPersonal(valor) {
 	return { ok: true };
 }
 
+let _sectoresTableReady = false;
+
+async function ensurePersonalSectoresTable() {
+	if (_sectoresTableReady) return;
+	try {
+		await executeQuery(`
+		IF OBJECT_ID(N'dbo.imPersonalSectores', N'U') IS NULL
+		BEGIN
+			CREATE TABLE dbo.imPersonalSectores (
+				idPersonal INT NOT NULL,
+				idSector VARCHAR(50) NOT NULL,
+				CONSTRAINT PK_imPersonalSectores PRIMARY KEY (idPersonal, idSector)
+			);
+		END
+		`);
+		_sectoresTableReady = true;
+	} catch (err) {
+		console.warn('[personal] ensurePersonalSectoresTable:', err?.message || err);
+	}
+}
+
 async function listarSectoresPersonal(valor) {
 	try {
 		const rows = await executeQuery(
@@ -1020,6 +1041,7 @@ async function listarSectoresPersonal(valor) {
 }
 
 async function agregarSectorPersonal(valor, idSector) {
+	await ensurePersonalSectoresTable();
 	const sid = strOrNull(idSector);
 	if (!sid) {
 		const e = new Error('idSector es obligatorio');
@@ -1088,6 +1110,7 @@ async function quitarServicioPedidosPersonal(valor, idServicio) {
 async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 	const vp = Number(valor);
 	if (Array.isArray(sectores)) {
+		await ensurePersonalSectoresTable();
 		await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
 			{ value: vp, type: 'Int' },
 		]);
@@ -1100,13 +1123,17 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 				`INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@p0, @p1)`,
 				[
 					{ value: vp, type: 'Int' },
-					{ value: sid, type: 'VarChar' },
+					{ value: sid, type: 'VarChar', length: 50 },
 				],
 			);
 		}
 		const tenantId = resolveTenantEmpresaId();
 		if (tenantId != null) {
-			await authCentralSync.syncPersonalSectores(tenantId, vp);
+			try {
+				await authCentralSync.syncPersonalSectores(tenantId, vp);
+			} catch (err) {
+				console.warn('[personal] sync sectores:', err?.message || err);
+			}
 		}
 	}
 	let srvList = null;
@@ -1114,7 +1141,11 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 		srvList = await personalServicios.reemplazar(vp, servicios);
 		const tenantId = resolveTenantEmpresaId();
 		if (tenantId != null) {
-			await authCentralSync.syncPersonalServicios(tenantId, vp);
+			try {
+				await authCentralSync.syncPersonalServicios(tenantId, vp);
+			} catch (err) {
+				console.warn('[personal] sync servicios:', err?.message || err);
+			}
 		}
 	}
 	return {

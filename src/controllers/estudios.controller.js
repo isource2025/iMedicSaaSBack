@@ -242,6 +242,22 @@ async function buscarTipos(req, res) {
 	}
 }
 
+async function contarLibres(req, res) {
+	try {
+		const soloMios =
+			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
+			String(req.query.soloMios || '').toLowerCase() === 'true';
+		const todosServicios = await _veTodosLosServicios(req);
+		const data = await estudiosService.contarLibresPorServicios({
+			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[estudios] conteo:', err.message);
+		return _err(res, err);
+	}
+}
+
 async function listarSectores(req, res) {
 	try {
 		const soloMios =
@@ -260,6 +276,7 @@ async function listarSectores(req, res) {
 module.exports = {
 	listarPorVisita,
 	listarPendientes,
+	contarLibres,
 	obtenerPorId,
 	crear,
 	actualizar,

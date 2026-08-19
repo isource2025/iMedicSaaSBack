@@ -242,10 +242,13 @@ async function syncPersonalServicios(idEmpresa, idPersonal) {
 		`CREATE TABLE IF NOT EXISTS ${q('imPersonalServicios')} (
 			IdEmpresa INT NOT NULL,
 			idPersonal INT NOT NULL,
-			idServicio VARCHAR(20) NOT NULL,
+			idServicio VARCHAR(50) NOT NULL,
 			PRIMARY KEY (IdEmpresa, idPersonal, idServicio)
 		)`,
 	);
+	await mysqlExec(
+		`ALTER TABLE ${q('imPersonalServicios')} MODIFY idServicio VARCHAR(50) NOT NULL`,
+	).catch(() => {});
 	await mysqlExec(`DELETE FROM ${q('imPersonalServicios')} WHERE IdEmpresa = ? AND idPersonal = ?`, [
 		emp,
 		id,
