@@ -49,10 +49,7 @@ async function listarPorUsuario(valorPersonal, page = 1, limit = 20, soloNoLeida
   const total = countRows[0]?.total ?? 0;
 
   const offset = (page - 1) * limit;
-
-  const data = await executeQuery(
-    `
-      SELECT
+  const selectList = `
         ${id} AS IdNotificacion,
         ${vp} AS ValorPersonal,
         ${tipo} AS TipoNotificacion,
@@ -63,12 +60,31 @@ async function listarPorUsuario(valorPersonal, page = 1, limit = 20, soloNoLeida
         ${json} AS DatosJSON,
         ${fecha} AS FechaCarga
       FROM dbo.imNotificaciones
-      ${where}
+      ${where}`;
+
+  let data;
+  try {
+    data = await executeQuery(
+      `
+      SELECT
+        ${selectList}
       ORDER BY ${fecha} DESC
       OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
       `,
-    [{ value: valorPersonal }]
-  );
+      [{ value: valorPersonal, type: 'Int' }],
+    );
+  } catch (err) {
+    const topN = offset + limit;
+    const rows = await executeQuery(
+      `
+      SELECT TOP ${topN}
+        ${selectList}
+      ORDER BY ${fecha} DESC
+      `,
+      [{ value: valorPersonal, type: 'Int' }],
+    );
+    data = (rows || []).slice(offset);
+  }
 
   const mapped = (data || []).map((n) => ({
     ...n,
@@ -185,12 +201,12 @@ async function crear({
   let insertCols = `${vp}, ${t}, ${d}, ${et}, ${ei}, ${j}, ${leida}, ${fc}`;
   let insertVals = '@param0, @param1, @param2, @param3, @param4, @param5, 0, GETDATE()';
   const params = [
-    { value: valorPersonal },
-    { value: tipo },
-    { value: normalizarTextoParaClarionAnsi(descripcion, { maxLength: 250 }) },
-    { value: entidadTipo },
-    { value: entidadId },
-    { value: datosStr },
+    { value: valorPersonal, type: 'Int' },
+    { value: tipo, type: 'VarChar', length: 50 },
+    { value: normalizarTextoParaClarionAnsi(descripcion, { maxLength: 250 }), type: 'VarChar', length: 250 },
+    { value: entidadTipo, type: 'VarChar', length: 50 },
+    { value: entidadId, type: 'Int' },
+    { value: datosStr, type: 'NVarChar' },
   ];
 
   let nextIdx = 6;
@@ -218,8 +234,20 @@ async function crear({
     const outKey = Object.keys(rows[0] || {})[0];
     return { success: true, idNotificacion: rows[0]?.[outKey] };
   } catch (e) {
-    console.warn('[notificaciones] crear falló (esquema distinto):', e.message);
-    return { success: false };
+    try {
+      const rows = await executeQuery(
+        `
+        INSERT INTO dbo.imNotificaciones (${insertCols})
+        VALUES (${insertVals});
+        SELECT SCOPE_IDENTITY() AS IdNotificacion
+        `,
+        params,
+      );
+      return { success: true, idNotificacion: rows[0]?.IdNotificacion };
+    } catch (e2) {
+      console.warn('[notificaciones] crear falló (esquema distinto):', e2.message || e.message);
+      return { success: false };
+    }
   }
 }
 

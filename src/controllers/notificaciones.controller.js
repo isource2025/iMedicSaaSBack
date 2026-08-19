@@ -9,8 +9,8 @@ router.use(requireAuth, requireTenant);
 function valorPersonalReq(req) {
   const q = req.query.userId ?? req.query.valorPersonal;
   const b = req.body?.userId ?? req.body?.valorPersonal;
-  const v = parseInt(String(q ?? b ?? req.user?.id ?? ''), 10);
-  return Number.isFinite(v) ? v : null;
+  const v = parseInt(String(q ?? b ?? req.valorPersonal ?? req.user?.id ?? ''), 10);
+  return Number.isFinite(v) && v > 0 ? v : null;
 }
 
 /**

@@ -3,10 +3,7 @@ const notificacionesService = require('./notificaciones.service');
 const personalServicios = require('./personalServicios.service');
 
 function _normSector(v) {
-	return String(v || '')
-		.trim()
-		.toUpperCase()
-		.slice(0, 4);
+	return String(v || '').trim().toUpperCase();
 }
 
 /**
@@ -38,18 +35,24 @@ async function obtenerDestinatariosSectorReceptor(idSectorReceptor, excluirValor
 	const excluir = Number(excluirValorPersonal) || 0;
 
 	await personalServicios.ensureTable();
+	const sectorPad = sector.slice(0, 4).padEnd(4, ' ');
 	const rows = await executeQuery(
 		`
     SELECT DISTINCT pw.ValorPersonal
     FROM dbo.imPersonalServicios ps
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = ps.idPersonal
-    WHERE LTRIM(RTRIM(ps.idServicio)) = LTRIM(RTRIM(@p1))
+    WHERE (
+        UPPER(LTRIM(RTRIM(ps.idServicio))) = UPPER(LTRIM(RTRIM(@p1)))
+        OR LEFT(UPPER(LTRIM(RTRIM(ps.idServicio))) + '    ', 4) = LEFT(UPPER(LTRIM(RTRIM(@p1))) + '    ', 4)
+        OR UPPER(LTRIM(RTRIM(ps.idServicio))) = UPPER(LTRIM(RTRIM(@p2)))
+      )
       AND ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
       AND pw.ValorPersonal <> @p0
     `,
 		[
 			{ value: excluir, type: 'Int' },
-			{ value: sector, type: 'VarChar' },
+			{ value: sector, type: 'VarChar', length: 50 },
+			{ value: sectorPad, type: 'VarChar', length: 50 },
 		],
 	).catch(() => []);
 

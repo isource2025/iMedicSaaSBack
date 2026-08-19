@@ -1,18 +1,44 @@
 const { executeQuery } = require('../models/db');
 
 /**
- * Capa de compatibilidad con la tabla dbo.imNotificaciones ya existente (p. ej. Aclysa).
- *
- * IMPORTANTE: el backend NO ejecuta CREATE/ALTER sobre esta tabla; solo lee
- * INFORMATION_SCHEMA o variables de entorno. Para ver columnas reales use
- * scripts/inspect_imNotificaciones.sql en SSMS.
- *
- * Override explícito (recomendado si la heurística no coincide con Aclysa):
- *   NOTIFICACIONES_COL_VALOR_PERSONAL, NOTIFICACIONES_COL_LEIDA,
- *   NOTIFICACIONES_COL_ID, NOTIFICACIONES_COL_FECHA, NOTIFICACIONES_COL_DESC, NOTIFICACIONES_COL_TIPO
+ * Esquema de dbo.imNotificaciones.
+ * Si la tabla no existe en el tenant, se crea. Si ya existe (p. ej. Aclysa),
+ * se detectan las columnas por INFORMATION_SCHEMA o por NOTIFICACIONES_COL_* en .env.
  */
 
 let cached = null;
+let ensuredTable = false;
+
+async function ensureImNotificacionesTable() {
+	if (ensuredTable) return;
+	try {
+		await executeQuery(`
+		IF OBJECT_ID(N'dbo.imNotificaciones', N'U') IS NULL
+		BEGIN
+			CREATE TABLE dbo.imNotificaciones (
+				IdNotificacion INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+				ValorPersonal INT NOT NULL,
+				TipoNotificacion VARCHAR(50) NOT NULL,
+				DescNotificacion VARCHAR(250) NOT NULL,
+				EntidadTipo VARCHAR(50) NULL,
+				EntidadId INT NULL,
+				DatosJSON NVARCHAR(MAX) NULL,
+				Leida BIT NOT NULL CONSTRAINT DF_imNotificaciones_Leida DEFAULT (0),
+				FechaCarga DATETIME NOT NULL CONSTRAINT DF_imNotificaciones_FechaCarga DEFAULT (GETDATE()),
+				MostrarHasta DATETIME NULL,
+				Marca VARCHAR(20) NULL
+			);
+			CREATE INDEX IX_imNotificaciones_ValorPersonal ON dbo.imNotificaciones (ValorPersonal);
+			CREATE INDEX IX_imNotificaciones_Leida ON dbo.imNotificaciones (Leida);
+			CREATE INDEX IX_imNotificaciones_FechaCarga ON dbo.imNotificaciones (FechaCarga);
+		END
+		`);
+		ensuredTable = true;
+		cached = null;
+	} catch (e) {
+		console.warn('[notificaciones] No se pudo asegurar imNotificaciones:', e.message);
+	}
+}
 
 function bracket(name) {
   if (!name || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
@@ -50,6 +76,7 @@ async function loadColumnsFromDb() {
 
 async function resolveImNotificacionesColumns() {
   if (cached !== null) return cached;
+  await ensureImNotificacionesTable();
 
   const envId = process.env.NOTIFICACIONES_COL_ID;
   const envVp = process.env.NOTIFICACIONES_COL_VALOR_PERSONAL;
@@ -178,4 +205,5 @@ function sqlEscapeIdent(name) {
 module.exports = {
   resolveImNotificacionesColumns,
   sqlEscapeIdent,
+  ensureImNotificacionesTable,
 };
