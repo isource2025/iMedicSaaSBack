@@ -126,6 +126,8 @@ function completarObligatorias(colMap, campos, valores) {
 	for (const meta of colMap.values()) {
 		if (puestas.has(meta.nombre.toLowerCase())) continue;
 		if (meta.nullable || meta.hasDefault || meta.autoInc) continue;
+		if (BINARY_TYPES.has(meta.tipo)) continue;
+		if (COLUMNAS_EXCLUIR_IMPORT.has(meta.nombre.toLowerCase())) continue;
 		campos.push(meta.nombre);
 		valores.push(valorPorTipo(meta));
 	}
@@ -449,8 +451,10 @@ async function listarRoles() {
 
 async function listarUsuariosEmpresa(idEmpresa) {
 	const id = Number(idEmpresa);
-	const rows = await mysqlQuery(
-		`
+	let rows = [];
+	try {
+		rows = await mysqlQuery(
+			`
     SELECT
       pw.ValorPersonal AS IdPersonal, pw.NombreRed AS Usuario,
       pw.Nombres AS Nombre, pw.Apellido AS Apellido,
@@ -462,12 +466,30 @@ async function listarUsuariosEmpresa(idEmpresa) {
     LEFT JOIN \`imPersonal\` p
       ON p.Valor = pe.IdPersonal AND p.IdEmpresa = pe.IdEmpresa
     LEFT JOIN \`imRoles\` r
-      ON CAST(r.IdRol AS CHAR) COLLATE ${COLLATE} = TRIM(p.Rol) COLLATE ${COLLATE} AND r.Activo = 1
+      ON r.IdRol = CAST(NULLIF(TRIM(CAST(p.Rol AS CHAR)), '') AS UNSIGNED) AND r.Activo = 1
     WHERE pe.IdEmpresa = ?
     ORDER BY pw.Apellido, pw.Nombres
     `,
-		[id],
-	);
+			[id],
+		);
+	} catch (e) {
+		console.warn('[nube] listar usuarios (join roles):', e.message);
+		rows = await mysqlQuery(
+			`
+    SELECT
+      pw.ValorPersonal AS IdPersonal, pw.NombreRed AS Usuario,
+      pw.Nombres AS Nombre, pw.Apellido AS Apellido,
+      pw.NumeroDocumento AS NumeroDocumento, pw.CodOperador AS CodOperador,
+      NULL AS IdRol, NULL AS RolNombre, NULL AS RolDescripcion
+    FROM \`imPersonalEmpresas\` pe
+    INNER JOIN \`imPassword\` pw
+      ON pw.ValorPersonal = pe.IdPersonal AND pw.IdEmpresa = pe.IdEmpresa
+    WHERE pe.IdEmpresa = ?
+    ORDER BY pw.Apellido, pw.Nombres
+    `,
+			[id],
+		);
+	}
 	const usuarios = [];
 	for (const r of rows) {
 		const idPersonal = Number(r.IdPersonal);
@@ -500,8 +522,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
 			usuario: String(r.Usuario || '').trim(),
 			nombre: String(r.Nombre || '').trim(),
 			apellido: String(r.Apellido || '').trim(),
-			numeroDocumento: String(r.NumeroDocumento || '').trim(),
-			codOperador: r.CodOperador,
+			numeroDocumento: String(r.NumeroDocumento ?? '').trim(),
+			codOperador: r.CodOperador == null ? null : String(r.CodOperador),
 			idRol: r.IdRol != null ? Number(r.IdRol) : null,
 			rol: String(r.RolDescripcion || r.RolNombre || '').trim() || null,
 			activo: true,
@@ -545,10 +567,10 @@ async function asegurarFichaPersonal(idEmpresa, valorPersonal, { apellido, nombr
 	if (colMap.has('Matricula')) { campos.push('Matricula'); valores.push(valorPersonal); }
 	if (colMap.has('ApellidoNombre')) { campos.push('ApellidoNombre'); valores.push(apellidoNombre || `Usuario ${valorPersonal}`); }
 	if (colMap.has('Numero')) {
-		const num = numeroDocumento != null && String(numeroDocumento).trim() !== ''
-			? Number(String(numeroDocumento).replace(/\D/g, '')) : null;
+		const rawDoc = numeroDocumento != null ? String(numeroDocumento).replace(/\D/g, '') : '';
+		const num = rawDoc ? Number(rawDoc) : null;
 		campos.push('Numero');
-		valores.push(esNumerica(colMap, 'Numero') ? (Number.isFinite(num) ? num : 0) : String(num || ''));
+		valores.push(esNumerica(colMap, 'Numero') ? (Number.isFinite(num) ? num : null) : rawDoc || null);
 	}
 	if (colMap.has('Estado')) { campos.push('Estado'); valores.push(1); }
 	completarObligatorias(colMap, campos, valores);
@@ -566,6 +588,55 @@ async function vincularUsuarioEmpresa(idEmpresa, valorPersonal) {
      WHERE NOT EXISTS (SELECT 1 FROM \`imPersonalEmpresas\` WHERE IdPersonal = ? AND IdEmpresa = ?)`,
 		[valorPersonal, Number(idEmpresa), valorPersonal, Number(idEmpresa)],
 	);
+}
+
+async function asignarRolNube(idEmpresa, valorPersonal, idRol) {
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	const rol = idRol == null || idRol === '' || Number(idRol) === 0 ? null : Number(idRol);
+	await mysqlExec(`
+    CREATE TABLE IF NOT EXISTS \`imPersonalRoles\` (
+      \`IdEmpresa\` INT NOT NULL,
+      \`Valor\` INT NOT NULL,
+      \`IdRol\` INT NOT NULL,
+      \`EsPrincipal\` TINYINT(1) NOT NULL DEFAULT 0,
+      PRIMARY KEY (\`IdEmpresa\`, \`Valor\`, \`IdRol\`)
+    )
+  `);
+	await mysqlExec(`DELETE FROM \`imPersonalRoles\` WHERE IdEmpresa = ? AND Valor = ?`, [emp, vp]);
+	if (rol == null) {
+		await mysqlExec(`UPDATE \`imPersonal\` SET Rol = NULL WHERE IdEmpresa = ? AND Valor = ?`, [emp, vp]).catch(
+			() => {},
+		);
+		return;
+	}
+	await mysqlExec(
+		`INSERT INTO \`imPersonalRoles\` (IdEmpresa, Valor, IdRol, EsPrincipal) VALUES (?, ?, ?, 1)`,
+		[emp, vp, rol],
+	);
+	await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+		String(rol),
+		emp,
+		vp,
+	]);
+}
+
+function payloadUsuarioCreado(valorPersonal, body, idRol) {
+	return {
+		idPersonal: Number(valorPersonal),
+		usuario: String(body.nombreRed || '').trim(),
+		nombre: String(body.nombres || '').trim(),
+		apellido: String(body.apellido || '').trim(),
+		numeroDocumento: String(body.numeroDocumento || '').trim(),
+		codOperador: body.codOperador != null ? String(body.codOperador) : null,
+		idRol: idRol != null && idRol !== '' ? Number(idRol) : null,
+		rol: null,
+		activo: true,
+		sectores: Array.isArray(body.sectores) ? body.sectores.map((s) => ({ id: String(s), descripcion: String(s) })) : [],
+		servicios: Array.isArray(body.servicios)
+			? body.servicios.map((s) => ({ id: String(s), descripcion: String(s) }))
+			: [],
+	};
 }
 
 /**
@@ -635,13 +706,29 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		campos.push('NumeroDocumento');
 		valores.push(valorCampoSegunTipo(colMap, 'NumeroDocumento', numeroDocumento));
 	}
-	if (colMap.has('Legajo')) { campos.push('Legajo'); valores.push(legajo || ''); }
+	if (colMap.has('Legajo')) {
+		const v = valorCampoSegunTipo(colMap, 'Legajo', legajo);
+		if (v != null) {
+			campos.push('Legajo');
+			valores.push(v);
+		} else if (esNumerica(colMap, 'Legajo')) {
+			campos.push('Legajo');
+			valores.push(valorPersonal);
+		}
+	}
 	if (colMap.has('CodOperador')) {
 		campos.push('CodOperador');
-		valores.push(esNumerica(colMap, 'CodOperador') ? (Number(codOperador) || valorPersonal) : (codOperador || ''));
+		valores.push(
+			esNumerica(colMap, 'CodOperador')
+				? (Number(codOperador) || valorPersonal)
+				: (String(codOperador || '').trim() || String(valorPersonal)),
+		);
 	}
 	if (colMap.has('Grupo')) { campos.push('Grupo'); valores.push(0); }
-	if (colMap.has('MarcadeBaja')) { campos.push('MarcadeBaja'); valores.push('0'); }
+	if (colMap.has('MarcadeBaja')) {
+		campos.push('MarcadeBaja');
+		valores.push(esNumerica(colMap, 'MarcadeBaja') ? 0 : '0');
+	}
 	if (colMap.has('FechaActual')) {
 		campos.push('FechaActual');
 		valores.push(esNumerica(colMap, 'FechaActual') ? fechaClarionHoy() : new Date());
@@ -663,10 +750,25 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		throw err;
 	}
 
-	await asegurarFichaPersonal(emp, valorPersonal, { apellido, nombres, numeroDocumento, idRol });
+	try {
+		await asegurarFichaPersonal(emp, valorPersonal, { apellido, nombres, numeroDocumento, idRol });
+	} catch (e) {
+		console.warn('[nube] ficha personal', e.message);
+	}
 	await vincularUsuarioEmpresa(emp, valorPersonal);
+	try {
+		await asignarRolNube(emp, valorPersonal, idRol);
+	} catch (e) {
+		console.warn('[nube] asignar rol', e.message);
+	}
 
-	for (const idSector of (await resolverSectoresUsuario(emp, idRol, sectores)) || []) {
+	let sectoresAsignar = [];
+	try {
+		sectoresAsignar = (await resolverSectoresUsuario(emp, idRol, sectores)) || [];
+	} catch (e) {
+		console.warn('[nube] resolver sectores', e.message);
+	}
+	for (const idSector of sectoresAsignar) {
 		try {
 			await mysqlExec(
 				`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector)
@@ -682,13 +784,23 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		}
 	}
 
-	const serviciosAsignar = await resolverServiciosUsuario(emp, idRol, servicios);
-	if (serviciosAsignar != null) {
-		await reemplazarServiciosUsuario(emp, valorPersonal, serviciosAsignar);
+	try {
+		const serviciosAsignar = await resolverServiciosUsuario(emp, idRol, servicios);
+		if (serviciosAsignar != null) {
+			await reemplazarServiciosUsuario(emp, valorPersonal, serviciosAsignar);
+		}
+	} catch (e) {
+		console.warn('[nube] asignar servicios', e.message);
 	}
 
-	const lista = await listarUsuariosEmpresa(idEmpresa);
-	return lista.find((u) => u.idPersonal === valorPersonal) || lista[lista.length - 1];
+	try {
+		const lista = await listarUsuariosEmpresa(idEmpresa);
+		const found = lista.find((u) => Number(u.idPersonal) === Number(valorPersonal));
+		if (found) return found;
+	} catch (e) {
+		console.warn('[nube] listar usuarios post-alta', e.message);
+	}
+	return payloadUsuarioCreado(valorPersonal, body, idRol);
 }
 
 async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
@@ -727,6 +839,11 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 				String(body.idRol), emp, id,
 			]);
 		}
+		try {
+			await asignarRolNube(emp, id, body.idRol);
+		} catch (e) {
+			console.warn('[nube] actualizar rol', e.message);
+		}
 	}
 
 	const sectoresAsignar = await resolverSectoresUsuario(emp, body.idRol, body.sectores);
@@ -746,11 +863,20 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 
 	const serviciosAsignar = await resolverServiciosUsuario(emp, body.idRol, body.servicios);
 	if (serviciosAsignar != null) {
-		await reemplazarServiciosUsuario(emp, id, serviciosAsignar);
+		try {
+			await reemplazarServiciosUsuario(emp, id, serviciosAsignar);
+		} catch (e) {
+			console.warn('[nube] actualizar servicios', e.message);
+		}
 	}
 
-	const lista = await listarUsuariosEmpresa(idEmpresa);
-	return lista.find((u) => u.idPersonal === id) || null;
+	try {
+		const lista = await listarUsuariosEmpresa(idEmpresa);
+		return lista.find((u) => Number(u.idPersonal) === id) || payloadUsuarioCreado(id, body, body.idRol);
+	} catch (e) {
+		console.warn('[nube] listar usuarios post-edicion', e.message);
+		return payloadUsuarioCreado(id, body, body.idRol);
+	}
 }
 
 async function desvincularUsuarioEmpresa(idEmpresa, idPersonal) {

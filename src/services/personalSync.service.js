@@ -260,143 +260,341 @@ async function syncPersonalDelta(emp, syncRows) {
 	};
 }
 
-async function syncSectoresDesdeFisico(idEmpresa, pool) {
-	const emp = Number(idEmpresa);
-	const sectores = await pool.request().query(`
-    SELECT DISTINCT s.Valor, RTRIM(LTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion
-    FROM dbo.imSectores s
-    INNER JOIN dbo.imPersonalSectores ps ON ps.idSector = s.Valor
-  `);
-	const secRows = sectores.recordset || [];
+function emptyCatalogSync() {
+	return {
+		catalogo: 0,
+		catalogoCambios: 0,
+		detalleCatalogo: [],
+		asignaciones: 0,
+		asignacionesTotal: 0,
+		detalleAsignaciones: [],
+	};
+}
 
-	const existingSec = await mysqlQuery(
-		`SELECT Valor, Descripcion FROM ${q('imSectores')} WHERE IdEmpresa = ?`,
+async function queryFisicoRecordset(pool, sql) {
+	const r = await pool.request().query(sql);
+	return r.recordset || [];
+}
+
+function mapNombreCatalogo(rows) {
+	return new Map(
+		(rows || []).map((s) => {
+			const valor = String(rowField(s, 'Valor') || '').trim();
+			const desc = String(rowField(s, 'Descripcion') || '').trim() || valor;
+			return [valor, desc];
+		}),
+	);
+}
+
+/**
+ * Upsert catálogo físico → MySQL (Valor + Descripcion, AmbInt si existe en ambos).
+ */
+async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false } = {}) {
+	const mysqlCols = await getMysqlColumnNames(mysqlTable);
+	const writeAmb = ambInt && mysqlCols.has('ambint');
+	const existing = await mysqlQuery(
+		writeAmb
+			? `SELECT Valor, Descripcion, AmbInt FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`
+			: `SELECT Valor, Descripcion FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`,
 		[emp],
 	);
-	const secByValor = new Map(
-		(existingSec || []).map((r) => [String(r.Valor || '').trim(), normCmp(r.Descripcion)]),
+	const byValor = new Map(
+		(existing || []).map((r) => [
+			String(rowField(r, 'Valor') || '').trim(),
+			{
+				desc: normCmp(rowField(r, 'Descripcion')),
+				amb: writeAmb ? normCmp(rowField(r, 'AmbInt')) : '',
+			},
+		]),
 	);
-	let sectoresCambios = 0;
+
+	let cambios = 0;
 	const detalleCatalogo = [];
-	for (const s of secRows) {
-		const valor = String(s.Valor || '').trim();
+	for (const s of fisicoRows || []) {
+		const valor = String(rowField(s, 'Valor') || '').trim();
 		if (!valor) continue;
-		const desc = String(s.Descripcion || '').trim() || valor;
-		const prev = secByValor.get(valor);
-		if (prev === undefined || prev !== normCmp(desc)) {
-			sectoresCambios += 1;
-			detalleCatalogo.push({
-				valor,
-				descripcion: desc,
-				accion: prev === undefined ? 'alta' : 'actualizacion',
-				de: prev === undefined ? '—' : displayVal(prev),
-			});
+		const desc = String(rowField(s, 'Descripcion') || '').trim() || valor;
+		const amb = writeAmb ? String(rowField(s, 'AmbInt') || '').trim() : '';
+		const prev = byValor.get(valor);
+		const descChanged = !prev || prev.desc !== normCmp(desc);
+		const ambChanged = writeAmb && amb !== '' && (!prev || prev.amb !== normCmp(amb));
+		if (!descChanged && !ambChanged) continue;
+		cambios += 1;
+		detalleCatalogo.push({
+			valor,
+			descripcion: desc,
+			accion: prev === undefined ? 'alta' : 'actualizacion',
+			de: prev === undefined ? '—' : displayVal(prev.desc),
+		});
+		if (writeAmb && (amb || prev === undefined)) {
 			await mysqlExec(
-				`INSERT INTO ${q('imSectores')} (IdEmpresa, Valor, Descripcion)
+				`INSERT INTO ${q(mysqlTable)} (IdEmpresa, Valor, Descripcion, AmbInt)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion), AmbInt = VALUES(AmbInt)`,
+				[emp, valor, desc, amb || 'A'],
+			);
+		} else {
+			await mysqlExec(
+				`INSERT INTO ${q(mysqlTable)} (IdEmpresa, Valor, Descripcion)
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion)`,
 				[emp, valor, desc],
 			);
 		}
 	}
+	return { catalogo: (fisicoRows || []).length, catalogoCambios: cambios, detalleCatalogo };
+}
 
-	const asign = await pool.request().query(`
-    SELECT idPersonal, idSector FROM dbo.imPersonalSectores
-  `);
+function rowField(row, ...names) {
+	if (!row) return undefined;
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = Object.prototype.hasOwnProperty.call(row, n)
+			? row[n]
+			: lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function parseAsignFisico(rows, idItemField) {
 	const asignFisico = [];
 	const setFisico = new Set();
-	for (const r of asign.recordset || []) {
-		const idP = Number(r.idPersonal);
-		const idS = String(r.idSector || '').trim();
+	for (const r of rows || []) {
+		const idP = Number(rowField(r, 'idPersonal'));
+		const idS = String(rowField(r, idItemField) || '').trim();
 		if (!Number.isFinite(idP) || idP <= 0 || !idS) continue;
 		const key = `${idP}\t${idS}`;
 		if (setFisico.has(key)) continue;
 		setFisico.add(key);
 		asignFisico.push({ idP, idS });
 	}
+	return { asignFisico, setFisico };
+}
 
+function setsIguales(a, b) {
+	if (a.size !== b.size) return false;
+	for (const k of a) if (!b.has(k)) return false;
+	return true;
+}
+
+function diffAsignaciones(setFisico, setNube, labelById) {
+	const byUser = new Map();
+	const touch = (idP, accion, idS) => {
+		if (!byUser.has(idP)) byUser.set(idP, { valor: idP, agregados: [], quitados: [] });
+		const label = (labelById && labelById.get(idS)) || idS;
+		if (accion === 'agregado') byUser.get(idP).agregados.push(label);
+		else byUser.get(idP).quitados.push(label);
+	};
+	let onlyFisico = 0;
+	let onlyNube = 0;
+	for (const k of setFisico) {
+		if (setNube.has(k)) continue;
+		onlyFisico += 1;
+		const [idP, idS] = k.split('\t');
+		touch(Number(idP), 'agregado', idS);
+	}
+	for (const k of setNube) {
+		if (setFisico.has(k)) continue;
+		onlyNube += 1;
+		const [idP, idS] = k.split('\t');
+		touch(Number(idP), 'quitado', idS);
+	}
+	return {
+		asignaciones: onlyFisico + onlyNube,
+		detalleAsignaciones: [...byUser.values()],
+	};
+}
+
+/**
+ * Reemplaza asignaciones de la empresa en MySQL si el set físico difiere.
+ * Si `asignRows` es null, no toca las asignaciones (tabla física ausente).
+ */
+async function syncAsignacionesMysql(emp, { mysqlTable, idItemCol, asignRows, labelById }) {
+	if (asignRows == null) {
+		return { asignaciones: 0, asignacionesTotal: 0, detalleAsignaciones: [] };
+	}
+	const { asignFisico, setFisico } = parseAsignFisico(asignRows, idItemCol);
 	const existingAsign = await mysqlQuery(
-		`SELECT idPersonal, idSector FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ?`,
+		`SELECT idPersonal, ${q(idItemCol)} AS idItem FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`,
 		[emp],
 	);
 	const setNube = new Set(
-		(existingAsign || []).map((r) => `${Number(r.idPersonal)}\t${String(r.idSector || '').trim()}`),
+		(existingAsign || []).map(
+			(r) => `${Number(r.idPersonal)}\t${String(r.idItem || '').trim()}`,
+		),
 	);
-
-	let same = setFisico.size === setNube.size;
-	if (same) {
-		for (const k of setFisico) {
-			if (!setNube.has(k)) {
-				same = false;
-				break;
-			}
-		}
-	}
-
-	if (same) {
+	if (setsIguales(setFisico, setNube)) {
 		return {
-			sectoresCatalogo: secRows.length,
-			sectoresCatalogoCambios: sectoresCambios,
-			detalleCatalogo,
 			asignaciones: 0,
 			asignacionesTotal: asignFisico.length,
 			detalleAsignaciones: [],
 		};
 	}
 
-	await mysqlExec(`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ?`, [emp]);
+	await mysqlExec(`DELETE FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`, [emp]);
 	for (const lote of chunk(asignFisico, 200)) {
 		const flat = [];
 		for (const r of lote) flat.push(emp, r.idP, r.idS);
 		const valuesSql = lote.map(() => '(?, ?, ?)').join(', ');
 		await mysqlExec(
-			`INSERT INTO ${q('imPersonalSectores')} (IdEmpresa, idPersonal, idSector)
+			`INSERT INTO ${q(mysqlTable)} (IdEmpresa, idPersonal, ${q(idItemCol)})
        VALUES ${valuesSql}
-       ON DUPLICATE KEY UPDATE idSector = VALUES(idSector)`,
+       ON DUPLICATE KEY UPDATE ${q(idItemCol)} = VALUES(${q(idItemCol)})`,
 			flat,
 		);
 	}
 
-	// Cambios ≈ |simétricos| aproximados: tamaño de diferencia de sets
-	let onlyFisico = 0;
-	for (const k of setFisico) if (!setNube.has(k)) onlyFisico += 1;
-	let onlyNube = 0;
-	for (const k of setNube) if (!setFisico.has(k)) onlyNube += 1;
+	const diff = diffAsignaciones(setFisico, setNube, labelById);
+	return {
+		asignaciones: diff.asignaciones,
+		asignacionesTotal: asignFisico.length,
+		detalleAsignaciones: diff.detalleAsignaciones,
+	};
+}
 
-	const secNombre = new Map(
-		secRows.map((s) => [
-			String(s.Valor || '').trim(),
-			String(s.Descripcion || '').trim() || String(s.Valor || '').trim(),
-		]),
+async function leerCatalogoFisico(pool, tabla, { ambInt = false } = {}) {
+	const allowed = new Set(['imSectores', 'imServicios']);
+	if (!allowed.has(tabla)) {
+		throw new Error(`Catálogo físico no permitido: ${tabla}`);
+	}
+	if (ambInt) {
+		try {
+			return await queryFisicoRecordset(
+				pool,
+				`
+      SELECT
+        Valor,
+        RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
+        RTRIM(LTRIM(ISNULL(AmbInt, ''))) AS AmbInt
+      FROM dbo.${tabla}
+    `,
+			);
+		} catch {
+			/* AmbInt puede no existir en este SQL físico */
+		}
+	}
+	return queryFisicoRecordset(
+		pool,
+		`
+      SELECT Valor, RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS Descripcion
+      FROM dbo.${tabla}
+    `,
 	);
+}
 
-	const byUser = new Map();
-	function touchSector(idP, accion, idS) {
-		if (!byUser.has(idP)) byUser.set(idP, { valor: idP, agregados: [], quitados: [] });
-		const label = secNombre.get(idS) || idS;
-		if (accion === 'agregado') byUser.get(idP).agregados.push(label);
-		else byUser.get(idP).quitados.push(label);
+async function syncSectoresDesdeFisico(idEmpresa, pool) {
+	const emp = Number(idEmpresa);
+	let secRows = [];
+	try {
+		secRows = await leerCatalogoFisico(pool, 'imSectores', { ambInt: true });
+	} catch (e) {
+		console.warn('[personalSync] catálogo imSectores físico:', e.message);
+		return {
+			...emptyCatalogSync(),
+			sectoresCatalogo: 0,
+			sectoresCatalogoCambios: 0,
+		};
 	}
-	for (const k of setFisico) {
-		if (!setNube.has(k)) {
-			const [idP, idS] = k.split('\t');
-			touchSector(Number(idP), 'agregado', idS);
-		}
+
+	const cat = await upsertCatalogoMysql(emp, 'imSectores', secRows, { ambInt: true });
+
+	let asignRows = null;
+	try {
+		asignRows = await queryFisicoRecordset(
+			pool,
+			`SELECT idPersonal, idSector FROM dbo.imPersonalSectores`,
+		);
+	} catch (e) {
+		console.warn('[personalSync] imPersonalSectores físico:', e.message);
 	}
-	for (const k of setNube) {
-		if (!setFisico.has(k)) {
-			const [idP, idS] = k.split('\t');
-			touchSector(Number(idP), 'quitado', idS);
-		}
-	}
+
+	const asig = await syncAsignacionesMysql(emp, {
+		mysqlTable: 'imPersonalSectores',
+		idItemCol: 'idSector',
+		asignRows,
+		labelById: mapNombreCatalogo(secRows),
+	});
 
 	return {
-		sectoresCatalogo: secRows.length,
-		sectoresCatalogoCambios: sectoresCambios,
-		detalleCatalogo,
-		asignaciones: onlyFisico + onlyNube,
-		asignacionesTotal: asignFisico.length,
-		detalleAsignaciones: [...byUser.values()],
+		sectoresCatalogo: cat.catalogo,
+		sectoresCatalogoCambios: cat.catalogoCambios,
+		detalleCatalogo: cat.detalleCatalogo,
+		asignaciones: asig.asignaciones,
+		asignacionesTotal: asig.asignacionesTotal,
+		detalleAsignaciones: asig.detalleAsignaciones,
+	};
+}
+
+async function ensureServiciosMysqlTables() {
+	await mysqlExec(`
+    CREATE TABLE IF NOT EXISTS ${q('imServicios')} (
+      IdEmpresa INT NOT NULL,
+      Valor VARCHAR(50) NOT NULL,
+      Descripcion VARCHAR(200) NULL,
+      PRIMARY KEY (IdEmpresa, Valor)
+    )
+  `);
+	await mysqlExec(`
+    CREATE TABLE IF NOT EXISTS ${q('imPersonalServicios')} (
+      IdEmpresa INT NOT NULL,
+      idPersonal INT NOT NULL,
+      idServicio VARCHAR(50) NOT NULL,
+      PRIMARY KEY (IdEmpresa, idPersonal, idServicio)
+    )
+  `);
+	await mysqlExec(
+		`ALTER TABLE ${q('imPersonalServicios')} MODIFY idServicio VARCHAR(50) NOT NULL`,
+	).catch(() => {});
+	await mysqlExec(`ALTER TABLE ${q('imServicios')} MODIFY Valor VARCHAR(50) NOT NULL`).catch(
+		() => {},
+	);
+}
+
+async function syncServiciosDesdeFisico(idEmpresa, pool) {
+	const emp = Number(idEmpresa);
+	try {
+		await ensureServiciosMysqlTables();
+	} catch (e) {
+		console.warn('[personalSync] tablas MySQL imServicios:', e.message);
+		return emptyCatalogSync();
+	}
+
+	let srvRows = [];
+	try {
+		srvRows = await leerCatalogoFisico(pool, 'imServicios', { ambInt: false });
+	} catch (e) {
+		console.warn('[personalSync] catálogo imServicios físico:', e.message);
+		return emptyCatalogSync();
+	}
+
+	const cat = await upsertCatalogoMysql(emp, 'imServicios', srvRows);
+
+	let asignRows = null;
+	try {
+		asignRows = await queryFisicoRecordset(
+			pool,
+			`SELECT idPersonal, idServicio FROM dbo.imPersonalServicios`,
+		);
+	} catch (e) {
+		console.warn('[personalSync] imPersonalServicios físico:', e.message);
+	}
+
+	const asig = await syncAsignacionesMysql(emp, {
+		mysqlTable: 'imPersonalServicios',
+		idItemCol: 'idServicio',
+		asignRows,
+		labelById: mapNombreCatalogo(srvRows),
+	});
+
+	return {
+		catalogo: cat.catalogo,
+		catalogoCambios: cat.catalogoCambios,
+		detalleCatalogo: cat.detalleCatalogo,
+		asignaciones: asig.asignaciones,
+		asignacionesTotal: asig.asignacionesTotal,
+		detalleAsignaciones: asig.detalleAsignaciones,
 	};
 }
 
@@ -723,7 +921,7 @@ async function syncVinculosEmpresa(idEmpresa, pool) {
 }
 
 /**
- * Copia personal + credenciales + sectores + vínculos del SQL físico a MySQL.
+ * Copia personal + credenciales + catálogos/asignaciones de sectores y servicios + vínculos.
  * Los contadores de la UI son deltas (0 si ya estaba al día).
  */
 async function syncPersonalDesdeFisico(idEmpresa) {
@@ -748,7 +946,25 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 	const personal = await syncPersonalDelta(emp, syncRows);
 
 	const passwords = await syncPasswordsDesdeFisico(emp, pool);
-	const sec = await syncSectoresDesdeFisico(emp, pool);
+	let sec = {
+		sectoresCatalogo: 0,
+		sectoresCatalogoCambios: 0,
+		detalleCatalogo: [],
+		asignaciones: 0,
+		asignacionesTotal: 0,
+		detalleAsignaciones: [],
+	};
+	try {
+		sec = await syncSectoresDesdeFisico(emp, pool);
+	} catch (e) {
+		console.warn('[personalSync] sectores:', e.message);
+	}
+	let srv = emptyCatalogSync();
+	try {
+		srv = await syncServiciosDesdeFisico(emp, pool);
+	} catch (e) {
+		console.warn('[personalSync] servicios:', e.message);
+	}
 	const vinculos = await syncVinculosEmpresa(emp, pool);
 	const roles = await syncRolesDesdeFisico(emp, pool);
 
@@ -776,6 +992,9 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 		sectoresAsignaciones: sec.asignaciones,
 		sectoresAsignacionesTotal: sec.asignacionesTotal,
 		sectoresCatalogoCambios: sec.sectoresCatalogoCambios,
+		serviciosAsignaciones: srv.asignaciones,
+		serviciosAsignacionesTotal: srv.asignacionesTotal,
+		serviciosCatalogoCambios: srv.catalogoCambios,
 		vinculos: vinculos.cambios,
 		vinculosTotal: vinculos.ids,
 		vinculosMysql: vinculos.nuevos,
@@ -790,6 +1009,7 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 		personal,
 		passwords,
 		sec,
+		srv,
 		vinculos,
 		roles,
 		namesByValor,
@@ -799,6 +1019,8 @@ async function syncPersonalDesdeFisico(idEmpresa) {
 		(Number(bruto.passwordsEscritos) || 0) +
 		(Number(bruto.sectoresAsignaciones) || 0) +
 		(Number(bruto.sectoresCatalogoCambios) || 0) +
+		(Number(bruto.serviciosAsignaciones) || 0) +
+		(Number(bruto.serviciosCatalogoCambios) || 0) +
 		(Number(bruto.vinculos) || 0) +
 		(Number(bruto.rolesAsignados) || 0);
 
@@ -1127,7 +1349,7 @@ function ensureUser(users, valor, namesByValor, fallbackNombre) {
 /**
  * Informe del modal: resumen + detalle por usuario (desplegables).
  */
-function buildSyncInforme({ bruto: r, personal, passwords, sec, vinculos, roles, namesByValor }) {
+function buildSyncInforme({ bruto: r, personal, passwords, sec, srv, vinculos, roles, namesByValor }) {
 	const items = [];
 	pushInformeItem(items, r.personalNuevos, 'persona dada de alta', 'personas dadas de alta');
 	pushInformeItem(
@@ -1173,6 +1395,18 @@ function buildSyncInforme({ bruto: r, personal, passwords, sec, vinculos, roles,
 		r.sectoresAsignaciones,
 		'asignación de sector distinta a la nube',
 		'asignaciones de sectores distintas a la nube',
+	);
+	pushInformeItem(
+		items,
+		r.serviciosCatalogoCambios,
+		'servicio del catálogo actualizado',
+		'servicios del catálogo actualizados',
+	);
+	pushInformeItem(
+		items,
+		r.serviciosAsignaciones,
+		'asignación de servicio distinta a la nube',
+		'asignaciones de servicios distintas a la nube',
 	);
 	pushInformeItem(
 		items,
@@ -1260,6 +1494,18 @@ function buildSyncInforme({ bruto: r, personal, passwords, sec, vinculos, roles,
 		});
 	}
 
+	for (const d of srv?.detalleAsignaciones || []) {
+		const u = ensureUser(users, d.valor, names, null);
+		if (!u) continue;
+		u.cambios.push({
+			tipo: 'servicio',
+			accion: 'asignacion',
+			titulo: 'Servicios',
+			agregados: d.agregados || [],
+			quitados: d.quitados || [],
+		});
+	}
+
 	for (const d of vinculos?.detalle || []) {
 		const u = ensureUser(users, d.valor, names, null);
 		if (!u) continue;
@@ -1301,6 +1547,7 @@ function buildSyncInforme({ bruto: r, personal, passwords, sec, vinculos, roles,
 		items,
 		usuarios,
 		catalogoSectores: sec?.detalleCatalogo || [],
+		catalogoServicios: srv?.detalleCatalogo || [],
 		roles: {
 			asignados: Number(r.rolesAsignados) || 0,
 			yaTenia: Number(r.rolesYaTenia) || 0,
