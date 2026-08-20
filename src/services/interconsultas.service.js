@@ -105,9 +105,11 @@ const NUEVA_OBTENER_SQL = `
 `;
 
 function mapLegacyRow(r) {
+	const idProtocolo = Number(r.IdProtocolo) || 0;
+	const cumplido = idProtocolo > 0 || !!(r.Respuesta && String(r.Respuesta).trim());
 	return {
-		IdInterconsulta: r.IdPedido,
-		IdPedido: r.IdPedido,
+		IdInterconsulta: r.IdPedido || r.IdInterconsulta,
+		IdPedido: r.IdPedido || r.IdInterconsulta,
 		IdVisita: r.IdVisita,
 		FechaSolicitud: r.FechaSolicitud,
 		HoraSolicitud: r.HoraSolicitud,
@@ -120,15 +122,22 @@ function mapLegacyRow(r) {
 		MedicoSolicitante: r.MedicoSolicitante,
 		MedicoSolicitanteNombre: r.MedicoSolicitanteNombre,
 		Motivo: r.Motivo,
-		Estado: r.Estado,
+		Estado: cumplido ? 'CUMPLIDO' : r.Estado,
 		EstadoUrgencia: r.EstadoUrgencia,
-		IdProtocolo: r.IdProtocolo,
+		Respuesta: r.Respuesta || null,
+		FechaRespuesta: r.FechaRespuesta || null,
+		IdProtocolo: idProtocolo > 0 ? idProtocolo : 0,
 		SectorSolicitante: r.SectorSolicitante,
 		SectorSolicitanteNombre: r.SectorSolicitanteNombre,
 		SectorReceptor: r.SectorReceptor,
 		SectorReceptorNombre: r.SectorReceptorNombre,
 		ServicioCodigo: r.ServicioCodigo,
 		ServicioDescripcion: r.ServicioDescripcion,
+		Tomado: !!r.Tomado,
+		MatriculaToma: r.MatriculaToma ?? null,
+		NombreToma: r.NombreToma || null,
+		Cumplido: cumplido,
+		EstadoWorkflow: r.EstadoWorkflow || (cumplido ? 'CUMPLIDO' : r.Tomado ? 'TOMADO' : 'PENDIENTE'),
 		Origen: r.Origen || 'LEGACY',
 	};
 }
@@ -184,13 +193,24 @@ async function listarSectoresDestino() {
 }
 
 async function listarPorVisita(idVisita) {
-	const [legacy, nuevas] = await Promise.all([
-		executeQuery(LEGACY_LISTAR_SQL, [{ value: idVisita, type: 'Int' }]).catch(() => []),
-		executeQuery(NUEVAS_LISTAR_SQL, [{ value: idVisita, type: 'Int' }]).catch(() => []),
+	const nv = Number(idVisita);
+	const [pedidosIc, nuevas] = await Promise.all([
+		estudiosService.listarInterconsultasPorVisita(nv).catch((e) => {
+			console.warn('[interconsultas] listarPedidos:', e.message || e);
+			return [];
+		}),
+		executeQuery(NUEVAS_LISTAR_SQL, [{ value: nv, type: 'Int' }]).catch(() => []),
 	]);
 
-	const mappedLegacy = (legacy || []).map(mapLegacyRow);
-	const combined = [...mappedLegacy, ...(nuevas || [])];
+	const mappedLegacy = (pedidosIc || []).map(mapPedidoToInterconsulta);
+	const mappedWeb = (nuevas || []).map((r) =>
+		mapLegacyRow({
+			...r,
+			IdPedido: r.IdInterconsulta,
+			Origen: 'WEB',
+		}),
+	);
+	const combined = [...mappedLegacy, ...mappedWeb];
 	combined.sort((a, b) => {
 		const da = `${a.FechaSolicitud || ''} ${a.HoraSolicitud || ''}`;
 		const db = `${b.FechaSolicitud || ''} ${b.HoraSolicitud || ''}`;

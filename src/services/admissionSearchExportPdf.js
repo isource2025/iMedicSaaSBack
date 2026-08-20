@@ -795,11 +795,19 @@ async function buildSelectiveExportPdf(payload) {
         });
         doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
         const pedidoTxt = str(ex.PedidoEstudio || ex.pedidoEstudio);
-        if (pedidoTxt) bodyParagraph(doc, pedidoTxt);
+        if (pedidoTxt) {
+          doc.font('Helvetica-Bold').fontSize(8).text('Pedido', { width: contentWidth(doc) });
+          bodyParagraph(doc, pedidoTxt);
+        }
         const resultado = str(ex.ResultadoEstudio || ex.resultadoEstudio);
         if (resultado) {
-          doc.font('Helvetica-Bold').fontSize(8).text('Resultado', { width: contentWidth(doc) });
+          doc.font('Helvetica-Bold').fontSize(8).text('Respuesta', { width: contentWidth(doc) });
           bodyParagraph(doc, resultado.slice(0, 2000));
+        } else {
+          doc.font('Helvetica').fontSize(8).fillColor('#64748b').text('Sin respuesta cargada.', {
+            width: contentWidth(doc),
+          });
+          doc.fillColor('#1e293b');
         }
         doc.moveDown(0.15);
       });

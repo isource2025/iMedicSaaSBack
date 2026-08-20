@@ -854,6 +854,20 @@ async function listarPorVisita(idVisita) {
 	return dedupePedidos((rows || []).map(mapPedidoRow));
 }
 
+/** Interconsultas (IdTipoPedido = 33) de una visita, con texto de respuesta si hay protocolo. */
+async function listarInterconsultasPorVisita(idVisita) {
+	await ensureTomaTable();
+	const rows = await executeQuery(
+		`SELECT ${SELECT_PEDIDO}
+		 ${FROM_PEDIDO}
+		 WHERE pe.IdVisita = @p0
+		   AND pe.IdTipoPedido = 33
+		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
+		[{ value: Number(idVisita), type: 'Int' }],
+	);
+	return (rows || []).map(mapPedidoRow);
+}
+
 async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	await ensureTomaTable();
 	if (!String(sectorReceptor || '').trim()) {
@@ -1180,6 +1194,7 @@ module.exports = {
 	actualizarPedido,
 	eliminarPedido,
 	listarPorVisita,
+	listarInterconsultasPorVisita,
 	listarPendientesPorSector,
 	contarLibresPorServicios,
 	obtenerPorId,

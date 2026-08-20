@@ -261,9 +261,11 @@ function buildContextText(dossier) {
 	ics.slice(0, 30).forEach((ic, i) => {
 		lines.push(
 			`${i + 1}. [${ic.FechaSolicitud || ''} ${ic.HoraSolicitud || ''}] ` +
-				`${takeText(ic.ServicioDestino || ic.SectorReceptor || ic.IdSectorReceptor, 40)}: ` +
-				`${takeText(ic.Motivo || ic.Notas || ic.motivo, 400)}`,
+				`${takeText(ic.ServicioDestino || ic.SectorReceptor || ic.IdSectorReceptor || ic.Especialidad, 40)}`,
 		);
+		lines.push(`   Pedido: ${takeText(ic.Motivo || ic.Notas || ic.NotasObservacion || ic.motivo, 400)}`);
+		const resp = takeText(ic.Respuesta || ic.TextoResultado || ic.respuesta, 600);
+		lines.push(`   Respuesta: ${resp || '(sin respuesta)'}`);
 	});
 
 	const ind = Array.isArray(dossier.indicaciones) ? dossier.indicaciones : [];
@@ -302,10 +304,21 @@ function buildContextText(dossier) {
 	lines.push(`\n=== 8. ESTUDIOS / PEDIDOS (${est.length}) ===`);
 	if (!est.length) lines.push('(sin estudios)');
 	est.slice(0, 40).forEach((e, i) => {
-		const nombre = e.Descripcion || e.descripcion || e.Nombre || e.Estudio || e.Notas || '';
+		const nombre =
+			e.PracticaDescripcion ||
+			e.Descripcion ||
+			e.descripcion ||
+			e.PracticaSolicitada ||
+			e.Nombre ||
+			e.Estudio ||
+			'';
 		lines.push(
-			`${i + 1}. ${takeText(nombre, 200)} | estado=${takeText(e.Estado || e.estado, 40)}`,
+			`${i + 1}. ${takeText(nombre, 200)} | estado=${takeText(e.Estado || e.EstadoWorkflow || e.estado, 40)}`,
 		);
+		const pedido = takeText(e.PedidoEstudio || e.NotasObservacion || e.Notas || e.pedido, 400);
+		if (pedido) lines.push(`   Pedido: ${pedido}`);
+		const resp = takeText(e.ResultadoEstudio || e.TextoResultado || e.resultado || e.Respuesta, 600);
+		lines.push(`   Respuesta: ${resp || '(sin respuesta)'}`);
 	});
 
 	const labs = Array.isArray(dossier.laboratorios) ? dossier.laboratorios : [];
