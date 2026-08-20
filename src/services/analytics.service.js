@@ -68,6 +68,7 @@ function sanitizeMetadata(raw, userAgent) {
 		if (raw.expiredSessionId && String(raw.expiredSessionId).length <= 36) {
 			out.expiredSessionId = String(raw.expiredSessionId);
 		}
+		if (raw.simulated === true) out.simulated = true;
 	}
 	out.device = classifyDevice(userAgent);
 	return out;
@@ -173,7 +174,7 @@ async function trackEvent({
 	}
 }
 
-async function trackIdleExpiration({ decoded, session, userAgent }) {
+async function trackIdleExpiration({ decoded, session, userAgent, metadata = null }) {
 	const vpCandidates = [];
 	const u = decoded?.usuario || {};
 	for (const c of [u.id, u.idValorpersonal, u.idValorPersonal, u.valorPersonal, session?.ValorPersonal]) {
@@ -187,7 +188,7 @@ async function trackIdleExpiration({ decoded, session, userAgent }) {
 		idEmpresa: session?.IdEmpresa ?? decoded?.idEmpresa,
 		role: decoded?.rol?.nombre,
 		userAgent: userAgent || session?.UserAgent,
-		metadata: { source: 'server' },
+		metadata: { source: 'server', ...(metadata && typeof metadata === 'object' ? metadata : {}) },
 	});
 }
 

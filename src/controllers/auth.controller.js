@@ -229,6 +229,28 @@ const cerrarSesion = async (req, res) => {
 	}
 };
 
+/** Fuerza el mismo 401 de inactividad que el timeout real (para probar modal + analytics). */
+const simularInactividad = async (req, res) => {
+	try {
+		const sessionId = req.auth?.sessionId || null;
+		const session = sessionId ? await sessionService.getSessionAny(sessionId) : null;
+		if (sessionId) await sessionService.revokeSession(sessionId);
+		const refresh = req.cookies?.[sessionService.COOKIE_REFRESH];
+		if (refresh) await sessionService.revokeByRefreshToken(refresh);
+		await analyticsService.trackIdleExpiration({
+			decoded: req.auth,
+			session,
+			userAgent: req.headers['user-agent'],
+			metadata: { simulated: true },
+		});
+		sessionService.clearAuthCookies(res);
+		return res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+	} catch (e) {
+		sessionService.clearAuthCookies(res);
+		return res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+	}
+};
+
 const refrescarSesion = async (req, res) => {
 	const t0 = Date.now();
 	try {
@@ -464,6 +486,7 @@ const repararCuentasCriticas = async (req, res) => {
 module.exports = {
 	inicioSesion,
 	cerrarSesion,
+	simularInactividad,
 	refrescarSesion,
 	sesionActual,
 	obtenerSectores,

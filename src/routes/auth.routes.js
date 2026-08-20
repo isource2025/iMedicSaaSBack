@@ -10,6 +10,7 @@ router.use(authGeneralLimiter);
 
 router.post('/login', geoBlockAuth, loginLimiter, authController.inicioSesion);
 router.post('/logout', authController.cerrarSesion);
+router.post('/simulate-idle', requireAuth, authController.simularInactividad);
 router.post('/refresh', authController.refrescarSesion);
 router.get('/me', requireAuth, authController.sesionActual);
 
