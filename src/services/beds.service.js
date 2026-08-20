@@ -2,6 +2,7 @@
 
 const { executeQuery } = require('../models/db');
 const { enrichControlesWithIMC } = require('../utils/antropometria');
+const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 
 /**
  * Obtener todas las camas desde imHabitacionCamas
@@ -38,6 +39,8 @@ const obtenerCamas = async () => {
 		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
 	});
 
+	const vistoOk = await vistoEnfermeria.ensureTable();
+
 	const consulta = `
     SELECT 
       hc.*,
@@ -51,9 +54,11 @@ const obtenerCamas = async () => {
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
-      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
+      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
+      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
     FROM 
       imHabitacionCamas hc
+    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
@@ -89,6 +94,7 @@ const obtenerEstadosCama = async () => {
  * @returns {Promise<Array>} Lista de camas filtradas
  */
 const filtrarCamasPorEstado = async (estadoValor) => {
+	const vistoOk = await vistoEnfermeria.ensureTable();
 	const consulta = `
     SELECT 
       hc.*,
@@ -104,9 +110,11 @@ const filtrarCamasPorEstado = async (estadoValor) => {
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
-      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita
+      CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
+      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
     FROM 
       imHabitacionCamas hc
+    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     INNER JOIN 
       imEstadoCama ec ON hc.ValorEstadoCama = ec.valor
     LEFT JOIN 
@@ -144,6 +152,7 @@ const filtrarCamasPorEstado = async (estadoValor) => {
  */
 const obtenerCamaPorId = async (id) => {
 	const [ValorSector, ValorHabitacionCama] = id.split('-');
+	const vistoOk = await vistoEnfermeria.ensureTable();
 	const consulta = `
     SELECT 
       hc.*,
@@ -155,9 +164,11 @@ const obtenerCamaPorId = async (id) => {
       c.RazonSocial as RazonSocialCliente,
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
-      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL
+      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
+      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
     FROM 
       imHabitacionCamas hc
+    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 

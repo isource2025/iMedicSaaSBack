@@ -1,5 +1,5 @@
 const indicacionesService = require("../services/indicaciones.service");
-const { requireOperadorCarga, requireProfesional } = require("../utils/sessionIdentity");
+const { requireOperadorCarga, requireProfesional, resolveOperadorCarga } = require("../utils/sessionIdentity");
 
 /**
  * Obtener la última indicación por número de visita
@@ -474,6 +474,46 @@ const crearIndicacionHija = async (req, res) => {
     }
 };
 
+const marcarVistoEnfermeria = async (req, res) => {
+	try {
+		const rol = String(req.rolNombre || req.auth?.rol?.nombre || '')
+			.trim()
+			.toUpperCase();
+		if (rol !== 'ENFERMERO') {
+			return res.status(403).json({
+				success: false,
+				mensaje: 'Solo enfermería puede marcar indicaciones como vistas',
+			});
+		}
+
+		const { numeroVisita } = req.params;
+		const visitaNum = Number(numeroVisita);
+		if (!Number.isFinite(visitaNum) || visitaNum <= 0) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Número de visita inválido',
+			});
+		}
+
+		const operador = resolveOperadorCarga(req);
+		const insertadas = await indicacionesService.marcarVistoEnfermeria(
+			visitaNum,
+			operador,
+		);
+
+		return res.json({
+			success: true,
+			data: { insertadas },
+		});
+	} catch (error) {
+		console.error('[IndicacionesController][marcarVistoEnfermeria] error:', error);
+		return res.status(500).json({
+			success: false,
+			mensaje: 'Error al marcar indicaciones como vistas',
+		});
+	}
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -488,4 +528,5 @@ module.exports = {
     aplicarIndicacion,
     crearIndicacionHija,
     dejarSinEfecto,
+    marcarVistoEnfermeria,
 };

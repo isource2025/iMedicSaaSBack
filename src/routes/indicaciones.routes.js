@@ -28,6 +28,11 @@ router.get(
 	requirePermiso('INTERNACION.INDICACIONES.VER'),
 	indicacionesController.insumosByDate,
 );
+router.post(
+	'/:numeroVisita/visto-enfermeria',
+	requirePermiso('INTERNACION.INDICACIONES.VER'),
+	indicacionesController.marcarVistoEnfermeria,
+);
 
 router.post('/', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.nuevaIndicacion);
 router.post('/hija', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.crearIndicacionHija);

@@ -6,6 +6,7 @@ const {
     convertirHoraClarionAString,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
 const limitLength = (str, max) =>
@@ -219,6 +220,7 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     const { fecha, limit, excluirSuspendidas = false } = opciones;
+    const vistoOk = await vistoEnfermeria.ensureTable();
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -290,6 +292,9 @@ SELECT ${topClause}
   tit.PromptCodigo,
   tit.Orden as OrdenTipo,
   v.TipoMedicamento,
+  ${vistoOk
+		? `CASE WHEN visto.NroIndicacion IS NULL AND ISNULL(iim.NroAdicional, 0) = 0 THEN 1 ELSE 0 END AS NuevaEnfermeria`
+		: `CAST(0 AS INT) AS NuevaEnfermeria`},
   
   CASE 
     WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
@@ -300,6 +305,10 @@ SELECT ${topClause}
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
 INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
+${vistoOk
+		? `LEFT JOIN dbo.imIndicacionesVistoEnfermeria AS visto
+  ON visto.NumeroVisita = iim.NumeroVisita AND visto.NroIndicacion = iim.NroIndicacion`
+		: ''}
 OUTER APPLY (
   SELECT TOP 1 per0.Matricula
   FROM dbo.imPersonal AS per0
@@ -362,6 +371,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                     r.Frecuencia.toUpperCase().includes('POR UNICA') ||
                     r.Estado === 'U'
                 ),
+                nuevaEnfermeria: Number(r.NuevaEnfermeria) === 1,
                 indicacionesHijas: []
             });
         } else {
@@ -1750,4 +1760,5 @@ module.exports = {
     aplicarIndicacion,
     crearIndicacionHija,
     dejarSinEfecto,
+    marcarVistoEnfermeria: vistoEnfermeria.marcarVistoPorVisita,
 };
