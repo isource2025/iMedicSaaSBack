@@ -1,6 +1,9 @@
 const { executeQuery } = require('../models/db');
 const personalService = require('./personal.service');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { getTenantId } = require('../context/tenantContext');
+const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const nubeTenant = require('./nubeTenant.service');
 
 const MAX_RANGE_DAYS = 800;
 
@@ -81,39 +84,146 @@ async function obtenerCredencialesResumen(valorPersonal) {
 	return rows?.[0] || null;
 }
 
+function pickFirst(...vals) {
+	for (const v of vals) {
+		if (v == null) continue;
+		if (typeof v === 'string' && !v.trim()) continue;
+		return v;
+	}
+	return null;
+}
+
+function personalDesdeNube(nube, sqlPersonal) {
+	const base = sqlPersonal ? { ...sqlPersonal } : {};
+	if (!nube && !sqlPersonal) return null;
+	const apellidoNombre = pickFirst(
+		base.ApellidoNombre,
+		nube?.apellidoNombre,
+		nube ? [nube.apellido, nube.nombres].filter(Boolean).join(', ') : null,
+	);
+	const numDoc = pickFirst(base.NumeroDocumento, nube?.numeroDocumento);
+	return {
+		Valor: base.Valor || nube?.valorPersonal || null,
+		TipoDocumento: pickFirst(base.TipoDocumento, nube?.tipoDocumento, 'DNI'),
+		NumeroDocumento: numDoc != null && numDoc !== '' ? Number(numDoc) || numDoc : null,
+		ApellidoNombre: apellidoNombre || '',
+		Domicilio: pickFirst(base.Domicilio, nube?.domicilio),
+		ValorLocalidad: base.ValorLocalidad ?? null,
+		Provincia: base.Provincia ?? null,
+		Nacionalidad: base.Nacionalidad ?? null,
+		FechaNacimiento: base.FechaNacimiento ?? null,
+		Sexo: base.Sexo ?? null,
+		EstadoCivil: base.EstadoCivil ?? null,
+		Telefono: pickFirst(base.Telefono, nube?.telefono),
+		MatriculaProvincial: pickFirst(base.MatriculaProvincial, nube?.matricula),
+		MatriculaNacional: pickFirst(base.MatriculaNacional, nube?.matriculaNacional),
+		ValorEspecialidad: pickFirst(base.ValorEspecialidad, nube?.valorEspecialidad),
+		ValorFunciones: base.ValorFunciones ?? null,
+		ValorServicio: pickFirst(base.ValorServicio, nube?.valorServicio),
+		ValorServicioParaFacturar: pickFirst(base.ValorServicioParaFacturar, nube?.valorServicioParaFacturar),
+		ValorCategoria: pickFirst(base.ValorCategoria, nube?.valorCategoria),
+		ValorClase: base.ValorClase ?? null,
+		LugarTrabajo: base.LugarTrabajo ?? null,
+		LugarCobro: base.LugarCobro ?? null,
+		NumeroSocio: base.NumeroSocio ?? null,
+		ConvenioFacturacion: base.ConvenioFacturacion ?? null,
+		IdEspecialidadME: base.IdEspecialidadME ?? null,
+		Estado: pickFirst(base.Estado, nube?.estado),
+		CUIT: pickFirst(base.CUIT, nube?.cuit),
+	};
+}
+
+async function obtenerFichaNube(valorPersonal) {
+	if (!isAuthCentralEnabled()) return null;
+	const idEmpresa = getTenantId();
+	if (idEmpresa == null) return null;
+	try {
+		return await nubeTenant.obtenerFichaUsuario(idEmpresa, valorPersonal);
+	} catch (e) {
+		console.warn('[miPerfil] ficha nube:', e.message);
+		return null;
+	}
+}
+
 async function obtenerPerfilCompleto(valorPersonal) {
-	const cred = await obtenerCredencialesResumen(valorPersonal);
-	const personal = await personalService.obtenerPorId(valorPersonal);
-	const foto = await personalService.obtenerFirmaPersonal(valorPersonal).catch(() => ({ hasFirma: false }));
+	let cred = null;
+	let personalSql = null;
+	try {
+		cred = await obtenerCredencialesResumen(valorPersonal);
+	} catch (e) {
+		console.warn('[miPerfil] credenciales SQL:', e.message);
+	}
+	try {
+		personalSql = await personalService.obtenerPorId(valorPersonal);
+	} catch (e) {
+		console.warn('[miPerfil] personal SQL:', e.message);
+	}
+	const nube = await obtenerFichaNube(valorPersonal);
+	const personal = personalDesdeNube(nube, personalSql);
+
+	let foto = { hasFirma: false };
+	try {
+		foto = await personalService.obtenerFirmaPersonal(valorPersonal);
+	} catch {
+		foto = { hasFirma: false };
+	}
+
+	const apellidoNombre =
+		personal?.ApellidoNombre ||
+		nube?.apellidoNombre ||
+		(cred?.ApellidoNombrePersonal || '').trim() ||
+		[cred?.Apellido, cred?.Nombres].filter(Boolean).join(', ') ||
+		[nube?.apellido, nube?.nombres].filter(Boolean).join(', ');
 
 	return {
 		valorPersonal,
-		resumenOperador: cred
-			? {
-					ValorPersonal: cred.ValorPersonal,
-					CodOperador: cred.CodOperador,
-					NombreRed: cred.NombreRed,
-					Nombres: cred.Nombres,
-					Apellido: cred.Apellido,
-					Matricula: cred.Matricula != null ? Number(cred.Matricula) : null,
-					MatriculaNacional: cred.MatriculaNacional != null ? Number(cred.MatriculaNacional) : null,
-					ApellidoNombrePersonal: cred.ApellidoNombrePersonal,
-			  }
-			: null,
+		resumenOperador: {
+			ValorPersonal: valorPersonal,
+			CodOperador: pickFirst(cred?.CodOperador, nube?.codOperador),
+			NombreRed: pickFirst(cred?.NombreRed, nube?.nombreRed, ''),
+			Nombres: pickFirst(cred?.Nombres, nube?.nombres, ''),
+			Apellido: pickFirst(cred?.Apellido, nube?.apellido, ''),
+			Matricula: pickFirst(
+				cred?.Matricula != null ? Number(cred.Matricula) : null,
+				nube?.matricula,
+				personal?.MatriculaProvincial,
+			),
+			MatriculaNacional: pickFirst(
+				cred?.MatriculaNacional != null ? Number(cred.MatriculaNacional) : null,
+				nube?.matriculaNacional,
+				personal?.MatriculaNacional,
+			),
+			ApellidoNombrePersonal: apellidoNombre || '',
+		},
 		personal: personal || null,
 		fotoPerfil: foto || { hasFirma: false },
 	};
 }
 
 async function actualizarPerfilPersonal(valorPersonal, data = {}) {
-	const existente = await personalService.obtenerPorId(valorPersonal);
-	if (!existente) {
+	const existente = await personalService.obtenerPorId(valorPersonal).catch(() => null);
+	if (existente) {
+		const payload = { ...existente, ...data };
+		await personalService.actualizar(valorPersonal, payload);
+	}
+	const idEmpresa = getTenantId();
+	if (isAuthCentralEnabled() && idEmpresa != null) {
+		try {
+			await nubeTenant.actualizarFichaPerfil(idEmpresa, valorPersonal, { ...(existente || {}), ...data });
+		} catch (e) {
+			console.warn('[miPerfil] actualizar ficha nube:', e.message);
+			if (!existente) {
+				const err = new Error(e.message || 'No se pudo guardar el perfil');
+				err.statusCode = e.statusCode || 500;
+				throw err;
+			}
+		}
+	} else if (!existente) {
 		const e = new Error('No se encontró el perfil de personal enlazado al usuario');
 		e.statusCode = 404;
 		throw e;
 	}
-	const payload = { ...existente, ...data };
-	return personalService.actualizar(valorPersonal, payload);
+	return obtenerPerfilCompleto(valorPersonal);
 }
 
 async function obtenerFotoPerfil(valorPersonal) {

@@ -440,6 +440,28 @@ async function crear(data) {
 		}
 	}
 
+	const idRolAlta = Number(data.idRol ?? data.IdRol ?? data.Rol);
+	if (!Number.isFinite(idRolAlta) || idRolAlta <= 0) {
+		const e = new Error('El rol es obligatorio');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const rollbackAlta = async (valorAlta) => {
+		const idParam = [{ value: valorAlta, type: 'Int' }];
+		await executeQuery(`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`, idParam).catch(
+			() => {},
+		);
+		await executeQuery(`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`, idParam).catch(
+			() => {},
+		);
+		await executeQuery(`DELETE FROM dbo.imPersonal WHERE Valor = @p0`, idParam).catch(() => {});
+		const tenantIdRollback = resolveTenantEmpresaId();
+		if (tenantIdRollback != null) {
+			await authCentralSync.purgePersonalAuth(valorAlta, tenantIdRollback).catch(() => {});
+		}
+	};
+
 	await ensureMatriculaEspecialidadUnique();
 
 	// Intentar hasta 5 veces por si hay carrera en MAX+1
@@ -472,17 +494,17 @@ async function crear(data) {
 					{ value: nuevoValor, type: 'Int' },
 					{ value: matriculaFinal, type: 'Int' },
 					{ value: input.MatriculaNacional, type: 'Int' },
-					{ value: input.TipoDocumento, type: 'VarChar' },
+					{ value: input.TipoDocumento, type: 'VarChar', length: 10 },
 					{ value: input.Numero, type: 'Int' },
-					{ value: input.ApellidoNombre, type: 'VarChar' },
-					{ value: input.Domicilio, type: 'VarChar' },
+					{ value: input.ApellidoNombre, type: 'VarChar', length: 80 },
+					{ value: input.Domicilio, type: 'VarChar', length: 100 },
 					{ value: input.ValorLocalidad, type: 'Int' },
 					{ value: input.Provincia, type: 'SmallInt' },
-					{ value: input.Nacionalidad, type: 'VarChar' },
+					{ value: input.Nacionalidad, type: 'VarChar', length: 2 },
 					{ value: input.FechaNacimiento, type: 'Int' },
-					{ value: input.Sexo, type: 'Char' },
-					{ value: input.EstadoCivil, type: 'Char' },
-					{ value: input.Telefono, type: 'VarChar' },
+					{ value: input.Sexo, type: 'Char', length: 1 },
+					{ value: input.EstadoCivil, type: 'Char', length: 1 },
+					{ value: input.Telefono, type: 'VarChar', length: 30 },
 					{ value: input.ValorEspecialidad, type: 'SmallInt' },
 					{ value: input.ValorFunciones, type: 'TinyInt' },
 					{ value: input.ValorCategoria, type: 'TinyInt' },
@@ -536,24 +558,7 @@ async function crear(data) {
 						await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
 					}
 				} catch (userErr) {
-					await executeQuery(
-						`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`,
-						[{ value: nuevoValor, type: 'Int' }],
-					).catch(() => {});
-					await executeQuery(
-						`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`,
-						[{ value: nuevoValor, type: 'Int' }],
-					).catch(() => {});
-					await executeQuery(
-						`DELETE FROM dbo.imPersonal WHERE Valor = @p0`,
-						[{ value: nuevoValor, type: 'Int' }],
-					).catch(() => {});
-					const tenantIdRollback = resolveTenantEmpresaId();
-					if (tenantIdRollback != null) {
-						await authCentralSync
-							.purgePersonalAuth(nuevoValor, tenantIdRollback)
-							.catch(() => {});
-					}
+					await rollbackAlta(nuevoValor);
 					throw userErr;
 				}
 			} else {
@@ -563,6 +568,36 @@ async function crear(data) {
 					await authCentralSync.syncPersonal(tenantId, nuevoValor);
 				}
 			}
+
+			try {
+				const rolesService = require('./roles.service');
+				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta);
+			} catch (roleErr) {
+				await rollbackAlta(nuevoValor);
+				throw roleErr;
+			}
+
+			const sectoresAlta = Array.isArray(data.sectores)
+				? data.sectores
+				: Array.isArray(data.Sectores)
+					? data.Sectores
+					: [];
+			const serviciosAlta = Array.isArray(data.servicios)
+				? data.servicios
+				: Array.isArray(data.Servicios)
+					? data.Servicios
+					: [];
+			if (sectoresAlta.length || serviciosAlta.length) {
+				try {
+					await reemplazarAsignacionesPersonal(nuevoValor, {
+						sectores: sectoresAlta,
+						servicios: serviciosAlta,
+					});
+				} catch (asigErr) {
+					console.warn('[personal.crear] asignaciones:', asigErr?.message || asigErr);
+				}
+			}
+
 			return await obtenerPorId(nuevoValor);
 		} catch (err) {
 			const n = err?.number ?? err?.originalError?.info?.number;
@@ -643,17 +678,17 @@ async function actualizar(valor, data) {
 			{ value: valor, type: 'Int' },
 			{ value: matriculaFinal, type: 'Int' },
 			{ value: input.MatriculaNacional, type: 'Int' },
-			{ value: input.TipoDocumento, type: 'VarChar' },
+			{ value: input.TipoDocumento, type: 'VarChar', length: 10 },
 			{ value: input.Numero, type: 'Int' },
-			{ value: input.ApellidoNombre, type: 'VarChar' },
-			{ value: input.Domicilio, type: 'VarChar' },
+			{ value: input.ApellidoNombre, type: 'VarChar', length: 80 },
+			{ value: input.Domicilio, type: 'VarChar', length: 100 },
 			{ value: input.ValorLocalidad, type: 'Int' },
 			{ value: input.Provincia, type: 'SmallInt' },
-			{ value: input.Nacionalidad, type: 'VarChar' },
+			{ value: input.Nacionalidad, type: 'VarChar', length: 2 },
 			{ value: input.FechaNacimiento, type: 'Int' },
-			{ value: input.Sexo, type: 'Char' },
-			{ value: input.EstadoCivil, type: 'Char' },
-			{ value: input.Telefono, type: 'VarChar' },
+			{ value: input.Sexo, type: 'Char', length: 1 },
+			{ value: input.EstadoCivil, type: 'Char', length: 1 },
+			{ value: input.Telefono, type: 'VarChar', length: 30 },
 			{ value: input.ValorEspecialidad, type: 'SmallInt' },
 			{ value: input.ValorFunciones, type: 'TinyInt' },
 			{ value: input.ValorCategoria, type: 'TinyInt' },

@@ -151,6 +151,59 @@ function valorCampoSegunTipo(colMap, col, raw) {
 	return s === '' ? null : s;
 }
 
+function esNombreDebil(value) {
+	const s = String(value || '').trim();
+	if (!s) return true;
+	if (/^\d+$/.test(s)) return true;
+	if (/^(null|undefined|n\/a)$/i.test(s)) return true;
+	return false;
+}
+
+function splitApellidoNombre(apellidoNombre) {
+	const s = String(apellidoNombre || '').trim();
+	if (!s) return { nombres: '', apellido: '' };
+	if (s.includes(',')) {
+		const [ap, ...rest] = s.split(',');
+		return { apellido: ap.trim(), nombres: rest.join(',').trim() };
+	}
+	const parts = s.split(/\s+/).filter(Boolean);
+	if (parts.length === 1) return { nombres: parts[0], apellido: '' };
+	return { apellido: parts[0], nombres: parts.slice(1).join(' ') };
+}
+
+function apellidoNombreDesdePartes(apellido, nombres) {
+	const a = String(apellido || '').trim();
+	const n = String(nombres || '').trim();
+	if (a && n) return `${a}, ${n}`;
+	return a || n || '';
+}
+
+/** imPassword.Nombres/Apellido o, si vienen vacíos, imPersonal.ApellidoNombre. */
+function identidadDesdeFila(row) {
+	let nombres = String(row.Nombre || row.Nombres || '').trim();
+	let apellido = String(row.Apellido || '').trim();
+	if (esNombreDebil(nombres) && esNombreDebil(apellido)) {
+		const fromPersonal = splitApellidoNombre(row.ApellidoNombre);
+		if (!esNombreDebil(fromPersonal.nombres) || !esNombreDebil(fromPersonal.apellido)) {
+			nombres = fromPersonal.nombres;
+			apellido = fromPersonal.apellido;
+		}
+	}
+	if (esNombreDebil(nombres)) nombres = '';
+	if (esNombreDebil(apellido)) apellido = '';
+	const docPw = String(row.NumeroDocumento ?? '').trim();
+	const docP =
+		row.Numero != null && String(row.Numero).trim() !== '' && String(row.Numero) !== '0'
+			? String(row.Numero).trim()
+			: '';
+	return {
+		nombre: nombres,
+		apellido,
+		apellidoNombre: apellidoNombreDesdePartes(apellido, nombres) || String(row.ApellidoNombre || '').trim(),
+		numeroDocumento: docPw && docPw !== '0' ? docPw : docP,
+	};
+}
+
 async function esRolAdmin(idRol) {
 	if (idRol == null || idRol === '' || Number(idRol) === 0) return false;
 	if (Number(idRol) === 1) return true;
@@ -459,6 +512,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
       pw.ValorPersonal AS IdPersonal, pw.NombreRed AS Usuario,
       pw.Nombres AS Nombre, pw.Apellido AS Apellido,
       pw.NumeroDocumento AS NumeroDocumento, pw.CodOperador AS CodOperador,
+      p.ApellidoNombre AS ApellidoNombre, p.Numero AS Numero,
       r.IdRol AS IdRol, r.Nombre AS RolNombre, r.Descripcion AS RolDescripcion
     FROM \`imPersonalEmpresas\` pe
     INNER JOIN \`imPassword\` pw
@@ -480,10 +534,13 @@ async function listarUsuariosEmpresa(idEmpresa) {
       pw.ValorPersonal AS IdPersonal, pw.NombreRed AS Usuario,
       pw.Nombres AS Nombre, pw.Apellido AS Apellido,
       pw.NumeroDocumento AS NumeroDocumento, pw.CodOperador AS CodOperador,
+      p.ApellidoNombre AS ApellidoNombre, p.Numero AS Numero,
       NULL AS IdRol, NULL AS RolNombre, NULL AS RolDescripcion
     FROM \`imPersonalEmpresas\` pe
     INNER JOIN \`imPassword\` pw
       ON pw.ValorPersonal = pe.IdPersonal AND pw.IdEmpresa = pe.IdEmpresa
+    LEFT JOIN \`imPersonal\` p
+      ON p.Valor = pe.IdPersonal AND p.IdEmpresa = pe.IdEmpresa
     WHERE pe.IdEmpresa = ?
     ORDER BY pw.Apellido, pw.Nombres
     `,
@@ -517,12 +574,13 @@ async function listarUsuariosEmpresa(idEmpresa) {
 		} catch {
 			servicios = [];
 		}
+		const ident = identidadDesdeFila(r);
 		usuarios.push({
 			idPersonal,
 			usuario: String(r.Usuario || '').trim(),
-			nombre: String(r.Nombre || '').trim(),
-			apellido: String(r.Apellido || '').trim(),
-			numeroDocumento: String(r.NumeroDocumento ?? '').trim(),
+			nombre: ident.nombre,
+			apellido: ident.apellido,
+			numeroDocumento: ident.numeroDocumento,
 			codOperador: r.CodOperador == null ? null : String(r.CodOperador),
 			idRol: r.IdRol != null ? Number(r.IdRol) : null,
 			rol: String(r.RolDescripcion || r.RolNombre || '').trim() || null,
@@ -830,6 +888,37 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 	if (sets.length) {
 		params.push(emp, id);
 		await mysqlExec(`UPDATE \`imPassword\` SET ${sets.join(', ')} WHERE IdEmpresa = ? AND ValorPersonal = ?`, params);
+	}
+
+	if (body.apellido != null || body.nombres != null || body.numeroDocumento != null) {
+		try {
+			await asegurarFichaPersonal(emp, id, {
+				apellido: body.apellido,
+				nombres: body.nombres,
+				numeroDocumento: body.numeroDocumento,
+				idRol: body.idRol,
+			});
+			const pcols = await columnasMeta('imPersonal');
+			const pSets = [];
+			const pParams = [];
+			if (pcols.has('ApellidoNombre') && (body.apellido != null || body.nombres != null)) {
+				pSets.push('`ApellidoNombre` = ?');
+				pParams.push(apellidoNombreDesdePartes(body.apellido, body.nombres));
+			}
+			if (pcols.has('Numero') && body.numeroDocumento != null) {
+				pSets.push('`Numero` = ?');
+				pParams.push(valorCampoSegunTipo(pcols, 'Numero', body.numeroDocumento));
+			}
+			if (pSets.length) {
+				pParams.push(emp, id);
+				await mysqlExec(
+					`UPDATE \`imPersonal\` SET ${pSets.join(', ')} WHERE IdEmpresa = ? AND Valor = ?`,
+					pParams,
+				);
+			}
+		} catch (e) {
+			console.warn('[nube] sync ficha personal', e.message);
+		}
 	}
 
 	if (body.idRol != null && body.idRol !== '') {
@@ -1200,6 +1289,170 @@ async function importarTablas(idEmpresa, tablas) {
 	return { idEmpresa: emp, resultados };
 }
 
+async function obtenerFichaUsuario(idEmpresa, valorPersonal) {
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp) || vp <= 0) return null;
+	let rows = [];
+	try {
+		rows = await mysqlQuery(
+			`
+    SELECT
+      pw.ValorPersonal AS ValorPersonal,
+      pw.NombreRed AS NombreRed,
+      pw.Nombres AS Nombres,
+      pw.Apellido AS Apellido,
+      pw.NumeroDocumento AS NumeroDocumento,
+      pw.CodOperador AS CodOperador,
+      p.ApellidoNombre AS ApellidoNombre,
+      p.Numero AS Numero,
+      p.TipoDocumento AS TipoDocumento,
+      p.Matricula AS Matricula,
+      p.MatriculaNacional AS MatriculaNacional,
+      p.Telefono AS Telefono,
+      p.Domicilio AS Domicilio,
+      p.ValorEspecialidad AS ValorEspecialidad,
+      p.ValorServicio AS ValorServicio,
+      p.ValorServicioParaFacturar AS ValorServicioParaFacturar,
+      p.ValorCategoria AS ValorCategoria,
+      p.CUIT AS CUIT,
+      p.Estado AS Estado
+    FROM \`imPassword\` pw
+    LEFT JOIN \`imPersonal\` p
+      ON p.Valor = pw.ValorPersonal AND p.IdEmpresa = pw.IdEmpresa
+    WHERE pw.IdEmpresa = ? AND pw.ValorPersonal = ?
+    LIMIT 1
+    `,
+			[emp, vp],
+		);
+	} catch (e) {
+		console.warn('[nube] obtener ficha usuario:', e.message);
+		try {
+			rows = await mysqlQuery(
+				`
+      SELECT
+        pw.ValorPersonal AS ValorPersonal,
+        pw.NombreRed AS NombreRed,
+        pw.Nombres AS Nombres,
+        pw.Apellido AS Apellido,
+        pw.NumeroDocumento AS NumeroDocumento,
+        pw.CodOperador AS CodOperador,
+        NULL AS ApellidoNombre,
+        NULL AS Numero,
+        NULL AS TipoDocumento,
+        NULL AS Matricula,
+        NULL AS MatriculaNacional,
+        NULL AS Telefono,
+        NULL AS Domicilio,
+        NULL AS ValorEspecialidad,
+        NULL AS ValorServicio,
+        NULL AS ValorServicioParaFacturar,
+        NULL AS ValorCategoria,
+        NULL AS CUIT,
+        NULL AS Estado
+      FROM \`imPassword\` pw
+      WHERE pw.IdEmpresa = ? AND pw.ValorPersonal = ?
+      LIMIT 1
+      `,
+				[emp, vp],
+			);
+		} catch (e2) {
+			console.warn('[nube] obtener ficha usuario (password):', e2.message);
+			return null;
+		}
+	}
+	const row = rows[0];
+	if (!row) return null;
+	const id = identidadDesdeFila(row);
+	const numDoc = id.numeroDocumento ? Number(String(id.numeroDocumento).replace(/\D/g, '')) : null;
+	return {
+		valorPersonal: Number(row.ValorPersonal),
+		nombreRed: String(row.NombreRed || '').trim(),
+		nombres: id.nombre,
+		apellido: id.apellido,
+		apellidoNombre: id.apellidoNombre,
+		numeroDocumento: Number.isFinite(numDoc) && numDoc > 0 ? numDoc : null,
+		codOperador: row.CodOperador == null ? null : String(row.CodOperador),
+		tipoDocumento: row.TipoDocumento != null ? String(row.TipoDocumento).trim() : null,
+		matricula: row.Matricula != null ? Number(row.Matricula) : null,
+		matriculaNacional: row.MatriculaNacional != null ? Number(row.MatriculaNacional) : null,
+		telefono: row.Telefono != null ? String(row.Telefono).trim() : null,
+		domicilio: row.Domicilio != null ? String(row.Domicilio).trim() : null,
+		valorEspecialidad: row.ValorEspecialidad != null ? Number(row.ValorEspecialidad) : null,
+		valorServicio: row.ValorServicio != null ? String(row.ValorServicio).trim() : null,
+		valorServicioParaFacturar:
+			row.ValorServicioParaFacturar != null ? String(row.ValorServicioParaFacturar).trim() : null,
+		valorCategoria: row.ValorCategoria != null ? Number(row.ValorCategoria) : null,
+		cuit: row.CUIT != null ? String(row.CUIT).trim() : null,
+		estado: row.Estado != null ? Number(row.Estado) : null,
+	};
+}
+
+async function actualizarFichaPerfil(idEmpresa, valorPersonal, data = {}) {
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp) || vp <= 0) {
+		const e = new Error('Empresa o usuario inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+	const apellidoNombre = String(data.ApellidoNombre || '').trim();
+	const partes = splitApellidoNombre(apellidoNombre);
+	await asegurarFichaPersonal(emp, vp, {
+		apellido: partes.apellido,
+		nombres: partes.nombres,
+		numeroDocumento: data.NumeroDocumento,
+	});
+
+	const pwCols = await columnasMeta('imPassword');
+	const pwSets = [];
+	const pwParams = [];
+	const setPw = (col, v) => {
+		if (!pwCols.has(col) || v === undefined) return;
+		pwSets.push(`\`${col}\` = ?`);
+		pwParams.push(v);
+	};
+	if (partes.apellido) setPw('Apellido', partes.apellido);
+	if (partes.nombres) setPw('Nombres', partes.nombres);
+	if (data.NumeroDocumento != null) {
+		setPw('NumeroDocumento', valorCampoSegunTipo(pwCols, 'NumeroDocumento', data.NumeroDocumento));
+	}
+	if (pwSets.length) {
+		pwParams.push(emp, vp);
+		await mysqlExec(
+			`UPDATE \`imPassword\` SET ${pwSets.join(', ')} WHERE IdEmpresa = ? AND ValorPersonal = ?`,
+			pwParams,
+		);
+	}
+
+	const pCols = await columnasMeta('imPersonal');
+	const pSets = [];
+	const pParams = [];
+	const setP = (col, v) => {
+		if (!pCols.has(col) || v === undefined) return;
+		pSets.push(`\`${col}\` = ?`);
+		pParams.push(valorCampoSegunTipo(pCols, col, v));
+	};
+	if (apellidoNombre) setP('ApellidoNombre', apellidoNombre);
+	if (data.NumeroDocumento != null) setP('Numero', data.NumeroDocumento);
+	if (data.TipoDocumento != null) setP('TipoDocumento', data.TipoDocumento);
+	if (data.Telefono != null) setP('Telefono', data.Telefono);
+	if (data.Domicilio != null) setP('Domicilio', data.Domicilio);
+	if (data.MatriculaProvincial != null) setP('Matricula', data.MatriculaProvincial);
+	if (data.MatriculaNacional != null) setP('MatriculaNacional', data.MatriculaNacional);
+	if (data.ValorEspecialidad != null) setP('ValorEspecialidad', data.ValorEspecialidad);
+	if (data.ValorCategoria != null) setP('ValorCategoria', data.ValorCategoria);
+	if (data.ValorServicio != null) setP('ValorServicio', data.ValorServicio);
+	if (data.ValorServicioParaFacturar != null) {
+		setP('ValorServicioParaFacturar', data.ValorServicioParaFacturar);
+	}
+	if (pSets.length) {
+		pParams.push(emp, vp);
+		await mysqlExec(`UPDATE \`imPersonal\` SET ${pSets.join(', ')} WHERE IdEmpresa = ? AND Valor = ?`, pParams);
+	}
+	return obtenerFichaUsuario(emp, vp);
+}
+
 module.exports = {
 	TABLAS_IMPORTABLES,
 	listarSectores,
@@ -1214,6 +1467,8 @@ module.exports = {
 	resolverServiciosUsuario,
 	listarRoles,
 	listarUsuariosEmpresa,
+	obtenerFichaUsuario,
+	actualizarFichaPerfil,
 	asegurarFichaPersonal,
 	crearUsuarioEmpresa,
 	actualizarUsuarioEmpresa,

@@ -29,8 +29,10 @@ async function getRequestPool(opts = {}) {
 }
 
 const LENGTH_TYPES = new Set(['VarChar', 'NVarChar', 'Char', 'NChar', 'Binary', 'VarBinary']);
+const FIXED_LENGTH_TYPES = new Set(['Char', 'NChar', 'Binary']);
 
-/** sql.VarChar sin longitud en node-mssql queda en VARCHAR(1) y trunca/rompe inserts. */
+/** sql.VarChar sin longitud en node-mssql queda en VARCHAR(1) y trunca/rompe inserts.
+ *  CHAR/NCHAR/BINARY no admiten MAX (TDS 0xAF: invalid data length). */
 function resolveMssqlType(parametro) {
   const typeName = parametro && parametro.type;
   if (!typeName) return undefined;
@@ -39,7 +41,9 @@ function resolveMssqlType(parametro) {
   if (t == null) return undefined;
   if (LENGTH_TYPES.has(typeName) && typeof t === 'function') {
     const n = Number(parametro.length);
-    return t(Number.isFinite(n) && n > 0 ? n : sql.MAX);
+    if (Number.isFinite(n) && n > 0) return t(n);
+    if (FIXED_LENGTH_TYPES.has(typeName)) return t(1);
+    return t(sql.MAX);
   }
   if ((typeName === 'Decimal' || typeName === 'Numeric') && typeof t === 'function') {
     return t(Number(parametro.precision) || 18, parametro.scale != null ? Number(parametro.scale) : 2);

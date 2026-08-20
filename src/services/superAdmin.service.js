@@ -1220,6 +1220,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
         pw.Apellido AS Apellido,
         pw.NumeroDocumento AS NumeroDocumento,
         pw.CodOperador AS CodOperador,
+        LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre,
+        p.Numero AS Numero,
         LTRIM(RTRIM(p.Rol)) AS IdRol,
         p.Estado AS EstadoPersonal
       FROM dbo.imPersonalEmpresas pe
@@ -1261,12 +1263,30 @@ async function listarUsuariosEmpresa(idEmpresa) {
 				} catch {
 					servicios = [];
 				}
+				const nombrePw = String(r.Nombre || '').trim();
+				const apellidoPw = String(r.Apellido || '').trim();
+				let nombre = nombrePw;
+				let apellido = apellidoPw;
+				if (!nombre && !apellido) {
+					const full = String(r.ApellidoNombre || '').trim();
+					if (full.includes(',')) {
+						const [ap, ...rest] = full.split(',');
+						apellido = ap.trim();
+						nombre = rest.join(',').trim();
+					} else if (full) {
+						const parts = full.split(/\s+/).filter(Boolean);
+						apellido = parts[0] || '';
+						nombre = parts.slice(1).join(' ');
+					}
+				}
+				const docPw = String(r.NumeroDocumento || '').trim();
+				const docP = r.Numero != null ? String(r.Numero).trim() : '';
 				usuarios.push({
 					idPersonal,
 					usuario: String(r.Usuario || '').trim(),
-					nombre: String(r.Nombre || '').trim(),
-					apellido: String(r.Apellido || '').trim(),
-					numeroDocumento: String(r.NumeroDocumento || '').trim(),
+					nombre,
+					apellido,
+					numeroDocumento: docPw && docPw !== '0' ? docPw : docP,
 					codOperador: r.CodOperador,
 					idRol: r.IdRol != null && r.IdRol !== '' ? Number(r.IdRol) : null,
 					rol: r.IdRol != null ? rolNombrePorId.get(Number(r.IdRol)) || null : null,
