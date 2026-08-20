@@ -1766,4 +1766,5 @@ module.exports = {
     crearIndicacionHija,
     dejarSinEfecto,
     marcarVistoEnfermeria: vistoEnfermeria.marcarVistoPorVisita,
+    listarNuevasEnfermeria: vistoEnfermeria.listarNuevasResumen,
 };

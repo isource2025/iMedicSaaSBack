@@ -33,6 +33,11 @@ router.post(
 	requirePermiso('INTERNACION.INDICACIONES.VER'),
 	indicacionesController.marcarVistoEnfermeria,
 );
+router.get(
+	'/:numeroVisita/nuevas-enfermeria',
+	requirePermiso('INTERNACION.INDICACIONES.VER'),
+	indicacionesController.nuevasEnfermeria,
+);
 
 router.post('/', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.nuevaIndicacion);
 router.post('/hija', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.crearIndicacionHija);

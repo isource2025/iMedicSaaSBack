@@ -514,6 +514,24 @@ const marcarVistoEnfermeria = async (req, res) => {
 	}
 };
 
+const nuevasEnfermeria = async (req, res) => {
+	try {
+		const visitaNum = Number(req.params.numeroVisita);
+		if (!Number.isFinite(visitaNum) || visitaNum <= 0) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Número de visita inválido',
+			});
+		}
+		const limit = req.query.limit;
+		const data = await indicacionesService.listarNuevasEnfermeria(visitaNum, limit);
+		return res.json({ success: true, data: data || { total: 0, items: [] } });
+	} catch (error) {
+		console.error('[IndicacionesController][nuevasEnfermeria] error:', error);
+		return res.json({ success: true, data: { total: 0, items: [] } });
+	}
+};
+
 module.exports = {
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
@@ -529,4 +547,5 @@ module.exports = {
     crearIndicacionHija,
     dejarSinEfecto,
     marcarVistoEnfermeria,
+    nuevasEnfermeria,
 };
