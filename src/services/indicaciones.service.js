@@ -601,14 +601,39 @@ const obtenerDatosFormulario = async () => {
     }
 };
 
+const parseYmd = (value) => {
+    if (value == null || value === "") return null;
+    const m = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+};
+
+const addDaysYmd = (ymd, days) => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + days));
+    return dt.toISOString().slice(0, 10);
+};
+
+/** Hoy o mañana (fecha Argentina). Cualquier otra fecha se rechaza. */
+const resolverFechaCargaIndicacion = (fechaSolicitada) => {
+    const hoy = getLocalDateString(new Date());
+    const manana = addDaysYmd(hoy, 1);
+    const ymd = parseYmd(fechaSolicitada) || hoy;
+    if (ymd !== hoy && ymd !== manana) {
+        const err = new Error("Solo se puede indicar para el día de hoy o para mañana");
+        err.statusCode = 400;
+        throw err;
+    }
+    return ymd;
+};
+
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
     console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
     
-    // ✅ SIMPLIFICADO: Calcular automáticamente fecha y hora actual
+    // Fecha de carga: hoy por defecto, o mañana si el médico la pide
+    const fechaCargaYmd = resolverFechaCargaIndicacion(data.FechaCarga);
     const ahora = new Date();
-    const fechaActual = getLocalDateString(ahora);
     const horaActual = getLocalTimeString(ahora) + ':00';
     
     let horaCarga = convertirHoraAClarion(horaActual);
@@ -642,7 +667,7 @@ const nuevaIndicacion = async (data) => {
         NumeroVisita: toNumberOrNull(data.NumeroVisita) || 0,
         NroAdicional: nroAdicionalConvertido || 0,
 
-        FechaCarga: convertirFechaAClarion(fechaActual),
+        FechaCarga: convertirFechaAClarion(fechaCargaYmd),
         HoraCarga: horaCarga,
         OperadorCarga: toNumberOrNull(data.OperadorCarga) || 0,
         ProfesionalAsiste: toNumberOrNull(data.ProfesionalAsiste) || 0,
@@ -779,7 +804,6 @@ const nuevaIndicacion = async (data) => {
         
         // ✅ NUEVO: Insertar en tablas secundarias según el tipo de indicación
         const nroIndicacion = nueva.NroIndicacion;
-        const dateCarga = new Date();
         
         if (tipoLetra === "D" && data.Codigo) {
             console.log("[INSERTANDO DIETA] en imInterCtrlDieta");
@@ -796,8 +820,8 @@ const nuevaIndicacion = async (data) => {
             await executeQuery(insertDieta, [
                 { value: nextValor },
                 { value: data.NumeroVisita },
-                { value: convertirFechaAClarion(getLocalDateString(dateCarga)) },
-                { value: convertirHoraAClarion(getLocalTimeString(dateCarga) + ':00') },
+                { value: convertirFechaAClarion(fechaCargaYmd) },
+                { value: convertirHoraAClarion(horaActual) },
                 { value: limitLength(data.Observaciones || '', 255) },
                 { value: data.ProfesionalAsiste },
                 { value: data.OperadorCarga },
