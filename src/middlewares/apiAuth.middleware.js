@@ -12,7 +12,8 @@ function isPublicApiPath(req) {
 		path.startsWith('/auth') ||
 		path.startsWith('/webhook/whatsapp') ||
 		path.startsWith('/integrations/bot') ||
-		path.startsWith('/turnero/display')
+		path.startsWith('/turnero/display') ||
+		(req.method === 'POST' && path === '/analytics/events')
 	);
 }
 

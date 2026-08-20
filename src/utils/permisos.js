@@ -162,6 +162,7 @@ const MODULOS = Object.freeze([
 			{ id: 'COBRANZA',   label: 'Cobranza',    path: '/dashboard/super-admin/cobranza',         acciones: [ACCIONES.VER, ACCIONES.GESTIONAR, ACCIONES.EXPORTAR] },
 			{ id: 'CONFIG',     label: 'Configuración', path: '/dashboard/super-admin/configuracion', acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
 			{ id: 'SEGURIDAD',  label: 'Seguridad',   path: '/dashboard/super-admin/seguridad',       acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
+			{ id: 'ANALITICA',  label: 'Analítica',   path: '/dashboard/super-admin/analitica',       acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
 		],
 	},
 	{

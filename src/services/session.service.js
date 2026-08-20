@@ -150,15 +150,20 @@ async function createSession({ valorPersonal, username, idEmpresa, ip, userAgent
 	return { accessToken, refreshToken, sessionId };
 }
 
-async function getSession(sessionId) {
+async function getSessionAny(sessionId) {
 	if (!sessionId || !isAuthCentralEnabled()) return null;
 	await ensureTables();
 	const pool = await getAuthCentralPool();
-	const [rows] = await pool.query(
-		`SELECT * FROM AuthSessions WHERE SessionId = ? AND Revoked = 0 LIMIT 1`,
-		[String(sessionId)],
-	);
+	const [rows] = await pool.query(`SELECT * FROM AuthSessions WHERE SessionId = ? LIMIT 1`, [
+		String(sessionId),
+	]);
 	return rows[0] || null;
+}
+
+async function getSession(sessionId) {
+	const row = await getSessionAny(sessionId);
+	if (!row || Number(row.Revoked) === 1) return null;
+	return row;
 }
 
 async function touchSession(sessionId) {
@@ -169,22 +174,41 @@ async function touchSession(sessionId) {
 	]);
 }
 
-async function validateSession(sessionId) {
-	const row = await getSession(sessionId);
-	if (!row) return null;
-	const now = Date.now();
-	if (new Date(row.ExpiresAt).getTime() < now) {
-		await revokeSession(sessionId);
-		return null;
-	}
-	const idleMinutes = await getIdleTimeoutMinutes(row.IdEmpresa);
+function isIdleExpired(row, idleMinutes) {
 	const idleMs = idleMinutes * 60 * 1000;
-	if (now - new Date(row.LastActivityAt).getTime() > idleMs) {
-		await revokeSession(sessionId);
-		return null;
+	return Date.now() - new Date(row.LastActivityAt).getTime() > idleMs;
+}
+
+/**
+ * Evalúa la sesión sin ocultar el motivo (idle vs logout vs vencimiento absoluta).
+ */
+async function evaluateSession(sessionId) {
+	if (!sessionId) return { ok: false, reason: 'missing', session: null };
+	const row = await getSessionAny(sessionId);
+	if (!row) return { ok: false, reason: 'missing', session: null };
+
+	const idleMinutes = await getIdleTimeoutMinutes(row.IdEmpresa);
+	if (Number(row.Revoked) === 1) {
+		return { ok: false, reason: isIdleExpired(row, idleMinutes) ? 'idle' : 'revoked', session: row };
 	}
+
+	if (new Date(row.ExpiresAt).getTime() < Date.now()) {
+		await revokeSession(sessionId);
+		return { ok: false, reason: 'expired', session: row };
+	}
+
+	if (isIdleExpired(row, idleMinutes)) {
+		await revokeSession(sessionId);
+		return { ok: false, reason: 'idle', session: row };
+	}
+
 	await touchSession(sessionId);
-	return row;
+	return { ok: true, reason: 'ok', session: row };
+}
+
+async function validateSession(sessionId) {
+	const result = await evaluateSession(sessionId);
+	return result.ok ? result.session : null;
 }
 
 async function revokeSession(sessionId) {
@@ -228,6 +252,8 @@ module.exports = {
 	clearAuthCookies,
 	createSession,
 	getSession,
+	getSessionAny,
+	evaluateSession,
 	validateSession,
 	revokeSession,
 	revokeByRefreshToken,

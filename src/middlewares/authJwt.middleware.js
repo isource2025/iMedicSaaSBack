@@ -92,10 +92,24 @@ async function verifyBearerToken(req, res) {
 	}
 
 	if (decoded.sessionId) {
-		const session = await sessionService.validateSession(decoded.sessionId);
-		if (!session) {
+		const result = await sessionService.evaluateSession(decoded.sessionId);
+		if (!result.ok) {
 			sessionService.clearAuthCookies(res);
-			res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+			if (result.reason === 'idle') {
+				try {
+					const analyticsService = require('../services/analytics.service');
+					await analyticsService.trackIdleExpiration({
+						decoded,
+						session: result.session,
+						userAgent: req.headers['user-agent'],
+					});
+				} catch {
+					/* analytics no debe bloquear el 401 */
+				}
+				res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+			} else {
+				res.status(401).json({ success: false, mensaje: 'Sesión expirada' });
+			}
 			return null;
 		}
 	}

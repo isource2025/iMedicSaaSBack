@@ -5,6 +5,8 @@ const authLoginFlow = require('../services/authLoginFlow.service');
 const authAudit = require('../services/authAudit.service');
 const sessionService = require('../services/session.service');
 const geoPolicy = require('../services/geoPolicy.service');
+const analyticsService = require('../services/analytics.service');
+const { extractTokenFromRequest } = require('../middlewares/authJwt.middleware');
 const { runWithTenant } = require('../context/tenantContext');
 const { JWT_SECRET, TEMP_TOKEN_EXPIRATION } = require('../config/jwt');
 const {
@@ -94,6 +96,32 @@ const inicioSesion = async (req, res) => {
 			idEmpresa: payload.idEmpresa,
 		});
 
+		try {
+			let sessionId = null;
+			if (payload.token) {
+				const decodedTok = jwt.decode(payload.token);
+				sessionId = decodedTok?.sessionId || null;
+			}
+			await analyticsService.trackEvent({
+				eventType: analyticsService.EVENT_TYPES.LOGIN,
+				sessionId,
+				valorPersonal: payload.usuario?.idValorpersonal,
+				idEmpresa: payload.idEmpresa,
+				role: payload.rol?.nombre,
+				userAgent,
+				metadata: { source: 'server' },
+			});
+			await analyticsService.trackReauthIfExpired({
+				valorPersonal: payload.usuario?.idValorpersonal,
+				sessionId,
+				idEmpresa: payload.idEmpresa,
+				role: payload.rol?.nombre,
+				userAgent,
+			});
+		} catch {
+			/* analytics no debe bloquear el login */
+		}
+
 		return res.json(payload);
 	} catch (error) {
 		if (error.message === 'MULTI_EMPRESA' || error.statusCode === 200) {
@@ -155,7 +183,18 @@ const inicioSesion = async (req, res) => {
 
 const cerrarSesion = async (req, res) => {
 	try {
-		const sessionId = req.auth?.sessionId;
+		let decoded = req.auth || null;
+		if (!decoded) {
+			const token = extractTokenFromRequest(req);
+			if (token) {
+				try {
+					decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
+				} catch {
+					decoded = null;
+				}
+			}
+		}
+		const sessionId = decoded?.sessionId || null;
 		if (sessionId) await sessionService.revokeSession(sessionId);
 		const refresh = req.cookies?.[sessionService.COOKIE_REFRESH];
 		if (refresh) await sessionService.revokeByRefreshToken(refresh);
@@ -163,11 +202,26 @@ const cerrarSesion = async (req, res) => {
 		await authAudit.logEvent({
 			ip: getClientIp(req),
 			userAgent: req.headers['user-agent'],
-			username: req.auth?.usuario?.username,
+			username: decoded?.usuario?.username || req.auth?.usuario?.username,
 			evento: 'LOGOUT',
 			resultado: 'OK',
-			idEmpresa: req.idEmpresa,
+			idEmpresa: decoded?.idEmpresa ?? req.idEmpresa,
 		});
+		try {
+			const u = decoded?.usuario || {};
+			const vp = Number(u.id || u.idValorpersonal || u.valorPersonal);
+			await analyticsService.trackEvent({
+				eventType: analyticsService.EVENT_TYPES.LOGOUT,
+				sessionId,
+				valorPersonal: Number.isFinite(vp) && vp > 0 ? vp : null,
+				idEmpresa: decoded?.idEmpresa ?? req.idEmpresa,
+				role: decoded?.rol?.nombre,
+				userAgent: req.headers['user-agent'],
+				metadata: { source: 'server' },
+			});
+		} catch {
+			/* ignore */
+		}
 		return res.json({ success: true, mensaje: 'Sesión cerrada' });
 	} catch (e) {
 		sessionService.clearAuthCookies(res);
@@ -221,10 +275,22 @@ const refrescarSesion = async (req, res) => {
 			sessionService.clearAuthCookies(res);
 			return res.status(401).json({ success: false, mensaje: 'Sesión expirada' });
 		}
-		const session = await sessionService.validateSession(decoded.sessionId);
-		if (!session) {
+		const session = await sessionService.evaluateSession(decoded.sessionId);
+		if (!session.ok) {
 			sessionService.clearAuthCookies(res);
-			return res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+			if (session.reason === 'idle') {
+				try {
+					await analyticsService.trackIdleExpiration({
+						decoded,
+						session: session.session,
+						userAgent: req.headers['user-agent'],
+					});
+				} catch {
+					/* ignore */
+				}
+				return res.status(401).json({ success: false, mensaje: 'Sesión expirada por inactividad' });
+			}
+			return res.status(401).json({ success: false, mensaje: 'Sesión expirada' });
 		}
 		const newAccess = sessionService.signAccessToken({
 			usuario: decoded.usuario,
