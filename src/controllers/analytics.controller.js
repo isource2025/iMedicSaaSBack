@@ -37,6 +37,21 @@ async function registrarEvento(req, res) {
 		const event = String(req.body?.event || req.body?.eventType || '')
 			.trim()
 			.toUpperCase();
+
+		if (analyticsService.ANON_EVENT_TYPES.has(event)) {
+			const visitorHash = analyticsService.hashAnonymousVisitor(req.body?.visitorId);
+			await analyticsService.trackEvent({
+				eventType: event,
+				userHash: visitorHash,
+				metadata: {
+					...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+					source: 'client',
+				},
+				userAgent: req.headers['user-agent'],
+			});
+			return res.json({ success: true });
+		}
+
 		if (!analyticsService.CLIENT_EVENT_TYPES.has(event)) {
 			return res.status(400).json({ success: false, mensaje: 'Evento no permitido' });
 		}

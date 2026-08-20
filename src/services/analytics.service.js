@@ -16,6 +16,9 @@ const EVENT_TYPES = Object.freeze({
 	SESSION_REAUTH: 'SESSION_REAUTH',
 	LOGIN: 'LOGIN',
 	LOGOUT: 'LOGOUT',
+	LOGIN_PAGE_VIEWED: 'LOGIN_PAGE_VIEWED',
+	LOGIN_VISUAL_IMPRESSION: 'LOGIN_VISUAL_IMPRESSION',
+	LOGIN_VISUAL_CLICK: 'LOGIN_VISUAL_CLICK',
 	SPONSOR_IMPRESSION: 'SPONSOR_IMPRESSION',
 	SPONSOR_CLICK: 'SPONSOR_CLICK',
 });
@@ -27,6 +30,15 @@ const CLIENT_EVENT_TYPES = new Set([
 	EVENT_TYPES.LOGIN_CLICKED,
 	EVENT_TYPES.MODAL_DISMISSED,
 ]);
+
+/** Eventos públicos de la pantalla de login (sin sesión). */
+const ANON_EVENT_TYPES = new Set([
+	EVENT_TYPES.LOGIN_PAGE_VIEWED,
+	EVENT_TYPES.LOGIN_VISUAL_IMPRESSION,
+	EVENT_TYPES.LOGIN_VISUAL_CLICK,
+]);
+
+const LOGIN_SLIDES = new Set(['tecnologia', 'medico', 'paciente', 'laboratorio']);
 
 /** Un evento de este tipo por SessionId (idempotencia del funnel). */
 const ONCE_PER_SESSION = new Set([
@@ -40,6 +52,13 @@ const ONCE_PER_SESSION = new Set([
 ]);
 
 let tablesReady = false;
+
+function hashAnonymousVisitor(visitorId) {
+	const id = String(visitorId || '').trim();
+	if (!id || id.length < 8 || id.length > 80) return null;
+	const secret = process.env.ANALYTICS_HASH_SECRET || JWT_SECRET || 'imedic-analytics';
+	return crypto.createHmac('sha256', String(secret)).update(`anon:${id}`).digest('hex');
+}
 
 function hashUser(valorPersonal) {
 	if (valorPersonal == null || !Number.isFinite(Number(valorPersonal))) return null;
@@ -69,6 +88,10 @@ function sanitizeMetadata(raw, userAgent) {
 			out.expiredSessionId = String(raw.expiredSessionId);
 		}
 		if (raw.simulated === true) out.simulated = true;
+		const slide = String(raw.slide || '').trim().toLowerCase();
+		if (LOGIN_SLIDES.has(slide)) out.slide = slide;
+		const action = String(raw.action || '').trim().toLowerCase();
+		if (action === 'prev' || action === 'next' || action === 'dot') out.action = action;
 	}
 	out.device = classifyDevice(userAgent);
 	return out;
@@ -131,6 +154,7 @@ async function trackEvent({
 	eventType,
 	sessionId = null,
 	valorPersonal = null,
+	userHash: userHashOverride = null,
 	idEmpresa = null,
 	role = null,
 	metadata = null,
@@ -150,7 +174,7 @@ async function trackEvent({
 		}
 
 		const prior = sid ? await copyContextFromSession(pool, sid) : {};
-		const userHash = hashUser(valorPersonal) || prior.UserHash || null;
+		const userHash = userHashOverride || hashUser(valorPersonal) || prior.UserHash || null;
 		const empresa =
 			idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
 				? Number(idEmpresa)
@@ -250,6 +274,51 @@ function defaultRange() {
 function pct(part, total) {
 	if (!total) return 0;
 	return Math.round((Number(part) / Number(total)) * 10000) / 100;
+}
+
+async function getLoginScreenStats(pool, fromBound, toBound) {
+	const params = [fromBound, toBound];
+	const [[kpis]] = await pool.query(
+		`SELECT
+        SUM(EventType = 'LOGIN_PAGE_VIEWED') AS pageViews,
+        COUNT(DISTINCT CASE WHEN EventType = 'LOGIN_PAGE_VIEWED' THEN UserHash END) AS uniqueVisitors,
+        SUM(EventType = 'LOGIN_VISUAL_IMPRESSION') AS visualImpressions,
+        SUM(EventType = 'LOGIN_VISUAL_CLICK') AS visualClicks
+      FROM AnalyticsEvents
+      WHERE CreatedAt >= ? AND CreatedAt <= ?
+        AND EventType IN ('LOGIN_PAGE_VIEWED', 'LOGIN_VISUAL_IMPRESSION', 'LOGIN_VISUAL_CLICK')`,
+		params,
+	);
+	const pageViews = Number(kpis?.pageViews || 0);
+	const uniqueVisitors = Number(kpis?.uniqueVisitors || 0);
+	const visualImpressions = Number(kpis?.visualImpressions || 0);
+	const visualClicks = Number(kpis?.visualClicks || 0);
+
+	const [bySlideRows] = await pool.query(
+		`SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(Metadata, '$.slide')), 'otros') AS slide,
+        SUM(EventType = 'LOGIN_VISUAL_IMPRESSION') AS impressions,
+        SUM(EventType = 'LOGIN_VISUAL_CLICK') AS clicks
+      FROM AnalyticsEvents
+      WHERE CreatedAt >= ? AND CreatedAt <= ?
+        AND EventType IN ('LOGIN_VISUAL_IMPRESSION', 'LOGIN_VISUAL_CLICK')
+      GROUP BY COALESCE(JSON_UNQUOTE(JSON_EXTRACT(Metadata, '$.slide')), 'otros')
+      ORDER BY impressions DESC`,
+		params,
+	);
+
+	return {
+		pageViews,
+		uniqueVisitors,
+		visualImpressions,
+		visualClicks,
+		ctr: pct(visualClicks, visualImpressions),
+		bySlide: bySlideRows.map((r) => ({
+			slide: String(r.slide || 'otros'),
+			impressions: Number(r.impressions || 0),
+			clicks: Number(r.clicks || 0),
+			ctr: pct(r.clicks, r.impressions),
+		})),
+	};
 }
 
 async function getSessionExpirationStats({ from, to, idEmpresa, role } = {}) {
@@ -403,6 +472,20 @@ async function getSessionExpirationStats({ from, to, idEmpresa, role } = {}) {
 		console.warn('[analytics] activeNow:', e.message);
 	}
 
+	let loginScreen = {
+		pageViews: 0,
+		uniqueVisitors: 0,
+		visualImpressions: 0,
+		visualClicks: 0,
+		ctr: 0,
+		bySlide: [],
+	};
+	try {
+		loginScreen = await getLoginScreenStats(pool, fromBound, toBound);
+	} catch (e) {
+		console.warn('[analytics] loginScreen:', e.message);
+	}
+
 	return {
 		from: fromBound.slice(0, 10),
 		to: toBound.slice(0, 10),
@@ -437,14 +520,17 @@ async function getSessionExpirationStats({ from, to, idEmpresa, role } = {}) {
 			device: String(r.device || 'unknown'),
 			count: Number(r.count || 0),
 		})),
+		loginScreen,
 	};
 }
 
 module.exports = {
 	EVENT_TYPES,
 	CLIENT_EVENT_TYPES,
+	ANON_EVENT_TYPES,
 	ensureTables,
 	hashUser,
+	hashAnonymousVisitor,
 	trackEvent,
 	trackIdleExpiration,
 	trackReauthIfExpired,
