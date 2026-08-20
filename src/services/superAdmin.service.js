@@ -1705,38 +1705,59 @@ async function obtenerCatalogosTenant(idEmpresa) {
 	// clínicos físicos legacy no tienen imRoles, así que siempre se leen de la nube.
 	const roles = await nubeTenant.listarRoles().catch(() => []);
 
+	const desdeFisico = async () =>
+		runWithTenant(idEmpresa, async () => {
+			const sectores = await sectoresService.obtenerSectores().catch((e) => {
+				console.warn('[catalogos] sectores fisico', e.message);
+				return [];
+			});
+			let srvRows = await tenantDb
+				.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`)
+				.catch(() => []);
+			if (!srvRows?.length) {
+				srvRows = await tenantDb
+					.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`)
+					.catch(() => []);
+			}
+			return {
+				sectores: (sectores || [])
+					.map((s) => ({
+						id: String(s.IdSector ?? s.idSector ?? s.id ?? '').trim(),
+						descripcion: String(s.Descripcion ?? s.descripcionSector ?? s.descripcion ?? '').trim(),
+						ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
+					}))
+					.filter((s) => s.id),
+				servicios: (srvRows || [])
+					.map((s) => ({
+						id: String(s.Valor || s.IdServicio || s.id || '').trim(),
+						descripcion: String(s.Descripcion || s.Valor || '').trim(),
+					}))
+					.filter((s) => s.id),
+			};
+		}).catch((e) => {
+			console.warn('[catalogos] fallback fisico', e.message);
+			return { sectores: [], servicios: [] };
+		});
+
 	if (await gestionAuthEnRailway()) {
-		const sectores = await nubeTenant.listarSectores(idEmpresa).catch(() => []);
-		const servicios = await nubeTenant.listarServicios(idEmpresa).catch(() => []);
+		let sectores = await nubeTenant.listarSectores(idEmpresa).catch((e) => {
+			console.warn('[catalogos] sectores nube', e.message);
+			return [];
+		});
+		let servicios = await nubeTenant.listarServicios(idEmpresa).catch((e) => {
+			console.warn('[catalogos] servicios nube', e.message);
+			return [];
+		});
+		if (!sectores.length || !servicios.length) {
+			const fisico = await desdeFisico();
+			if (!sectores.length) sectores = fisico.sectores;
+			if (!servicios.length) servicios = fisico.servicios;
+		}
 		return { ...base, sectores, servicios, roles };
 	}
 
-	return runWithTenant(idEmpresa, async () => {
-		const sectores = await sectoresService.obtenerSectores().catch(() => []);
-		let srvRows = await tenantDb
-			.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`)
-			.catch(() => []);
-		if (!srvRows?.length) {
-			srvRows = await tenantDb
-				.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`)
-				.catch(() => []);
-		}
-		return {
-			...base,
-			sectores: (sectores || []).map((s) => ({
-				id: String(s.IdSector ?? s.idSector ?? ''),
-				descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
-				ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
-			})),
-			servicios: (srvRows || [])
-				.map((s) => ({
-					id: String(s.Valor || '').trim(),
-					descripcion: String(s.Descripcion || s.Valor || '').trim(),
-				}))
-				.filter((s) => s.id),
-			roles,
-		};
-	});
+	const fisico = await desdeFisico();
+	return { ...base, ...fisico, roles };
 }
 
 async function obtenerModulosEmpresaActiva(idEmpresa) {

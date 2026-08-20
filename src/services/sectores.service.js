@@ -16,13 +16,23 @@ const obtenerSectores = async () => {
         LTRIM(RTRIM(Valor)) as IdSector,
         LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
         LTRIM(RTRIM(ISNULL(AmbInt, ''))) AS AmbInt
-      FROM imSectores
+      FROM dbo.imSectores
       ORDER BY Descripcion
     `;
 		return await executeQuery(consulta);
 	} catch (error) {
-		console.error('Error al obtener sectores:', error);
-		throw error;
+		try {
+			return await executeQuery(`
+      SELECT 
+        LTRIM(RTRIM(Valor)) as IdSector,
+        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
+      FROM dbo.imSectores
+      ORDER BY Descripcion
+    `);
+		} catch (e2) {
+			console.error('Error al obtener sectores:', e2);
+			throw e2;
+		}
 	}
 };
 

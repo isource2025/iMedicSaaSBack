@@ -344,16 +344,114 @@ function fechaClarionHoy() {
 
 // ───────────────────────────── sectores (NUBE) ─────────────────────────────
 
-async function listarSectores(idEmpresa) {
-	const rows = await mysqlQuery(
-		`SELECT Valor, Descripcion, AmbInt FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
-		[Number(idEmpresa)],
+function mapCatalogoFilas(rows) {
+	return (rows || [])
+		.map((s) => ({
+			id: String(s.Valor ?? s.IdSector ?? s.id ?? '').trim(),
+			descripcion: String(s.Descripcion ?? s.descripcion ?? s.Valor ?? s.id ?? '').trim(),
+			ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
+		}))
+		.filter((s) => s.id);
+}
+
+async function empresaEsFisica(idEmpresa) {
+	const emp = Number(idEmpresa);
+	const empRow = await mysqlQuery(
+		`SELECT TipoServidor, DbServer FROM \`Empresas\` WHERE IDEMPRESA = ? LIMIT 1`,
+		[emp],
 	);
-	return rows.map((s) => ({
-		id: String(s.Valor || '').trim(),
-		descripcion: String(s.Descripcion || s.Valor || '').trim(),
-		ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
-	}));
+	const tipo = String(empRow[0]?.TipoServidor || '').trim().toUpperCase();
+	const server = String(empRow[0]?.DbServer || '').trim();
+	return { emp, fisica: tipo !== 'NUBE' && !!server };
+}
+
+async function seedSectoresDesdeFisico(idEmpresa) {
+	const { emp, fisica } = await empresaEsFisica(idEmpresa);
+	if (!fisica) return 0;
+	try {
+		const pool = await getTenantPool(emp);
+		const cols = await sqlServerColumnas(pool, 'imSectores').catch(() => []);
+		if (!cols.length) return 0;
+		const hasAmb = cols.some((c) => String(c).toLowerCase() === 'ambint');
+		const data = await pool.request().query(
+			`SELECT LTRIM(RTRIM(CAST(Valor AS VARCHAR(20)))) AS Valor,
+			        LTRIM(RTRIM(CAST(Descripcion AS VARCHAR(200)))) AS Descripcion
+			        ${hasAmb ? ', LTRIM(RTRIM(CAST(AmbInt AS VARCHAR(4)))) AS AmbInt' : ''}
+			 FROM dbo.imSectores`,
+		);
+		const filas = data.recordset || [];
+		const destCols = await columnasMeta('imSectores');
+		const hasDestAmb = !!colMeta(destCols, 'AmbInt');
+		for (const r of filas) {
+			const valor = String(r.Valor || '').trim().slice(0, 20);
+			const desc = String(r.Descripcion || r.Valor || '').trim().slice(0, 200);
+			if (!valor) continue;
+			try {
+				if (hasDestAmb) {
+					await mysqlExec(
+						`INSERT INTO \`imSectores\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`, \`AmbInt\`)
+						 SELECT ?, ?, ?, ? FROM DUAL
+						 WHERE NOT EXISTS (
+						   SELECT 1 FROM \`imSectores\` WHERE IdEmpresa = ? AND Valor = ?
+						 )`,
+						[emp, valor, desc, String(r.AmbInt || 'A').trim().slice(0, 1) || 'A', emp, valor],
+					);
+				} else {
+					await mysqlExec(
+						`INSERT INTO \`imSectores\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`)
+						 SELECT ?, ?, ? FROM DUAL
+						 WHERE NOT EXISTS (
+						   SELECT 1 FROM \`imSectores\` WHERE IdEmpresa = ? AND Valor = ?
+						 )`,
+						[emp, valor, desc, emp, valor],
+					);
+				}
+			} catch (e) {
+				console.warn('[nube] seed sector', valor, e.message);
+			}
+		}
+		return filas.length;
+	} catch (e) {
+		console.warn('[nube] seed sectores desde físico:', e.message);
+		return 0;
+	}
+}
+
+async function listarSectores(idEmpresa) {
+	const emp = Number(idEmpresa);
+	try {
+		let cols = await columnasMeta('imSectores');
+		if (!cols.size) {
+			await seedSectoresDesdeFisico(emp);
+			cols = await columnasMeta('imSectores');
+		}
+		if (!cols.size) return [];
+		const hasAmb = !!colMeta(cols, 'AmbInt');
+		const hasEmp = !!colMeta(cols, 'IdEmpresa');
+		const select = hasAmb ? '`Valor`, `Descripcion`, `AmbInt`' : '`Valor`, `Descripcion`';
+		const sql = hasEmp
+			? `SELECT ${select} FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`
+			: `SELECT ${select} FROM \`imSectores\` ORDER BY Descripcion`;
+		let rows = await mysqlQuery(sql, hasEmp ? [emp] : []);
+		if (!rows.length) {
+			await seedSectoresDesdeFisico(emp);
+			rows = await mysqlQuery(sql, hasEmp ? [emp] : []);
+		}
+		return mapCatalogoFilas(rows);
+	} catch (e) {
+		console.warn('[nube] listarSectores', e.message);
+		try {
+			await seedSectoresDesdeFisico(emp);
+			const rows = await mysqlQuery(
+				`SELECT Valor, Descripcion FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
+				[emp],
+			);
+			return mapCatalogoFilas(rows);
+		} catch (e2) {
+			console.warn('[nube] listarSectores retry', e2.message);
+			return [];
+		}
+	}
 }
 
 async function crearSector(idEmpresa, { valor, descripcion, ambInt }) {
@@ -471,16 +569,9 @@ async function ensureServiciosTables(idEmpresa) {
 }
 
 async function seedServiciosDesdeFisico(idEmpresa) {
-	const emp = Number(idEmpresa);
+	const { emp, fisica } = await empresaEsFisica(idEmpresa);
+	if (!fisica) return 0;
 	try {
-		const empRow = await mysqlQuery(
-			`SELECT TipoServidor, DbServer FROM \`Empresas\` WHERE IDEMPRESA = ? LIMIT 1`,
-			[emp],
-		);
-		const tipo = String(empRow[0]?.TipoServidor || '').trim().toUpperCase();
-		const server = String(empRow[0]?.DbServer || '').trim();
-		if (tipo === 'NUBE' || !server) return 0;
-
 		const pool = await getTenantPool(emp);
 		for (const tabla of ['imServicios', 'imServiciosMedicos']) {
 			const cols = await sqlServerColumnas(pool, tabla).catch(() => []);
