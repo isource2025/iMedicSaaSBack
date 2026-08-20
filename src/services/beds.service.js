@@ -4,6 +4,26 @@ const { executeQuery } = require('../models/db');
 const { enrichControlesWithIMC } = require('../utils/antropometria');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 
+async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
+	try {
+		const listo = await vistoEnfermeria.tablaLista();
+		if (listo) {
+			try {
+				return await executeQuery(sqlConVisto, params);
+			} catch (err) {
+				console.warn('[beds] Aviso de indicaciones omitido:', err?.message || err);
+			}
+		}
+	} catch (err) {
+		console.warn('[beds] Chequeo de indicaciones nuevas omitido:', err?.message || err);
+	}
+	const rows = await executeQuery(sqlSinVisto, params);
+	void vistoEnfermeria.ensureTable().catch((e) => {
+		console.warn('[beds] No se pudo preparar tabla de aviso de indicaciones:', e?.message || e);
+	});
+	return rows;
+}
+
 /**
  * Obtener todas las camas desde imHabitacionCamas
  * @returns {Promise<Array>} Lista de camas con información del paciente y diagnóstico
@@ -39,9 +59,7 @@ const obtenerCamas = async () => {
 		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
 	});
 
-	const vistoOk = await vistoEnfermeria.ensureTable();
-
-	const consulta = `
+	const sqlBase = (conVisto) => `
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
@@ -55,10 +73,10 @@ const obtenerCamas = async () => {
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
-      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
+      ${conVisto ? vistoEnfermeria.SELECT_COUNT : vistoEnfermeria.SELECT_COUNT_ZERO}
     FROM 
       imHabitacionCamas hc
-    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
+    ${conVisto ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
@@ -75,7 +93,7 @@ const obtenerCamas = async () => {
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
     ORDER BY
       hc.ValorHabitacionCama ASC`;
-	return await executeQuery(consulta);
+	return await queryCamasSeguro(sqlBase(true), sqlBase(false));
 };
 
 /**
@@ -94,8 +112,7 @@ const obtenerEstadosCama = async () => {
  * @returns {Promise<Array>} Lista de camas filtradas
  */
 const filtrarCamasPorEstado = async (estadoValor) => {
-	const vistoOk = await vistoEnfermeria.ensureTable();
-	const consulta = `
+	const sqlBase = (conVisto) => `
     SELECT 
       hc.*,
       ec.valor as valorEstadoCama, 
@@ -111,10 +128,10 @@ const filtrarCamasPorEstado = async (estadoValor) => {
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
-      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
+      ${conVisto ? vistoEnfermeria.SELECT_COUNT : vistoEnfermeria.SELECT_COUNT_ZERO}
     FROM 
       imHabitacionCamas hc
-    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
+    ${conVisto ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     INNER JOIN 
       imEstadoCama ec ON hc.ValorEstadoCama = ec.valor
     LEFT JOIN 
@@ -137,7 +154,7 @@ const filtrarCamasPorEstado = async (estadoValor) => {
 
 	const parametros = [{ value: estadoValor }];
 	try {
-		return await executeQuery(consulta, parametros);
+		return await queryCamasSeguro(sqlBase(true), sqlBase(false), parametros);
 	} catch (error) {
 		console.error('Error al filtrar camas por estado:', error);
 		console.error('Parámetros:', JSON.stringify(parametros));
@@ -152,8 +169,7 @@ const filtrarCamasPorEstado = async (estadoValor) => {
  */
 const obtenerCamaPorId = async (id) => {
 	const [ValorSector, ValorHabitacionCama] = id.split('-');
-	const vistoOk = await vistoEnfermeria.ensureTable();
-	const consulta = `
+	const sqlBase = (conVisto) => `
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
@@ -165,10 +181,10 @@ const obtenerCamaPorId = async (id) => {
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
-      ${vistoOk ? vistoEnfermeria.SELECT_COUNT : 'CAST(0 AS INT) AS IndicacionesNuevasEnfermeria'}
+      ${conVisto ? vistoEnfermeria.SELECT_COUNT : vistoEnfermeria.SELECT_COUNT_ZERO}
     FROM 
       imHabitacionCamas hc
-    ${vistoOk ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
+    ${conVisto ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
     LEFT JOIN 
       imVisita v ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
@@ -182,7 +198,7 @@ const obtenerCamaPorId = async (id) => {
     WHERE hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param1`;
 	const parametros = [{ value: ValorHabitacionCama }, { value: ValorSector }];
 	try {
-		const resultado = await executeQuery(consulta, parametros);
+		const resultado = await queryCamasSeguro(sqlBase(true), sqlBase(false), parametros);
 		return resultado.length > 0 ? resultado[0] : null;
 	} catch (error) {
 		console.error('Error al obtener cama por ID:', error);

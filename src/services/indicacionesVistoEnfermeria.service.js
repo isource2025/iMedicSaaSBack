@@ -1,17 +1,41 @@
 const { executeQuery } = require('../models/db');
+const { getTenantId } = require('../context/tenantContext');
 
 /**
  * Estado compartido: indicaciones médicas aún no revisadas por enfermería.
- * Cualquier enfermero que las vea las marca para todos (no es por usuario).
+ * Nunca debe romper GET /beds: DDL y joins van aislados, por tenant.
  */
 
-let ensured = false;
+const ensuredByTenant = new Map();
 
-async function ensureTable() {
-	if (ensured) return true;
-	let created = false;
+function tenantKey() {
+	const id = getTenantId();
+	return id != null && Number.isFinite(Number(id)) ? String(id) : 'default';
+}
+
+async function tablaExiste() {
 	try {
 		const rows = await executeQuery(`
+			SELECT OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') AS Id
+		`);
+		const row = rows?.[0] || {};
+		return row.Id != null || row.id != null || row.ID != null;
+	} catch (e) {
+		console.warn('[indicacionesVistoEnfermeria] No se pudo chequear la tabla:', e?.message || e);
+		return false;
+	}
+}
+
+async function ensureTable() {
+	const key = tenantKey();
+	if (ensuredByTenant.get(key)) return true;
+	if (await tablaExiste()) {
+		ensuredByTenant.set(key, true);
+		return true;
+	}
+
+	try {
+		await executeQuery(`
 		IF OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') IS NULL
 		BEGIN
 			CREATE TABLE dbo.imIndicacionesVistoEnfermeria (
@@ -21,40 +45,43 @@ async function ensureTable() {
 				OperadorVista INT NULL,
 				CONSTRAINT PK_imIndicacionesVistoEnfermeria PRIMARY KEY (NumeroVisita, NroIndicacion)
 			);
-			CREATE INDEX IX_imIndVistoEnf_Visita ON dbo.imIndicacionesVistoEnfermeria (NumeroVisita);
-			SELECT CAST(1 AS INT) AS Created;
-		END
-		ELSE
-		BEGIN
-			SELECT CAST(0 AS INT) AS Created;
 		END
 		`);
-		created = Number(rows?.[0]?.Created) === 1;
 	} catch (e) {
-		console.warn('[indicacionesVistoEnfermeria] No se pudo asegurar la tabla:', e?.message || e);
+		console.warn('[indicacionesVistoEnfermeria] No se pudo crear la tabla:', e?.message || e);
 		return false;
 	}
 
-	if (created) {
-		try {
-			await executeQuery(`
-			INSERT INTO dbo.imIndicacionesVistoEnfermeria (NumeroVisita, NroIndicacion, FechaVista, OperadorVista)
-			SELECT DISTINCT iim.NumeroVisita, iim.NroIndicacion, GETDATE(), NULL
-			FROM dbo.imInterIndMedicas iim
-			WHERE ISNULL(iim.NroAdicional, 0) = 0
-			  AND iim.NumeroVisita IS NOT NULL
-			  AND iim.NroIndicacion IS NOT NULL;
-			`);
-		} catch (e) {
-			console.warn('[indicacionesVistoEnfermeria] Seed inicial omitido:', e?.message || e);
-		}
+	try {
+		await executeQuery(`
+		IF OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') IS NOT NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM sys.indexes
+			WHERE name = N'IX_imIndVistoEnf_Visita'
+			  AND object_id = OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria')
+		)
+		BEGIN
+			CREATE INDEX IX_imIndVistoEnf_Visita ON dbo.imIndicacionesVistoEnfermeria (NumeroVisita);
+		END
+		`);
+	} catch (e) {
+		console.warn('[indicacionesVistoEnfermeria] Índice omitido:', e?.message || e);
 	}
 
-	ensured = true;
-	return true;
+	const ok = await tablaExiste();
+	if (ok) ensuredByTenant.set(key, true);
+	return ok;
 }
 
-/** OUTER APPLY + columna para listados de camas (alias hc). */
+/** true solo si la tabla ya está; no hace DDL. */
+async function tablaLista() {
+	const key = tenantKey();
+	if (ensuredByTenant.get(key)) return true;
+	const ok = await tablaExiste();
+	if (ok) ensuredByTenant.set(key, true);
+	return ok;
+}
+
 const OUTER_APPLY_COUNT = `
     OUTER APPLY (
       SELECT COUNT(1) AS IndicacionesNuevasEnfermeria
@@ -74,13 +101,8 @@ const OUTER_APPLY_COUNT = `
 `;
 
 const SELECT_COUNT = `ISNULL(indn.IndicacionesNuevasEnfermeria, 0) AS IndicacionesNuevasEnfermeria`;
+const SELECT_COUNT_ZERO = `CAST(0 AS INT) AS IndicacionesNuevasEnfermeria`;
 
-/**
- * Marca como vistas (compartido) todas las indicaciones padre vigentes de la visita.
- * @param {number} numeroVisita
- * @param {number|null} operadorVista
- * @returns {Promise<number>} filas insertadas
- */
 async function marcarVistoPorVisita(numeroVisita, operadorVista) {
 	const ok = await ensureTable();
 	if (!ok) return 0;
@@ -111,7 +133,9 @@ async function marcarVistoPorVisita(numeroVisita, operadorVista) {
 
 module.exports = {
 	ensureTable,
+	tablaLista,
 	OUTER_APPLY_COUNT,
 	SELECT_COUNT,
+	SELECT_COUNT_ZERO,
 	marcarVistoPorVisita,
 };

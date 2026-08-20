@@ -220,7 +220,12 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     const { fecha, limit, excluirSuspendidas = false } = opciones;
-    const vistoOk = await vistoEnfermeria.ensureTable();
+    let vistoOk = false;
+    try {
+        vistoOk = await vistoEnfermeria.tablaLista();
+    } catch (e) {
+        console.warn('[indicaciones] aviso enfermería omitido:', e?.message || e);
+    }
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
