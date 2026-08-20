@@ -683,9 +683,41 @@ async function asegurarFichaPersonal(valorPersonal, { apellido, nombres, numeroD
 /**
  * Alta completa: credencial + ficha personal + rol + empresa + sectores.
  */
+async function espejarAsignacionesEnFisico(idEmpresa, idPersonal, sectores, servicios, idRol) {
+	return runWithTenant(idEmpresa, async () => {
+		const sectoresAsignar = (await nubeTenant.resolverSectoresUsuario(idEmpresa, idRol, sectores)) || [];
+		await tenantDb
+			.executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
+				{ value: idPersonal, type: 'Int' },
+			])
+			.catch(() => {});
+		for (const idSector of sectoresAsignar) {
+			try {
+				await usersService.asignarSector(idPersonal, String(idSector));
+			} catch (err) {
+				if (!String(err.message || '').includes('ya tiene asignado')) {
+					console.warn('[superAdmin] espejo sector', idSector, err.message);
+				}
+			}
+		}
+		const serviciosAsignar = (await nubeTenant.resolverServiciosUsuario(idEmpresa, idRol, servicios)) || [];
+		await require('./personalServicios.service').reemplazar(idPersonal, serviciosAsignar);
+	});
+}
+
 async function crearUsuarioEmpresa(idEmpresa, body) {
 	if (await gestionAuthEnRailway()) {
-		return nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
+		const created = await nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
+		if (!(await esEmpresaNube(idEmpresa))) {
+			await espejarAsignacionesEnFisico(
+				idEmpresa,
+				created.idPersonal,
+				body.sectores,
+				body.servicios,
+				body.idRol,
+			).catch((e) => console.warn('[superAdmin] espejo alta asignaciones físico:', e.message));
+		}
+		return created;
 	}
 	return runWithTenant(idEmpresa, async () => {
 		const {

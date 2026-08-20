@@ -568,6 +568,24 @@ async function ensureServiciosTables(idEmpresa) {
 	return emp;
 }
 
+async function ensurePersonalSectoresTable(idEmpresa) {
+	const emp = Number(idEmpresa);
+	await mysqlExec(
+		`CREATE TABLE IF NOT EXISTS \`imPersonalSectores\` (
+			\`IdEmpresa\` INT NOT NULL,
+			\`idPersonal\` INT NOT NULL,
+			\`idSector\` VARCHAR(20) NOT NULL,
+			PRIMARY KEY (\`IdEmpresa\`, \`idPersonal\`, \`idSector\`)
+		)`,
+	);
+	await mysqlExec(`ALTER TABLE \`imPersonalSectores\` MODIFY idSector VARCHAR(20) NOT NULL`).catch(() => {});
+	const cols = await columnasMeta('imPersonalSectores');
+	if (!colMeta(cols, 'IdEmpresa')) {
+		await mysqlExec(`ALTER TABLE \`imPersonalSectores\` ADD COLUMN IdEmpresa INT NOT NULL DEFAULT 0`).catch(() => {});
+	}
+	return emp;
+}
+
 async function seedServiciosDesdeFisico(idEmpresa) {
 	const { emp, fisica } = await empresaEsFisica(idEmpresa);
 	if (!fisica) return 0;
@@ -698,22 +716,97 @@ async function eliminarServicio(idEmpresa, valor) {
 async function reemplazarServiciosUsuario(idEmpresa, idPersonal, servicios) {
 	const emp = await ensureServiciosTables(idEmpresa);
 	const id = Number(idPersonal);
-	await mysqlExec(`DELETE FROM \`imPersonalServicios\` WHERE IdEmpresa = ? AND idPersonal = ?`, [
-		emp,
-		id,
-	]);
+	const cols = await columnasMeta('imPersonalServicios');
+	const cEmp = colMeta(cols, 'IdEmpresa')?.nombre || 'IdEmpresa';
+	const cPers = colMeta(cols, 'idPersonal')?.nombre || 'idPersonal';
+	const cSrv = colMeta(cols, 'idServicio')?.nombre || 'idServicio';
+	await mysqlExec(`DELETE FROM \`imPersonalServicios\` WHERE \`${cEmp}\` = ? AND \`${cPers}\` = ?`, [emp, id]);
+	const failed = [];
+	const seen = new Set();
 	for (const raw of servicios || []) {
 		const sid = String(raw || '').trim();
-		if (!sid) continue;
+		if (!sid || seen.has(sid.toUpperCase())) continue;
+		seen.add(sid.toUpperCase());
 		try {
+			const campos = [cEmp, cPers, cSrv];
+			const valores = [emp, id, sid.slice(0, 50)];
+			completarObligatorias(cols, campos, valores);
 			await mysqlExec(
-				`INSERT INTO \`imPersonalServicios\` (IdEmpresa, idPersonal, idServicio) VALUES (?, ?, ?)`,
-				[emp, id, sid],
+				`INSERT INTO \`imPersonalServicios\` (${campos.map((c) => `\`${c}\``).join(', ')})
+				 VALUES (${campos.map(() => '?').join(', ')})`,
+				valores,
 			);
 		} catch (e) {
 			console.warn('[nube] asignar servicio', sid, e.message);
+			failed.push(sid);
 		}
 	}
+	if (failed.length) {
+		const e = new Error(`No se pudieron asignar ${failed.length} servicio(s): ${failed.slice(0, 3).join(', ')}`);
+		e.statusCode = 500;
+		throw e;
+	}
+}
+
+async function reemplazarSectoresUsuario(idEmpresa, idPersonal, sectores) {
+	const emp = await ensurePersonalSectoresTable(idEmpresa);
+	const id = Number(idPersonal);
+	const cols = await columnasMeta('imPersonalSectores');
+	const cEmp = colMeta(cols, 'IdEmpresa')?.nombre || 'IdEmpresa';
+	const cPers = colMeta(cols, 'idPersonal')?.nombre || 'idPersonal';
+	const cSec = colMeta(cols, 'idSector')?.nombre || 'idSector';
+	await mysqlExec(`DELETE FROM \`imPersonalSectores\` WHERE \`${cEmp}\` = ? AND \`${cPers}\` = ?`, [emp, id]);
+	const failed = [];
+	const seen = new Set();
+	for (const raw of sectores || []) {
+		const sid = String(raw || '').trim();
+		if (!sid || seen.has(sid.toUpperCase())) continue;
+		seen.add(sid.toUpperCase());
+		try {
+			const campos = [cEmp, cPers, cSec];
+			const valores = [emp, id, sid.slice(0, 20)];
+			completarObligatorias(cols, campos, valores);
+			await mysqlExec(
+				`INSERT INTO \`imPersonalSectores\` (${campos.map((c) => `\`${c}\``).join(', ')})
+				 VALUES (${campos.map(() => '?').join(', ')})`,
+				valores,
+			);
+		} catch (e) {
+			console.warn('[nube] asignar sector', sid, e.message);
+			failed.push(sid);
+		}
+	}
+	if (failed.length) {
+		const e = new Error(`No se pudieron asignar ${failed.length} sector(es): ${failed.slice(0, 3).join(', ')}`);
+		e.statusCode = 500;
+		throw e;
+	}
+}
+
+async function listarSectoresDeUsuario(idEmpresa, idPersonal) {
+	const emp = await ensurePersonalSectoresTable(idEmpresa);
+	const vp = Number(idPersonal);
+	const sqlConEmp = `SELECT ps.idSector AS idSector, s.Descripcion AS descripcion
+		 FROM \`imPersonalSectores\` ps
+		 LEFT JOIN \`imSectores\` s
+		   ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+		  AND s.IdEmpresa = ps.IdEmpresa
+		 WHERE ps.IdEmpresa = ? AND ps.idPersonal = ?`;
+	const sqlSinEmp = `SELECT ps.idSector AS idSector, s.Descripcion AS descripcion
+		 FROM \`imPersonalSectores\` ps
+		 LEFT JOIN \`imSectores\` s
+		   ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+		 WHERE ps.idPersonal = ?`;
+	let rows = [];
+	try {
+		rows = await mysqlQuery(sqlConEmp, [emp, vp]);
+	} catch {
+		rows = await mysqlQuery(sqlSinEmp, [vp]);
+	}
+	return (rows || []).map((s) => ({
+		id: String(s.idSector || '').trim(),
+		descripcion: String(s.descripcion || s.idSector || '').trim(),
+	})).filter((s) => s.id);
 }
 
 async function listarServiciosDeUsuario(idEmpresa, idPersonal) {
@@ -800,19 +893,7 @@ async function listarUsuariosEmpresa(idEmpresa) {
 		const idPersonal = Number(r.IdPersonal);
 		let sectores = [];
 		try {
-			const secRows = await mysqlQuery(
-				`SELECT ps.idSector AS idSector, s.Descripcion AS descripcion
-         FROM \`imPersonalSectores\` ps
-         LEFT JOIN \`imSectores\` s
-           ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
-          AND s.IdEmpresa = ps.IdEmpresa
-         WHERE ps.IdEmpresa = ? AND ps.idPersonal = ?`,
-				[id, idPersonal],
-			);
-			sectores = (secRows || []).map((s) => ({
-				id: String(s.idSector || ''),
-				descripcion: String(s.descripcion || s.idSector || ''),
-			}));
+			sectores = await listarSectoresDeUsuario(id, idPersonal);
 		} catch {
 			sectores = [];
 		}
@@ -1118,36 +1199,11 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		console.warn('[nube] asignar rol', e.message);
 	}
 
-	let sectoresAsignar = [];
-	try {
-		sectoresAsignar = (await resolverSectoresUsuario(emp, idRol, sectores)) || [];
-	} catch (e) {
-		console.warn('[nube] resolver sectores', e.message);
-	}
-	for (const idSector of sectoresAsignar) {
-		try {
-			await mysqlExec(
-				`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector)
-         SELECT ?, ?, ? FROM DUAL
-         WHERE NOT EXISTS (
-           SELECT 1 FROM \`imPersonalSectores\`
-           WHERE IdEmpresa = ? AND idPersonal = ? AND idSector = ?
-         )`,
-				[emp, valorPersonal, String(idSector), emp, valorPersonal, String(idSector)],
-			);
-		} catch (e) {
-			console.warn('[nube] asignar sector', idSector, e.message);
-		}
-	}
+	const sectoresAsignar = (await resolverSectoresUsuario(emp, idRol, sectores)) || [];
+	await reemplazarSectoresUsuario(emp, valorPersonal, sectoresAsignar);
 
-	try {
-		const serviciosAsignar = await resolverServiciosUsuario(emp, idRol, servicios);
-		if (serviciosAsignar != null) {
-			await reemplazarServiciosUsuario(emp, valorPersonal, serviciosAsignar);
-		}
-	} catch (e) {
-		console.warn('[nube] asignar servicios', e.message);
-	}
+	const serviciosAsignar = (await resolverServiciosUsuario(emp, idRol, servicios)) || [];
+	await reemplazarServiciosUsuario(emp, valorPersonal, serviciosAsignar);
 
 	try {
 		const lista = await listarUsuariosEmpresa(idEmpresa);
@@ -1241,26 +1297,12 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 
 	const sectoresAsignar = await resolverSectoresUsuario(emp, body.idRol, body.sectores);
 	if (sectoresAsignar != null) {
-		await mysqlExec(`DELETE FROM \`imPersonalSectores\` WHERE IdEmpresa = ? AND idPersonal = ?`, [emp, id]);
-		for (const idSector of sectoresAsignar) {
-			try {
-				await mysqlExec(
-					`INSERT INTO \`imPersonalSectores\` (IdEmpresa, idPersonal, idSector) VALUES (?, ?, ?)`,
-					[emp, id, String(idSector)],
-				);
-			} catch (e) {
-				console.warn('[nube] reasignar sector', idSector, e.message);
-			}
-		}
+		await reemplazarSectoresUsuario(emp, id, sectoresAsignar);
 	}
 
 	const serviciosAsignar = await resolverServiciosUsuario(emp, body.idRol, body.servicios);
 	if (serviciosAsignar != null) {
-		try {
-			await reemplazarServiciosUsuario(emp, id, serviciosAsignar);
-		} catch (e) {
-			console.warn('[nube] actualizar servicios', e.message);
-		}
+		await reemplazarServiciosUsuario(emp, id, serviciosAsignar);
 	}
 
 	try {
