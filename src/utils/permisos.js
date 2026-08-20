@@ -144,10 +144,6 @@ const MODULOS = Object.freeze([
 		id: 'CONFIGURACION',
 		label: 'Configuración',
 		submodulos: [
-			{ id: 'GENERAL',  label: 'General',  path: '/dashboard/settings/general',  acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
-			{ id: 'USUARIOS', label: 'Usuarios', path: '/dashboard/settings/usuarios', acciones: [...CRUD] },
-			{ id: 'PERMISOS', label: 'Permisos', path: '/dashboard/settings/permisos', acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
-			{ id: 'SECTORES', label: 'Sectores', path: '/dashboard/settings/sectores', acciones: [...CRUD] },
 			{ id: 'PERSONAL', label: 'Personal', path: '/dashboard/personal',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
 		],
 	},

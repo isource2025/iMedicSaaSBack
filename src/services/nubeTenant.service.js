@@ -50,6 +50,8 @@ const TABLAS_IMPORTABLES = [
 	},
 	{ tabla: 'imPassword', label: 'Usuarios de acceso', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalSectores', label: 'Sectores por personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{ tabla: 'imServicios', label: 'Servicios', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
+	{ tabla: 'imPersonalServicios', label: 'Servicios por personal', estrategia: 'tenant', forzarEmpresa: ['IdEmpresa'] },
 	{ tabla: 'imPersonalEmpresas', label: 'Vínculo usuario-empresa', estrategia: 'vinculo' },
 ];
 
@@ -72,10 +74,21 @@ async function mysqlExec(sql, params = []) {
 // ───────────────────────────── esquema (introspección) ─────────────────────────────
 
 const NUMERIC_TYPES = new Set([
-	'int', 'bigint', 'smallint', 'tinyint', 'mediumint', 'decimal', 'numeric', 'float', 'double',
+	'int', 'bigint', 'smallint', 'tinyint', 'mediumint', 'decimal', 'numeric', 'float', 'double', 'bit', 'year',
 ]);
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp']);
 const BINARY_TYPES = new Set(['blob', 'mediumblob', 'longblob', 'tinyblob', 'binary', 'varbinary']);
+const STRING_TYPES = new Set(['char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext', 'enum', 'set']);
+
+/** Anchos mínimos para columnas de texto copiadas desde Clarion (CHAR 20). */
+const IMPASSWORD_MIN_WIDTH = Object.freeze({
+	Apellido: 80,
+	Nombres: 80,
+	NombreRed: 80,
+	NumeroDocumento: 30,
+	CodOperador: 30,
+	Password: 255,
+});
 
 /** Columnas que nunca se copian al importar (binarios / clínico pesado). */
 const COLUMNAS_EXCLUIR_IMPORT = new Set(['firma', 'foto', 'imagen', 'observaciones']);
@@ -85,70 +98,160 @@ function sanitizarValorImport(v, meta) {
 	if (Buffer.isBuffer(v)) return null;
 	if (v instanceof Date) return v;
 	if (meta && BINARY_TYPES.has(meta.tipo)) return null;
-	if (meta && NUMERIC_TYPES.has(meta.tipo)) {
+	if (meta && esTipoNumerico(meta.tipo)) {
 		if (v === null || v === '') return null;
 		const n = Number(v);
 		return Number.isFinite(n) ? n : null;
 	}
+	if (meta && STRING_TYPES.has(meta.tipo) && v != null) {
+		return truncarSegunMeta(meta, String(v));
+	}
 	return v;
+}
+
+function esTipoNumerico(tipo) {
+	return NUMERIC_TYPES.has(String(tipo || '').toLowerCase());
+}
+
+function defaultEsUsable(meta) {
+	if (meta.def == null) return false;
+	const s = String(meta.def).trim().replace(/^'|'$/g, '');
+	if (!s || /^null$/i.test(s)) return false;
+	if (esTipoNumerico(meta.tipo) && s === '') return false;
+	return true;
 }
 
 async function columnasMeta(tabla) {
 	const rows = await mysqlQuery(
 		`SELECT COLUMN_NAME AS col, DATA_TYPE AS tipo, IS_NULLABLE AS nullable,
-            COLUMN_DEFAULT AS def, EXTRA AS extra
+            COLUMN_DEFAULT AS def, EXTRA AS extra, CHARACTER_MAXIMUM_LENGTH AS maxlen
      FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
 		[tabla],
 	);
 	const map = new Map();
 	for (const r of rows) {
-		map.set(String(r.col), {
+		const tipo = String(r.tipo).toLowerCase();
+		const meta = {
 			nombre: String(r.col),
-			tipo: String(r.tipo).toLowerCase(),
+			tipo,
 			nullable: String(r.nullable).toUpperCase() === 'YES',
-			hasDefault: r.def != null,
+			def: r.def,
+			hasDefault: defaultEsUsable({ tipo, def: r.def }),
 			autoInc: String(r.extra || '').toLowerCase().includes('auto_increment'),
-		});
+			maxlen: r.maxlen != null ? Number(r.maxlen) : null,
+		};
+		map.set(meta.nombre, meta);
 	}
 	return map;
 }
 
+function colMeta(colMap, col) {
+	if (!col || !colMap) return undefined;
+	if (colMap.has(col)) return colMap.get(col);
+	const lower = String(col).toLowerCase();
+	for (const meta of colMap.values()) {
+		if (meta.nombre.toLowerCase() === lower) return meta;
+	}
+	return undefined;
+}
+
+function truncarSegunMeta(meta, s) {
+	const str = String(s ?? '');
+	const max = Number(meta?.maxlen);
+	if (Number.isFinite(max) && max > 0) return str.slice(0, max);
+	return str;
+}
+
 function valorPorTipo(meta) {
-	if (NUMERIC_TYPES.has(meta.tipo)) return 0;
+	if (esTipoNumerico(meta.tipo)) return 0;
 	if (DATE_TYPES.has(meta.tipo)) return meta.tipo === 'date' ? '1900-01-01' : '1900-01-01 00:00:00';
+	if (meta.tipo === 'char' || meta.tipo === 'nchar') return ' '.slice(0, Math.max(1, Number(meta.maxlen) || 1));
 	return '';
 }
 
-/** Completa columnas NOT NULL sin default con un valor seguro por tipo. */
+/** Completa columnas NOT NULL sin default usable con un valor seguro por tipo. Nunca inserta '' en numéricos. */
 function completarObligatorias(colMap, campos, valores) {
-	const puestas = new Set(campos.map((c) => c.toLowerCase()));
+	const puestas = new Set(campos.map((c) => String(c).toLowerCase()));
+	const seen = new Set();
 	for (const meta of colMap.values()) {
-		if (puestas.has(meta.nombre.toLowerCase())) continue;
+		const key = meta.nombre.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		if (puestas.has(key)) continue;
 		if (meta.nullable || meta.hasDefault || meta.autoInc) continue;
 		if (BINARY_TYPES.has(meta.tipo)) continue;
-		if (COLUMNAS_EXCLUIR_IMPORT.has(meta.nombre.toLowerCase())) continue;
+		if (COLUMNAS_EXCLUIR_IMPORT.has(key)) continue;
 		campos.push(meta.nombre);
 		valores.push(valorPorTipo(meta));
 	}
 }
 
 function esNumerica(colMap, col) {
-	return NUMERIC_TYPES.has(colMap.get(col)?.tipo);
+	return esTipoNumerico(colMeta(colMap, col)?.tipo);
 }
 
 /** Convierte valores para UPDATE/INSERT según el tipo real de la columna en MySQL. */
 function valorCampoSegunTipo(colMap, col, raw) {
+	const meta = colMeta(colMap, col);
 	if (raw == null) return null;
-	if (!colMap.has(col)) return raw;
-	if (esNumerica(colMap, col)) {
+	if (!meta) {
+		const s = String(raw).trim();
+		return s === '' ? null : s;
+	}
+	if (esTipoNumerico(meta.tipo)) {
 		const s = String(raw).trim();
 		if (s === '') return null;
-		const n = Number(s.replace(/\D/g, ''));
+		const n = Number(String(s).replace(/[^\d.-]/g, ''));
 		return Number.isFinite(n) ? n : null;
 	}
 	const s = String(raw).trim();
-	return s === '' ? null : s;
+	if (s === '') return null;
+	return truncarSegunMeta(meta, s);
+}
+
+/**
+ * El esquema copiado desde SQL Server/Clarion deja Apellido CHAR(20) y Legajo INT DEFAULT ''.
+ * Ensancha textos y saca defaults vacíos en columnas numéricas.
+ */
+async function ensureImPasswordUsableSchema() {
+	const colMap = await columnasMeta('imPassword');
+	for (const [logical, minLen] of Object.entries(IMPASSWORD_MIN_WIDTH)) {
+		const meta = colMeta(colMap, logical);
+		if (!meta) continue;
+		if (!STRING_TYPES.has(meta.tipo)) continue;
+		const max = Number(meta.maxlen);
+		if (!Number.isFinite(max) || max <= 0 || max >= minLen) continue;
+		const nullSql = meta.nullable ? 'NULL' : 'NOT NULL';
+		try {
+			await mysqlExec(
+				`ALTER TABLE \`imPassword\` MODIFY \`${meta.nombre}\` VARCHAR(${minLen}) ${nullSql}`,
+			);
+			meta.tipo = 'varchar';
+			meta.maxlen = minLen;
+		} catch (e) {
+			console.warn(`[nube] widen imPassword.${meta.nombre}:`, e.message);
+		}
+	}
+	const NUMERIC_DEFAULT_FIX = new Set(['legajo', 'grupo', 'marcadebaja']);
+	const seen = new Set();
+	for (const meta of colMap.values()) {
+		const key = meta.nombre.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		if (!NUMERIC_DEFAULT_FIX.has(key)) continue;
+		if (!esTipoNumerico(meta.tipo) || meta.nullable || meta.autoInc) continue;
+		const def = meta.def == null ? '' : String(meta.def).trim().replace(/^'|'$/g, '');
+		if (def !== '') continue;
+		try {
+			await mysqlExec(`ALTER TABLE \`imPassword\` ALTER \`${meta.nombre}\` SET DEFAULT 0`);
+			meta.hasDefault = true;
+			meta.def = '0';
+		} catch (e) {
+			console.warn(`[nube] default imPassword.${meta.nombre}:`, e.message);
+		}
+	}
+	return colMap;
 }
 
 function esNombreDebil(value) {
@@ -367,12 +470,66 @@ async function ensureServiciosTables(idEmpresa) {
 	return emp;
 }
 
+async function seedServiciosDesdeFisico(idEmpresa) {
+	const emp = Number(idEmpresa);
+	try {
+		const empRow = await mysqlQuery(
+			`SELECT TipoServidor, DbServer FROM \`Empresas\` WHERE IDEMPRESA = ? LIMIT 1`,
+			[emp],
+		);
+		const tipo = String(empRow[0]?.TipoServidor || '').trim().toUpperCase();
+		const server = String(empRow[0]?.DbServer || '').trim();
+		if (tipo === 'NUBE' || !server) return 0;
+
+		const pool = await getTenantPool(emp);
+		for (const tabla of ['imServicios', 'imServiciosMedicos']) {
+			const cols = await sqlServerColumnas(pool, tabla).catch(() => []);
+			if (!cols.length) continue;
+			const data = await pool.request().query(
+				`SELECT LTRIM(RTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor,
+				        LTRIM(RTRIM(CAST(Descripcion AS VARCHAR(200)))) AS Descripcion
+				 FROM dbo.[${tabla}]`,
+			);
+			const filas = data.recordset || [];
+			if (!filas.length) continue;
+			for (const r of filas) {
+				const valor = String(r.Valor || '').trim().slice(0, 20);
+				const desc = String(r.Descripcion || r.Valor || '').trim().slice(0, 200);
+				if (!valor) continue;
+				try {
+					await mysqlExec(
+						`INSERT INTO \`imServicios\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`)
+						 SELECT ?, ?, ? FROM DUAL
+						 WHERE NOT EXISTS (
+						   SELECT 1 FROM \`imServicios\` WHERE IdEmpresa = ? AND Valor = ?
+						 )`,
+						[emp, valor, desc, emp, valor],
+					);
+				} catch (e) {
+					console.warn('[nube] seed servicio', valor, e.message);
+				}
+			}
+			return filas.length;
+		}
+	} catch (e) {
+		console.warn('[nube] seed servicios desde físico:', e.message);
+	}
+	return 0;
+}
+
 async function listarServicios(idEmpresa) {
 	const emp = await ensureServiciosTables(idEmpresa);
-	const rows = await mysqlQuery(
+	let rows = await mysqlQuery(
 		`SELECT Valor, Descripcion FROM \`imServicios\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
 		[emp],
 	);
+	if (!rows.length) {
+		await seedServiciosDesdeFisico(emp);
+		rows = await mysqlQuery(
+			`SELECT Valor, Descripcion FROM \`imServicios\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
+			[emp],
+		);
+	}
 	return rows.map((s) => ({
 		id: String(s.Valor || '').trim(),
 		descripcion: String(s.Descripcion || s.Valor || '').trim(),
@@ -609,10 +766,17 @@ async function asegurarFichaPersonal(idEmpresa, valorPersonal, { apellido, nombr
 	const colMap = await columnasMeta('imPersonal');
 	const apellidoNombre = `${String(apellido || '').trim()}, ${String(nombres || '').trim()}`
 		.replace(/^,\s*|,\s*$/g, '');
+	const pushCol = (logical, value) => {
+		const meta = colMeta(colMap, logical);
+		if (!meta) return;
+		campos.push(meta.nombre);
+		valores.push(value);
+	};
 
 	if (existe.length) {
-		if (idRol != null && colMap.has('Rol')) {
-			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+		const rolMeta = colMeta(colMap, 'Rol');
+		if (idRol != null && rolMeta) {
+			await mysqlExec(`UPDATE \`imPersonal\` SET \`${rolMeta.nombre}\` = ? WHERE IdEmpresa = ? AND Valor = ?`, [
 				String(idRol), emp, valorPersonal,
 			]);
 		}
@@ -621,16 +785,22 @@ async function asegurarFichaPersonal(idEmpresa, valorPersonal, { apellido, nombr
 
 	const campos = ['IdEmpresa', 'Valor'];
 	const valores = [emp, valorPersonal];
-	if (colMap.has('Rol')) { campos.push('Rol'); valores.push(idRol != null ? String(idRol) : ''); }
-	if (colMap.has('Matricula')) { campos.push('Matricula'); valores.push(valorPersonal); }
-	if (colMap.has('ApellidoNombre')) { campos.push('ApellidoNombre'); valores.push(apellidoNombre || `Usuario ${valorPersonal}`); }
-	if (colMap.has('Numero')) {
+	if (colMeta(colMap, 'Rol')) {
+		pushCol('Rol', idRol != null ? String(idRol) : (esNumerica(colMap, 'Rol') ? 0 : null));
+	}
+	if (colMeta(colMap, 'Matricula')) pushCol('Matricula', valorPersonal);
+	if (colMeta(colMap, 'ApellidoNombre')) {
+		pushCol(
+			'ApellidoNombre',
+			valorCampoSegunTipo(colMap, 'ApellidoNombre', apellidoNombre) || `Usuario ${valorPersonal}`.slice(0, 80),
+		);
+	}
+	if (colMeta(colMap, 'Numero')) {
 		const rawDoc = numeroDocumento != null ? String(numeroDocumento).replace(/\D/g, '') : '';
 		const num = rawDoc ? Number(rawDoc) : null;
-		campos.push('Numero');
-		valores.push(esNumerica(colMap, 'Numero') ? (Number.isFinite(num) ? num : null) : rawDoc || null);
+		pushCol('Numero', esNumerica(colMap, 'Numero') ? (Number.isFinite(num) ? num : null) : rawDoc || null);
 	}
-	if (colMap.has('Estado')) { campos.push('Estado'); valores.push(1); }
+	if (colMeta(colMap, 'Estado')) pushCol('Estado', 1);
 	completarObligatorias(colMap, campos, valores);
 	await mysqlExec(
 		`INSERT INTO \`imPersonal\` (${campos.map((c) => `\`${c}\``).join(', ')})
@@ -757,41 +927,63 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	}
 
 	const valorPersonal = await siguienteValorPersonal(emp);
-	const colMap = await columnasMeta('imPassword');
-	const campos = ['IdEmpresa', 'ValorPersonal', 'NombreRed', 'Password', 'Apellido', 'Nombres'];
-	const valores = [emp, valorPersonal, nombreRed.trim(), password.trim(), apellido.trim(), nombres.trim()];
-	if (colMap.has('NumeroDocumento')) {
-		campos.push('NumeroDocumento');
-		valores.push(valorCampoSegunTipo(colMap, 'NumeroDocumento', numeroDocumento));
+	const colMap = await ensureImPasswordUsableSchema();
+	const pushCol = (logical, value) => {
+		const meta = colMeta(colMap, logical);
+		if (!meta) return;
+		campos.push(meta.nombre);
+		valores.push(value);
+	};
+
+	const apellidoSafe = valorCampoSegunTipo(colMap, 'Apellido', apellido.trim()) || apellido.trim().slice(0, 80);
+	const nombresSafe = valorCampoSegunTipo(colMap, 'Nombres', nombres.trim()) || nombres.trim().slice(0, 80);
+	const nombreRedSafe = valorCampoSegunTipo(colMap, 'NombreRed', nombreRed.trim()) || nombreRed.trim().slice(0, 80);
+	const passwordSafe = valorCampoSegunTipo(colMap, 'Password', password.trim()) || password.trim();
+
+	const campos = ['IdEmpresa', 'ValorPersonal'];
+	const valores = [emp, valorPersonal];
+	pushCol('NombreRed', nombreRedSafe);
+	pushCol('Password', passwordSafe);
+	pushCol('Apellido', apellidoSafe);
+	pushCol('Nombres', nombresSafe);
+	if (colMeta(colMap, 'NumeroDocumento')) {
+		pushCol('NumeroDocumento', valorCampoSegunTipo(colMap, 'NumeroDocumento', numeroDocumento));
 	}
-	if (colMap.has('Legajo')) {
+	if (colMeta(colMap, 'Legajo')) {
 		const v = valorCampoSegunTipo(colMap, 'Legajo', legajo);
 		if (v != null) {
-			campos.push('Legajo');
-			valores.push(v);
+			pushCol('Legajo', v);
 		} else if (esNumerica(colMap, 'Legajo')) {
-			campos.push('Legajo');
-			valores.push(valorPersonal);
+			pushCol('Legajo', valorPersonal);
+		} else {
+			pushCol('Legajo', String(valorPersonal));
 		}
 	}
-	if (colMap.has('CodOperador')) {
-		campos.push('CodOperador');
-		valores.push(
+	if (colMeta(colMap, 'CodOperador')) {
+		pushCol(
+			'CodOperador',
 			esNumerica(colMap, 'CodOperador')
 				? (Number(codOperador) || valorPersonal)
 				: (String(codOperador || '').trim() || String(valorPersonal)),
 		);
 	}
-	if (colMap.has('Grupo')) { campos.push('Grupo'); valores.push(0); }
-	if (colMap.has('MarcadeBaja')) {
-		campos.push('MarcadeBaja');
-		valores.push(esNumerica(colMap, 'MarcadeBaja') ? 0 : '0');
+	if (colMeta(colMap, 'Grupo')) pushCol('Grupo', 0);
+	if (colMeta(colMap, 'MarcadeBaja')) {
+		pushCol('MarcadeBaja', esNumerica(colMap, 'MarcadeBaja') ? 0 : '0');
 	}
-	if (colMap.has('FechaActual')) {
-		campos.push('FechaActual');
-		valores.push(esNumerica(colMap, 'FechaActual') ? fechaClarionHoy() : new Date());
+	if (colMeta(colMap, 'FechaActual')) {
+		pushCol('FechaActual', esNumerica(colMap, 'FechaActual') ? fechaClarionHoy() : new Date());
 	}
 	completarObligatorias(colMap, campos, valores);
+	for (let i = 0; i < campos.length; i++) {
+		const meta = colMeta(colMap, campos[i]);
+		if (!meta) continue;
+		if (esTipoNumerico(meta.tipo) && (valores[i] === '' || valores[i] == null)) {
+			valores[i] = meta.nullable ? null : campos[i].toLowerCase() === 'legajo' ? valorPersonal : 0;
+		} else if (STRING_TYPES.has(meta.tipo) && valores[i] != null) {
+			valores[i] = truncarSegunMeta(meta, valores[i]);
+		}
+	}
 	try {
 		await mysqlExec(
 			`INSERT INTO \`imPassword\` (${campos.map((c) => `\`${c}\``).join(', ')})
@@ -803,6 +995,21 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 		if (mapped) {
 			const e = new Error(mapped.message);
 			e.statusCode = mapped.statusCode;
+			throw e;
+		}
+		const sqlMsg = String(err?.sqlMessage || err?.message || '');
+		if (/data too long/i.test(sqlMsg)) {
+			const e = new Error(
+				'Un dato de texto (apellido, nombre o usuario) es más largo que lo que admite la base. Acortalo e intentá de nuevo.',
+			);
+			e.statusCode = 400;
+			throw e;
+		}
+		if (/incorrect integer value/i.test(sqlMsg)) {
+			const e = new Error(
+				'La base rechazó un número vacío (por ejemplo Legajo). Recargá la página e intentá crear el usuario otra vez.',
+			);
+			e.statusCode = 400;
 			throw e;
 		}
 		throw err;
@@ -874,10 +1081,16 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 		throw e;
 	}
 
-	const colMap = await columnasMeta('imPassword');
+	const colMap = await ensureImPasswordUsableSchema();
 	const sets = [];
 	const params = [];
-	const set = (col, v) => { if (colMap.has(col)) { sets.push(`\`${col}\` = ?`); params.push(v); } };
+	const set = (col, v) => {
+		const meta = colMeta(colMap, col);
+		if (meta) {
+			sets.push(`\`${meta.nombre}\` = ?`);
+			params.push(v);
+		}
+	};
 	if (body.nombreRed != null) set('NombreRed', valorCampoSegunTipo(colMap, 'NombreRed', body.nombreRed));
 	if (body.apellido != null) set('Apellido', valorCampoSegunTipo(colMap, 'Apellido', body.apellido));
 	if (body.nombres != null) set('Nombres', valorCampoSegunTipo(colMap, 'Nombres', body.nombres));

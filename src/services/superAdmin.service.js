@@ -1713,9 +1713,14 @@ async function obtenerCatalogosTenant(idEmpresa) {
 
 	return runWithTenant(idEmpresa, async () => {
 		const sectores = await sectoresService.obtenerSectores().catch(() => []);
-		const srvRows = await tenantDb
+		let srvRows = await tenantDb
 			.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`)
 			.catch(() => []);
+		if (!srvRows?.length) {
+			srvRows = await tenantDb
+				.executeQuery(`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`)
+				.catch(() => []);
+		}
 		return {
 			...base,
 			sectores: (sectores || []).map((s) => ({
@@ -1723,10 +1728,12 @@ async function obtenerCatalogosTenant(idEmpresa) {
 				descripcion: String(s.Descripcion ?? s.descripcionSector ?? ''),
 				ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
 			})),
-			servicios: (srvRows || []).map((s) => ({
-				id: String(s.Valor || '').trim(),
-				descripcion: String(s.Descripcion || s.Valor || '').trim(),
-			})),
+			servicios: (srvRows || [])
+				.map((s) => ({
+					id: String(s.Valor || '').trim(),
+					descripcion: String(s.Descripcion || s.Valor || '').trim(),
+				}))
+				.filter((s) => s.id),
 			roles,
 		};
 	});

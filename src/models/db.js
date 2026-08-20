@@ -31,8 +31,12 @@ async function getRequestPool(opts = {}) {
 const LENGTH_TYPES = new Set(['VarChar', 'NVarChar', 'Char', 'NChar', 'Binary', 'VarBinary']);
 const FIXED_LENGTH_TYPES = new Set(['Char', 'NChar', 'Binary']);
 
+function isEmptySqlValue(v) {
+  return v == null || v === '' || (typeof v === 'string' && v.trim() === '');
+}
+
 /** sql.VarChar sin longitud en node-mssql queda en VARCHAR(1) y trunca/rompe inserts.
- *  CHAR/NCHAR/BINARY no admiten MAX (TDS 0xAF: invalid data length). */
+ *  CHAR/NCHAR vacío con length 0 dispara TDS 0xAF (invalid data length). */
 function resolveMssqlType(parametro) {
   const typeName = parametro && parametro.type;
   if (!typeName) return undefined;
@@ -40,6 +44,9 @@ function resolveMssqlType(parametro) {
   const t = sql[typeName];
   if (t == null) return undefined;
   if (LENGTH_TYPES.has(typeName) && typeof t === 'function') {
+    if (FIXED_LENGTH_TYPES.has(typeName) && isEmptySqlValue(parametro.value)) {
+      return sql.NVarChar(1);
+    }
     const n = Number(parametro.length);
     if (Number.isFinite(n) && n > 0) return t(n);
     if (FIXED_LENGTH_TYPES.has(typeName)) return t(1);
@@ -77,9 +84,15 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
 
         // Si se especifica un tipo, usarlo; si no, dejar que SQL Server lo infiera
         if (parametro.type) {
-          request.input(nombreParametro, resolveMssqlType(parametro), parametro.value);
+          const typeName = typeof parametro.type === 'string' ? parametro.type : '';
+          const emptyFixed = FIXED_LENGTH_TYPES.has(typeName) && isEmptySqlValue(parametro.value);
+          request.input(
+            nombreParametro,
+            resolveMssqlType(parametro),
+            emptyFixed ? null : parametro.value,
+          );
         } else {
-          request.input(nombreParametro, parametro.value);
+          request.input(nombreParametro, parametro.value === '' ? null : parametro.value);
         }
         
         const regex = new RegExp(`@p${indice}\\b`, 'g');

@@ -18,9 +18,79 @@ function getTenantSchemaCache() {
       fechaActualTipo: null,
       valorPersonalIsIdentity: null,
       codOperadorIsIdentity: null,
+      columns: null,
     });
   }
   return schemaCacheByTenant.get(key);
+}
+
+function truncStr(v, max) {
+  const s = v == null ? '' : String(v).trim();
+  if (!s) return '';
+  const n = Number(max);
+  if (Number.isFinite(n) && n > 0) return s.slice(0, n);
+  return s;
+}
+
+function isNumericSqlType(t) {
+  return ['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money'].includes(
+    String(t || '').toLowerCase(),
+  );
+}
+
+async function getImPasswordColumns() {
+  const cache = getTenantSchemaCache();
+  if (cache.columns) return cache.columns;
+  const map = new Map();
+  try {
+    const rows = await executeQuery(`
+      SELECT COLUMN_NAME AS col, DATA_TYPE AS tipo, CHARACTER_MAXIMUM_LENGTH AS maxlen
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE UPPER(TABLE_NAME) = 'IMPASSWORD'
+    `);
+    for (const r of rows || []) {
+      map.set(String(r.col), {
+        nombre: String(r.col),
+        tipo: String(r.tipo || '').toLowerCase(),
+        maxlen: r.maxlen != null ? Number(r.maxlen) : null,
+      });
+    }
+  } catch {
+    /* esquema no disponible */
+  }
+  cache.columns = map;
+  return map;
+}
+
+function colInfo(colMap, name) {
+  if (colMap.has(name)) return colMap.get(name);
+  const lower = String(name).toLowerCase();
+  for (const v of colMap.values()) {
+    if (v.nombre.toLowerCase() === lower) return v;
+  }
+  return null;
+}
+
+function bindPasswordString(colMap, name, raw, fallbackLen = 80) {
+  const meta = colInfo(colMap, name);
+  const max = Number(meta?.maxlen);
+  const length = Number.isFinite(max) && max > 0 && max < 8000 ? max : fallbackLen;
+  const value = truncStr(raw, length) || null;
+  return { value, type: 'VarChar', length };
+}
+
+function bindPasswordLegajo(colMap, raw, fallbackInt) {
+  const meta = colInfo(colMap, 'Legajo');
+  const tipo = meta?.tipo || 'varchar';
+  const s = raw == null ? '' : String(raw).trim();
+  if (isNumericSqlType(tipo)) {
+    if (s === '') return { value: Number(fallbackInt) || 0, type: 'Int' };
+    const n = Number(s.replace(/[^\d.-]/g, ''));
+    return { value: Number.isFinite(n) ? n : Number(fallbackInt) || 0, type: 'Int' };
+  }
+  const max = Number(meta?.maxlen);
+  const length = Number.isFinite(max) && max > 0 && max < 8000 ? max : 20;
+  return { value: truncStr(s || String(fallbackInt || ''), length) || '0', type: 'VarChar', length };
 }
 
 async function afterUserMutation(valorPersonal) {
@@ -326,7 +396,11 @@ async function insertImPasswordManualId(
 
   const parametros = [{ value: nuevoValorPersonal, type: 'Int' }];
   if (!omitCodOperador) {
-    parametros.push({ value: codOperadorVal, type: 'VarChar' });
+    parametros.push({
+      value: truncStr(codOperadorVal, 30) || String(nuevoValorPersonal),
+      type: 'VarChar',
+      length: 30,
+    });
   }
   parametros.push(...baseParamsSinCod);
   if (fechaTipo === 'int') {
@@ -470,18 +544,19 @@ const crearUsuario = async (userData) => {
       legajo 
     } = userData;
 
+    const cols = await getImPasswordColumns();
     const fechaTipo = await getImPasswordFechaActualTipo();
     const hoy = new Date();
     const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
     const fechaClarionHoy = convertirFechaAClarion(fechaLocalStr);
 
     const baseParamsSinCod = [
-      { value: apellido, type: 'VarChar' },
-      { value: nombres, type: 'VarChar' },
-      { value: nombreRed, type: 'VarChar' },
-      { value: password, type: 'VarChar' },
-      { value: numeroDocumento || '', type: 'VarChar' },
-      { value: legajo || '', type: 'VarChar' }
+      bindPasswordString(cols, 'Apellido', apellido),
+      bindPasswordString(cols, 'Nombres', nombres),
+      bindPasswordString(cols, 'NombreRed', nombreRed),
+      bindPasswordString(cols, 'Password', password, 255),
+      bindPasswordString(cols, 'NumeroDocumento', numeroDocumento || '', 30),
+      bindPasswordLegajo(cols, legajo, 0),
     ];
 
     const omitCodOperador = await getImPasswordCodOperadorIsIdentity();
@@ -490,14 +565,27 @@ const crearUsuario = async (userData) => {
 
     if (usarIdentity) {
       nuevoValorPersonal = await insertImPasswordConIdentity(fechaTipo, baseParamsSinCod, fechaClarionHoy);
+      if (!String(legajo || '').trim() && nuevoValorPersonal != null) {
+        await executeQuery(
+          `UPDATE imPassword SET Legajo = @p1 WHERE ValorPersonal = @p0`,
+          [
+            { value: nuevoValorPersonal, type: 'Int' },
+            bindPasswordLegajo(cols, String(nuevoValorPersonal), nuevoValorPersonal),
+          ],
+        ).catch(() => {});
+      }
     } else {
       try {
+        const maxIdResult = await executeQuery(`SELECT MAX(ValorPersonal) as maxId FROM imPassword`);
+        const nextId = (maxIdResult[0]?.maxId || 0) + 1;
+        baseParamsSinCod[5] = bindPasswordLegajo(cols, legajo, nextId);
         nuevoValorPersonal = await insertImPasswordManualId(
           fechaTipo,
           omitCodOperador,
           baseParamsSinCod,
-          codOperador || '',
-          fechaClarionHoy
+          truncStr(codOperador, 30) || String(nextId),
+          fechaClarionHoy,
+          nextId,
         );
       } catch (err) {
         if (!isSqlIdentityInsertError(err)) throw err;
@@ -507,7 +595,7 @@ const crearUsuario = async (userData) => {
             fechaTipo,
             true,
             baseParamsSinCod,
-            codOperador || '',
+            truncStr(codOperador, 30),
             fechaClarionHoy
           );
         } else {
@@ -689,14 +777,15 @@ const actualizarUsuario = async (valorPersonal, userData) => {
       WHERE ValorPersonal = @p0
     `;
     
+    const cols = await getImPasswordColumns();
     const parametros = [
-      { value: valorPersonal },
-      { value: codOperador || '', type: 'VarChar' },
-      { value: apellido, type: 'VarChar' },
-      { value: nombres, type: 'VarChar' },
-      { value: nombreRed, type: 'VarChar' },
-      { value: numeroDocumento || '', type: 'VarChar' },
-      { value: legajo || '', type: 'VarChar' }
+      { value: valorPersonal, type: 'Int' },
+      bindPasswordString(cols, 'CodOperador', codOperador || String(valorPersonal), 30),
+      bindPasswordString(cols, 'Apellido', apellido),
+      bindPasswordString(cols, 'Nombres', nombres),
+      bindPasswordString(cols, 'NombreRed', nombreRed),
+      bindPasswordString(cols, 'NumeroDocumento', numeroDocumento || '', 30),
+      bindPasswordLegajo(cols, legajo, valorPersonal),
     ];
     
     await executeQuery(consulta, parametros);
@@ -740,34 +829,32 @@ async function crearImPasswordParaPersonal(valorPersonal, data) {
   }
 
   const { apellido, nombres } = splitApellidoNombre(data.ApellidoNombre || data.apellidoNombre);
+  const cols = await getImPasswordColumns();
   const fechaTipo = await getImPasswordFechaActualTipo();
   const hoy = new Date();
   const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
   const fechaClarionHoy = convertirFechaAClarion(fechaLocalStr);
 
   const baseParamsSinCod = [
-    { value: data.apellido || apellido, type: 'VarChar' },
-    { value: data.nombres || nombres, type: 'VarChar' },
-    { value: nombreRed, type: 'VarChar' },
-    { value: password, type: 'VarChar' },
-    {
-      value:
-        data.numeroDocumento != null
-          ? String(data.numeroDocumento)
-          : data.NumeroDocumento != null
-            ? String(data.NumeroDocumento)
-            : '',
-      type: 'VarChar',
-    },
-    {
-      value:
-        data.legajo != null
-          ? String(data.legajo)
-          : data.Legajo != null
-            ? String(data.Legajo)
-            : String(vp),
-      type: 'VarChar',
-    },
+    bindPasswordString(cols, 'Apellido', data.apellido || apellido),
+    bindPasswordString(cols, 'Nombres', data.nombres || nombres),
+    bindPasswordString(cols, 'NombreRed', nombreRed),
+    bindPasswordString(cols, 'Password', password, 255),
+    bindPasswordString(
+      cols,
+      'NumeroDocumento',
+      data.numeroDocumento != null
+        ? String(data.numeroDocumento)
+        : data.NumeroDocumento != null
+          ? String(data.NumeroDocumento)
+          : '',
+      30,
+    ),
+    bindPasswordLegajo(
+      cols,
+      data.legajo != null ? data.legajo : data.Legajo,
+      vp,
+    ),
   ];
 
   const omitCodOperador = await getImPasswordCodOperadorIsIdentity();
@@ -786,7 +873,7 @@ async function crearImPasswordParaPersonal(valorPersonal, data) {
       fechaTipo,
       omitCodOperador,
       baseParamsSinCod,
-      data.CodOperador || data.codOperador || '',
+      truncStr(data.CodOperador || data.codOperador, 30) || String(vp),
       fechaClarionHoy,
       vp,
     );
