@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-  Copiar ESTE archivo a C:\imedic\Start-QuickTunnel.ps1 (reemplaza el de la otra IA).
+  Copiar ESTE archivo a C:\imedic\Start-QuickTunnel.ps1 (NO uses scripts\tunnel\Start-QuickTunnel.ps1 del repo).
 
   Primera vez / URL nueva:
     powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1
@@ -106,7 +106,7 @@ function Probe-Utf8Filename {
 	$sr.Close(); $resp.Close()
 	if ($txt -notmatch '"filePath"') { throw "Probe UTF-8 no devolvio filePath: $txt" }
 	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: el nombre quedo corrupto ($txt)" }
-	$m = [regex]::Match($txt, '"filePath"\s*:\s*"([^"]+)"')
+	$m = [regex]::Match($txt, '\"filePath\"\s*:\s*\"([^"]+)\"')
 	$fp = $m.Groups[1].Value.Replace('\\', '\')
 	if ($fp -notmatch 'PEÑA|PEÑA') { Write-Host "WARN: filePath sin Ñ legible -> $fp" }
 	try {

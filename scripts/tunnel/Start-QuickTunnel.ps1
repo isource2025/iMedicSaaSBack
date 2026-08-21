@@ -80,7 +80,7 @@ function Ensure-AdjuntosRoot([string]$wanted) {
 	if ($drive -and -not (Test-Path -LiteralPath $drive)) {
 		$hostDir = 'C:\imedic'
 		New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
-		Write-Host "No hay $drive — subst $drive -> $hostDir (misma ruta logica que Vidal: E:\adjuntos)"
+		Write-Host ('No hay ' + $drive + ' - subst ' + $drive + ' -> ' + $hostDir + ' (misma ruta logica que Vidal: E:\adjuntos)')
 		cmd /c "subst $($drive.TrimEnd('\')) `"$hostDir`"" | Out-Null
 	}
 	try {
@@ -187,7 +187,7 @@ function Probe-Local([int]$listenPort, [string]$rootDir) {
 	$sr.Close(); $resp.Close()
 	if ($txt -notmatch '"filePath"') { throw "Probe upload no devolvio filePath: $txt" }
 	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: nombre corrupto ($txt)" }
-	$m = [regex]::Match($txt, '"filePath"\s*:\s*"([^"]+)"')
+	$m = [regex]::Match($txt, '\"filePath\"\s*:\s*\"([^"]+)\"')
 	$fp = $m.Groups[1].Value.Replace('\\', '\')
 	if ($fp -notmatch [regex]::Escape($rootDir)) {
 		Write-Host "WARN: filePath fuera de $rootDir -> $fp"
