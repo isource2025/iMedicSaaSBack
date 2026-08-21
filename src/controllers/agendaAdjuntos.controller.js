@@ -17,7 +17,7 @@ const {
   isFileServerUnreachable,
   describeFileServerError,
 } = require('../utils/fileServerUrl');
-const { fixMulterFile, formDataFileOptions } = require('../utils/fileNameEncoding');
+const { fixMulterFile, formDataFileOptions, sanitizeWindowsFileName } = require('../utils/fileNameEncoding');
 const { runWithTenant, restoreTenantFromRequest, ensureTenantFromReq } = require('../context/tenantContext');
 
 function enqueueNotificarAdjunto(req, payload) {
@@ -119,6 +119,7 @@ async function subirAdjuntoTurno(req, res) {
     try {
       const formData = new FormData();
       formData.append('file', fsSync.createReadStream(req.file.path), formDataFileOptions(req.file.originalname, req.file.mimetype));
+      formData.append('nombreArchivo', sanitizeWindowsFileName(req.file.originalname));
       formData.append('numeroVisita', String(idTurno));
       formData.append('nombrePaciente', nombrePaciente);
 
