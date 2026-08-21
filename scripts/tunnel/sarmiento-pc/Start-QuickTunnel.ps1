@@ -56,7 +56,63 @@ function Get-HealthJson([string]$url) {
 
 function Test-ImedicFileServer {
 	$h = Get-HealthJson "http://127.0.0.1:$Port/health"
-	return ($h -and $h -match '"success"\s*:\s*true' -and $h -match '"status"\s*:\s*"ok"')
+	return ($h -and $h -match '"success"\s*:\s*true' -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"encoding"\s*:\s*"utf8-v2"')
+}
+
+function Stop-LegacyFileServers {
+	foreach ($procId in (Get-PidsOnPort $Port)) {
+		if ($procId -le 4) { continue }
+		try {
+			$p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+			if ($p -and $p.ProcessName -match 'python|py') {
+				Write-Host "Deteniendo file server viejo (Python PID $($p.Id))..."
+				Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+			}
+		} catch {}
+	}
+	Stop-Port $Port
+}
+
+function Probe-Utf8Filename {
+	$probeName = 'PEÑA-probe.txt'
+	$body = [Text.Encoding]::UTF8.GetBytes("probe $(Get-Date -Format o)")
+	$boundary = '----ImedicUtf8' + [guid]::NewGuid().ToString('N')
+	$nl = "`r`n"
+	$ms = New-Object IO.MemoryStream
+	$w = New-Object IO.StreamWriter($ms, [Text.Encoding]::UTF8, 1024, $true)
+	$w.Write("--$boundary$nl")
+	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nl99999$nl")
+	$w.Write("--$boundary$nl")
+	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nlPEÑA PROBE$nl")
+	$w.Write("--$boundary$nl")
+	$enc = [Uri]::EscapeDataString($probeName)
+	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"PEÑA-probe.txt`"; filename*=UTF-8''$enc$nl")
+	$w.Write("Content-Type: text/plain$nl$nl")
+	$w.Flush()
+	$ms.Write($body, 0, $body.Length)
+	$tail = [Text.Encoding]::UTF8.GetBytes("$nl--$boundary--$nl")
+	$ms.Write($tail, 0, $tail.Length)
+	$payload = $ms.ToArray()
+	$w.Dispose(); $ms.Dispose()
+
+	$req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/upload")
+	$req.Method = 'POST'
+	$req.ContentType = "multipart/form-data; boundary=$boundary"
+	$req.Timeout = 15000
+	$req.GetRequestStream().Write($payload, 0, $payload.Length)
+	$resp = $req.GetResponse()
+	$sr = New-Object IO.StreamReader($resp.GetResponseStream())
+	$txt = $sr.ReadToEnd()
+	$sr.Close(); $resp.Close()
+	if ($txt -notmatch '"filePath"') { throw "Probe UTF-8 no devolvio filePath: $txt" }
+	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: el nombre quedo corrupto ($txt)" }
+	$m = [regex]::Match($txt, '"filePath"\s*:\s*"([^"]+)"')
+	$fp = $m.Groups[1].Value.Replace('\\', '\')
+	if ($fp -notmatch 'PEÑA|PEÑA') { Write-Host "WARN: filePath sin Ñ legible -> $fp" }
+	try {
+		Invoke-WebRequest -Method DELETE -Uri ("http://127.0.0.1:$Port/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10 | Out-Null
+	} catch {}
+	Write-Host "Probe UTF-8 OK  $fp"
 }
 
 function Find-Cloudflared {
@@ -233,7 +289,7 @@ try {
       if ($req.HttpMethod -eq "OPTIONS") { Add-Cors $res; $res.StatusCode = 204; $res.Close(); continue }
       if ($req.HttpMethod -eq "GET" -and ($route -eq "/" -or $route -eq "/health")) {
         $rootEsc = $RootDir.Replace("\","\\")
-        Send-Json $res 200 "{""success"":true,""ok"":true,""status"":""ok"",""root"":""$rootEsc"",""port"":$Port}"
+        Send-Json $res 200 "{""success"":true,""ok"":true,""status"":""ok"",""encoding"":""utf8-v2"",""root"":""$rootEsc"",""port"":$Port}"
         continue
       }
       if ($req.HttpMethod -eq "GET" -and $route -eq "/file") {
@@ -294,9 +350,8 @@ try {
 }
 
 function Start-ImedicFileServer {
-	if (Test-ImedicFileServer) { return }
-	Write-Host 'Reemplazando file server del puerto 9012 (el actual no manda success=true)...'
-	Stop-Port $Port
+	Stop-LegacyFileServers
+	Write-Host 'Reiniciando file server iMedic (utf8-v2, carpetas por visita)...'
 	Write-FileServerRuntime
 	$psi = New-Object System.Diagnostics.ProcessStartInfo
 	$psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -313,7 +368,8 @@ function Start-ImedicFileServer {
 		Start-Sleep -Milliseconds 300
 		if (Test-ImedicFileServer) { $ok = $true; break }
 	}
-	if (-not $ok) { throw "File server iMedic no respondio success=true en http://127.0.0.1:$Port/health" }
+	if (-not $ok) { throw "File server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health" }
+	Probe-Utf8Filename
 }
 
 function Save-FileServerUrlRest([string]$publicUrl) {

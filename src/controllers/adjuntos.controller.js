@@ -26,6 +26,7 @@ const {
 const {
   fixMulterFile,
   utf8FilenameForFormDataHeader,
+  formDataFileOptions,
   pathLookupCandidates,
 } = require('../utils/fileNameEncoding');
 
@@ -219,10 +220,7 @@ router.post(
     try {
       const formData = new FormData();
       const fileStream = fsSync.createReadStream(req.file.path);
-      formData.append('file', fileStream, {
-        filename: utf8FilenameForFormDataHeader(req.file.originalname),
-        contentType: req.file.mimetype,
-      });
+      formData.append('file', fileStream, formDataFileOptions(req.file.originalname, req.file.mimetype));
       formData.append('numeroVisita', String(numeroVisita));
       formData.append('nombrePaciente', nombrePaciente);
 
@@ -354,10 +352,7 @@ router.post(
       try {
         const formData = new FormData();
         const fileStream = fsSync.createReadStream(file.path);
-        formData.append('file', fileStream, {
-          filename: utf8FilenameForFormDataHeader(file.originalname),
-          contentType: file.mimetype,
-        });
+        formData.append('file', fileStream, formDataFileOptions(file.originalname, file.mimetype));
         formData.append('numeroVisita', String(numeroVisita));
         formData.append('nombrePaciente', nombrePaciente);
 

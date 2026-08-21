@@ -57,7 +57,21 @@ function Get-Health([int]$listenPort) {
 
 function Test-ImedicFileServer([int]$listenPort) {
 	$h = Get-Health $listenPort
-	return ($h -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"success"\s*:\s*true')
+	return ($h -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"success"\s*:\s*true' -and $h -match '"encoding"\s*:\s*"utf8-v2"')
+}
+
+function Stop-LegacyFileServers([int]$listenPort) {
+	foreach ($procId in (Get-PidsOnPort $listenPort)) {
+		if ($procId -le 4) { continue }
+		try {
+			$p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+			if ($p -and $p.ProcessName -match 'python|py') {
+				Write-Host "Deteniendo file server viejo (Python PID $($p.Id))..."
+				Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+			}
+		} catch {}
+	}
+	Stop-Port $listenPort
 }
 
 function Ensure-AdjuntosRoot([string]$wanted) {
@@ -140,22 +154,23 @@ function Test-PublicHealth([string]$base) {
 }
 
 function Probe-Local([int]$listenPort, [string]$rootDir) {
-	$probeName = 'imedic-probe.txt'
+	$probeName = 'PEÑA-probe.txt'
 	$body = [Text.Encoding]::UTF8.GetBytes("probe $(Get-Date -Format o)")
 	$boundary = '----ImedicProbe' + [guid]::NewGuid().ToString('N')
 	$nl = "`r`n"
 	$ms = New-Object IO.MemoryStream
-	$w = New-Object IO.StreamWriter($ms, [Text.Encoding]::ASCII, 1024, $true)
+	$w = New-Object IO.StreamWriter($ms, [Text.Encoding]::UTF8, 1024, $true)
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nlPROBE$nl")
 	$w.Write("--$boundary$nl")
-	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nlPROBE PACIENTE$nl")
+	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nlPEÑA PROBE$nl")
 	$w.Write("--$boundary$nl")
-	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"$probeName`"$nl")
+	$enc = [Uri]::EscapeDataString($probeName)
+	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"PEÑA-probe.txt`"; filename*=UTF-8''$enc$nl")
 	$w.Write("Content-Type: text/plain$nl$nl")
 	$w.Flush()
 	$ms.Write($body, 0, $body.Length)
-	$tail = [Text.Encoding]::ASCII.GetBytes("$nl--$boundary--$nl")
+	$tail = [Text.Encoding]::UTF8.GetBytes("$nl--$boundary--$nl")
 	$ms.Write($tail, 0, $tail.Length)
 	$payload = $ms.ToArray()
 	$w.Dispose(); $ms.Dispose()
@@ -171,6 +186,7 @@ function Probe-Local([int]$listenPort, [string]$rootDir) {
 	$txt = $sr.ReadToEnd()
 	$sr.Close(); $resp.Close()
 	if ($txt -notmatch '"filePath"') { throw "Probe upload no devolvio filePath: $txt" }
+	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: nombre corrupto ($txt)" }
 	$m = [regex]::Match($txt, '"filePath"\s*:\s*"([^"]+)"')
 	$fp = $m.Groups[1].Value.Replace('\\', '\')
 	if ($fp -notmatch [regex]::Escape($rootDir)) {
@@ -200,31 +216,31 @@ Write-Host 'Ejemplo: E:\adjuntos\468 APELLIDO NOMBRE\archivo.pdf'
 Write-Host ''
 
 if (-not (Test-ImedicFileServer $Port)) {
-	Write-Host 'Hay un proceso en el puerto que NO es el file server iMedic (o no hay nada). Se reemplaza.'
-	Stop-Port $Port
-	$fsBat = Join-Path $repoBack 'start-file-server.bat'
-	if (-not (Test-Path -LiteralPath $fsBat)) { throw "No existe $fsBat" }
-	Write-Host 'Arrancando file server iMedic (oculto)...'
-	$psi = New-Object System.Diagnostics.ProcessStartInfo
-	$psi.FileName = "$env:SystemRoot\System32\cmd.exe"
-	$psi.Arguments = "/c `"$fsBat`""
-	$psi.WorkingDirectory = $repoBack
-	$psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
-	$psi.UseShellExecute = $false
-	$psi.CreateNoWindow = $true
-	$psi.EnvironmentVariables['PORT'] = "$Port"
-	$psi.EnvironmentVariables['ROOT'] = $Root
-	$psi.EnvironmentVariables['FALLBACK_ROOT'] = $FallbackRoot
-	$psi.EnvironmentVariables['IMEDIC_NOPAUSE'] = '1'
-	[void][Diagnostics.Process]::Start($psi)
-
-	$ok = $false
-	for ($i = 0; $i -lt 30; $i++) {
-		Start-Sleep -Milliseconds 400
-		if (Test-ImedicFileServer $Port) { $ok = $true; break }
-	}
-	if (-not $ok) { throw "El file server iMedic no respondio status=ok en http://127.0.0.1:$Port/health" }
+	Write-Host 'Reiniciando file server iMedic (utf8-v2)...'
 }
+Stop-LegacyFileServers $Port
+$fsBat = Join-Path $repoBack 'start-file-server.bat'
+if (-not (Test-Path -LiteralPath $fsBat)) { throw "No existe $fsBat" }
+Write-Host 'Arrancando file server iMedic (oculto)...'
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "$env:SystemRoot\System32\cmd.exe"
+$psi.Arguments = "/c `"$fsBat`""
+$psi.WorkingDirectory = $repoBack
+$psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.EnvironmentVariables['PORT'] = "$Port"
+$psi.EnvironmentVariables['ROOT'] = $Root
+$psi.EnvironmentVariables['FALLBACK_ROOT'] = $FallbackRoot
+$psi.EnvironmentVariables['IMEDIC_NOPAUSE'] = '1'
+[void][Diagnostics.Process]::Start($psi)
+
+$ok = $false
+for ($i = 0; $i -lt 30; $i++) {
+	Start-Sleep -Milliseconds 400
+	if (Test-ImedicFileServer $Port) { $ok = $true; break }
+}
+if (-not $ok) { throw "El file server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health" }
 
 Write-Host "File server iMedic OK  http://127.0.0.1:$Port/health"
 Probe-Local $Port $Root

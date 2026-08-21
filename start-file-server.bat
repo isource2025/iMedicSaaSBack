@@ -235,7 +235,7 @@ try {
 
       if ($req.HttpMethod -eq 'GET' -and ($route -eq '/' -or $route -eq '/health')) {
         $rootEsc = $RootDir.Replace('\','\\')
-        Send-Json $res 200 "{""success"":true,""status"":""ok"",""root"":""$rootEsc"",""port"":$Port,""endpoints"":[""/health"",""/file"",""/upload""]}"
+        Send-Json $res 200 "{""success"":true,""status"":""ok"",""encoding"":""utf8-v2"",""root"":""$rootEsc"",""port"":$Port,""endpoints"":[""/health"",""/file"",""/upload""]}"
         continue
       }
 
