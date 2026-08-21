@@ -56,18 +56,29 @@ function Normalize-Path([string]$p) {
   return $x
 }
 
-function Replace-N-Tilde([string]$s) {
+function Normalize-UnicodeText([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return $s }
-  try { $s = $s.Normalize([Text.NormalizationForm]::FormC) } catch {}
-  $s = $s -replace '[\u00D1\u00F1]', '_'
-  $s = $s -replace 'N\u0303', '_'
-  $s = $s -replace 'n\u0303', '_'
-  return $s
+  try { return $s.Normalize([Text.NormalizationForm]::FormC) } catch { return $s }
+}
+
+function Legacy-UnderscoreN([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return $s }
+  return ($s -replace '[\u00D1\u00F1]', '_')
+}
+
+function Test-LooksMojibake([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return $false }
+  if ($s -match 'PE.A\?') { return $true }
+  foreach ($ch in [char[]]$s) {
+    $code = [int]$ch
+    if ($code -eq 0xC3 -or $code -eq 0xC2 -or ($code -ge 0x80 -and $code -le 0x9F)) { return $true }
+  }
+  return $false
 }
 
 function Sanitize-Name([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return '' }
-  $x = Replace-N-Tilde (Repair-Utf8Mojibake $s)
+  $x = Normalize-UnicodeText (Repair-Utf8Mojibake $s)
   $x = $x.Trim().ToUpper()
   $x = $x -replace '[\\/:*?"<>|]', ' '
   $x = $x -replace '\s+', ' '
@@ -76,6 +87,8 @@ function Sanitize-Name([string]$s) {
 
 function Repair-Utf8Mojibake([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return $s }
+  $s = Normalize-UnicodeText $s
+  if (-not (Test-LooksMojibake $s)) { return $s }
   try {
     $latin1 = [Text.Encoding]::GetEncoding(28591)
     $bytes = $latin1.GetBytes($s)
@@ -87,13 +100,13 @@ function Repair-Utf8Mojibake([string]$s) {
   $s = $s.Replace(([char]0x00C3).ToString() + [char]0x0091, $latN)
   $s = $s.Replace(([char]0x00C3).ToString() + '?', $latN)
   $s = $s.Replace(([char]0x00C3).ToString() + [char]0x00B1, $latn)
-  return $s
+  return (Normalize-UnicodeText $s)
 }
 
 function Sanitize-FileName([string]$fileName) {
-  $safeFile = Replace-N-Tilde ([IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName)))
+  $safeFile = Normalize-UnicodeText ([IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName)))
   $safeFile = $safeFile -replace '[\\/:*?"<>|]', '_'
-  $safeFile = $safeFile -replace '[\x00-\x1F]', '_'
+  $safeFile = $safeFile -replace '[\x00-\x1F\u007F-\u009F]', '_'
   if ([string]::IsNullOrWhiteSpace($safeFile)) { return 'archivo' }
   return $safeFile.Trim()
 }
@@ -111,7 +124,7 @@ function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [strin
 
 function Find-ExistingFile([string]$p) {
   $names = New-Object System.Collections.Generic.List[string]
-  foreach ($c in @($p, (Repair-Utf8Mojibake $p), (Replace-N-Tilde $p), (Replace-N-Tilde (Repair-Utf8Mojibake $p)))) {
+  foreach ($c in @($p, (Repair-Utf8Mojibake $p), (Legacy-UnderscoreN $p), (Legacy-UnderscoreN (Repair-Utf8Mojibake $p)))) {
     if ($c -and -not $names.Contains($c)) { [void]$names.Add($c) }
   }
   $fileName = Sanitize-FileName ([IO.Path]::GetFileName($p))
@@ -310,9 +323,8 @@ try {
         if (-not $destPath) {
           $destPath = Get-VidalDest $RootDir $numeroVisita $nombrePaciente $fileName
         } else {
-          $destPath = Replace-N-Tilde (Repair-Utf8Mojibake $destPath)
+          $destPath = Repair-Utf8Mojibake $destPath
         }
-        $destPath = Replace-N-Tilde $destPath
 
         Ensure-Parent $destPath
         [IO.File]::WriteAllBytes($destPath, $fileBytes)

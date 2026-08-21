@@ -1,8 +1,8 @@
 /**
  * Nombres de adjuntos: multer/busboy decodifican el filename del multipart
  * como latin1. UTF-8 "Ñ" (C3 91) termina como "Ã" + control U+0091 y, tras
- * el round-trip Clarion/CP1252, se ve "PEÃ?A". Windows tampoco acepta ? * :
- * en el nombre, así que el write falla o el archivo queda inencontrable.
+ * el round-trip Clarion/CP1252, se ve "PEÃ?A". Reparamos mojibake y
+ * preservamos ñ/Ñ/acentos en el nombre real (filename* UTF-8 al file server).
  */
 
 const path = require('path');
@@ -42,6 +42,12 @@ function decodeMultipartFilename(name) {
 	if (!s) return '';
 
 	try {
+		s = s.normalize('NFC');
+	} catch {
+		/* keep */
+	}
+
+	try {
 		const decoded = Buffer.from(s, 'latin1').toString('utf8');
 		if (!decoded.includes('\uFFFD') && decoded !== s) {
 			if (looksLikeUtf8Mojibake(s) || /[ñÑáéíóúÁÉÍÓÚüÜ]/.test(decoded)) {
@@ -55,15 +61,17 @@ function decodeMultipartFilename(name) {
 	for (const [re, repl] of MOJIBAKE_MAP) {
 		s = s.replace(re, repl);
 	}
-	return s;
+
+	try {
+		return s.normalize('NFC');
+	} catch {
+		return s;
+	}
 }
 
-function replaceNTildeWithUnderscore(s) {
-	return String(s)
-		.normalize('NFC')
-		.replace(/[\u00D1\u00F1]/g, '_')
-		.replace(/N\u0303/g, '_')
-		.replace(/n\u0303/g, '_');
+/** Solo para encontrar archivos viejos guardados con _ en lugar de Ñ */
+function legacyUnderscoreForN(s) {
+	return String(s).replace(/[\u00D1\u00F1]/g, '_');
 }
 
 function sanitizeWindowsFileName(name) {
@@ -73,19 +81,17 @@ function sanitizeWindowsFileName(name) {
 		.replace(/[<>:"/\\|?*\u0000-\u001F\u007F-\u009F]/g, '_')
 		.replace(/\s+/g, ' ')
 		.trim();
-	return replaceNTildeWithUnderscore(safe) || 'archivo';
+	return safe || 'archivo';
 }
 
 function sanitizeFolderName(name) {
 	const decoded = decodeMultipartFilename(name);
-	return replaceNTildeWithUnderscore(
-		decoded
-			.trim()
-			.toUpperCase()
-			.replace(/[\\/:*?"<>|]/g, ' ')
-			.replace(/\s+/g, ' ')
-			.trim(),
-	);
+	return decoded
+		.trim()
+		.toUpperCase()
+		.replace(/[\\/:*?"<>|]/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
 }
 
 /**
@@ -131,12 +137,12 @@ function pathLookupCandidates(filePath) {
 	return uniqueNonEmpty([
 		original,
 		repaired,
-		replaceNTildeWithUnderscore(original),
-		replaceNTildeWithUnderscore(repaired),
 		path.join(dir, repairedName),
 		path.join(repairedDir, repairedName),
 		path.join(repairedDir, name),
-		path.join(replaceNTildeWithUnderscore(repairedDir), repairedName),
+		legacyUnderscoreForN(original),
+		legacyUnderscoreForN(repaired),
+		path.join(legacyUnderscoreForN(repairedDir), legacyUnderscoreForN(repairedName)),
 	]);
 }
 
@@ -148,6 +154,7 @@ function fixMulterFile(file) {
 
 /**
  * Content-Disposition con filename* UTF-8 (RFC 5987) para el file server PowerShell.
+ * filename= es solo fallback ASCII; el nombre real va en filename*.
  */
 function formDataFileOptions(originalName, contentType) {
 	const safeName = sanitizeWindowsFileName(originalName);
