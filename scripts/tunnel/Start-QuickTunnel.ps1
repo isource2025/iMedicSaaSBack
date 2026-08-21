@@ -32,13 +32,44 @@ $runtime = Join-Path $here 'file-server-runtime.ps1'
 $outLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\cf-out.log'
 $errLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\cf-err.log'
 $urlFile = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\url.txt'
+$fsLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\file-server.log'
+$fsErrLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\file-server-err.log'
 
 function Get-PidsOnPort([int]$listenPort) {
 	$pids = @()
 	foreach ($line in (netstat -ano -p tcp)) {
-		if ($line -match ":$listenPort\s+.+LISTENING\s+(\d+)\s*$") { $pids += [int]$Matches[1] }
+		if ($line -match ":$listenPort\s+.+LISTENING\s+(\d+)\s*$") { $pids += [int]$Matches[1]; continue }
+		if ($line -match "\]:$listenPort\s+.+LISTENING\s+(\d+)\s*$") { $pids += [int]$Matches[1] }
 	}
 	return $pids | Select-Object -Unique
+}
+
+function Ensure-HttpUrlAcl([int]$listenPort) {
+	$url = "http://127.0.0.1:$listenPort/"
+	$show = netsh http show urlacl url=$url 2>&1 | Out-String
+	if ($show -notmatch 'URL reservada|Reserved URL') {
+		Write-Host "Reservando $url (HttpListener)..."
+		$null = netsh http add urlacl url=$url user=Everyone
+	}
+}
+
+function Show-FileServerDiagnostics {
+	$health = Get-HealthJson "http://127.0.0.1:$Port/health"
+	Write-Host ''
+	Write-Host '--- diagnostico file server ---'
+	Write-Host "Health recibido: $(if ($health) { $health } else { '(sin respuesta)' })"
+	foreach ($procId in (Get-PidsOnPort $Port)) {
+		try {
+			$p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+			if ($p) { Write-Host "Puerto $Port -> PID $($p.Id) $($p.ProcessName)" }
+		} catch {}
+	}
+	foreach ($logPath in @($fsErrLog, $fsLog)) {
+		if (-not (Test-Path -LiteralPath $logPath)) { continue }
+		Write-Host "--- $logPath (ultimas lineas) ---"
+		Get-Content -LiteralPath $logPath -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+	}
+	Write-Host '-----------------------------'
 }
 
 function Stop-Port([int]$listenPort) {
@@ -141,10 +172,18 @@ function Find-Cloudflared {
 }
 
 function Write-FileServerRuntime {
-	@'
+	$content = @'
+param(
+  [Parameter(Mandatory=$true)][int]$Port,
+  [Parameter(Mandatory=$true)][string]$Root
+)
 $ErrorActionPreference = "Stop"
-$Port = [int]$env:FILE_SERVER_PORT
-$RootDir = $env:FILE_SERVER_ROOT
+$RootDir = $Root
+$fsLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\file-server.log'
+function FsLog([string]$m) {
+  try { Add-Content -LiteralPath $fsLog -Value "$(Get-Date -Format o) $m" -ErrorAction SilentlyContinue } catch {}
+}
+FsLog "Inicio port=$Port root=$RootDir pid=$PID"
 if (-not (Test-Path -LiteralPath $RootDir)) { New-Item -ItemType Directory -Force -Path $RootDir | Out-Null }
 
 function Normalize-Path([string]$p) {
@@ -284,10 +323,12 @@ function Mime-Of([string]$filePath) {
   }
 }
 
-$listener = [System.Net.HttpListener]::new()
-$listener.Prefixes.Add("http://127.0.0.1:$Port/")
-$listener.Start()
 try {
+$listener = New-Object System.Net.HttpListener
+$listener.Prefixes.Add("http://127.0.0.1:$Port/")
+FsLog "HttpListener.Start en http://127.0.0.1:$Port/"
+$listener.Start()
+FsLog "Escuchando OK"
   while ($listener.IsListening) {
     $ctx = $listener.GetContext()
     $req = $ctx.Request
@@ -351,32 +392,51 @@ try {
     }
   }
 } finally {
-  if ($listener.IsListening) { $listener.Stop() }
-  $listener.Close()
+  if ($listener -and $listener.IsListening) { $listener.Stop() }
+  if ($listener) { $listener.Close() }
 }
-'@ | Set-Content -LiteralPath $runtime -Encoding UTF8
+} catch {
+  FsLog "FATAL: $($_.Exception.Message)"
+  throw
+}
+'@
+	$utf8 = New-Object System.Text.UTF8Encoding $false
+	[System.IO.File]::WriteAllText($runtime, $content, $utf8)
 }
 
 function Start-ImedicFileServer {
 	Stop-LegacyFileServers
+	Ensure-HttpUrlAcl $Port
 	Write-Host 'Reiniciando file server iMedic (utf8-v2, carpetas por visita)...'
 	Write-FileServerRuntime
-	$psi = New-Object System.Diagnostics.ProcessStartInfo
-	$psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-	$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runtime`""
-	$psi.WorkingDirectory = $here
-	$psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
-	$psi.UseShellExecute = $false
-	$psi.CreateNoWindow = $true
-	$psi.EnvironmentVariables['FILE_SERVER_PORT'] = "$Port"
-	$psi.EnvironmentVariables['FILE_SERVER_ROOT'] = $Root
-	[void][Diagnostics.Process]::Start($psi)
+	foreach ($f in @($fsLog, $fsErrLog)) {
+		if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+	}
+	$psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+	$args = @(
+		'-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runtime,
+		'-Port', "$Port", '-Root', $Root
+	)
+	$proc = Start-Process -FilePath $psExe -ArgumentList $args -WorkingDirectory $here `
+		-WindowStyle Hidden -PassThru `
+		-RedirectStandardOutput $fsLog -RedirectStandardError $fsErrLog
 	$ok = $false
-	for ($i = 0; $i -lt 40; $i++) {
-		Start-Sleep -Milliseconds 300
+	for ($i = 0; $i -lt 50; $i++) {
+		Start-Sleep -Milliseconds 400
+		if ($proc.HasExited) { break }
 		if (Test-ImedicFileServer) { $ok = $true; break }
 	}
-	if (-not $ok) { throw "File server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health" }
+	if (-not $ok -and -not $proc.HasExited) {
+		Start-Sleep -Seconds 2
+		if (Test-ImedicFileServer) { $ok = $true }
+	}
+	if (-not $ok) {
+		Show-FileServerDiagnostics
+		if ($proc.HasExited) {
+			throw "File server termino con codigo $($proc.ExitCode). Ver $fsErrLog y $fsLog"
+		}
+		throw "File server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health"
+	}
 	Probe-Utf8Filename
 }
 
