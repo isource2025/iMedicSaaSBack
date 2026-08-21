@@ -58,6 +58,14 @@ function decodeMultipartFilename(name) {
 	return s;
 }
 
+function replaceNTildeWithUnderscore(s) {
+	return String(s)
+		.normalize('NFC')
+		.replace(/[\u00D1\u00F1]/g, '_')
+		.replace(/N\u0303/g, '_')
+		.replace(/n\u0303/g, '_');
+}
+
 function sanitizeWindowsFileName(name) {
 	const decoded = decodeMultipartFilename(name);
 	const base = path.basename(decoded.replace(/\\/g, '/')) || 'archivo';
@@ -65,17 +73,19 @@ function sanitizeWindowsFileName(name) {
 		.replace(/[<>:"/\\|?*\u0000-\u001F\u007F-\u009F]/g, '_')
 		.replace(/\s+/g, ' ')
 		.trim();
-	return safe || 'archivo';
+	return replaceNTildeWithUnderscore(safe) || 'archivo';
 }
 
 function sanitizeFolderName(name) {
 	const decoded = decodeMultipartFilename(name);
-	return decoded
-		.trim()
-		.toUpperCase()
-		.replace(/[\\/:*?"<>|]/g, ' ')
-		.replace(/\s+/g, ' ')
-		.trim();
+	return replaceNTildeWithUnderscore(
+		decoded
+			.trim()
+			.toUpperCase()
+			.replace(/[\\/:*?"<>|]/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim(),
+	);
 }
 
 /**
@@ -121,9 +131,12 @@ function pathLookupCandidates(filePath) {
 	return uniqueNonEmpty([
 		original,
 		repaired,
+		replaceNTildeWithUnderscore(original),
+		replaceNTildeWithUnderscore(repaired),
 		path.join(dir, repairedName),
 		path.join(repairedDir, repairedName),
 		path.join(repairedDir, name),
+		path.join(replaceNTildeWithUnderscore(repairedDir), repairedName),
 	]);
 }
 

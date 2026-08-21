@@ -56,9 +56,19 @@ function Normalize-Path([string]$p) {
   return $x
 }
 
+function Replace-N-Tilde([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return $s }
+  try { $s = $s.Normalize([Text.NormalizationForm]::FormC) } catch {}
+  $s = $s -replace '[\u00D1\u00F1]', '_'
+  $s = $s -replace 'N\u0303', '_'
+  $s = $s -replace 'n\u0303', '_'
+  return $s
+}
+
 function Sanitize-Name([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return '' }
-  $x = $s.Trim().ToUpper()
+  $x = Replace-N-Tilde (Repair-Utf8Mojibake $s)
+  $x = $x.Trim().ToUpper()
   $x = $x -replace '[\\/:*?"<>|]', ' '
   $x = $x -replace '\s+', ' '
   return $x.Trim()
@@ -81,7 +91,7 @@ function Repair-Utf8Mojibake([string]$s) {
 }
 
 function Sanitize-FileName([string]$fileName) {
-  $safeFile = [IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName))
+  $safeFile = Replace-N-Tilde ([IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName)))
   $safeFile = $safeFile -replace '[\\/:*?"<>|]', '_'
   $safeFile = $safeFile -replace '[\x00-\x1F]', '_'
   if ([string]::IsNullOrWhiteSpace($safeFile)) { return 'archivo' }
@@ -91,7 +101,7 @@ function Sanitize-FileName([string]$fileName) {
 # Igual que Vidal: \\server\Imagenes\Vidal\{visita} {PACIENTE}\{archivo}
 function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [string]$fileName) {
   $safeFile = Sanitize-FileName $fileName
-  $n = Sanitize-Name (Repair-Utf8Mojibake $paciente)
+  $n = Sanitize-Name $paciente
   $folder = $null
   if ($visita -and $n) { $folder = "$visita $n" }
   elseif ($visita) { $folder = "$visita" }
@@ -101,7 +111,7 @@ function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [strin
 
 function Find-ExistingFile([string]$p) {
   $names = New-Object System.Collections.Generic.List[string]
-  foreach ($c in @($p, (Repair-Utf8Mojibake $p))) {
+  foreach ($c in @($p, (Repair-Utf8Mojibake $p), (Replace-N-Tilde $p), (Replace-N-Tilde (Repair-Utf8Mojibake $p)))) {
     if ($c -and -not $names.Contains($c)) { [void]$names.Add($c) }
   }
   $fileName = Sanitize-FileName ([IO.Path]::GetFileName($p))
@@ -299,7 +309,10 @@ try {
         if (-not $fileName -or $fileBytes.Length -eq 0) { Send-Json $res 400 '{"success":false,"error":"archivo requerido"}'; continue }
         if (-not $destPath) {
           $destPath = Get-VidalDest $RootDir $numeroVisita $nombrePaciente $fileName
+        } else {
+          $destPath = Replace-N-Tilde (Repair-Utf8Mojibake $destPath)
         }
+        $destPath = Replace-N-Tilde $destPath
 
         Ensure-Parent $destPath
         [IO.File]::WriteAllBytes($destPath, $fileBytes)
