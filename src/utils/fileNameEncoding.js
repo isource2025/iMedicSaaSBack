@@ -156,15 +156,20 @@ function fixMulterFile(file) {
  * Content-Disposition con filename* UTF-8 (RFC 5987) para el file server PowerShell.
  * filename= es solo fallback ASCII; el nombre real va en filename*.
  */
+function escapeContentDispositionFilename(name) {
+	return String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function formDataFileOptions(originalName, contentType) {
 	const safeName = sanitizeWindowsFileName(originalName);
 	const encoded = encodeURIComponent(safeName);
-	const asciiFallback = safeName.replace(/[^\x20-\x7E]/g, '_') || 'archivo';
+	const wireName = utf8FilenameForFormDataHeader(safeName);
+	const escaped = escapeContentDispositionFilename(wireName);
 	return {
-		filename: asciiFallback,
+		filename: wireName,
 		contentType: contentType || 'application/octet-stream',
 		header: {
-			'Content-Disposition': `form-data; name="file"; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`,
+			'Content-Disposition': `form-data; name="file"; filename="${escaped}"; filename*=UTF-8''${encoded}`,
 		},
 	};
 }

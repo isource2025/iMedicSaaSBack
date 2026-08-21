@@ -76,6 +76,27 @@ function Test-LooksMojibake([string]$s) {
   return $false
 }
 
+function Resolve-MultipartFilename([string]$headerText) {
+  if ([string]::IsNullOrWhiteSpace($headerText)) { return $null }
+  foreach ($pat in @(
+      'filename\*=(?:UTF-8|utf-8)\s*''\s*([^;\r\n]+)',
+      'filename\*=(?:UTF-8|utf-8)\s*""\s*([^;\r\n]+)'
+    )) {
+    $m = [regex]::Match($headerText, $pat, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($m.Success) {
+      try {
+        $decoded = [Uri]::UnescapeDataString($m.Groups[1].Value.Trim().Trim('"'))
+        if ($decoded) { return $decoded }
+      } catch {}
+    }
+  }
+  $m2 = [regex]::Match($headerText, 'filename="([^"]*)"')
+  if ($m2.Success -and $m2.Groups[1].Value) {
+    return (Repair-Utf8Mojibake $m2.Groups[1].Value)
+  }
+  return $null
+}
+
 function Sanitize-Name([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return '' }
   $x = Normalize-UnicodeText (Repair-Utf8Mojibake $s)
@@ -295,29 +316,28 @@ try {
         $numeroVisita = $null
         $nombrePaciente = $null
         $fileName = $null
+        $nombreArchivo = $null
         [byte[]]$fileBytes = @()
 
         foreach ($part in $parts) {
           $h = $part.Headers
           $name = [regex]::Match($h, 'name="([^"]+)"').Groups[1].Value
-          $fnStar = [regex]::Match($h, "filename\*=(?:UTF-8|utf-8)''([^;\r\n]+)")
-          $fn = [regex]::Match($h, 'filename="([^"]*)"').Groups[1].Value
-          if ($fnStar.Success) {
-            try { $fn = [Uri]::UnescapeDataString($fnStar.Groups[1].Value.Trim()) } catch {}
-          }
-
-          if ($fn) {
-            $fileName = Sanitize-FileName $fn
+          $resolvedFn = Resolve-MultipartFilename $h
+          if ($resolvedFn) {
+            $fileName = Sanitize-FileName $resolvedFn
             $fileBytes = $part.Data
             continue
           }
 
           $txt = [Text.Encoding]::UTF8.GetString($part.Data).Trim()
           $txt = Repair-Utf8Mojibake $txt
+          if ($name -eq 'nombreArchivo' -and $txt) { $nombreArchivo = $txt; continue }
           if ($name -eq 'path' -and $txt) { $destPath = Normalize-Path $txt }
           if ($name -eq 'numeroVisita' -and $txt) { $numeroVisita = $txt }
           if ($name -eq 'nombrePaciente' -and $txt) { $nombrePaciente = $txt }
         }
+
+        if ($nombreArchivo) { $fileName = Sanitize-FileName $nombreArchivo }
 
         if (-not $fileName -or $fileBytes.Length -eq 0) { Send-Json $res 400 '{"success":false,"error":"archivo requerido"}'; continue }
         if (-not $destPath) {

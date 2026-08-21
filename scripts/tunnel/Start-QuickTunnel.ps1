@@ -133,8 +133,11 @@ function Probe-Utf8Filename {
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nl$probeStem PROBE$nl")
 	$w.Write("--$boundary$nl")
+	$w.Write("Content-Disposition: form-data; name=`"nombreArchivo`"$nl$nl$probeName$nl")
+	$w.Write("--$boundary$nl")
 	$enc = [Uri]::EscapeDataString($probeName)
-	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"$probeName`"; filename*=UTF-8''$enc$nl")
+	$asciiFn = $probeName -replace '[^\x20-\x7E]', '_'
+	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"$asciiFn`"; filename*=UTF-8''$enc$nl")
 	$w.Write("Content-Type: text/plain$nl$nl")
 	$w.Flush()
 	$ms.Write($body, 0, $body.Length)
@@ -218,6 +221,26 @@ function Test-LooksMojibake([string]$s) {
     if ($code -eq 0xC3 -or $code -eq 0xC2 -or ($code -ge 0x80 -and $code -le 0x9F)) { return $true }
   }
   return $false
+}
+function Resolve-MultipartFilename([string]$headerText) {
+  if ([string]::IsNullOrWhiteSpace($headerText)) { return $null }
+  foreach ($pat in @(
+      'filename\*=(?:UTF-8|utf-8)\s*''\s*([^;\r\n]+)',
+      'filename\*=(?:UTF-8|utf-8)\s*""\s*([^;\r\n]+)'
+    )) {
+    $m = [regex]::Match($headerText, $pat, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($m.Success) {
+      try {
+        $decoded = [Uri]::UnescapeDataString($m.Groups[1].Value.Trim().Trim('"'))
+        if ($decoded) { return $decoded }
+      } catch {}
+    }
+  }
+  $m2 = [regex]::Match($headerText, 'filename="([^"]*)"')
+  if ($m2.Success -and $m2.Groups[1].Value) {
+    return (Repair-Utf8Mojibake $m2.Groups[1].Value)
+  }
+  return $null
 }
 function Sanitize-Name([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return "" }
@@ -409,21 +432,19 @@ try {
         $ctype = $req.ContentType
         if (-not $ctype -and $req.Headers['Content-Type']) { $ctype = $req.Headers['Content-Type'] }
         $parts = Parse-Multipart $body $ctype
-        $destPath = $null; $numeroVisita = $null; $nombrePaciente = $null; $fileName = $null; [byte[]]$fileBytes = @()
+        $destPath = $null; $numeroVisita = $null; $nombrePaciente = $null; $fileName = $null; $nombreArchivo = $null; [byte[]]$fileBytes = @()
         foreach ($part in $parts) {
           $h = $part.Headers
           $name = [regex]::Match($h, "name=""([^""]+)""").Groups[1].Value
-          $fnStar = [regex]::Match($h, "filename\*=(?:UTF-8|utf-8)''([^;\r\n]+)")
-          $fn = [regex]::Match($h, "filename=""([^""]*)""").Groups[1].Value
-          if ($fnStar.Success) {
-            try { $fn = [Uri]::UnescapeDataString($fnStar.Groups[1].Value.Trim()) } catch {}
-          }
-          if ($fn) { $fileName = Sanitize-FileName $fn; $fileBytes = $part.Data; continue }
+          $resolvedFn = Resolve-MultipartFilename $h
+          if ($resolvedFn) { $fileName = Sanitize-FileName $resolvedFn; $fileBytes = $part.Data; continue }
           $txt = Repair-Utf8Mojibake ([Text.Encoding]::UTF8.GetString($part.Data).Trim())
+          if ($name -eq "nombreArchivo" -and $txt) { $nombreArchivo = $txt; continue }
           if ($name -eq "path" -and $txt) { $destPath = Normalize-Path $txt }
           if ($name -eq "numeroVisita" -and $txt) { $numeroVisita = $txt }
           if ($name -eq "nombrePaciente" -and $txt) { $nombrePaciente = $txt }
         }
+        if ($nombreArchivo) { $fileName = Sanitize-FileName $nombreArchivo }
         if (-not $fileName -or $fileBytes.Length -eq 0) { Send-Json $res 400 "{""success"":false,""error"":""archivo requerido""}"; continue }
         if (-not $destPath) { $destPath = Get-VidalDest $RootDir $numeroVisita $nombrePaciente $fileName }
         else { $destPath = Repair-Utf8Mojibake $destPath }
