@@ -126,7 +126,8 @@ function Probe-Utf8Filename {
 	$boundary = '----ImedicUtf8' + [guid]::NewGuid().ToString('N')
 	$nl = "`r`n"
 	$ms = New-Object IO.MemoryStream
-	$w = New-Object IO.StreamWriter($ms, [Text.Encoding]::UTF8, 1024, $true)
+	$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+	$w = New-Object IO.StreamWriter($ms, $utf8NoBom, 1024, $true)
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nl99999$nl")
 	$w.Write("--$boundary$nl")
@@ -287,34 +288,41 @@ function Find-Bytes([byte[]]$arr,[byte[]]$pattern,[int]$start=0) {
   return -1
 }
 function Parse-Multipart([byte[]]$body,[string]$contentType) {
-  $m = [regex]::Match($contentType, "boundary=(.+)$")
-  if (-not $m.Success) { throw "Boundary no encontrado" }
+  if ($body.Length -ge 3 -and $body[0] -eq 0xEF -and $body[1] -eq 0xBB -and $body[2] -eq 0xBF) {
+    $body = $body[3..($body.Length - 1)]
+  }
+  $ct = $contentType
+  if (-not $ct -or $ct -notmatch 'boundary=') { $ct = $contentType }
+  $m = [regex]::Match($ct, 'boundary=([^;\s]+)')
+  if (-not $m.Success) { throw "Boundary no encontrado en Content-Type: $contentType" }
   $boundary = $m.Groups[1].Value.Trim('"')
-  $b = [Text.Encoding]::ASCII.GetBytes("--" + $boundary)
+  $marker = [Text.Encoding]::ASCII.GetBytes("--$boundary")
   $sep = [byte[]](13,10,13,10)
   $parts = @()
+  $starts = New-Object System.Collections.Generic.List[int]
   $pos = 0
-  while ($true) {
-    $bi = Find-Bytes $body $b $pos
-    if ($bi -lt 0) { break }
-    $after = $bi + $b.Length
-    if ($after + 1 -lt $body.Length -and $body[$after] -eq 45 -and $body[$after+1] -eq 45) { break }
-    if ($after + 1 -ge $body.Length) { break }
-    if ($body[$after] -eq 13 -and $body[$after+1] -eq 10) { $after += 2 }
-    $hi = Find-Bytes $body $sep $after
-    if ($hi -lt 0) { break }
-    $headerText = [Text.Encoding]::UTF8.GetString($body[$after..($hi-1)])
+  while ($pos -le $body.Length - $marker.Length) {
+    $i = Find-Bytes $body $marker $pos
+    if ($i -lt 0) { break }
+    [void]$starts.Add($i)
+    $pos = $i + $marker.Length
+  }
+  for ($si = 0; $si -lt $starts.Count; $si++) {
+    $start = $starts[$si] + $marker.Length
+    if ($start + 1 -lt $body.Length -and $body[$start] -eq 45 -and $body[$start + 1] -eq 45) { break }
+    if ($start + 1 -lt $body.Length -and $body[$start] -eq 13 -and $body[$start + 1] -eq 10) { $start += 2 }
+    $end = if ($si + 1 -lt $starts.Count) { $starts[$si + 1] - 1 } else { $body.Length - 1 }
+    if ($end -ge $start -and $body[$end] -eq 10) { $end-- }
+    if ($end -ge $start -and $body[$end] -eq 13) { $end-- }
+    if ($end -lt $start) { continue }
+    $hi = Find-Bytes $body $sep $start
+    if ($hi -lt 0 -or $hi -gt $end) { continue }
+    $headerText = [Text.Encoding]::UTF8.GetString($body, $start, $hi - $start)
     $dataStart = $hi + 4
-    $next = Find-Bytes $body ([byte[]](13,10) + $b) $dataStart
-    if ($next -lt 0) { break }
-    $dataEnd = $next - 1
-    if ($dataEnd -ge $dataStart -and $body[$dataEnd] -eq 10) { $dataEnd-- }
-    if ($dataEnd -ge $dataStart -and $body[$dataEnd] -eq 13) { $dataEnd-- }
-    $len = [Math]::Max(0, $dataEnd - $dataStart + 1)
+    $len = [Math]::Max(0, $end - $dataStart + 1)
     $data = New-Object byte[] $len
     if ($len -gt 0) { [Array]::Copy($body, $dataStart, $data, 0, $len) }
     $parts += [pscustomobject]@{ Headers=$headerText; Data=$data }
-    $pos = $next + 2
   }
   return $parts
 }
@@ -363,11 +371,22 @@ try {
         $res.Close()
         continue
       }
+      if ($req.HttpMethod -eq "DELETE" -and $route -eq "/file") {
+        $p = Normalize-Path $req.QueryString["path"]
+        if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
+        Remove-Item -LiteralPath $p -Force
+        $esc = $p.Replace("\","\\")
+        Send-Json $res 200 "{""success"":true,""filePath"":""$esc""}"
+        continue
+      }
       if ($req.HttpMethod -eq "POST" -and $route -eq "/upload") {
         $ms = New-Object IO.MemoryStream
         $req.InputStream.CopyTo($ms)
         $body = $ms.ToArray()
-        $parts = Parse-Multipart $body $req.ContentType
+        $ctype = $req.ContentType
+        if (-not $ctype -and $req.Headers['Content-Type']) { $ctype = $req.Headers['Content-Type'] }
+        $parts = Parse-Multipart $body $ctype
         $destPath = $null; $numeroVisita = $null; $nombrePaciente = $null; $fileName = $null; [byte[]]$fileBytes = @()
         foreach ($part in $parts) {
           $h = $part.Headers
