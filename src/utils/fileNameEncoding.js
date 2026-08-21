@@ -125,10 +125,38 @@ function uniqueNonEmpty(values) {
 	return out;
 }
 
+function mapLegacyDriveRoots(filePath) {
+	const s = String(filePath);
+	const imedicRoot =
+		process.env.FILE_SERVER_ROOT ||
+		process.env.IMEDIC_ADJUNTOS_ROOT ||
+		'C:\\imedic\\adjuntos';
+	const out = [];
+	if (/^E:\\adjuntos\\/i.test(s)) {
+		out.push(path.join(imedicRoot, s.slice('E:\\adjuntos\\'.length)));
+	}
+	if (/^D:\\adjuntos\\/i.test(s)) {
+		out.push(path.join(imedicRoot, s.slice('D:\\adjuntos\\'.length)));
+	}
+	if (/^F:\\adjuntos\\/i.test(s)) {
+		out.push(path.join(imedicRoot, s.slice('F:\\adjuntos\\'.length)));
+	}
+	return out;
+}
+
+function normalizeAdjuntoFilePath(rutaOriginal) {
+	if (!rutaOriginal) return rutaOriginal;
+	let ruta = decodeMultipartFilename(String(rutaOriginal));
+	if (/^D:\\/i.test(ruta)) ruta = ruta.replace(/^D:\\/, 'E:\\');
+	if (/^F:\\/i.test(ruta)) ruta = ruta.replace(/^F:\\/, 'E:\\');
+	return ruta;
+}
+
 function pathLookupCandidates(filePath) {
 	if (!filePath) return [];
 	const original = String(filePath);
 	const repaired = decodeMultipartFilename(original);
+	const normalized = normalizeAdjuntoFilePath(original);
 	const dir = path.dirname(original);
 	const name = path.basename(original);
 	const repairedName = sanitizeWindowsFileName(name);
@@ -137,6 +165,11 @@ function pathLookupCandidates(filePath) {
 	return uniqueNonEmpty([
 		original,
 		repaired,
+		normalized,
+		decodeMultipartFilename(normalized),
+		...mapLegacyDriveRoots(original),
+		...mapLegacyDriveRoots(repaired),
+		...mapLegacyDriveRoots(normalized),
 		path.join(dir, repairedName),
 		path.join(repairedDir, repairedName),
 		path.join(repairedDir, name),
@@ -181,6 +214,7 @@ module.exports = {
 	utf8FilenameForFormDataHeader,
 	formDataFileOptions,
 	buildVidalDest,
+	normalizeAdjuntoFilePath,
 	pathLookupCandidates,
 	fixMulterFile,
 };

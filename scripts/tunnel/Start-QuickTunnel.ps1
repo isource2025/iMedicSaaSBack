@@ -164,8 +164,13 @@ function Probe-Utf8Filename {
 	if ($fp -notlike "*$probeStem*") {
 		throw "Probe fallo: la Ñ no se preservo en disco ($fp)"
 	}
+	$getUrl = "http://127.0.0.1:$Port/file?path=" + [uri]::EscapeDataString($fp)
+	$getResp = Invoke-WebRequest -Uri $getUrl -UseBasicParsing -TimeoutSec 10
+	if ($getResp.StatusCode -ne 200 -or $getResp.RawContentLength -lt 1) {
+		throw "Probe GET fallo: no se pudo abrir el archivo subido ($fp)"
+	}
 	try {
-		Invoke-WebRequest -Method DELETE -Uri ("http://127.0.0.1:$Port/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10 | Out-Null
+		Invoke-WebRequest -Method DELETE -Uri $getUrl -UseBasicParsing -TimeoutSec 10 | Out-Null
 	} catch {}
 	Write-Host "Probe UTF-8 OK  $fp"
 }
@@ -198,12 +203,33 @@ function FsLog([string]$m) {
 FsLog "Inicio port=$Port root=$RootDir pid=$PID"
 if (-not (Test-Path -LiteralPath $RootDir)) { New-Item -ItemType Directory -Force -Path $RootDir | Out-Null }
 
+function Get-QueryPath([System.Net.HttpListenerRequest]$req) {
+  $q = $req.Url.Query
+  if ($q -and $q.Length -gt 1) {
+    foreach ($part in $q.Substring(1).Split('&')) {
+      $eq = $part.IndexOf('=')
+      if ($eq -lt 0) { continue }
+      $k = [Uri]::UnescapeDataString($part.Substring(0, $eq).Replace('+', ' '))
+      if ($k -eq 'path') {
+        return [Uri]::UnescapeDataString($part.Substring($eq + 1).Replace('+', ' '))
+      }
+    }
+  }
+  $fallback = $req.QueryString['path']
+  if ($fallback) { return (Repair-Utf8Mojibake $fallback) }
+  return $null
+}
 function Normalize-Path([string]$p) {
   if ([string]::IsNullOrWhiteSpace($p)) { return $null }
-  $x = [Uri]::UnescapeDataString($p)
-  if ($x.StartsWith("D:\")) { $x = "E:\" + $x.Substring(3) }
-  if ($x.StartsWith("F:\")) { $x = "E:\" + $x.Substring(3) }
-  return $x
+  $x = Repair-Utf8Mojibake ([Uri]::UnescapeDataString($p))
+  if ($x.StartsWith("D:\", [StringComparison]::OrdinalIgnoreCase)) { $x = "E:\" + $x.Substring(3) }
+  if ($x.StartsWith("F:\", [StringComparison]::OrdinalIgnoreCase)) { $x = "E:\" + $x.Substring(3) }
+  $eAdj = 'E:\adjuntos'
+  if ($x.StartsWith($eAdj, [StringComparison]::OrdinalIgnoreCase)) {
+    $rel = $x.Substring($eAdj.Length).TrimStart('\')
+    $x = if ($rel) { Join-Path $RootDir $rel } else { $RootDir }
+  }
+  return (Normalize-UnicodeText $x)
 }
 function Normalize-UnicodeText([string]$s) {
   if ([string]::IsNullOrWhiteSpace($s)) { return $s }
@@ -300,6 +326,12 @@ function Find-ExistingFile([string]$p) {
   foreach ($folder in @($dir, $RootDir)) {
     if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
     foreach ($f in (Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue)) {
+      $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
+      if ($have -eq $want) { return $f.FullName }
+    }
+  }
+  if ($want -and (Test-Path -LiteralPath $RootDir)) {
+    foreach ($f in (Get-ChildItem -LiteralPath $RootDir -Recurse -File -ErrorAction SilentlyContinue)) {
       $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
       if ($have -eq $want) { return $f.FullName }
     }
@@ -401,7 +433,7 @@ try {
         continue
       }
       if ($req.HttpMethod -eq "GET" -and $route -eq "/file") {
-        $p = Normalize-Path $req.QueryString["path"]
+        $p = Normalize-Path (Get-QueryPath $req)
         if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
         $found = Find-ExistingFile $p
         if (-not $found) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
@@ -417,11 +449,12 @@ try {
         continue
       }
       if ($req.HttpMethod -eq "DELETE" -and $route -eq "/file") {
-        $p = Normalize-Path $req.QueryString["path"]
+        $p = Normalize-Path (Get-QueryPath $req)
         if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
-        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
-        Remove-Item -LiteralPath $p -Force
-        $esc = $p.Replace("\","\\")
+        $found = Find-ExistingFile $p
+        if (-not $found) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
+        Remove-Item -LiteralPath $found -Force
+        $esc = $found.Replace("\","\\")
         Send-Json $res 200 "{""success"":true,""filePath"":""$esc""}"
         continue
       }

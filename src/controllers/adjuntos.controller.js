@@ -29,6 +29,7 @@ const {
   formDataFileOptions,
   sanitizeWindowsFileName,
   pathLookupCandidates,
+  normalizeAdjuntoFilePath,
 } = require('../utils/fileNameEncoding');
 
 /** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
@@ -74,24 +75,10 @@ function isFileServerNetworkError(err) {
 }
 
 /**
- * Normaliza la ruta del archivo (mapea D:\ y F:\ a E:\)
+ * Normaliza la ruta del archivo (legacy D/F → E, mojibake, rutas E:\adjuntos)
  */
 function normalizarRuta(rutaOriginal) {
-  if (!rutaOriginal) return rutaOriginal;
-  
-  let ruta = rutaOriginal;
-  
-  // Mapear D:\ a E:\
-  if (ruta.startsWith('D:\\')) {
-    ruta = ruta.replace(/^D:\\/, 'E:\\');
-  }
-  
-  // Mapear F:\ a E:\
-  if (ruta.startsWith('F:\\')) {
-    ruta = ruta.replace(/^F:\\/, 'E:\\');
-  }
-  
-  return ruta;
+  return normalizeAdjuntoFilePath(rutaOriginal);
 }
 
 function contentTypeForAdjuntoFileName(fileName) {
