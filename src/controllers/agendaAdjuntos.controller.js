@@ -17,6 +17,7 @@ const {
   isFileServerUnreachable,
   describeFileServerError,
 } = require('../utils/fileServerUrl');
+const { fixMulterFile, utf8FilenameForFormDataHeader } = require('../utils/fileNameEncoding');
 const { runWithTenant, restoreTenantFromRequest, ensureTenantFromReq } = require('../context/tenantContext');
 
 function enqueueNotificarAdjunto(req, payload) {
@@ -75,6 +76,10 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    fixMulterFile(file);
+    cb(null, true);
+  },
 });
 
 async function listarAdjuntosTurno(req, res) {
@@ -113,7 +118,10 @@ async function subirAdjuntoTurno(req, res) {
 
     try {
       const formData = new FormData();
-      formData.append('file', fsSync.createReadStream(req.file.path), req.file.originalname);
+      formData.append('file', fsSync.createReadStream(req.file.path), {
+        filename: utf8FilenameForFormDataHeader(req.file.originalname),
+        contentType: req.file.mimetype,
+      });
       formData.append('numeroVisita', String(idTurno));
       formData.append('nombrePaciente', nombrePaciente);
 

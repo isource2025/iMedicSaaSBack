@@ -93,14 +93,63 @@ function Sanitize-Name([string]$s) {
   $x = $x -replace "\s+", " "
   return $x.Trim()
 }
+function Repair-Utf8Mojibake([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return $s }
+  try {
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $bytes = $latin1.GetBytes($s)
+    $decoded = [Text.Encoding]::UTF8.GetString($bytes)
+    if ($decoded.IndexOf([char]0xFFFD) -lt 0 -and $decoded -ne $s) { $s = $decoded }
+  } catch {}
+  $s = $s.Replace(("$([char]0x00C3)$([char]0x0091)"), "Ñ")
+  $s = $s -replace "Ã\?","Ñ"
+  $s = $s -replace "Ã‘","Ñ"
+  $s = $s -replace "Ã±","ñ"
+  $s = $s -replace "Ã¡","á"
+  $s = $s -replace "Ã©","é"
+  $s = $s -replace "Ã­","í"
+  $s = $s -replace "Ã³","ó"
+  $s = $s -replace "Ãº","ú"
+  return $s
+}
+function Sanitize-FileName([string]$fileName) {
+  $safeFile = [IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName))
+  $safeFile = $safeFile -replace "[\\/:*?`"<>|]", "_"
+  $safeFile = $safeFile -replace "[\x00-\x1F]", "_"
+  if ([string]::IsNullOrWhiteSpace($safeFile)) { return "archivo" }
+  return $safeFile.Trim()
+}
 function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [string]$fileName) {
-  $safeFile = [IO.Path]::GetFileName($fileName)
-  $n = Sanitize-Name $paciente
+  $safeFile = Sanitize-FileName $fileName
+  $n = Sanitize-Name (Repair-Utf8Mojibake $paciente)
   $folder = $null
   if ($visita -and $n) { $folder = "$visita $n" }
   elseif ($visita) { $folder = "$visita" }
   if ($folder) { return (Join-Path (Join-Path $root $folder) $safeFile) }
   return (Join-Path $root $safeFile)
+}
+function Find-ExistingFile([string]$p) {
+  $names = New-Object System.Collections.Generic.List[string]
+  foreach ($c in @($p, (Repair-Utf8Mojibake $p))) {
+    if ($c -and -not $names.Contains($c)) { [void]$names.Add($c) }
+  }
+  $fileName = Sanitize-FileName ([IO.Path]::GetFileName($p))
+  $dir = [IO.Path]::GetDirectoryName($p)
+  if ($dir) { [void]$names.Add((Join-Path $dir $fileName)) }
+  [void]$names.Add((Join-Path $RootDir $fileName))
+  [void]$names.Add((Join-Path $RootDir ([IO.Path]::GetFileName($p))))
+  foreach ($c in $names) {
+    if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+  }
+  $want = $fileName.ToLowerInvariant()
+  foreach ($folder in @($dir, $RootDir)) {
+    if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
+    foreach ($f in (Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue)) {
+      $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
+      if ($have -eq $want) { return $f.FullName }
+    }
+  }
+  return $null
 }
 function Ensure-Parent([string]$filePath) {
   $dir = [IO.Path]::GetDirectoryName($filePath)
@@ -190,7 +239,9 @@ try {
       if ($req.HttpMethod -eq "GET" -and $route -eq "/file") {
         $p = Normalize-Path $req.QueryString["path"]
         if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
-        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
+        $found = Find-ExistingFile $p
+        if (-not $found) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
+        $p = $found
         $bytes = [IO.File]::ReadAllBytes($p)
         Add-Cors $res
         $res.StatusCode = 200
@@ -210,9 +261,13 @@ try {
         foreach ($part in $parts) {
           $h = $part.Headers
           $name = [regex]::Match($h, "name=""([^""]+)""").Groups[1].Value
+          $fnStar = [regex]::Match($h, "filename\*=(?:UTF-8|utf-8)''([^;\r\n]+)")
           $fn = [regex]::Match($h, "filename=""([^""]*)""").Groups[1].Value
-          if ($fn) { $fileName = [IO.Path]::GetFileName($fn); $fileBytes = $part.Data; continue }
-          $txt = [Text.Encoding]::UTF8.GetString($part.Data).Trim()
+          if ($fnStar.Success) {
+            try { $fn = [Uri]::UnescapeDataString($fnStar.Groups[1].Value.Trim()) } catch {}
+          }
+          if ($fn) { $fileName = Sanitize-FileName $fn; $fileBytes = $part.Data; continue }
+          $txt = Repair-Utf8Mojibake ([Text.Encoding]::UTF8.GetString($part.Data).Trim())
           if ($name -eq "path" -and $txt) { $destPath = Normalize-Path $txt }
           if ($name -eq "numeroVisita" -and $txt) { $numeroVisita = $txt }
           if ($name -eq "nombrePaciente" -and $txt) { $nombrePaciente = $txt }

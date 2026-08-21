@@ -5,6 +5,7 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const { decodeMultipartFilename, sanitizeWindowsFileName } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
@@ -49,7 +50,10 @@ class AdjuntosService {
           { value: numeroVisita, type: 'Int' },
           { value: idTurno, type: 'Int' },
           {
-            value: normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }),
+            value: normalizarTextoParaClarionAnsi(
+              sanitizeWindowsFileName(file.originalname),
+              { maxLength: 255 },
+            ),
             type: 'NVarChar',
           },
           { value: rutaArchivo, type: 'NVarChar' },
@@ -194,6 +198,7 @@ class AdjuntosService {
       const rutaCompleta = adj.PatchServidor || '';
       nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
     }
+    nombreArchivo = decodeMultipartFilename(nombreArchivo);
 
     return {
       IdAdjunto: adj.IdAdjunto,
@@ -301,6 +306,20 @@ class AdjuntosService {
       ],
     );
     return { updated: result?.rowsAffected?.[0] ?? 0 };
+  }
+
+  async getNombrePacientePorVisita(numeroVisita) {
+    const rows = await executeQuery(
+      `
+      SELECT TOP 1 p.ApellidoYNombre
+      FROM imVisita v
+      INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+      WHERE v.NumeroVisita = @param0
+      `,
+      [{ value: parseInt(numeroVisita, 10) }],
+    );
+    const nombre = rows?.[0]?.ApellidoYNombre;
+    return nombre ? String(nombre).trim() : `PACIENTE_${numeroVisita}`;
   }
 
   async getNombrePacientePorTurno(idTurno) {

@@ -23,6 +23,11 @@ const {
   isFileServerUnreachable,
   describeFileServerError,
 } = require('../utils/fileServerUrl');
+const {
+  fixMulterFile,
+  utf8FilenameForFormDataHeader,
+  pathLookupCandidates,
+} = require('../utils/fileNameEncoding');
 
 /** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
 function enqueueNotificarAdjunto(req, payload) {
@@ -135,6 +140,7 @@ const upload = multer({
     fileSize: 100 * 1024 * 1024 // 100MB (videos DICOM)
   },
   fileFilter: (req, file, cb) => {
+    fixMulterFile(file);
     const allowedTypes = [
       'application/pdf',
       'image/jpeg',
@@ -205,19 +211,7 @@ router.post(
 
     console.log(`📤 Enviando archivo al servidor SQL: ${req.file.originalname}`);
 
-    // Obtener nombre del paciente desde la base de datos
-    const { executeQuery } = require('../models/db');
-    const pacienteResult = await executeQuery(`
-      SELECT TOP 1 
-        p.ApellidoYNombre
-      FROM imVisita v
-      INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
-      WHERE v.NumeroVisita = @param0
-    `, [{ value: parseInt(numeroVisita) }]);
-
-    const nombrePaciente = pacienteResult.length > 0 
-      ? pacienteResult[0].ApellidoYNombre 
-      : `PACIENTE_${numeroVisita}`;
+    const nombrePaciente = await adjuntosService.getNombrePacientePorVisita(numeroVisita);
 
     console.log(`👤 Paciente: ${nombrePaciente}`);
 
@@ -225,8 +219,11 @@ router.post(
     try {
       const formData = new FormData();
       const fileStream = fsSync.createReadStream(req.file.path);
-      formData.append('file', fileStream, req.file.originalname);
-      formData.append('numeroVisita', numeroVisita);
+      formData.append('file', fileStream, {
+        filename: utf8FilenameForFormDataHeader(req.file.originalname),
+        contentType: req.file.mimetype,
+      });
+      formData.append('numeroVisita', String(numeroVisita));
       formData.append('nombrePaciente', nombrePaciente);
 
       const fileServerUrl = await resolveFileServerUrl();
@@ -347,14 +344,22 @@ router.post(
 
     console.log(`📤 Enviando ${req.files.length} archivos al servidor SQL`);
 
-    // Subir todos los adjuntos al servidor PowerShell
+    const nombrePaciente = await adjuntosService.getNombrePacientePorVisita(numeroVisita);
+    console.log(`👤 Paciente: ${nombrePaciente}`);
+
+    // Subir todos los adjuntos al servidor PowerShell (misma carpeta {visita} {PACIENTE})
     const resultados = [];
     for (const file of req.files) {
       let filePath;
       try {
         const formData = new FormData();
         const fileStream = fsSync.createReadStream(file.path);
-        formData.append('file', fileStream, file.originalname);
+        formData.append('file', fileStream, {
+          filename: utf8FilenameForFormDataHeader(file.originalname),
+          contentType: file.mimetype,
+        });
+        formData.append('numeroVisita', String(numeroVisita));
+        formData.append('nombrePaciente', nombrePaciente);
 
         const fileServerUrl = await resolveFileServerUrl();
         const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
@@ -558,20 +563,30 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
       console.log(`🔄 Ruta normalizada: ${adjunto.RutaArchivo} -> ${rutaNormalizada}`);
     }
     
+    const rutasIntento = pathLookupCandidates(rutaNormalizada);
+    
     // Solicitar el archivo al servidor HTTP de archivos
     try {
-      // Construir URL manualmente para controlar la codificación
-      const encodedPath = encodeURIComponent(rutaNormalizada);
       const fileServerUrl = await resolveFileServerUrl();
-      const fileUrl = `${fileServerUrl}/file?path=${encodedPath}`;
-      
-      console.log(`🌐 URL solicitada: ${fileUrl}`);
-      
-      const response = await axios.get(fileUrl, {
-        responseType: 'stream',
-        timeout: FILE_SERVER_TIMEOUT_MS,
-        validateStatus: (s) => s >= 200 && s < 300,
-      });
+      let response = null;
+      let lastFileErr = null;
+      for (const ruta of rutasIntento) {
+        const fileUrl = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+        console.log(`🌐 URL solicitada: ${fileUrl}`);
+        try {
+          response = await axios.get(fileUrl, {
+            responseType: 'stream',
+            timeout: FILE_SERVER_TIMEOUT_MS,
+            validateStatus: (s) => s >= 200 && s < 300,
+          });
+          break;
+        } catch (tryErr) {
+          lastFileErr = tryErr;
+        }
+      }
+      if (!response) {
+        throw lastFileErr || new Error('Archivo no encontrado en el servidor de archivos');
+      }
 
       const contentLength = Number(response.headers['content-length'] || 0);
       if (contentLength === 0) {
@@ -599,8 +614,8 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
     } catch (fileError) {
       console.error(`❌ Error al obtener archivo del servidor HTTP:`, fileError.message);
 
-      const candidates = [rutaNormalizada, adjunto.RutaArchivo].filter(
-        (p) => typeof p === 'string' && p.length > 0
+      const candidates = pathLookupCandidates(rutaNormalizada).concat(
+        pathLookupCandidates(adjunto.RutaArchivo),
       );
       let localPath;
       for (const p of candidates) {
