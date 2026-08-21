@@ -93,6 +93,12 @@ function Test-ImedicFileServer {
 }
 
 function Stop-LegacyFileServers {
+	Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+		Where-Object { $_.Name -match '^(powershell|pwsh)(\.exe)?$' -and $_.CommandLine -like '*file-server-runtime*' } |
+		ForEach-Object {
+			Write-Host "Deteniendo file server anterior (PID $($_.ProcessId))..."
+			Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+		}
 	foreach ($procId in (Get-PidsOnPort $Port)) {
 		if ($procId -le 4) { continue }
 		try {
@@ -324,11 +330,11 @@ function Mime-Of([string]$filePath) {
 }
 
 try {
-$listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://127.0.0.1:$Port/")
-FsLog "HttpListener.Start en http://127.0.0.1:$Port/"
-$listener.Start()
-FsLog "Escuchando OK"
+  $listener = New-Object System.Net.HttpListener
+  $listener.Prefixes.Add("http://127.0.0.1:$Port/")
+  FsLog "HttpListener.Start en http://127.0.0.1:$Port/"
+  $listener.Start()
+  FsLog "Escuchando OK"
   while ($listener.IsListening) {
     $ctx = $listener.GetContext()
     $req = $ctx.Request
@@ -391,13 +397,12 @@ FsLog "Escuchando OK"
       Send-Json $res 500 "{""success"":false,""error"":""$msg""}"
     }
   }
-} finally {
-  if ($listener -and $listener.IsListening) { $listener.Stop() }
-  if ($listener) { $listener.Close() }
-}
 } catch {
   FsLog "FATAL: $($_.Exception.Message)"
   throw
+} finally {
+  if ($listener -and $listener.IsListening) { $listener.Stop() }
+  if ($listener) { $listener.Close() }
 }
 '@
 	$utf8 = New-Object System.Text.UTF8Encoding $false
