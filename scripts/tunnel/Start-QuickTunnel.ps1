@@ -1,68 +1,68 @@
 #Requires -Version 5.1
 <#
-  Configura TODO el tunel de adjuntos (como Vidal):
-    - Asegura E:\adjuntos (si no hay E:, subst a C:\imedic)
-    - Reemplaza el stub del puerto 9012 por el file server iMedic
-    - Guarda en E:\adjuntos\{visita} {PACIENTE}\archivo
-  Abre Cloudflare trycloudflare, graba FileServerUrl (Sarmiento 101) y SALE.
-  File server + cloudflared quedan en segundo plano (no dependen de esta consola).
-  Railway usa SOLO la URL trycloudflare, nunca 127.0.0.1 ni la IP de la PC.
+  UNICO script de tunel + file server de adjuntos.
 
-  powershell -NoProfile -ExecutionPolicy Bypass -File "...\Start-QuickTunnel.ps1"
+  En la PC de la clinica: copiar este archivo a C:\imedic\Start-QuickTunnel.ps1
+
+  Primera vez / URL nueva:
+    powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1
+
+  Solo reiniciar file server (tunel Cloudflare NO cambia):
+    powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1 -KeepTunnel
+
+  Railway usa la URL trycloudflare. 127.0.0.1:9012 es solo local.
 #>
 param(
 	[int] $Port = 9012,
-	[string] $Root = 'E:\adjuntos',
-	[string] $FallbackRoot = 'C:\imedic\adjuntos',
+	[string] $Root = 'C:\imedic\adjuntos',
 	[int] $EmpresaId = 101,
-	[string] $EmpresaMatch = 'sarmiento',
-	[switch] $SkipApi,
-	# Reemplaza el file server del 9012 y NO toca cloudflared ni la URL (para cuando el tunel ya anda).
-	[switch] $KeepTunnel
+	[string] $Api = 'https://imedicsaasback-production.up.railway.app/api',
+	[string] $SaUser = 'superadmin',
+	[string] $SaPass = 'SuperAdmin2026!',
+	[switch] $KeepTunnel,
+	[switch] $SkipApi
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $script:LatN = [char]0x00D1
-$repoBack = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-
-function Find-Cloudflared {
-	foreach ($c in @(
-			(Join-Path $repoBack 'cloudflared.exe'),
-			'C:\Program Files\cloudflared\cloudflared.exe',
-			'C:\Program Files (x86)\cloudflared\cloudflared.exe'
-		)) {
-		if (Test-Path -LiteralPath $c) { return (Resolve-Path -LiteralPath $c).Path }
-	}
-	$cmd = Get-Command cloudflared.exe -ErrorAction SilentlyContinue
-	if ($cmd) { return $cmd.Source }
-	throw 'cloudflared no encontrado. Instala: winget install --id Cloudflare.cloudflared -e'
-}
+$here = 'C:\imedic'
+New-Item -ItemType Directory -Force -Path $here, $Root, "$env:ProgramData\iMedic\adjuntos-tunnel" | Out-Null
+$runtime = Join-Path $here 'file-server-runtime.ps1'
+$outLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\cf-out.log'
+$errLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\cf-err.log'
+$urlFile = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\url.txt'
 
 function Get-PidsOnPort([int]$listenPort) {
 	$pids = @()
 	foreach ($line in (netstat -ano -p tcp)) {
-		if ($line -match ":$listenPort\s+.+LISTENING\s+(\d+)\s*$") {
-			$pids += [int]$Matches[1]
-		}
+		if ($line -match ":$listenPort\s+.+LISTENING\s+(\d+)\s*$") { $pids += [int]$Matches[1] }
 	}
 	return $pids | Select-Object -Unique
 }
 
-function Get-Health([int]$listenPort) {
+function Stop-Port([int]$listenPort) {
+	foreach ($procId in (Get-PidsOnPort $listenPort)) {
+		if ($procId -le 4) { continue }
+		Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+	}
+	Start-Sleep -Milliseconds 400
+}
+
+function Get-HealthJson([string]$url) {
 	try {
-		$r = Invoke-WebRequest -Uri "http://127.0.0.1:$listenPort/health" -UseBasicParsing -TimeoutSec 3
+		$r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 8
 		return $r.Content
 	} catch { return $null }
 }
 
-function Test-ImedicFileServer([int]$listenPort) {
-	$h = Get-Health $listenPort
-	return ($h -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"success"\s*:\s*true' -and $h -match '"encoding"\s*:\s*"utf8-v2"')
+function Test-ImedicFileServer {
+	$h = Get-HealthJson "http://127.0.0.1:$Port/health"
+	return ($h -and $h -match '"success"\s*:\s*true' -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"encoding"\s*:\s*"utf8-v2"')
 }
 
-function Stop-LegacyFileServers([int]$listenPort) {
-	foreach ($procId in (Get-PidsOnPort $listenPort)) {
+function Stop-LegacyFileServers {
+	foreach ($procId in (Get-PidsOnPort $Port)) {
 		if ($procId -le 4) { continue }
 		try {
 			$p = Get-Process -Id $procId -ErrorAction SilentlyContinue
@@ -72,86 +72,7 @@ function Stop-LegacyFileServers([int]$listenPort) {
 			}
 		} catch {}
 	}
-	Stop-Port $listenPort
-}
-
-function Ensure-AdjuntosRoot([string]$wanted) {
-	if (Test-Path -LiteralPath $wanted) { return (Resolve-Path $wanted).Path }
-	$drive = [IO.Path]::GetPathRoot($wanted)
-	if ($drive -and -not (Test-Path -LiteralPath $drive)) {
-		$hostDir = 'C:\imedic'
-		New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
-		Write-Host ('No hay ' + $drive + ' - subst ' + $drive + ' -> ' + $hostDir + ' (misma ruta logica que Vidal: E:\adjuntos)')
-		cmd /c "subst $($drive.TrimEnd('\')) `"$hostDir`"" | Out-Null
-	}
-	try {
-		New-Item -ItemType Directory -Force -Path $wanted | Out-Null
-		return (Resolve-Path $wanted).Path
-	} catch {
-		Write-Host "WARN: no se pudo crear $wanted, usando $FallbackRoot"
-		New-Item -ItemType Directory -Force -Path $FallbackRoot | Out-Null
-		return (Resolve-Path $FallbackRoot).Path
-	}
-}
-
-function Stop-Port([int]$listenPort) {
-	foreach ($procId in (Get-PidsOnPort $listenPort)) {
-		if ($procId -le 4) { continue }
-		Write-Host "Liberando puerto $listenPort (PID $procId)"
-		Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-	}
-	Start-Sleep -Milliseconds 400
-}
-
-function Get-TunnelUrlFromLogs([string[]]$files) {
-	foreach ($f in $files) {
-		if (-not (Test-Path -LiteralPath $f)) { continue }
-		$m = Select-String -LiteralPath $f -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue |
-			Select-Object -Last 1
-		if ($m) { return $m.Matches[0].Value.TrimEnd('/') }
-	}
-	return $null
-}
-
-function Save-FileServerUrlRest([string]$publicUrl) {
-	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-	$api = 'https://imedicsaasback-production.up.railway.app/api'
-	$loginBody = (@{ username = 'superadmin'; password = 'SuperAdmin2026!' } | ConvertTo-Json)
-	$first = Invoke-RestMethod -Uri "$api/auth/login" -Method POST -ContentType 'application/json; charset=utf-8' -Body $loginBody
-	$token = $first.token
-	if (-not $token -and $first.step -eq 'SELECT_EMPRESA') {
-		$pick = $null
-		foreach ($e in @($first.empresas)) {
-			$id = $e.idEmpresa; if ($null -eq $id) { $id = $e.id }
-			if ([int]$id -eq $EmpresaId) { $pick = $e; break }
-		}
-		if (-not $pick) {
-			foreach ($e in @($first.empresas)) {
-				$n = [string]($e.descripcion + ' ' + $e.nombre)
-				if ($n -match $EmpresaMatch) { $pick = $e; break }
-			}
-		}
-		if (-not $pick) { $pick = @($first.empresas)[0] }
-		$idEmp = $pick.idEmpresa; if ($null -eq $idEmp) { $idEmp = $pick.id }
-		$second = Invoke-RestMethod -Uri "$api/auth/login" -Method POST -ContentType 'application/json; charset=utf-8' -Body ((@{
-					username  = 'superadmin'
-					password  = 'SuperAdmin2026!'
-					idEmpresa = $idEmp
-					tempToken = $first.tempToken
-				} | ConvertTo-Json))
-		$token = $second.token
-	}
-	if (-not $token) { throw 'Login Super Admin sin token' }
-	Invoke-RestMethod -Uri "$api/super-admin/empresas/$EmpresaId/conexion" -Method PUT -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json; charset=utf-8' -Body ((@{ fileServerUrl = $publicUrl } | ConvertTo-Json)) | Out-Null
-}
-
-function Test-PublicHealth([string]$base) {
-	try {
-		$r = Invoke-WebRequest -Uri "$base/health" -UseBasicParsing -TimeoutSec 15
-		return ($r.StatusCode -eq 200 -and $r.Content -match '"status"\s*:\s*"ok"')
-	} catch {
-		return $false
-	}
+	Stop-Port $Port
 }
 
 function Get-UploadFilePathFromJson([string]$txt) {
@@ -161,16 +82,16 @@ function Get-UploadFilePathFromJson([string]$txt) {
 	throw "Respuesta sin filePath: $txt"
 }
 
-function Probe-Local([int]$listenPort, [string]$rootDir) {
+function Probe-Utf8Filename {
 	$probeStem = 'PE' + $script:LatN + 'A'
 	$probeName = $probeStem + '-probe.txt'
 	$body = [Text.Encoding]::UTF8.GetBytes("probe $(Get-Date -Format o)")
-	$boundary = '----ImedicProbe' + [guid]::NewGuid().ToString('N')
+	$boundary = '----ImedicUtf8' + [guid]::NewGuid().ToString('N')
 	$nl = "`r`n"
 	$ms = New-Object IO.MemoryStream
 	$w = New-Object IO.StreamWriter($ms, [Text.Encoding]::UTF8, 1024, $true)
 	$w.Write("--$boundary$nl")
-	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nlPROBE$nl")
+	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nl99999$nl")
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nl$probeStem PROBE$nl")
 	$w.Write("--$boundary$nl")
@@ -184,152 +105,363 @@ function Probe-Local([int]$listenPort, [string]$rootDir) {
 	$payload = $ms.ToArray()
 	$w.Dispose(); $ms.Dispose()
 
-	$req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$listenPort/upload")
+	$req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/upload")
 	$req.Method = 'POST'
 	$req.ContentType = "multipart/form-data; boundary=$boundary"
 	$req.Timeout = 15000
-	$req.ReadWriteTimeout = 15000
 	$req.GetRequestStream().Write($payload, 0, $payload.Length)
 	$resp = $req.GetResponse()
 	$sr = New-Object IO.StreamReader($resp.GetResponseStream())
 	$txt = $sr.ReadToEnd()
 	$sr.Close(); $resp.Close()
-	if ($txt -notmatch 'filePath') { throw "Probe upload no devolvio filePath: $txt" }
+	if ($txt -notmatch 'filePath') { throw "Probe UTF-8 no devolvio filePath: $txt" }
 	$mojibakeMark = 'PE' + [char]0x00C3 + [char]0x0091
 	if ($txt -like "*$mojibakeMark*" -or $txt -match 'PE.A\?A') {
-		throw "Probe UTF-8 fallo: nombre corrupto ($txt)"
+		throw "Probe UTF-8 fallo: el nombre quedo corrupto ($txt)"
 	}
 	$fp = (Get-UploadFilePathFromJson $txt).Replace('\\', '\')
-	if ($fp -notlike "$rootDir*") {
-		Write-Host "WARN: filePath fuera de $rootDir -> $fp"
-	}
-	$get = Invoke-WebRequest -Uri ("http://127.0.0.1:$listenPort/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10
-	if ($get.StatusCode -ne 200 -or $get.RawContentLength -lt 1) { throw "Probe GET /file fallo" }
+	if ($fp -notlike "*$probeStem*") { Write-Host "WARN: filePath sin N-tilde legible -> $fp" }
 	try {
-		Invoke-WebRequest -Method DELETE -Uri ("http://127.0.0.1:$listenPort/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10 | Out-Null
-	} catch { }
-	Write-Host "Probe OK  guardo como Vidal: $fp"
+		Invoke-WebRequest -Method DELETE -Uri ("http://127.0.0.1:$Port/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10 | Out-Null
+	} catch {}
+	Write-Host "Probe UTF-8 OK  $fp"
 }
 
-$logDir = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel'
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$outLog = Join-Path $logDir 'cf-out.log'
-$errLog = Join-Path $logDir 'cf-err.log'
-$urlFile = Join-Path $logDir 'url.txt'
+function Find-Cloudflared {
+	foreach ($c in @(
+			(Join-Path $here 'cloudflared.exe'),
+			'C:\Program Files\cloudflared\cloudflared.exe',
+			'C:\Program Files (x86)\cloudflared\cloudflared.exe'
+		)) {
+		if (Test-Path -LiteralPath $c) { return (Resolve-Path -LiteralPath $c).Path }
+	}
+	$cmd = Get-Command cloudflared.exe -ErrorAction SilentlyContinue
+	if ($cmd) { return $cmd.Source }
+	throw 'cloudflared no encontrado. Instala: winget install --id Cloudflare.cloudflared -e'
+}
 
-Write-Host 'iMedic — tunel de adjuntos (misma ruta que Vidal)'
-Write-Host "Puerto: $Port"
-Write-Host ''
+function Write-FileServerRuntime {
+	@'
+$ErrorActionPreference = "Stop"
+$Port = [int]$env:FILE_SERVER_PORT
+$RootDir = $env:FILE_SERVER_ROOT
+if (-not (Test-Path -LiteralPath $RootDir)) { New-Item -ItemType Directory -Force -Path $RootDir | Out-Null }
 
-$Root = Ensure-AdjuntosRoot $Root
+function Normalize-Path([string]$p) {
+  if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+  $x = [Uri]::UnescapeDataString($p)
+  if ($x.StartsWith("D:\")) { $x = "E:\" + $x.Substring(3) }
+  if ($x.StartsWith("F:\")) { $x = "E:\" + $x.Substring(3) }
+  return $x
+}
+function Sanitize-Name([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return "" }
+  $x = $s.Trim().ToUpper()
+  $x = $x -replace "[\\/:*?`"<>|]", " "
+  $x = $x -replace "\s+", " "
+  return $x.Trim()
+}
+function Repair-Utf8Mojibake([string]$s) {
+  if ([string]::IsNullOrWhiteSpace($s)) { return $s }
+  try {
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $bytes = $latin1.GetBytes($s)
+    $decoded = [Text.Encoding]::UTF8.GetString($bytes)
+    if ($decoded.IndexOf([char]0xFFFD) -lt 0 -and $decoded -ne $s) { $s = $decoded }
+  } catch {}
+  $latN = [char]0x00D1
+  $latn = [char]0x00F1
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x0091, $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + '?', $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x00B1, $latn)
+  return $s
+}
+function Sanitize-FileName([string]$fileName) {
+  $safeFile = [IO.Path]::GetFileName((Repair-Utf8Mojibake $fileName))
+  $safeFile = $safeFile -replace "[\\/:*?`"<>|]", "_"
+  $safeFile = $safeFile -replace "[\x00-\x1F]", "_"
+  if ([string]::IsNullOrWhiteSpace($safeFile)) { return "archivo" }
+  return $safeFile.Trim()
+}
+function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [string]$fileName) {
+  $safeFile = Sanitize-FileName $fileName
+  $n = Sanitize-Name (Repair-Utf8Mojibake $paciente)
+  $folder = $null
+  if ($visita -and $n) { $folder = "$visita $n" }
+  elseif ($visita) { $folder = "$visita" }
+  if ($folder) { return (Join-Path (Join-Path $root $folder) $safeFile) }
+  return (Join-Path $root $safeFile)
+}
+function Find-ExistingFile([string]$p) {
+  $names = New-Object System.Collections.Generic.List[string]
+  foreach ($c in @($p, (Repair-Utf8Mojibake $p))) {
+    if ($c -and -not $names.Contains($c)) { [void]$names.Add($c) }
+  }
+  $fileName = Sanitize-FileName ([IO.Path]::GetFileName($p))
+  $dir = [IO.Path]::GetDirectoryName($p)
+  if ($dir) { [void]$names.Add((Join-Path $dir $fileName)) }
+  [void]$names.Add((Join-Path $RootDir $fileName))
+  [void]$names.Add((Join-Path $RootDir ([IO.Path]::GetFileName($p))))
+  foreach ($c in $names) {
+    if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+  }
+  $want = $fileName.ToLowerInvariant()
+  foreach ($folder in @($dir, $RootDir)) {
+    if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
+    foreach ($f in (Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue)) {
+      $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
+      if ($have -eq $want) { return $f.FullName }
+    }
+  }
+  return $null
+}
+function Ensure-Parent([string]$filePath) {
+  $dir = [IO.Path]::GetDirectoryName($filePath)
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+}
+function Add-Cors($res) {
+  $res.Headers["Access-Control-Allow-Origin"] = "*"
+  $res.Headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS"
+  $res.Headers["Access-Control-Allow-Headers"] = "*"
+}
+function Send-Json($res, [int]$code, [string]$json) {
+  Add-Cors $res
+  $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+  $res.StatusCode = $code
+  $res.ContentType = "application/json; charset=utf-8"
+  $res.ContentLength64 = $bytes.LongLength
+  $res.OutputStream.Write($bytes, 0, $bytes.Length)
+  $res.Close()
+}
+function Find-Bytes([byte[]]$arr,[byte[]]$pattern,[int]$start=0) {
+  for ($i=$start; $i -le $arr.Length-$pattern.Length; $i++) {
+    $ok = $true
+    for ($j=0; $j -lt $pattern.Length; $j++) { if ($arr[$i+$j] -ne $pattern[$j]) { $ok=$false; break } }
+    if ($ok) { return $i }
+  }
+  return -1
+}
+function Parse-Multipart([byte[]]$body,[string]$contentType) {
+  $m = [regex]::Match($contentType, "boundary=(.+)$")
+  if (-not $m.Success) { throw "Boundary no encontrado" }
+  $boundary = $m.Groups[1].Value.Trim('"')
+  $b = [Text.Encoding]::ASCII.GetBytes("--" + $boundary)
+  $sep = [byte[]](13,10,13,10)
+  $parts = @()
+  $pos = 0
+  while ($true) {
+    $bi = Find-Bytes $body $b $pos
+    if ($bi -lt 0) { break }
+    $after = $bi + $b.Length
+    if ($after + 1 -lt $body.Length -and $body[$after] -eq 45 -and $body[$after+1] -eq 45) { break }
+    if ($after + 1 -ge $body.Length) { break }
+    if ($body[$after] -eq 13 -and $body[$after+1] -eq 10) { $after += 2 }
+    $hi = Find-Bytes $body $sep $after
+    if ($hi -lt 0) { break }
+    $headerText = [Text.Encoding]::UTF8.GetString($body[$after..($hi-1)])
+    $dataStart = $hi + 4
+    $next = Find-Bytes $body ([byte[]](13,10) + $b) $dataStart
+    if ($next -lt 0) { break }
+    $dataEnd = $next - 1
+    if ($dataEnd -ge $dataStart -and $body[$dataEnd] -eq 10) { $dataEnd-- }
+    if ($dataEnd -ge $dataStart -and $body[$dataEnd] -eq 13) { $dataEnd-- }
+    $len = [Math]::Max(0, $dataEnd - $dataStart + 1)
+    $data = New-Object byte[] $len
+    if ($len -gt 0) { [Array]::Copy($body, $dataStart, $data, 0, $len) }
+    $parts += [pscustomobject]@{ Headers=$headerText; Data=$data }
+    $pos = $next + 2
+  }
+  return $parts
+}
+function Mime-Of([string]$filePath) {
+  switch ([IO.Path]::GetExtension($filePath).ToLowerInvariant()) {
+    ".pdf" { return "application/pdf" }
+    ".jpg" { return "image/jpeg" }
+    ".jpeg" { return "image/jpeg" }
+    ".png" { return "image/png" }
+    ".gif" { return "image/gif" }
+    default { return "application/octet-stream" }
+  }
+}
+
+$listener = [System.Net.HttpListener]::new()
+$listener.Prefixes.Add("http://127.0.0.1:$Port/")
+$listener.Start()
+try {
+  while ($listener.IsListening) {
+    $ctx = $listener.GetContext()
+    $req = $ctx.Request
+    $res = $ctx.Response
+    try {
+      $route = $req.Url.AbsolutePath.ToLowerInvariant()
+      if ($req.HttpMethod -eq "OPTIONS") { Add-Cors $res; $res.StatusCode = 204; $res.Close(); continue }
+      if ($req.HttpMethod -eq "GET" -and ($route -eq "/" -or $route -eq "/health")) {
+        $rootEsc = $RootDir.Replace("\","\\")
+        Send-Json $res 200 "{""success"":true,""ok"":true,""status"":""ok"",""encoding"":""utf8-v2"",""root"":""$rootEsc"",""port"":$Port}"
+        continue
+      }
+      if ($req.HttpMethod -eq "GET" -and $route -eq "/file") {
+        $p = Normalize-Path $req.QueryString["path"]
+        if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
+        $found = Find-ExistingFile $p
+        if (-not $found) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
+        $p = $found
+        $bytes = [IO.File]::ReadAllBytes($p)
+        Add-Cors $res
+        $res.StatusCode = 200
+        $res.ContentType = (Mime-Of $p)
+        $res.ContentLength64 = $bytes.LongLength
+        $res.AddHeader("Content-Disposition", "inline; filename=""" + [IO.Path]::GetFileName($p) + """")
+        $res.OutputStream.Write($bytes,0,$bytes.Length)
+        $res.Close()
+        continue
+      }
+      if ($req.HttpMethod -eq "POST" -and $route -eq "/upload") {
+        $ms = New-Object IO.MemoryStream
+        $req.InputStream.CopyTo($ms)
+        $body = $ms.ToArray()
+        $parts = Parse-Multipart $body $req.ContentType
+        $destPath = $null; $numeroVisita = $null; $nombrePaciente = $null; $fileName = $null; [byte[]]$fileBytes = @()
+        foreach ($part in $parts) {
+          $h = $part.Headers
+          $name = [regex]::Match($h, "name=""([^""]+)""").Groups[1].Value
+          $fnStar = [regex]::Match($h, "filename\*=(?:UTF-8|utf-8)''([^;\r\n]+)")
+          $fn = [regex]::Match($h, "filename=""([^""]*)""").Groups[1].Value
+          if ($fnStar.Success) {
+            try { $fn = [Uri]::UnescapeDataString($fnStar.Groups[1].Value.Trim()) } catch {}
+          }
+          if ($fn) { $fileName = Sanitize-FileName $fn; $fileBytes = $part.Data; continue }
+          $txt = Repair-Utf8Mojibake ([Text.Encoding]::UTF8.GetString($part.Data).Trim())
+          if ($name -eq "path" -and $txt) { $destPath = Normalize-Path $txt }
+          if ($name -eq "numeroVisita" -and $txt) { $numeroVisita = $txt }
+          if ($name -eq "nombrePaciente" -and $txt) { $nombrePaciente = $txt }
+        }
+        if (-not $fileName -or $fileBytes.Length -eq 0) { Send-Json $res 400 "{""success"":false,""error"":""archivo requerido""}"; continue }
+        if (-not $destPath) { $destPath = Get-VidalDest $RootDir $numeroVisita $nombrePaciente $fileName }
+        Ensure-Parent $destPath
+        [IO.File]::WriteAllBytes($destPath, $fileBytes)
+        $esc = $destPath.Replace("\","\\")
+        Send-Json $res 201 "{""success"":true,""ok"":true,""filePath"":""$esc"",""path"":""$esc""}"
+        continue
+      }
+      Send-Json $res 404 "{""success"":false,""error"":""Not found""}"
+    } catch {
+      $msg = $_.Exception.Message.Replace("\","\\").Replace("""","\""")
+      Send-Json $res 500 "{""success"":false,""error"":""$msg""}"
+    }
+  }
+} finally {
+  if ($listener.IsListening) { $listener.Stop() }
+  $listener.Close()
+}
+'@ | Set-Content -LiteralPath $runtime -Encoding UTF8
+}
+
+function Start-ImedicFileServer {
+	Stop-LegacyFileServers
+	Write-Host 'Reiniciando file server iMedic (utf8-v2, carpetas por visita)...'
+	Write-FileServerRuntime
+	$psi = New-Object System.Diagnostics.ProcessStartInfo
+	$psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+	$psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runtime`""
+	$psi.WorkingDirectory = $here
+	$psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+	$psi.UseShellExecute = $false
+	$psi.CreateNoWindow = $true
+	$psi.EnvironmentVariables['FILE_SERVER_PORT'] = "$Port"
+	$psi.EnvironmentVariables['FILE_SERVER_ROOT'] = $Root
+	[void][Diagnostics.Process]::Start($psi)
+	$ok = $false
+	for ($i = 0; $i -lt 40; $i++) {
+		Start-Sleep -Milliseconds 300
+		if (Test-ImedicFileServer) { $ok = $true; break }
+	}
+	if (-not $ok) { throw "File server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health" }
+	Probe-Utf8Filename
+}
+
+function Save-FileServerUrlRest([string]$publicUrl) {
+	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+	$loginBody = (@{ username = $SaUser; password = $SaPass } | ConvertTo-Json)
+	$first = Invoke-RestMethod -Uri "$Api/auth/login" -Method POST -ContentType 'application/json; charset=utf-8' -Body $loginBody
+	$token = $first.token
+	if (-not $token -and $first.step -eq 'SELECT_EMPRESA') {
+		$pick = $null
+		foreach ($e in @($first.empresas)) {
+			$id = $e.idEmpresa; if ($null -eq $id) { $id = $e.id }
+			if ([int]$id -eq $EmpresaId) { $pick = $e; break }
+		}
+		if (-not $pick) {
+			foreach ($e in @($first.empresas)) {
+				$n = [string]($e.descripcion + ' ' + $e.nombre)
+				if ($n -match 'sarmiento') { $pick = $e; break }
+			}
+		}
+		if (-not $pick) { $pick = @($first.empresas)[0] }
+		$idEmp = $pick.idEmpresa; if ($null -eq $idEmp) { $idEmp = $pick.id }
+		$second = Invoke-RestMethod -Uri "$Api/auth/login" -Method POST -ContentType 'application/json; charset=utf-8' -Body ((@{
+					username  = $SaUser
+					password  = $SaPass
+					idEmpresa = $idEmp
+					tempToken = $first.tempToken
+				} | ConvertTo-Json))
+		$token = $second.token
+	}
+	if (-not $token) { throw 'Login Super Admin sin token' }
+	Invoke-RestMethod -Uri "$Api/super-admin/empresas/$EmpresaId/conexion" -Method PUT -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json; charset=utf-8' -Body ((@{ fileServerUrl = $publicUrl } | ConvertTo-Json)) | Out-Null
+}
+
+Write-Host 'iMedic - file server + tunel'
 Write-Host "Root: $Root"
-Write-Host 'Ejemplo: E:\adjuntos\468 APELLIDO NOMBRE\archivo.pdf'
-Write-Host ''
-
-if (-not (Test-ImedicFileServer $Port)) {
-	Write-Host 'Reiniciando file server iMedic (utf8-v2)...'
-}
-Stop-LegacyFileServers $Port
-$fsBat = Join-Path $repoBack 'start-file-server.bat'
-if (-not (Test-Path -LiteralPath $fsBat)) { throw "No existe $fsBat" }
-Write-Host 'Arrancando file server iMedic (oculto)...'
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = "$env:SystemRoot\System32\cmd.exe"
-$psi.Arguments = "/c `"$fsBat`""
-$psi.WorkingDirectory = $repoBack
-$psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
-$psi.UseShellExecute = $false
-$psi.CreateNoWindow = $true
-$psi.EnvironmentVariables['PORT'] = "$Port"
-$psi.EnvironmentVariables['ROOT'] = $Root
-$psi.EnvironmentVariables['FALLBACK_ROOT'] = $FallbackRoot
-$psi.EnvironmentVariables['IMEDIC_NOPAUSE'] = '1'
-[void][Diagnostics.Process]::Start($psi)
-
-$ok = $false
-for ($i = 0; $i -lt 30; $i++) {
-	Start-Sleep -Milliseconds 400
-	if (Test-ImedicFileServer $Port) { $ok = $true; break }
-}
-if (-not $ok) { throw "El file server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health" }
-
-Write-Host "File server iMedic OK  http://127.0.0.1:$Port/health"
-Probe-Local $Port $Root
+Start-ImedicFileServer
+Write-Host "File server OK  http://127.0.0.1:$Port/health  (encoding=utf8-v2)"
 
 if ($KeepTunnel) {
-	$existing = $null
-	if (Test-Path -LiteralPath $urlFile) { $existing = (Get-Content -LiteralPath $urlFile -ErrorAction SilentlyContinue | Select-Object -First 1) }
-	Write-Host ''
-	Write-Host 'KeepTunnel: cloudflared NO se reinicia. Misma URL publica.'
-	if ($existing) { Write-Host $existing }
-	Write-Host "Local 127.0.0.1:$Port/health tiene que tener success=true (si no, Railway dice Error al subir archivo al servidor)."
+	$url = $null
+	if (Test-Path $urlFile) { $url = (Get-Content $urlFile | Select-Object -First 1) }
+	Write-Host 'KeepTunnel: cloudflared no se toca.'
+	if ($url) { Write-Host $url }
 	exit 0
 }
 
 Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 300
-
-Write-Host 'Abriendo tunel Cloudflare... (puede tardar ~20 s)'
 $cf = Find-Cloudflared
 foreach ($f in @($outLog, $errLog)) { if (Test-Path $f) { Remove-Item $f -Force } }
-
-$cfProc = Start-Process -FilePath $cf -ArgumentList @(
-	'tunnel', '--url', "http://127.0.0.1:$Port", '--loglevel', 'info'
-) -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden -PassThru
+Write-Host 'Abriendo tunnel Cloudflare...'
+$cfProc = Start-Process -FilePath $cf -ArgumentList @('tunnel', '--url', "http://127.0.0.1:$Port", '--loglevel', 'info') -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden -PassThru
 
 $url = $null
 for ($i = 0; $i -lt 60; $i++) {
 	Start-Sleep -Seconds 1
-	$url = Get-TunnelUrlFromLogs @($outLog, $errLog)
+	foreach ($f in @($outLog, $errLog)) {
+		if (-not (Test-Path $f)) { continue }
+		$m = Select-String -LiteralPath $f -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -Last 1
+		if ($m) { $url = $m.Matches[0].Value.TrimEnd('/'); break }
+	}
 	if ($url) { break }
 	if ($cfProc.HasExited) { break }
 }
-
-if (-not $url) {
-	throw "No salio la URL trycloudflare. Mira:`n$errLog`n$outLog"
-}
-
-Write-Host "Tunel: $url"
-Write-Host 'Esperando health PUBLICO (Railway usa esta URL, no 127.0.0.1 ni la IP de la PC)...'
-$publicOk = $false
-for ($i = 0; $i -lt 25; $i++) {
-	if ($cfProc.HasExited) { throw "cloudflared se cerro antes de quedar online. Mira:`n$errLog" }
-	if (Test-PublicHealth $url) { $publicOk = $true; break }
-	Start-Sleep -Seconds 2
-}
-if (-not $publicOk) {
-	Write-Host "WARN: $url/health todavia no responde status=ok. Se graba igual; si el upload da 530, volve a correr este script."
-}
+if (-not $url) { throw "No salio la URL trycloudflare. Mira $errLog" }
 
 $url | Set-Content -LiteralPath $urlFile -Encoding ASCII
 try { Set-Clipboard -Value $url } catch { }
 
-$apiMsg = 'no se grabo en Super Admin'
+$apiMsg = 'URL no grabada en Super Admin'
 if (-not $SkipApi) {
-	$node = Get-Command node -ErrorAction SilentlyContinue
-	$setJs = Join-Path $PSScriptRoot 'set-fileserver-url.js'
-	if ($node -and (Test-Path $setJs)) {
-		$p = Start-Process -FilePath $node.Source -ArgumentList @(
-			$setJs, '--id', "$EmpresaId", '--url', $url, '--match', $EmpresaMatch
-		) -WorkingDirectory $repoBack -Wait -PassThru -NoNewWindow
-		if ($p.ExitCode -eq 0) {
-			$apiMsg = "FileServerUrl grabado en empresa $EmpresaId"
-		} else {
-			$apiMsg = "No se pudo grabar en Super Admin (exit $($p.ExitCode)). Pega la URL a mano."
-		}
-	} else {
-		try {
-			Save-FileServerUrlRest $url
-			$apiMsg = "FileServerUrl grabado en empresa $EmpresaId (sin Node)"
-		} catch {
-			$apiMsg = "No se pudo grabar en Super Admin: $($_.Exception.Message)"
-		}
+	try {
+		Save-FileServerUrlRest $url
+		$apiMsg = "FileServerUrl grabado en empresa $EmpresaId"
+	} catch {
+		$apiMsg = "No se pudo grabar en Super Admin: $($_.Exception.Message)"
 	}
 }
 
 Write-Host ''
-Write-Host $url
+Write-Host '========================================'
+Write-Host "URL: $url"
+Write-Host "Archivos: $Root\{visita} {PACIENTE}\archivo"
 Write-Host $apiMsg
-Write-Host "Local 127.0.0.1:$Port/health = file server en ESTA PC. Railway usa solo el tunel de arriba."
-Write-Host 'Consola cierra. File server y cloudflared siguen en segundo plano.'
+Write-Host 'La consola se cierra y el tunnel queda corriendo en segundo plano.'
+Write-Host '========================================'
 exit 0
