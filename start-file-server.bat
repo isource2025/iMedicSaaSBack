@@ -72,15 +72,11 @@ function Repair-Utf8Mojibake([string]$s) {
     $decoded = [Text.Encoding]::UTF8.GetString($bytes)
     if ($decoded.IndexOf([char]0xFFFD) -lt 0 -and $decoded -ne $s) { $s = $decoded }
   } catch {}
-  $s = $s.Replace(("$([char]0x00C3)$([char]0x0091)"), 'Ñ')
-  $s = $s -replace 'Ã\?','Ñ'
-  $s = $s -replace 'Ã‘','Ñ'
-  $s = $s -replace 'Ã±','ñ'
-  $s = $s -replace 'Ã¡','á'
-  $s = $s -replace 'Ã©','é'
-  $s = $s -replace 'Ã­','í'
-  $s = $s -replace 'Ã³','ó'
-  $s = $s -replace 'Ãº','ú'
+  $latN = [char]0x00D1
+  $latn = [char]0x00F1
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x0091, $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + '?', $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x00B1, $latn)
   return $s
 }
 

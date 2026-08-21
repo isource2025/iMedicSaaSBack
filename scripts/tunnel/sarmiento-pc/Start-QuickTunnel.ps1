@@ -24,6 +24,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$script:LatN = [char]0x00D1
 $here = 'C:\imedic'
 New-Item -ItemType Directory -Force -Path $here, $Root, "$env:ProgramData\iMedic\adjuntos-tunnel" | Out-Null
 $runtime = Join-Path $here 'file-server-runtime.ps1'
@@ -73,8 +74,16 @@ function Stop-LegacyFileServers {
 	Stop-Port $Port
 }
 
+function Get-UploadFilePathFromJson([string]$txt) {
+	$obj = $txt | ConvertFrom-Json
+	if ($obj.filePath) { return [string]$obj.filePath }
+	if ($obj.path) { return [string]$obj.path }
+	throw "Respuesta sin filePath: $txt"
+}
+
 function Probe-Utf8Filename {
-	$probeName = 'PEÑA-probe.txt'
+	$probeStem = 'PE' + $script:LatN + 'A'
+	$probeName = $probeStem + '-probe.txt'
 	$body = [Text.Encoding]::UTF8.GetBytes("probe $(Get-Date -Format o)")
 	$boundary = '----ImedicUtf8' + [guid]::NewGuid().ToString('N')
 	$nl = "`r`n"
@@ -83,10 +92,10 @@ function Probe-Utf8Filename {
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nl99999$nl")
 	$w.Write("--$boundary$nl")
-	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nlPEÑA PROBE$nl")
+	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nl$probeStem PROBE$nl")
 	$w.Write("--$boundary$nl")
 	$enc = [Uri]::EscapeDataString($probeName)
-	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"PEÑA-probe.txt`"; filename*=UTF-8''$enc$nl")
+	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"$probeName`"; filename*=UTF-8''$enc$nl")
 	$w.Write("Content-Type: text/plain$nl$nl")
 	$w.Flush()
 	$ms.Write($body, 0, $body.Length)
@@ -104,11 +113,13 @@ function Probe-Utf8Filename {
 	$sr = New-Object IO.StreamReader($resp.GetResponseStream())
 	$txt = $sr.ReadToEnd()
 	$sr.Close(); $resp.Close()
-	if ($txt -notmatch '"filePath"') { throw "Probe UTF-8 no devolvio filePath: $txt" }
-	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: el nombre quedo corrupto ($txt)" }
-	$m = [regex]::Match($txt, '\"filePath\"\s*:\s*\"([^"]+)\"')
-	$fp = $m.Groups[1].Value.Replace('\\', '\')
-	if ($fp -notmatch 'PEÑA|PEÑA') { Write-Host "WARN: filePath sin Ñ legible -> $fp" }
+	if ($txt -notmatch 'filePath') { throw "Probe UTF-8 no devolvio filePath: $txt" }
+	$mojibakeMark = 'PE' + [char]0x00C3 + [char]0x0091
+	if ($txt -like "*$mojibakeMark*" -or $txt -match 'PE.A\?A') {
+		throw "Probe UTF-8 fallo: el nombre quedo corrupto ($txt)"
+	}
+	$fp = (Get-UploadFilePathFromJson $txt).Replace('\\', '\')
+	if ($fp -notlike "*$probeStem*") { Write-Host "WARN: filePath sin N-tilde legible -> $fp" }
 	try {
 		Invoke-WebRequest -Method DELETE -Uri ("http://127.0.0.1:$Port/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10 | Out-Null
 	} catch {}
@@ -157,15 +168,11 @@ function Repair-Utf8Mojibake([string]$s) {
     $decoded = [Text.Encoding]::UTF8.GetString($bytes)
     if ($decoded.IndexOf([char]0xFFFD) -lt 0 -and $decoded -ne $s) { $s = $decoded }
   } catch {}
-  $s = $s.Replace(("$([char]0x00C3)$([char]0x0091)"), "Ñ")
-  $s = $s -replace "Ã\?","Ñ"
-  $s = $s -replace "Ã‘","Ñ"
-  $s = $s -replace "Ã±","ñ"
-  $s = $s -replace "Ã¡","á"
-  $s = $s -replace "Ã©","é"
-  $s = $s -replace "Ã­","í"
-  $s = $s -replace "Ã³","ó"
-  $s = $s -replace "Ãº","ú"
+  $latN = [char]0x00D1
+  $latn = [char]0x00F1
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x0091, $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + '?', $latN)
+  $s = $s.Replace(([char]0x00C3).ToString() + [char]0x00B1, $latn)
   return $s
 }
 function Sanitize-FileName([string]$fileName) {

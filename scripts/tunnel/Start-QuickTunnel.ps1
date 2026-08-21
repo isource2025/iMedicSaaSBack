@@ -23,6 +23,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$script:LatN = [char]0x00D1
 $repoBack = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Find-Cloudflared {
@@ -153,8 +154,16 @@ function Test-PublicHealth([string]$base) {
 	}
 }
 
+function Get-UploadFilePathFromJson([string]$txt) {
+	$obj = $txt | ConvertFrom-Json
+	if ($obj.filePath) { return [string]$obj.filePath }
+	if ($obj.path) { return [string]$obj.path }
+	throw "Respuesta sin filePath: $txt"
+}
+
 function Probe-Local([int]$listenPort, [string]$rootDir) {
-	$probeName = 'PEÑA-probe.txt'
+	$probeStem = 'PE' + $script:LatN + 'A'
+	$probeName = $probeStem + '-probe.txt'
 	$body = [Text.Encoding]::UTF8.GetBytes("probe $(Get-Date -Format o)")
 	$boundary = '----ImedicProbe' + [guid]::NewGuid().ToString('N')
 	$nl = "`r`n"
@@ -163,10 +172,10 @@ function Probe-Local([int]$listenPort, [string]$rootDir) {
 	$w.Write("--$boundary$nl")
 	$w.Write("Content-Disposition: form-data; name=`"numeroVisita`"$nl$nlPROBE$nl")
 	$w.Write("--$boundary$nl")
-	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nlPEÑA PROBE$nl")
+	$w.Write("Content-Disposition: form-data; name=`"nombrePaciente`"$nl$nl$probeStem PROBE$nl")
 	$w.Write("--$boundary$nl")
 	$enc = [Uri]::EscapeDataString($probeName)
-	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"PEÑA-probe.txt`"; filename*=UTF-8''$enc$nl")
+	$w.Write("Content-Disposition: form-data; name=`"file`"; filename=`"$probeName`"; filename*=UTF-8''$enc$nl")
 	$w.Write("Content-Type: text/plain$nl$nl")
 	$w.Flush()
 	$ms.Write($body, 0, $body.Length)
@@ -185,11 +194,13 @@ function Probe-Local([int]$listenPort, [string]$rootDir) {
 	$sr = New-Object IO.StreamReader($resp.GetResponseStream())
 	$txt = $sr.ReadToEnd()
 	$sr.Close(); $resp.Close()
-	if ($txt -notmatch '"filePath"') { throw "Probe upload no devolvio filePath: $txt" }
-	if ($txt -match 'PEÃ|PE\?A') { throw "Probe UTF-8 fallo: nombre corrupto ($txt)" }
-	$m = [regex]::Match($txt, '\"filePath\"\s*:\s*\"([^"]+)\"')
-	$fp = $m.Groups[1].Value.Replace('\\', '\')
-	if ($fp -notmatch [regex]::Escape($rootDir)) {
+	if ($txt -notmatch 'filePath') { throw "Probe upload no devolvio filePath: $txt" }
+	$mojibakeMark = 'PE' + [char]0x00C3 + [char]0x0091
+	if ($txt -like "*$mojibakeMark*" -or $txt -match 'PE.A\?A') {
+		throw "Probe UTF-8 fallo: nombre corrupto ($txt)"
+	}
+	$fp = (Get-UploadFilePathFromJson $txt).Replace('\\', '\')
+	if ($fp -notlike "$rootDir*") {
 		Write-Host "WARN: filePath fuera de $rootDir -> $fp"
 	}
 	$get = Invoke-WebRequest -Uri ("http://127.0.0.1:$listenPort/file?path=" + [uri]::EscapeDataString($fp)) -UseBasicParsing -TimeoutSec 10
