@@ -16,145 +16,199 @@ async function getCols() {
   return resolveImNotificacionesColumns();
 }
 
+function emptyList(page, limit) {
+  return {
+    data: [],
+    pagination: { page, limit, total: 0, totalPages: 0 },
+  };
+}
+
+function colAs(cols, key, alias, nullSql) {
+  if (!cols[key]) return `${nullSql} AS ${alias}`;
+  return `${sqlEscapeIdent(cols[key])} AS ${alias}`;
+}
+
 /**
  * Lista notificaciones del usuario (paginado).
  */
 async function listarPorUsuario(valorPersonal, page = 1, limit = 20, soloNoLeidas = false) {
-  const cols = await getCols();
-  if (!cols.usable) {
-    return {
-      data: [],
-      pagination: { page, limit, total: 0, totalPages: 0 },
-    };
-  }
+  try {
+    const cols = await getCols();
+    if (!cols.usable) return emptyList(page, limit);
 
-  const id = sqlEscapeIdent(cols.id);
-  const vp = sqlEscapeIdent(cols.valorPersonal);
-  const leida = sqlEscapeIdent(cols.leida);
-  const fecha = sqlEscapeIdent(cols.fechaCarga);
-  const desc = sqlEscapeIdent(cols.descNotificacion);
-  const tipo = sqlEscapeIdent(cols.tipoNotificacion);
-  const entT = sqlEscapeIdent(cols.entidadTipo);
-  const entI = sqlEscapeIdent(cols.entidadId);
-  const json = sqlEscapeIdent(cols.datosJson);
+    const vp = sqlEscapeIdent(cols.valorPersonal);
+    const leida = sqlEscapeIdent(cols.leida);
+    const orderExpr = cols.fechaCarga
+      ? `${sqlEscapeIdent(cols.fechaCarga)} DESC`
+      : cols.id
+        ? `${sqlEscapeIdent(cols.id)} DESC`
+        : '(SELECT 1)';
 
-  const where = soloNoLeidas
-    ? `WHERE ${vp} = @param0 AND ${leida} = 0`
-    : `WHERE ${vp} = @param0`;
+    const where = soloNoLeidas
+      ? `WHERE ${vp} = @param0 AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0`
+      : `WHERE ${vp} = @param0`;
 
-  const countRows = await executeQuery(
-    `SELECT COUNT(*) AS total FROM dbo.imNotificaciones ${where}`,
-    [{ value: valorPersonal }]
-  );
-  const total = countRows[0]?.total ?? 0;
+    const params = [{ value: valorPersonal, type: 'Int' }];
+    let total = 0;
+    try {
+      const countRows = await executeQuery(
+        `SELECT COUNT(*) AS total FROM dbo.imNotificaciones ${where}`,
+        params,
+      );
+      total = Number(countRows[0]?.total ?? countRows[0]?.Total ?? 0);
+    } catch {
+      const countRows = await executeQuery(
+        `SELECT COUNT(*) AS total FROM dbo.imNotificaciones WHERE ${vp} = @param0${
+          soloNoLeidas ? ` AND ${leida} = 0` : ''
+        }`,
+        params,
+      );
+      total = Number(countRows[0]?.total ?? countRows[0]?.Total ?? 0);
+    }
 
-  const offset = (page - 1) * limit;
-  const selectList = `
-        ${id} AS IdNotificacion,
+    const offset = (page - 1) * limit;
+    const selectList = `
+        ${colAs(cols, 'id', 'IdNotificacion', 'CAST(0 AS INT)')},
         ${vp} AS ValorPersonal,
-        ${tipo} AS TipoNotificacion,
-        ${desc} AS DescNotificacion,
-        ${entT} AS EntidadTipo,
-        ${entI} AS EntidadId,
+        ${colAs(cols, 'tipoNotificacion', 'TipoNotificacion', 'CAST(NULL AS VARCHAR(50))')},
+        ${colAs(cols, 'descNotificacion', 'DescNotificacion', 'CAST(NULL AS VARCHAR(250))')},
+        ${colAs(cols, 'entidadTipo', 'EntidadTipo', 'CAST(NULL AS VARCHAR(50))')},
+        ${colAs(cols, 'entidadId', 'EntidadId', 'CAST(NULL AS INT)')},
         ${leida} AS Leida,
-        ${json} AS DatosJSON,
-        ${fecha} AS FechaCarga
+        ${colAs(cols, 'datosJson', 'DatosJSON', 'CAST(NULL AS NVARCHAR(MAX))')},
+        ${colAs(cols, 'fechaCarga', 'FechaCarga', 'CAST(NULL AS DATETIME)')}
       FROM dbo.imNotificaciones
       ${where}`;
 
-  let data;
-  try {
-    data = await executeQuery(
-      `
-      SELECT
-        ${selectList}
-      ORDER BY ${fecha} DESC
-      OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
-      `,
-      [{ value: valorPersonal, type: 'Int' }],
-    );
-  } catch (err) {
-    const topN = offset + limit;
-    const rows = await executeQuery(
-      `
-      SELECT TOP ${topN}
-        ${selectList}
-      ORDER BY ${fecha} DESC
-      `,
-      [{ value: valorPersonal, type: 'Int' }],
-    );
-    data = (rows || []).slice(offset);
+    let data;
+    try {
+      data = await executeQuery(
+        `
+        SELECT
+          ${selectList}
+        ORDER BY ${orderExpr}
+        OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
+        `,
+        params,
+      );
+    } catch {
+      const topN = offset + limit;
+      const rows = await executeQuery(
+        `
+        SELECT TOP ${topN}
+          ${selectList}
+        ORDER BY ${orderExpr}
+        `,
+        params,
+      );
+      data = (rows || []).slice(offset);
+    }
+
+    const mapped = (data || []).map((n) => ({
+      ...n,
+      DatosJSON: n.DatosJSON ? safeParseJson(n.DatosJSON) : null,
+    }));
+
+    return {
+      data: mapped,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 0,
+      },
+    };
+  } catch (e) {
+    console.warn('[notificaciones] listarPorUsuario:', e.message);
+    return emptyList(page, limit);
   }
-
-  const mapped = (data || []).map((n) => ({
-    ...n,
-    DatosJSON: n.DatosJSON ? safeParseJson(n.DatosJSON) : null,
-  }));
-
-  return {
-    data: mapped,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 0,
-    },
-  };
 }
 
 async function marcarLeida(idNotificacion, valorPersonal) {
-  const cols = await getCols();
-  if (!cols.usable) return { success: false };
+  try {
+    const cols = await getCols();
+    if (!cols.usable || !cols.id) return { success: false };
 
-  const id = sqlEscapeIdent(cols.id);
-  const vp = sqlEscapeIdent(cols.valorPersonal);
-  const leida = sqlEscapeIdent(cols.leida);
+    const id = sqlEscapeIdent(cols.id);
+    const vp = sqlEscapeIdent(cols.valorPersonal);
+    const leida = sqlEscapeIdent(cols.leida);
 
-  await executeQuery(
-    `
-    UPDATE dbo.imNotificaciones
-    SET ${leida} = 1
-    WHERE ${id} = @param0 AND ${vp} = @param1
-    `,
-    [{ value: idNotificacion }, { value: valorPersonal }]
-  );
-  return { success: true };
+    await executeQuery(
+      `
+      UPDATE dbo.imNotificaciones
+      SET ${leida} = 1
+      WHERE ${id} = @param0 AND ${vp} = @param1
+      `,
+      [
+        { value: idNotificacion, type: 'Int' },
+        { value: valorPersonal, type: 'Int' },
+      ],
+    );
+    return { success: true };
+  } catch (e) {
+    console.warn('[notificaciones] marcarLeida:', e.message);
+    return { success: false };
+  }
 }
 
 async function marcarTodasLeidas(valorPersonal) {
-  const cols = await getCols();
-  if (!cols.usable) return { success: false };
+  try {
+    const cols = await getCols();
+    if (!cols.usable) return { success: false };
 
-  const vp = sqlEscapeIdent(cols.valorPersonal);
-  const leida = sqlEscapeIdent(cols.leida);
+    const vp = sqlEscapeIdent(cols.valorPersonal);
+    const leida = sqlEscapeIdent(cols.leida);
 
-  await executeQuery(
-    `
-    UPDATE dbo.imNotificaciones
-    SET ${leida} = 1
-    WHERE ${vp} = @param0 AND ${leida} = 0
-    `,
-    [{ value: valorPersonal }]
-  );
-  return { success: true };
+    await executeQuery(
+      `
+      UPDATE dbo.imNotificaciones
+      SET ${leida} = 1
+      WHERE ${vp} = @param0 AND ${leida} = 0
+      `,
+      [{ value: valorPersonal, type: 'Int' }],
+    );
+    return { success: true };
+  } catch (e) {
+    console.warn('[notificaciones] marcarTodasLeidas:', e.message);
+    return { success: false };
+  }
 }
 
 async function contarNoLeidas(valorPersonal) {
-  const cols = await getCols();
-  if (!cols.usable) return 0;
+  try {
+    const cols = await getCols();
+    if (!cols.usable) return 0;
 
-  const vp = sqlEscapeIdent(cols.valorPersonal);
-  const leida = sqlEscapeIdent(cols.leida);
+    const vp = sqlEscapeIdent(cols.valorPersonal);
+    const leida = sqlEscapeIdent(cols.leida);
+    const params = [{ value: valorPersonal, type: 'Int' }];
 
-  const rows = await executeQuery(
-    `
-    SELECT COUNT(*) AS c
-    FROM dbo.imNotificaciones
-    WHERE ${vp} = @param0 AND ${leida} = 0
-    `,
-    [{ value: valorPersonal }]
-  );
-  return rows[0]?.c ?? 0;
+    let rows;
+    try {
+      rows = await executeQuery(
+        `
+        SELECT COUNT(*) AS c
+        FROM dbo.imNotificaciones
+        WHERE ${vp} = @param0 AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0
+        `,
+        params,
+      );
+    } catch {
+      rows = await executeQuery(
+        `
+        SELECT COUNT(*) AS c
+        FROM dbo.imNotificaciones
+        WHERE ${vp} = @param0 AND ${leida} = 0
+        `,
+        params,
+      );
+    }
+    const row = rows?.[0] || {};
+    return Number(row.c ?? row.C ?? 0);
+  } catch (e) {
+    console.warn('[notificaciones] contarNoLeidas:', e.message);
+    return 0;
+  }
 }
 
 /**
@@ -184,70 +238,87 @@ async function crear({
   const hasta = mostrarHasta || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   const datosStr = datos ? JSON.stringify(datos) : null;
 
-  const id = sqlEscapeIdent(cols.id);
-  const vp = sqlEscapeIdent(cols.valorPersonal);
-  const t = sqlEscapeIdent(cols.tipoNotificacion);
-  const d = sqlEscapeIdent(cols.descNotificacion);
-  const et = sqlEscapeIdent(cols.entidadTipo);
-  const ei = sqlEscapeIdent(cols.entidadId);
-  const j = sqlEscapeIdent(cols.datosJson);
-  const leida = sqlEscapeIdent(cols.leida);
-  const fc = sqlEscapeIdent(cols.fechaCarga);
+  const insertCols = [];
+  const insertVals = [];
+  const params = [];
+  const addParam = (colKey, value, opts) => {
+    if (!cols[colKey]) return;
+    insertCols.push(sqlEscapeIdent(cols[colKey]));
+    const idx = params.length;
+    insertVals.push(`@param${idx}`);
+    params.push({ value, ...opts });
+  };
+  addParam('valorPersonal', valorPersonal, { type: 'Int' });
+  addParam('tipoNotificacion', tipo, { type: 'VarChar', length: 50 });
+  addParam(
+    'descNotificacion',
+    normalizarTextoParaClarionAnsi(descripcion, { maxLength: 250 }),
+    { type: 'VarChar', length: 250 },
+  );
+  addParam('entidadTipo', entidadTipo, { type: 'VarChar', length: 50 });
+  addParam('entidadId', entidadId, { type: 'Int' });
+  addParam('datosJson', datosStr, { type: 'NVarChar' });
+  if (cols.leida) {
+    insertCols.push(sqlEscapeIdent(cols.leida));
+    insertVals.push('0');
+  }
+  if (cols.fechaCarga) {
+    insertCols.push(sqlEscapeIdent(cols.fechaCarga));
+    insertVals.push('GETDATE()');
+  }
 
-  const names = await loadColumnNamesForInsert();
-  const hasMostrarHasta = names && names.some((x) => String(x).toLowerCase() === 'mostrarhasta');
-  const hasMarca = names && names.some((x) => String(x).toLowerCase() === 'marca');
+  const names = cols.names || (await loadColumnNamesForInsert()) || [];
+  const hasMostrarHasta = names.some((x) => String(x).toLowerCase() === 'mostrarhasta');
+  const hasMarca = names.some((x) => String(x).toLowerCase() === 'marca');
 
-  let insertCols = `${vp}, ${t}, ${d}, ${et}, ${ei}, ${j}, ${leida}, ${fc}`;
-  let insertVals = '@param0, @param1, @param2, @param3, @param4, @param5, 0, GETDATE()';
-  const params = [
-    { value: valorPersonal, type: 'Int' },
-    { value: tipo, type: 'VarChar', length: 50 },
-    { value: normalizarTextoParaClarionAnsi(descripcion, { maxLength: 250 }), type: 'VarChar', length: 250 },
-    { value: entidadTipo, type: 'VarChar', length: 50 },
-    { value: entidadId, type: 'Int' },
-    { value: datosStr, type: 'NVarChar' },
-  ];
-
-  let nextIdx = 6;
   if (hasMostrarHasta) {
-    insertCols += ', [MostrarHasta]';
-    insertVals += `, @param${nextIdx}`;
+    insertCols.push('[MostrarHasta]');
+    const idx = params.length;
+    insertVals.push(`@param${idx}`);
     params.push({ value: hasta });
-    nextIdx += 1;
   }
   if (hasMarca) {
-    insertCols += ', [Marca]';
-    insertVals += `, @param${nextIdx}`;
+    insertCols.push('[Marca]');
+    const idx = params.length;
+    insertVals.push(`@param${idx}`);
     params.push({ value: marca });
   }
 
+  if (!insertCols.length) return { success: false };
+
+  const insertColsSql = insertCols.join(', ');
+  const insertValsSql = insertVals.join(', ');
+  const idSql = cols.id ? sqlEscapeIdent(cols.id) : null;
+
   try {
-    const rows = await executeQuery(
-      `
-      INSERT INTO dbo.imNotificaciones (${insertCols})
-      OUTPUT INSERTED.${id}
-      VALUES (${insertVals})
-      `,
-      params
-    );
-    const outKey = Object.keys(rows[0] || {})[0];
-    return { success: true, idNotificacion: rows[0]?.[outKey] };
-  } catch (e) {
-    try {
+    if (idSql) {
       const rows = await executeQuery(
         `
-        INSERT INTO dbo.imNotificaciones (${insertCols})
-        VALUES (${insertVals});
-        SELECT SCOPE_IDENTITY() AS IdNotificacion
+        INSERT INTO dbo.imNotificaciones (${insertColsSql})
+        OUTPUT INSERTED.${idSql}
+        VALUES (${insertValsSql})
         `,
         params,
       );
-      return { success: true, idNotificacion: rows[0]?.IdNotificacion };
-    } catch (e2) {
-      console.warn('[notificaciones] crear falló (esquema distinto):', e2.message || e.message);
-      return { success: false };
+      const outKey = Object.keys(rows[0] || {})[0];
+      return { success: true, idNotificacion: rows[0]?.[outKey] };
     }
+  } catch (e) {
+    /* IDENTITY / OUTPUT no disponible en este esquema */
+  }
+  try {
+    const rows = await executeQuery(
+      `
+      INSERT INTO dbo.imNotificaciones (${insertColsSql})
+      VALUES (${insertValsSql});
+      SELECT SCOPE_IDENTITY() AS IdNotificacion
+      `,
+      params,
+    );
+    return { success: true, idNotificacion: rows[0]?.IdNotificacion };
+  } catch (e2) {
+    console.warn('[notificaciones] crear falló (esquema distinto):', e2.message);
+    return { success: false };
   }
 }
 

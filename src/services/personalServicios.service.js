@@ -8,6 +8,80 @@ function _code(v) {
 	return String(v || '').trim().slice(0, ID_SERVICIO_LEN);
 }
 
+function _col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function _claves(valor) {
+	const raw = String(valor || '').trim();
+	if (!raw) return [];
+	const keys = new Set([raw, raw.toUpperCase()]);
+	const compact = raw.replace(/\s+/g, '');
+	keys.add(compact);
+	keys.add(compact.toUpperCase());
+	if (/^\d+$/.test(compact)) {
+		keys.add(String(Number(compact)));
+		const sinCeros = compact.replace(/^0+/, '');
+		if (sinCeros) keys.add(sinCeros);
+	}
+	return [...keys];
+}
+
+function _esCodigo(desc, codigo) {
+	const d = String(desc || '').trim();
+	const c = String(codigo || '').trim();
+	if (!d || !c) return false;
+	const dk = _claves(d);
+	return _claves(c).some((k) => dk.includes(k));
+}
+
+async function _catalogoDescripciones() {
+	const map = new Map();
+	const add = (rows) => {
+		for (const r of rows || []) {
+			const valor = _code(_col(r, 'Valor', 'IdServicio'));
+			const desc = String(_col(r, 'Descripcion') || '').trim();
+			if (!valor || !desc || _esCodigo(desc, valor)) continue;
+			for (const k of _claves(valor)) {
+				if (!map.has(k)) map.set(k, desc);
+			}
+		}
+	};
+	for (const sql of [
+		`SELECT Valor, Descripcion FROM dbo.imServicios`,
+		`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos`,
+	]) {
+		try {
+			add(await executeQuery(sql));
+		} catch {
+			/* tabla ausente */
+		}
+	}
+	return map;
+}
+
+function _descripcionDe(id, descRaw, catalogo) {
+	const idN = _code(id);
+	const extra = String(descRaw || '').trim();
+	if (extra && !_esCodigo(extra, idN)) return extra;
+	if (!idN || !catalogo) return '';
+	for (const k of _claves(idN)) {
+		const hit = catalogo.get(k);
+		if (hit) return hit;
+	}
+	return '';
+}
+
 async function ensureTable() {
 	if (_tableReady) return;
 	try {
@@ -111,66 +185,79 @@ async function ensureTable() {
 	}
 }
 
-function _mapRows(rows) {
+async function _mapRows(rows, catalogo) {
+	const cat = catalogo || (await _catalogoDescripciones());
 	return (rows || [])
-		.map((r) => ({
-			idServicio: _code(r.idServicio),
-			Descripcion: String(r.Descripcion || r.idServicio || '').trim() || _code(r.idServicio),
-		}))
-		.filter((r) => r.idServicio);
+		.map((r) => {
+			const idServicio = _code(_col(r, 'idServicio'));
+			if (!idServicio) return null;
+			return {
+				idServicio,
+				Descripcion: _descripcionDe(idServicio, _col(r, 'Descripcion'), cat),
+			};
+		})
+		.filter(Boolean);
 }
 
 async function listar(valorPersonal) {
 	await ensureTable();
 	const vp = Number(valorPersonal);
-	const sqlConCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
-		        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idServicio))) AS Descripcion
+	const catalogo = await _catalogoDescripciones();
+	const sqlConCatalogo = `SELECT RTRIM(LTRIM(CAST(ps.idServicio AS VARCHAR(50)))) AS idServicio,
+		        RTRIM(LTRIM(CAST(ISNULL(NULLIF(LTRIM(RTRIM(CAST(s.Descripcion AS VARCHAR(200)))), ''), '') AS VARCHAR(200)))) AS Descripcion
 		 FROM dbo.imPersonalServicios ps
-		 LEFT JOIN dbo.imServicios s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idServicio))
-		 WHERE ps.idPersonal = @p0
-		 ORDER BY ISNULL(s.Descripcion, ps.idServicio)`;
-	const sqlSinCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
-		        RTRIM(LTRIM(ps.idServicio)) AS Descripcion
+		 LEFT JOIN dbo.imServicios s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idServicio AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	const sqlSinCatalogo = `SELECT RTRIM(LTRIM(CAST(ps.idServicio AS VARCHAR(50)))) AS idServicio
 		 FROM dbo.imPersonalServicios ps
 		 WHERE ps.idPersonal = @p0`;
 	let list = [];
 	try {
-		list = _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+		list = await _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 	} catch (err) {
 		try {
-			list = _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
+			list = await _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 		} catch (err2) {
 			console.warn('[personalServicios] listar:', err2?.message || err?.message);
 			return [];
 		}
 	}
 
-	if (list.length) return list;
+	if (list.length) {
+		list.sort((a, b) =>
+			String(a.Descripcion || a.idServicio).localeCompare(String(b.Descripcion || b.idServicio), 'es'),
+		);
+		return list;
+	}
 
 	const legacy = await executeQuery(
 		`SELECT TOP 1 RTRIM(LTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio
 		 FROM dbo.imPersonal WHERE Valor = @p0`,
 		[{ value: vp, type: 'Int' }],
 	).catch(() => []);
-	const vs = _code(legacy?.[0]?.ValorServicio);
+	const vs = _code(_col(legacy?.[0], 'ValorServicio'));
 	if (!vs) return [];
 	try {
 		await agregar(vp, vs);
 	} catch (err) {
 		if (Number(err?.statusCode) !== 409) {
 			console.warn('[personalServicios] legacy:', err?.message || err);
-			return [{ idServicio: vs, Descripcion: vs }];
+			return [{ idServicio: vs, Descripcion: _descripcionDe(vs, '', catalogo) }];
 		}
 	}
 	try {
-		return _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+		list = await _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 	} catch {
-		try {
-			return _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
-		} catch {
-			return [{ idServicio: vs, Descripcion: vs }];
-		}
+		list = [];
 	}
+	if (list.length) {
+		list.sort((a, b) =>
+			String(a.Descripcion || a.idServicio).localeCompare(String(b.Descripcion || b.idServicio), 'es'),
+		);
+		return list;
+	}
+	return [{ idServicio: vs, Descripcion: _descripcionDe(vs, '', catalogo) }];
 }
 
 async function agregar(valorPersonal, idServicio) {

@@ -56,6 +56,21 @@ const strOrNull = (v) => {
 	return s === '' ? null : s;
 };
 
+/** Lee una columna sin importar mayúsculas (drivers TDS a veces minúsculan). */
+function col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
 const stripDiacritics = (s) =>
 	String(s)
 		.normalize('NFD')
@@ -760,29 +775,52 @@ async function listarFunciones() {
 }
 
 async function listarServicios() {
-	const mapRows = (rows) =>
-		(rows || [])
-			.map((r) => ({
-				valor: String(r.Valor || '').trim(),
-				descripcion: String(r.Descripcion || r.Valor || '').trim(),
-			}))
-			.filter((r) => r.valor);
+	const mapRows = (rows) => {
+		const out = [];
+		for (const r of rows || []) {
+			const valor = String(col(r, 'Valor', 'IdServicio') ?? '').trim();
+			if (!valor) continue;
+			const descripcion = String(col(r, 'Descripcion') ?? '').trim();
+			out.push({ valor, descripcion });
+		}
+		return out;
+	};
+	const porValor = new Map();
+	const merge = (items) => {
+		for (const it of items) {
+			const prev = porValor.get(it.valor);
+			if (!prev) {
+				porValor.set(it.valor, { valor: it.valor, descripcion: it.descripcion });
+				continue;
+			}
+			if (!prev.descripcion && it.descripcion) prev.descripcion = it.descripcion;
+		}
+	};
 	try {
-		return mapRows(
-			await executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`),
+		merge(
+			mapRows(
+				await executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`),
+			),
 		);
 	} catch (err) {
-		try {
-			return mapRows(
+		console.warn('[personal.listarServicios] imServicios:', err?.message || err);
+	}
+	try {
+		merge(
+			mapRows(
 				await executeQuery(
 					`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`,
 				),
-			);
-		} catch (err2) {
-			console.warn('[personal.listarServicios]', err2?.message || err?.message);
-			return [];
+			),
+		);
+	} catch (err) {
+		if (!porValor.size) {
+			console.warn('[personal.listarServicios] imServiciosMedicos:', err?.message || err);
 		}
 	}
+	return [...porValor.values()].sort((a, b) =>
+		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+	);
 }
 
 async function listarCategorias() {
@@ -1058,17 +1096,19 @@ async function listarSectoresPersonal(valor) {
 	try {
 		const rows = await executeQuery(
 			`SELECT RTRIM(LTRIM(ps.idSector)) AS idSector,
-			        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idSector))) AS Descripcion
+			        RTRIM(LTRIM(ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ''))) AS Descripcion
 			 FROM dbo.imPersonalSectores ps
-			 LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idSector))
+			 LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
 			 WHERE ps.idPersonal = @p0
-			 ORDER BY ISNULL(s.Descripcion, ps.idSector)`,
+			 ORDER BY ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ps.idSector)`,
 			[{ value: valor, type: 'Int' }],
 		);
-		return (rows || []).map((r) => ({
-			idSector: String(r.idSector || '').trim(),
-			Descripcion: String(r.Descripcion || '').trim(),
-		})).filter((r) => r.idSector);
+		return (rows || [])
+			.map((r) => ({
+				idSector: String(col(r, 'idSector') || '').trim(),
+				Descripcion: String(col(r, 'Descripcion') || '').trim(),
+			}))
+			.filter((r) => r.idSector);
 	} catch (err) {
 		console.warn('[personal.listarSectoresPersonal]', err?.message);
 		return [];
