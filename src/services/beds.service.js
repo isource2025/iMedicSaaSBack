@@ -24,37 +24,6 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	return rows;
 }
 
-function repararOcupacionesFantasma() {
-	return executeQuery(`
-    UPDATE hc
-    SET
-      FechaIngreso = 0,
-      FechaEgreso = 0,
-      ValorEstadoCama = 'U',
-      NumeroVisita = 0,
-      Observaciones = CASE
-        WHEN LTRIM(RTRIM(ISNULL(hc.Observaciones, ''))) = '' THEN 'Auto-reparación ocupación inconsistente'
-        ELSE hc.Observaciones
-      END
-    FROM dbo.imHabitacionCamas hc
-    CROSS APPLY (
-      SELECT TOP 1
-        LTRIM(RTRIM(ISNULL(m.ValorSector, ''))) AS ValorSector,
-        LTRIM(RTRIM(ISNULL(m.ValorHabitacionCama, ''))) AS ValorHabitacionCama
-      FROM dbo.imVisitaMovimiento m
-      WHERE m.NumeroVisita = hc.NumeroVisita
-      ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC
-    ) um
-    WHERE ISNULL(hc.NumeroVisita, 0) <> 0
-      AND (
-        LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) <> um.ValorSector
-        OR LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) <> um.ValorHabitacionCama
-      )
-  `).catch((err) => {
-		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
-	});
-}
-
 /**
  * Obtener camas desde imHabitacionCamas.
  * @param {string|null} idSector - Si viene, solo ese sector (login / filtro). Sin filtro = hospital entero.
@@ -66,7 +35,7 @@ const obtenerCamas = async (idSector) => {
 		: '';
 	const params = sector ? [{ value: sector, type: 'VarChar' }] : [];
 
-	const sqlBase = (conVisto) => `
+	const sqlList = `
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
@@ -80,29 +49,31 @@ const obtenerCamas = async (idSector) => {
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
-      ${conVisto ? vistoEnfermeria.SELECT_COUNT : vistoEnfermeria.SELECT_COUNT_ZERO}
+      CAST(0 AS INT) AS IndicacionesNuevasEnfermeria
     FROM 
-      imHabitacionCamas hc
-    ${conVisto ? vistoEnfermeria.OUTER_APPLY_COUNT : ''}
+      imHabitacionCamas hc WITH (NOLOCK)
     LEFT JOIN 
-      imVisita v ON hc.NumeroVisita = v.NumeroVisita
+      imVisita v WITH (NOLOCK) ON hc.NumeroVisita = v.NumeroVisita
     LEFT JOIN 
-      imPacientes p ON v.IdPaciente = p.IdPaciente
+      imPacientes p WITH (NOLOCK) ON v.IdPaciente = p.IdPaciente
     LEFT JOIN
-      imSexo sx ON p.Sexo = sx.Valor
+      imSexo sx WITH (NOLOCK) ON p.Sexo = sx.Valor
     LEFT JOIN
-      imDiagnosticos d ON v.Diagnostico = d.CodigoOMS
+      imDiagnosticos d WITH (NOLOCK) ON v.Diagnostico = d.CodigoOMS
     LEFT JOIN
-      imEstadoCama ec ON hc.ValorEstadoCama = ec.Valor
+      imEstadoCama ec WITH (NOLOCK) ON hc.ValorEstadoCama = ec.Valor
     LEFT JOIN
-      imClientes c ON v.Cliente = c.Valor
+      imClientes c WITH (NOLOCK) ON v.Cliente = c.Valor
     LEFT JOIN
-      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
+      imServiciosMedicos sm WITH (NOLOCK) ON v.ServicioHospital = sm.Valor
     ${whereSector}
     ORDER BY
       hc.ValorHabitacionCama ASC`;
-	const rows = await queryCamasSeguro(sqlBase(true), sqlBase(false), params);
-	void repararOcupacionesFantasma();
+	const t0 = Date.now();
+	const rows = await executeQuery(sqlList, params);
+	console.log(
+		`[beds] list sector=${sector || 'ALL'} n=${(rows || []).length} ms=${Date.now() - t0}`,
+	);
 	return rows;
 };
 
@@ -112,7 +83,7 @@ const obtenerCamas = async (idSector) => {
  */
 const obtenerEstadosCama = async () => {
 	// Usando alias para devolver los campos con nombres en minúsculas
-	const consulta = `SELECT Valor as valor, Descripcion as descripcion FROM imEstadoCama`;
+	const consulta = `SELECT Valor as valor, Descripcion as descripcion FROM imEstadoCama WITH (NOLOCK)`;
 	return await executeQuery(consulta);
 };
 
@@ -324,18 +295,17 @@ const obtenerSectores = async () => {
     SELECT
       LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
       LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
-    FROM dbo.imSectores s
+    FROM dbo.imSectores s WITH (NOLOCK)
     WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'
       AND LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
     ORDER BY s.Descripcion`;
-	const sqlConCamas = `
-    SELECT DISTINCT
+	const sqlTodos = `
+    SELECT
       LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
       LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
-    FROM dbo.imSectores s
-    INNER JOIN dbo.imHabitacionCamas hc
-      ON LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50))))
-    WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'`;
+    FROM dbo.imSectores s WITH (NOLOCK)
+    WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+    ORDER BY s.Descripcion`;
 
 	const byKey = new Map();
 	const add = (row) => {
@@ -345,22 +315,24 @@ const obtenerSectores = async () => {
 		if (!byKey.has(k)) byKey.set(k, m);
 	};
 
+	const t0 = Date.now();
 	try {
 		for (const r of (await executeQuery(sqlTodosI)) || []) add(r);
 	} catch (err) {
-		console.warn('[beds] sectores internación:', err?.message || err);
+		console.warn('[beds] sectores internación AmbInt:', err?.message || err);
 	}
 	if (!byKey.size) {
 		try {
-			for (const r of (await executeQuery(sqlConCamas)) || []) add(r);
+			for (const r of (await executeQuery(sqlTodos)) || []) add(r);
 		} catch (err) {
-			console.warn('[beds] sectores con camas:', err?.message || err);
+			console.warn('[beds] sectores catálogo:', err?.message || err);
 		}
 	}
-
-	return [...byKey.values()].sort((a, b) =>
+	const list = [...byKey.values()].sort((a, b) =>
 		String(a.descripcion).localeCompare(String(b.descripcion), 'es'),
 	);
+	console.log(`[beds] sectores n=${list.length} ms=${Date.now() - t0}`);
+	return list;
 };
 
 /**

@@ -14,6 +14,18 @@ const permisosService = require('../services/permisos.service');
 const matriz = require('../utils/permisos');
 
 async function _resolverPermisosReq(req) {
+	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
+	if (
+		rn === 'ADMIN' ||
+		rn === 'SUPER_ADMIN' ||
+		rn === 'MEDICO' ||
+		rn === 'ADMINISTRATIVO' ||
+		rn === 'ENFERMERO' ||
+		rn === 'CARGA_HC'
+	) {
+		return matriz.permisosDeRol(rn);
+	}
+
 	let permisos = [];
 	try {
 		const r = await permisosService.permisosDeUsuario(req.valorPersonal);
@@ -24,25 +36,6 @@ async function _resolverPermisosReq(req) {
 
 	if (!permisos.length && req.rolNombre) {
 		permisos = matriz.permisosDeRol(req.rolNombre);
-	}
-	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
-	if (rn === 'ADMIN') {
-		permisos = matriz.permisosDeRol('ADMIN');
-	}
-	if (rn === 'SUPER_ADMIN') {
-		permisos = matriz.permisosDeRol('SUPER_ADMIN');
-	}
-	if (rn === 'MEDICO') {
-		permisos = matriz.permisosDeRol('MEDICO');
-	}
-	if (rn === 'ADMINISTRATIVO') {
-		permisos = matriz.permisosDeRol('ADMINISTRATIVO');
-	}
-	if (rn === 'ENFERMERO') {
-		permisos = matriz.permisosDeRol('ENFERMERO');
-	}
-	if (rn === 'CARGA_HC') {
-		permisos = matriz.permisosDeRol('CARGA_HC');
 	}
 	return permisos;
 }
