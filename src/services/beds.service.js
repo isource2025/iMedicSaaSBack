@@ -24,13 +24,8 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	return rows;
 }
 
-/**
- * Obtener todas las camas desde imHabitacionCamas
- * @returns {Promise<Array>} Lista de camas con información del paciente y diagnóstico
- */
-const obtenerCamas = async () => {
-	// Autoreparar ocupaciones fantasma: cama con la visita pero sector/cama distinto al último movimiento
-	await executeQuery(`
+function repararOcupacionesFantasma() {
+	return executeQuery(`
     UPDATE hc
     SET
       FechaIngreso = 0,
@@ -58,6 +53,18 @@ const obtenerCamas = async () => {
   `).catch((err) => {
 		console.warn('No se pudo autoreparar ocupaciones de cama inconsistentes:', err?.message || err);
 	});
+}
+
+/**
+ * Obtener camas desde imHabitacionCamas.
+ * @param {string|null} idSector - Si viene, solo ese sector (login / filtro). Sin filtro = hospital entero.
+ */
+const obtenerCamas = async (idSector) => {
+	const sector = String(idSector || '').trim();
+	const whereSector = sector
+		? ` WHERE LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(@param0)) `
+		: '';
+	const params = sector ? [{ value: sector, type: 'VarChar' }] : [];
 
 	const sqlBase = (conVisto) => `
     SELECT 
@@ -91,9 +98,12 @@ const obtenerCamas = async () => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
+    ${whereSector}
     ORDER BY
       hc.ValorHabitacionCama ASC`;
-	return await queryCamasSeguro(sqlBase(true), sqlBase(false));
+	const rows = await queryCamasSeguro(sqlBase(true), sqlBase(false), params);
+	void repararOcupacionesFantasma();
+	return rows;
 };
 
 /**

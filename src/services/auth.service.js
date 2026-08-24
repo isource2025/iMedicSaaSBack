@@ -12,6 +12,7 @@ function mapSectorRow(r) {
 		idPersonal: String(r.idPersonal ?? r.IdPersonal ?? ''),
 		idSector: String(r.idSector ?? r.IdSector ?? '').trim(),
 		descripcionSector: String(r.descripcionSector ?? r.Descripcion ?? '').trim(),
+		valorServicio: String(r.valorServicio ?? r.ValorServicio ?? '').trim(),
 	};
 }
 
@@ -21,7 +22,8 @@ async function obtenerSectoresPorUsuarioEnFisico(username) {
     SELECT
       ps.idPersonal AS idPersonal,
       ps.idSector AS idSector,
-      s.Descripcion AS descripcionSector
+      s.Descripcion AS descripcionSector,
+      LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio
     FROM impassword pw
     INNER JOIN imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
     INNER JOIN imSectores s

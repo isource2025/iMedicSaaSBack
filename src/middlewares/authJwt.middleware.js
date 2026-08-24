@@ -63,6 +63,7 @@ function assignAuthFromDecoded(req, decoded) {
 		idEmp != null && idEmp !== '' && Number.isFinite(Number(idEmp)) && Number(idEmp) > 0
 			? Number(idEmp)
 			: null;
+	req.idSector = String(decoded?.idSector || decoded?.usuario?.idSector || '').trim() || null;
 }
 
 function extractTokenFromRequest(req) {

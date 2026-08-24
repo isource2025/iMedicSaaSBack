@@ -46,7 +46,7 @@ function verifyTempToken(tempToken, username) {
 
 const inicioSesion = async (req, res) => {
 	const t0 = Date.now();
-	const { username, password, idEmpresa, tempToken } = req.body;
+	const { username, password, idEmpresa, tempToken, idSector } = req.body;
 	const ip = getClientIp(req);
 	const userAgent = req.headers['user-agent'];
 
@@ -76,6 +76,7 @@ const inicioSesion = async (req, res) => {
 				usuario,
 				idEmpresaSesion,
 				idEmpresaBody: idEmpresa,
+				idSectorBody: idSector,
 				ip,
 				userAgent,
 			});
@@ -124,7 +125,7 @@ const inicioSesion = async (req, res) => {
 
 		return res.json(payload);
 	} catch (error) {
-		if (error.message === 'MULTI_EMPRESA' || error.statusCode === 200) {
+		if (error.message === 'MULTI_EMPRESA') {
 			const empresas = dedupeEmpresasPorId(error.empresas || []);
 			const temp = signTempToken(username);
 			await authAudit.logEvent({
@@ -140,6 +141,32 @@ const inicioSesion = async (req, res) => {
 				mensaje: 'Seleccione la empresa para continuar',
 				tempToken: temp,
 				empresas,
+			});
+		}
+
+		if (error.message === 'MULTI_SECTOR') {
+			const temp = signTempToken(username);
+			const idEmpresaPaso =
+				error.idEmpresa != null && Number.isFinite(Number(error.idEmpresa))
+					? Number(error.idEmpresa)
+					: idEmpresa != null && idEmpresa !== '' && Number.isFinite(Number(idEmpresa))
+						? Number(idEmpresa)
+						: undefined;
+			await authAudit.logEvent({
+				ip,
+				userAgent,
+				username,
+				evento: 'LOGIN_MULTI_SECTOR',
+				resultado: 'PASO',
+				idEmpresa: idEmpresaPaso,
+			});
+			return res.json({
+				success: true,
+				step: 'SELECT_SECTOR',
+				mensaje: 'Seleccione el sector para continuar',
+				tempToken: temp,
+				sectores: error.sectores || [],
+				idEmpresa: idEmpresaPaso ?? null,
 			});
 		}
 
@@ -288,6 +315,7 @@ const refrescarSesion = async (req, res) => {
 						usuario: decoded.usuario,
 						rol: decoded.rol,
 						idEmpresa: decoded.idEmpresa,
+						idSector: decoded.idSector || '',
 						sessionId: decoded.sessionId,
 					});
 					sessionService.setAccessCookie(res, newAccess);
@@ -318,6 +346,7 @@ const refrescarSesion = async (req, res) => {
 			usuario: decoded.usuario,
 			rol: decoded.rol,
 			idEmpresa: decoded.idEmpresa,
+			idSector: decoded.idSector || '',
 			sessionId: decoded.sessionId,
 		});
 		sessionService.setAuthCookies(res, newAccess, rotated.refreshToken);
@@ -359,6 +388,7 @@ const sesionActual = async (req, res) => {
 		usuario,
 		rol: req.auth?.rol || null,
 		idEmpresa,
+		idSector: req.idSector || req.auth?.idSector || '',
 		modulosEmpresa,
 		idleTimeoutMinutes: await sessionService.getIdleTimeoutMinutes(req.idEmpresa),
 	});

@@ -2,7 +2,8 @@ const bedsService = require('../services/beds.service');
 
 const obtenerCamas = async (req, res) => {
 	try {
-		const camas = await bedsService.obtenerCamas();
+		const sector = String(req.query?.sector || req.query?.idSector || '').trim();
+		const camas = await bedsService.obtenerCamas(sector || null);
 		res.json({ success: true, data: camas });
 	} catch (error) {
 		console.error('Error al obtener camas:', error);

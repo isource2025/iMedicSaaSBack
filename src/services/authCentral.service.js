@@ -251,6 +251,7 @@ async function obtenerSectores(username, idEmpresa) {
 		idPersonal: String(row.idPersonal),
 		idSector: String(row.idSector),
 		descripcionSector: String(row.descripcionSector || '').trim(),
+		valorServicio: String(row.valorServicio || row.ValorServicio || '').trim(),
 	}));
 }
 
