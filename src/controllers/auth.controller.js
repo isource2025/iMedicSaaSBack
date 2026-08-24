@@ -316,6 +316,7 @@ const refrescarSesion = async (req, res) => {
 						rol: decoded.rol,
 						idEmpresa: decoded.idEmpresa,
 						idSector: decoded.idSector || '',
+						sectores: decoded.sectores || [],
 						sessionId: decoded.sessionId,
 					});
 					sessionService.setAccessCookie(res, newAccess);
@@ -347,6 +348,7 @@ const refrescarSesion = async (req, res) => {
 			rol: decoded.rol,
 			idEmpresa: decoded.idEmpresa,
 			idSector: decoded.idSector || '',
+			sectores: decoded.sectores || [],
 			sessionId: decoded.sessionId,
 		});
 		sessionService.setAuthCookies(res, newAccess, rotated.refreshToken);
@@ -389,6 +391,7 @@ const sesionActual = async (req, res) => {
 		rol: req.auth?.rol || null,
 		idEmpresa,
 		idSector: req.idSector || req.auth?.idSector || '',
+		sectores: req.sectores || [],
 		modulosEmpresa,
 		idleTimeoutMinutes: await sessionService.getIdleTimeoutMinutes(req.idEmpresa),
 	});

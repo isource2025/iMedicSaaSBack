@@ -357,8 +357,8 @@ const PLANTILLAS = Object.freeze({
 	]),
 
 	// ──────────────────────────────────────────────────────────────────────
-	// CARGA_HC — solo adjuntos (catálogo UI: "Carga de adjuntos").
-	// CRUD de adjuntos propios (ownership en API). Sin clínica.
+	// CARGA_HC — adjuntos + bandeja de pedidos (laboratorio sube resultados).
+	// CRUD de adjuntos propios. Ven estudios para cumplir/adjuntar. Sin clínica.
 	// ──────────────────────────────────────────────────────────────────────
 	CARGA_HC: Object.freeze([
 		'DASHBOARD.INICIO.VER',
@@ -370,6 +370,8 @@ const PLANTILLAS = Object.freeze({
 
 		'INTERNACION.CAMAS.VER',
 		'INTERNACION.CAMAS.GESTIONAR',
+		'INTERNACION.ESTUDIOS.VER',
+		'INTERNACION.ESTUDIOS.CREAR',
 		'INTERNACION.ADJUNTOS.VER',
 		'INTERNACION.ADJUNTOS.CREAR',
 		'INTERNACION.ADJUNTOS.EDITAR',

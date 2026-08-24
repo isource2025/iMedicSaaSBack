@@ -7,13 +7,21 @@ const estudiosController = require('../controllers/estudios.controller');
 
 router.use(requireAuth, requireTenant);
 
-const ver = requireAnyPermiso('INTERNACION.ESTUDIOS.VER', 'TURNOS.AGENDA.VER');
+const ver = requireAnyPermiso(
+	'INTERNACION.ESTUDIOS.VER',
+	'TURNOS.AGENDA.VER',
+	'INTERNACION.ADJUNTOS.VER',
+);
 const crear = requireAnyPermiso(
 	'INTERNACION.ESTUDIOS.CREAR',
 	'TURNOS.AGENDA.CREAR',
 	'TURNOS.AGENDA.EDITAR',
 );
-const cumplir = requireAnyPermiso('INTERNACION.ESTUDIOS.CREAR', 'TURNOS.AGENDA.EDITAR');
+const cumplir = requireAnyPermiso(
+	'INTERNACION.ESTUDIOS.CREAR',
+	'TURNOS.AGENDA.EDITAR',
+	'INTERNACION.ADJUNTOS.CREAR',
+);
 const editar = requireAnyPermiso(
 	'INTERNACION.ESTUDIOS.EDITAR',
 	'INTERNACION.ESTUDIOS.CREAR',

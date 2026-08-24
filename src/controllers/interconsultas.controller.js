@@ -1,5 +1,7 @@
 const interconsultasService = require('../services/interconsultas.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
+const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
@@ -49,10 +51,29 @@ async function listarSectores(req, res) {
 	}
 }
 
+function _veTodos(req) {
+	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
+	const id = Number(req.auth?.rol?.id);
+	if (rn === 'SUPER_ADMIN' || id === 5) return true;
+	return esAdminClinico(req);
+}
+
 async function listarPendientes(req, res) {
 	try {
+		const todos = _veTodos(req);
+		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const sector = String(req.query.sector || '').trim();
-		if (!sector) {
+		if (sector && !todos && sesion.length && !sectorEnSesion(sesion, sector)) {
+			return res.status(403).json({ success: false, mensaje: 'Sector no asignado en su sesión' });
+		}
+		let codigos;
+		if (sesion.length) {
+			codigos = codigosParaFiltro(sesion, sector);
+		} else if (sector) {
+			codigos = undefined;
+		} else if (!todos) {
+			return res.json({ success: true, data: [] });
+		} else {
 			return res.status(400).json({ success: false, mensaje: 'Query sector requerido' });
 		}
 		const limit = req.query.limit != null ? Number(req.query.limit) : 100;
@@ -61,6 +82,8 @@ async function listarPendientes(req, res) {
 			paciente: req.query.paciente || req.query.q,
 			fechaDesde: req.query.fechaDesde,
 			fechaHasta: req.query.fechaHasta,
+			codigos,
+			permitirVacio: true,
 		});
 		return res.json({ success: true, data: data || [] });
 	} catch (err) {
@@ -102,9 +125,9 @@ async function crear(req, res) {
 			body.idSectorReceptor ?? body.IdSectorReceptor ?? '',
 		).trim();
 		const motivo = String(body.motivo ?? body.Motivo ?? '').trim();
-		const sectorSolicitante = String(
-			body.sectorSolicitante ?? body.SectorSolicitante ?? '',
-		).trim();
+		const sectorSolicitante =
+			idSectorSesion(req) ||
+			String(body.sectorSolicitante ?? body.SectorSolicitante ?? '').trim();
 
 		if (!Number.isFinite(idVisita) || idVisita <= 0) {
 			return res.status(400).json({ success: false, mensaje: 'idVisita es requerido' });
@@ -187,7 +210,7 @@ async function cumplir(req, res) {
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
 			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
 			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
-			sectorServicio: body.sectorServicio,
+			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

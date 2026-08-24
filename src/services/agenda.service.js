@@ -1890,6 +1890,7 @@ async function cerrarTurno({
 	idTurno,
 	codOperador,
 	valorPersonal,
+	idSector,
 	diagnostico,
 	contrato,
 	hci,
@@ -1983,7 +1984,7 @@ async function cerrarTurno({
 	const listaPedidosInterconsultas = Array.isArray(pedidosInterconsultas)
 		? pedidosInterconsultas
 		: [];
-	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
 	const now = new Date();
 
 	try {
@@ -2250,6 +2251,7 @@ async function actualizarAtencionPostCierre({
 	idTurno,
 	codOperador,
 	valorPersonal,
+	idSector,
 	diagnostico,
 	hci,
 	porIdTurno,
@@ -2301,7 +2303,7 @@ async function actualizarAtencionPostCierre({
 		[{ value: id, type: 'Int' }],
 	);
 	const sector = String(detalle[0]?.Sector || '').trim().padEnd(4, ' ').slice(0, 4);
-	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
 	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
 	const fechaIso = fechaCalendarioArgentina();
 	const horaStr = horaWallArgentina(true);

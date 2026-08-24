@@ -1,6 +1,7 @@
 const service = require('../services/agenda.service');
 const feriadosService = require('../services/feriados.service');
 const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/matriculaTenant');
+const { idSectorSesion } = require('../utils/sectoresSesion');
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
@@ -211,6 +212,7 @@ async function cerrarTurno(req, res) {
 			idTurno,
 			codOperador: _codOperadorSesion(req),
 			valorPersonal: req.valorPersonal,
+			idSector: idSectorSesion(req),
 			diagnostico: body.diagnostico,
 			contrato: body.contrato,
 			hci: body.hci || null,
@@ -241,6 +243,7 @@ async function actualizarAtencionPostCierre(req, res) {
 			idTurno,
 			codOperador: _codOperadorSesion(req),
 			valorPersonal: req.valorPersonal,
+			idSector: idSectorSesion(req),
 			diagnostico: body.diagnostico,
 			hci: body.hci || null,
 			procedimientos: body.procedimientos || null,

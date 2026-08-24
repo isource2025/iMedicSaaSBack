@@ -90,7 +90,8 @@ function buildDisplayName(usuario, username) {
 	return { nombre: red || 'Usuario', apellido: '', full: red || 'Usuario' };
 }
 
-function buildJwtPayload(userData, idEmpresa, rol, idSector) {
+function buildJwtPayload(userData, idEmpresa, rol, idSector, sectores) {
+	const { compactSectoresJwt } = require('../utils/sectoresSesion');
 	const matricula =
 		userData.Matricula != null && Number(userData.Matricula) > 0
 			? Number(userData.Matricula)
@@ -111,6 +112,7 @@ function buildJwtPayload(userData, idEmpresa, rol, idSector) {
 				? Number(idEmpresa)
 				: null,
 		idSector: sector || '',
+		sectores: compactSectoresJwt(sectores),
 	};
 }
 
@@ -329,7 +331,13 @@ async function completarLogin({
 		}
 	}
 
-	const jwtPayload = buildJwtPayload(usuario, idEmpresaEfectiva, rol, sectorInfo.idSector);
+	const jwtPayload = buildJwtPayload(
+		usuario,
+		idEmpresaEfectiva,
+		rol,
+		sectorInfo.idSector,
+		sectorInfo.sectores,
+	);
 
 	let token = null;
 	if (isAuthCentralEnabled()) {

@@ -656,9 +656,11 @@ async function listarSectoresReceptor({ valorPersonal } = {}) {
 	return _mapSectoresRows(await _catalogoSectoresSql());
 }
 
-async function contarLibresPorServicios({ valorPersonal } = {}) {
+async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) {
 	await ensureTomaTable();
-	const sectores = await listarSectoresReceptor({ valorPersonal });
+	const sectores = Array.isArray(sectoresSesion) && sectoresSesion.length
+		? sectoresSesion
+		: await listarSectoresReceptor({ valorPersonal });
 	const codes = [...new Set(sectores.flatMap((s) => _codigosPedidoDeSector(s)))].filter(Boolean);
 	const vacio = {
 		estudios: 0,
@@ -1018,11 +1020,14 @@ async function listarInterconsultasPorVisita(idVisita) {
 
 async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 	await ensureTomaTable();
-	if (!String(sectorReceptor || '').trim()) {
-		throw _httpError('sector receptor requerido');
-	}
-	const codes = await expandCodigosReceptor(sectorReceptor);
+	let codes = Array.isArray(opts.codigos)
+		? [...new Set(opts.codigos.map((c) => String(c || '').trim()).filter(Boolean))]
+		: [];
 	if (!codes.length) {
+		codes = await expandCodigosReceptor(sectorReceptor);
+	}
+	if (!codes.length) {
+		if (opts.permitirVacio) return [];
 		throw _httpError('sector receptor requerido');
 	}
 	const lim = Math.min(Math.max(Number(opts.limit) || 100, 1), 300);
