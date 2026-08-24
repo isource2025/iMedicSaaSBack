@@ -228,12 +228,7 @@ async function descubrirEmpresas(username) {
 async function obtenerSectores(username, idEmpresa) {
 	if (!isAuthCentralEnabled()) return [];
 	const emp = Number(idEmpresa);
-	const rows = await query(
-		`
-    SELECT DISTINCT
-      ps.idPersonal AS idPersonal,
-      ps.idSector AS idSector,
-      s.Descripcion AS descripcionSector
+	const sqlBase = `
     FROM \`imPassword\` pw
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA} AND pe.IdEmpresa = ?
     INNER JOIN \`imPersonalSectores\` ps
@@ -243,10 +238,34 @@ async function obtenerSectores(username, idEmpresa) {
      AND s.IdEmpresa = pe.IdEmpresa
     WHERE pw.IdEmpresa = ?
       AND ${USER_MATCH} = ?
-    ORDER BY descripcionSector
+    ORDER BY descripcionSector`;
+	const params = [emp, emp, normalizarUsername(username)];
+	let rows = [];
+	try {
+		rows = await query(
+			`
+    SELECT DISTINCT
+      ps.idPersonal AS idPersonal,
+      ps.idSector AS idSector,
+      s.Descripcion AS descripcionSector,
+      TRIM(IFNULL(s.ValorServicio, '')) AS valorServicio
+    ${sqlBase}
     `,
-		[emp, emp, normalizarUsername(username)],
-	);
+			params,
+		);
+	} catch (e) {
+		console.warn('[authCentral] sectores ValorServicio:', e.message);
+		rows = await query(
+			`
+    SELECT DISTINCT
+      ps.idPersonal AS idPersonal,
+      ps.idSector AS idSector,
+      s.Descripcion AS descripcionSector
+    ${sqlBase}
+    `,
+			params,
+		);
+	}
 	return rows.map((row) => ({
 		idPersonal: String(row.idPersonal),
 		idSector: String(row.idSector),

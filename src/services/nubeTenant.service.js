@@ -351,6 +351,8 @@ function mapCatalogoFilas(rows) {
 			descripcion: String(s.Descripcion ?? s.descripcion ?? s.Valor ?? s.id ?? '').trim(),
 			ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
 			valorServicio: s.ValorServicio != null ? String(s.ValorServicio).trim() : undefined,
+			descripcionServicio:
+				s.DescripcionServicio != null ? String(s.DescripcionServicio).trim() : undefined,
 		}))
 		.filter((s) => s.id);
 }
@@ -374,21 +376,34 @@ async function seedSectoresDesdeFisico(idEmpresa) {
 		const cols = await sqlServerColumnas(pool, 'imSectores').catch(() => []);
 		if (!cols.length) return 0;
 		const hasAmb = cols.some((c) => String(c).toLowerCase() === 'ambint');
+		const hasVs = cols.some((c) => String(c).toLowerCase() === 'valorservicio');
 		const data = await pool.request().query(
 			`SELECT LTRIM(RTRIM(CAST(Valor AS VARCHAR(20)))) AS Valor,
 			        LTRIM(RTRIM(CAST(Descripcion AS VARCHAR(200)))) AS Descripcion
 			        ${hasAmb ? ', LTRIM(RTRIM(CAST(AmbInt AS VARCHAR(4)))) AS AmbInt' : ''}
+			        ${hasVs ? ', LTRIM(RTRIM(CAST(ISNULL(ValorServicio, \'\') AS VARCHAR(50)))) AS ValorServicio' : ''}
 			 FROM dbo.imSectores`,
 		);
 		const filas = data.recordset || [];
 		const destCols = await columnasMeta('imSectores');
 		const hasDestAmb = !!colMeta(destCols, 'AmbInt');
+		const hasDestVs = !!colMeta(destCols, 'ValorServicio');
 		for (const r of filas) {
 			const valor = String(r.Valor || '').trim().slice(0, 20);
 			const desc = String(r.Descripcion || r.Valor || '').trim().slice(0, 200);
+			const vs = String(r.ValorServicio || '').trim().slice(0, 50);
 			if (!valor) continue;
 			try {
-				if (hasDestAmb) {
+				if (hasDestAmb && hasDestVs) {
+					await mysqlExec(
+						`INSERT INTO \`imSectores\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`, \`AmbInt\`, \`ValorServicio\`)
+						 SELECT ?, ?, ?, ?, ? FROM DUAL
+						 WHERE NOT EXISTS (
+						   SELECT 1 FROM \`imSectores\` WHERE IdEmpresa = ? AND Valor = ?
+						 )`,
+						[emp, valor, desc, String(r.AmbInt || 'A').trim().slice(0, 1) || 'A', vs, emp, valor],
+					);
+				} else if (hasDestAmb) {
 					await mysqlExec(
 						`INSERT INTO \`imSectores\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`, \`AmbInt\`)
 						 SELECT ?, ?, ?, ? FROM DUAL
@@ -425,19 +440,38 @@ async function listarSectores(idEmpresa) {
 		if (!cols.size) return [];
 		const hasAmb = !!colMeta(cols, 'AmbInt');
 		const hasEmp = !!colMeta(cols, 'IdEmpresa');
-		const hasVs = !!colMeta(cols, 'ValorServicio');
+		let hasVs = !!colMeta(cols, 'ValorServicio');
+		if (!hasVs) {
+			await mysqlExec(`ALTER TABLE \`imSectores\` ADD COLUMN \`ValorServicio\` VARCHAR(50) NULL`).catch(
+				() => {},
+			);
+			cols = await columnasMeta('imSectores');
+			hasVs = !!colMeta(cols, 'ValorServicio');
+		}
+		const srvCols = await columnasMeta('imServicios');
+		const canJoinSrv = hasVs && !!srvCols.size && !!colMeta(srvCols, 'Valor');
+		const srvEmp = canJoinSrv && !!colMeta(srvCols, 'IdEmpresa');
 		const select = [
-			'`Valor`',
-			'`Descripcion`',
-			hasAmb ? '`AmbInt`' : null,
-			hasVs ? '`ValorServicio`' : null,
+			's.`Valor`',
+			's.`Descripcion`',
+			hasAmb ? 's.`AmbInt`' : null,
+			hasVs ? 's.`ValorServicio`' : null,
+			canJoinSrv ? 'srv.`Descripcion` AS DescripcionServicio' : null,
 		]
 			.filter(Boolean)
 			.join(', ');
-		const sql = hasEmp
-			? `SELECT ${select} FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`
-			: `SELECT ${select} FROM \`imSectores\` ORDER BY Descripcion`;
-		let rows = await mysqlQuery(sql, hasEmp ? [emp] : []);
+		let sql = `SELECT ${select} FROM \`imSectores\` s`;
+		const params = [];
+		if (canJoinSrv) {
+			sql += ` LEFT JOIN \`imServicios\` srv ON TRIM(srv.\`Valor\`) = TRIM(s.\`ValorServicio\`)`;
+			if (srvEmp && hasEmp) sql += ` AND srv.\`IdEmpresa\` = s.\`IdEmpresa\``;
+		}
+		if (hasEmp) {
+			sql += ` WHERE s.\`IdEmpresa\` = ?`;
+			params.push(emp);
+		}
+		sql += ` ORDER BY s.\`Descripcion\``;
+		const rows = await mysqlQuery(sql, params);
 		return mapCatalogoFilas(rows);
 	} catch (e) {
 		console.warn('[nube] listarSectores', e.message);

@@ -43,69 +43,7 @@ function _mapSector(r) {
 	};
 }
 
-async function _sectoresNube() {
-	try {
-		const { getTenantId } = require('../context/tenantContext');
-		const tid = Number(getTenantId());
-		if (!Number.isFinite(tid) || tid <= 0) return [];
-		const nube = require('./nubeTenant.service');
-		const items = await nube.listarSectores(tid);
-		const mapped = (items || [])
-			.map((s) =>
-				_mapSector({
-					IdSector: s.id || s.valor,
-					Descripcion: s.descripcion,
-					AmbInt: s.ambInt,
-					ValorServicio: s.valorServicio,
-					DescripcionServicio: s.descripcionServicio,
-				}),
-			)
-			.filter(Boolean);
-		if (mapped.length) {
-			console.log(`[sectores] catalogo nube emp=${tid} n=${mapped.length}`);
-		}
-		return mapped;
-	} catch (err) {
-		console.warn('[sectores] catalogo nube:', err?.message || err);
-		return [];
-	}
-}
-
-const obtenerSectores = async () => {
-	const desdeNube = await _sectoresNube();
-	if (desdeNube.length) {
-		return desdeNube.sort((a, b) =>
-			String(a.Descripcion || a.IdSector).localeCompare(String(b.Descripcion || b.IdSector), 'es'),
-		);
-	}
-
-	const queries = [
-		`
-      SELECT
-        LTRIM(RTRIM(Valor)) AS IdSector,
-        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
-        LTRIM(RTRIM(ISNULL(AmbInt, ''))) AS AmbInt,
-        LTRIM(RTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio
-      FROM dbo.imSectores WITH (NOLOCK)
-      ORDER BY Descripcion`,
-		`
-      SELECT
-        LTRIM(RTRIM(Valor)) AS IdSector,
-        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
-      FROM dbo.imSectores WITH (NOLOCK)
-      ORDER BY Descripcion`,
-		`SELECT Valor AS IdSector, Descripcion FROM imSectores WITH (NOLOCK)`,
-	];
-	let raw = [];
-	for (const sqlText of queries) {
-		try {
-			raw = _asRows(await executeQuery(sqlText));
-			if (raw.length) break;
-		} catch (err) {
-			console.warn('[sectores] catalogo sql:', err?.message || err);
-		}
-	}
-
+function _dedupeSectores(raw) {
 	const mapped = [];
 	const seen = new Set();
 	for (const r of raw) {
@@ -116,12 +54,123 @@ const obtenerSectores = async () => {
 		seen.add(k);
 		mapped.push(m);
 	}
-	if (raw.length && !mapped.length) {
-		console.warn('[sectores] filas sin mapear, keys=', Object.keys(raw[0] || {}));
-	}
 	return mapped.sort((a, b) =>
 		String(a.Descripcion || a.IdSector).localeCompare(String(b.Descripcion || b.IdSector), 'es'),
 	);
+}
+
+async function _enriquecerDescripcionServicio(mapped) {
+	if (!mapped?.length) return mapped || [];
+	const missing = mapped.filter((s) => s.ValorServicio && !s.DescripcionServicio);
+	if (!missing.length) return mapped;
+	try {
+		const personalServicios = require('./personalServicios.service');
+		const cat = await personalServicios.catalogoDescripciones();
+		for (const s of mapped) {
+			if (!s.ValorServicio || s.DescripcionServicio) continue;
+			s.DescripcionServicio = String(
+				personalServicios.descripcionDe(s.ValorServicio, '', cat) || '',
+			).trim();
+		}
+	} catch (err) {
+		console.warn('[sectores] descripcion servicio:', err?.message || err);
+	}
+	return mapped;
+}
+
+async function _sectoresNube() {
+	try {
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (!Number.isFinite(tid) || tid <= 0) return [];
+		const nube = require('./nubeTenant.service');
+		const items = await nube.listarSectores(tid);
+		const mapped = _dedupeSectores(
+			(items || []).map((s) => ({
+				IdSector: s.id || s.valor,
+				Descripcion: s.descripcion,
+				AmbInt: s.ambInt,
+				ValorServicio: s.valorServicio,
+				DescripcionServicio: s.descripcionServicio,
+			})),
+		);
+		if (mapped.length) {
+			console.log(`[sectores] catalogo nube emp=${tid} n=${mapped.length}`);
+		}
+		return mapped;
+	} catch (err) {
+		console.warn('[sectores] catalogo nube:', err?.message || err);
+		return [];
+	}
+}
+
+async function _sectoresSql() {
+	const joinSrv = `LEFT JOIN dbo.imServicios srv
+		     ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))`;
+	const joinSm = `LEFT JOIN dbo.imServiciosMedicos sm
+		     ON LTRIM(RTRIM(CAST(sm.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))`;
+	const queries = [
+		`
+      SELECT
+        LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS IdSector,
+        LTRIM(RTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion,
+        LTRIM(RTRIM(ISNULL(s.AmbInt, ''))) AS AmbInt,
+        LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS ValorServicio,
+        LTRIM(RTRIM(CAST(ISNULL(COALESCE(NULLIF(LTRIM(RTRIM(srv.Descripcion)), ''), NULLIF(LTRIM(RTRIM(sm.Descripcion)), '')), '') AS VARCHAR(200)))) AS DescripcionServicio
+      FROM dbo.imSectores s WITH (NOLOCK)
+      ${joinSrv}
+      ${joinSm}
+      WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+      ORDER BY s.Descripcion`,
+		`
+      SELECT
+        LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS IdSector,
+        LTRIM(RTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion,
+        LTRIM(RTRIM(ISNULL(s.AmbInt, ''))) AS AmbInt,
+        LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS ValorServicio,
+        LTRIM(RTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS DescripcionServicio
+      FROM dbo.imSectores s WITH (NOLOCK)
+      ${joinSrv}
+      WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+      ORDER BY s.Descripcion`,
+		`
+      SELECT
+        LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS IdSector,
+        LTRIM(RTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion,
+        LTRIM(RTRIM(ISNULL(s.AmbInt, ''))) AS AmbInt,
+        LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS ValorServicio,
+        '' AS DescripcionServicio
+      FROM dbo.imSectores s WITH (NOLOCK)
+      WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+      ORDER BY s.Descripcion`,
+		`
+      SELECT
+        LTRIM(RTRIM(Valor)) AS IdSector,
+        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
+      FROM dbo.imSectores WITH (NOLOCK)
+      ORDER BY Descripcion`,
+	];
+	for (const sqlText of queries) {
+		try {
+			const raw = _asRows(await executeQuery(sqlText));
+			if (raw.length) {
+				const mapped = _dedupeSectores(raw);
+				if (raw.length && !mapped.length) {
+					console.warn('[sectores] filas sin mapear, keys=', Object.keys(raw[0] || {}));
+				}
+				return mapped;
+			}
+		} catch (err) {
+			console.warn('[sectores] catalogo sql:', err?.message || err);
+		}
+	}
+	return [];
+}
+
+const obtenerSectores = async () => {
+	const desdeNube = await _sectoresNube();
+	if (desdeNube.length) return _enriquecerDescripcionServicio(desdeNube);
+	return _enriquecerDescripcionServicio(await _sectoresSql());
 };
 
 async function crearSector({ valor, descripcion, ambInt }) {
