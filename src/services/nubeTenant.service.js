@@ -641,7 +641,7 @@ async function listarServicios(idEmpresa) {
 	}
 	return rows.map((s) => ({
 		id: String(s.Valor || '').trim(),
-		descripcion: String(s.Descripcion || s.Valor || '').trim(),
+		descripcion: String(s.Descripcion || '').trim(),
 	}));
 }
 
@@ -821,7 +821,7 @@ async function listarServiciosDeUsuario(idEmpresa, idPersonal) {
 	);
 	return (rows || []).map((s) => ({
 		id: String(s.id || '').trim(),
-		descripcion: String(s.descripcion || s.id || '').trim(),
+		descripcion: String(s.descripcion || '').trim(),
 	}));
 }
 

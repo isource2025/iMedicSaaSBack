@@ -159,6 +159,7 @@ function mapRow(row) {
 		ValorEspecialidad: row.ValorEspecialidad != null ? Number(row.ValorEspecialidad) : null,
 		ValorFunciones: row.ValorFunciones != null ? Number(row.ValorFunciones) : null,
 		ValorServicio: strOrNull(row.ValorServicio),
+		ServicioDescripcion: strOrNull(row.ServicioDescripcion),
 		ValorServicioParaFacturar: strOrNull(row.ValorServicioParaFacturar),
 		ValorCategoria: row.ValorCategoria != null ? Number(row.ValorCategoria) : null,
 		ValorClase: strOrNull(row.ValorClase),
@@ -256,7 +257,7 @@ async function listar(page = 1, limit = 30, search = '') {
 	`);
 
 	return {
-		data: dataRes.recordset.map(mapRow),
+		data: await _conDescripcionServicioLista(dataRes.recordset.map(mapRow)),
 		totalCount,
 		totalPages: Math.max(1, Math.ceil(totalCount / limit)),
 	};
@@ -267,7 +268,7 @@ async function obtenerPorId(valor) {
 		`SELECT ${SELECT_COLS} FROM dbo.imPersonal p WHERE p.Valor = @p0`,
 		[{ value: valor, type: 'Int' }],
 	);
-	return rows.length ? mapRow(rows[0]) : null;
+	return rows.length ? _conDescripcionServicio(mapRow(rows[0])) : null;
 }
 
 /** Obtiene el próximo Valor (MAX+1) excluyendo admins. */
@@ -775,52 +776,47 @@ async function listarFunciones() {
 }
 
 async function listarServicios() {
-	const mapRows = (rows) => {
-		const out = [];
-		for (const r of rows || []) {
-			const valor = String(col(r, 'Valor', 'IdServicio') ?? '').trim();
-			if (!valor) continue;
-			const descripcion = String(col(r, 'Descripcion') ?? '').trim();
-			out.push({ valor, descripcion });
-		}
-		return out;
-	};
-	const porValor = new Map();
-	const merge = (items) => {
-		for (const it of items) {
-			const prev = porValor.get(it.valor);
-			if (!prev) {
-				porValor.set(it.valor, { valor: it.valor, descripcion: it.descripcion });
-				continue;
-			}
-			if (!prev.descripcion && it.descripcion) prev.descripcion = it.descripcion;
-		}
-	};
 	try {
-		merge(
-			mapRows(
-				await executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`),
-			),
-		);
+		return await personalServicios.listarCatalogo();
 	} catch (err) {
-		console.warn('[personal.listarServicios] imServicios:', err?.message || err);
+		console.warn('[personal.listarServicios]', err?.message || err);
+		return [];
 	}
+}
+
+async function _conDescripcionServicio(mapped) {
+	if (!mapped) return mapped;
 	try {
-		merge(
-			mapRows(
-				await executeQuery(
-					`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`,
-				),
-			),
+		const cat = await personalServicios.catalogoDescripciones();
+		const desc = personalServicios.descripcionDe(
+			mapped.ValorServicio,
+			mapped.ServicioDescripcion,
+			cat,
 		);
+		mapped.ServicioDescripcion = desc || null;
 	} catch (err) {
-		if (!porValor.size) {
-			console.warn('[personal.listarServicios] imServiciosMedicos:', err?.message || err);
-		}
+		console.warn('[personal.servicioDescripcion]', err?.message || err);
 	}
-	return [...porValor.values()].sort((a, b) =>
-		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
-	);
+	return mapped;
+}
+
+async function _conDescripcionServicioLista(rows) {
+	if (!rows?.length) return rows;
+	try {
+		const cat = await personalServicios.catalogoDescripciones();
+		for (const mapped of rows) {
+			if (!mapped) continue;
+			const desc = personalServicios.descripcionDe(
+				mapped.ValorServicio,
+				mapped.ServicioDescripcion,
+				cat,
+			);
+			mapped.ServicioDescripcion = desc || null;
+		}
+	} catch (err) {
+		console.warn('[personal.servicioDescripcion]', err?.message || err);
+	}
+	return rows;
 }
 
 async function listarCategorias() {
