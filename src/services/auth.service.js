@@ -24,7 +24,8 @@ async function obtenerSectoresPorUsuarioEnFisico(username) {
       s.Descripcion AS descripcionSector
     FROM impassword pw
     INNER JOIN imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
-    INNER JOIN imSectores s ON ps.idSector = s.Valor
+    INNER JOIN imSectores s
+      ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
     WHERE UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
        OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
   `;
@@ -363,7 +364,7 @@ const obtenerIdSectorPorIdPersonal = async (idPersonal) => {
       FROM 
         imPersonalSectores ps
       INNER JOIN 
-        imSectores s ON ps.idSector = s.Valor
+        imSectores s ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
       WHERE 
         ps.idPersonal = @p0
     `;

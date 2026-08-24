@@ -284,25 +284,110 @@ const actualizarEstadoCama = async (id, estado) => {
 	}
 };
 
+function _col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function _mapSectorInternacion(r) {
+	const valor = String(_col(r, 'valor', 'Valor', 'IdSector', 'idSector') || '').trim();
+	if (!valor) return null;
+	const descripcion = String(_col(r, 'descripcion', 'Descripcion') || '').trim();
+	return { valor, descripcion: descripcion || valor };
+}
+
 /**
- * Obtener todos los sectores desde imSectores
- * @returns {Promise<Array>} Lista de sectores donde ambint='I' y que tengan camas asociadas
+ * Sectores de internación (AmbInt = I).
+ * Primero los que tienen camas; si el JOIN falla por padding, todos los I.
+ * Si el usuario tiene sectores I asignados, se listan esos (no se ocultan).
  */
-const obtenerSectores = async () => {
-	const consulta = `
+const obtenerSectores = async (valorPersonal) => {
+	const sqlConCamas = `
     SELECT DISTINCT
-      s.Valor as valor,
-      s.Descripcion as descripcion
-    FROM 
-      imSectores s
-    INNER JOIN
-      imHabitacionCamas hc ON s.Valor = hc.ValorSector
-    WHERE
-      s.AmbInt = 'I'
-    ORDER BY
-      s.Descripcion
-  `;
-	return await executeQuery(consulta);
+      LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+      LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
+    FROM dbo.imSectores s
+    INNER JOIN dbo.imHabitacionCamas hc
+      ON LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50))))
+    WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'
+    ORDER BY descripcion`;
+	const sqlTodosI = `
+    SELECT
+      LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+      LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
+    FROM dbo.imSectores s
+    WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'
+      AND LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+    ORDER BY s.Descripcion`;
+
+	const byKey = new Map();
+	const add = (row) => {
+		const m = _mapSectorInternacion(row);
+		if (!m) return;
+		const k = m.valor.toUpperCase();
+		if (!byKey.has(k)) byKey.set(k, m);
+	};
+
+	let conCamas = [];
+	try {
+		conCamas = await executeQuery(sqlConCamas);
+	} catch (err) {
+		console.warn('[beds] sectores con camas:', err?.message || err);
+	}
+	for (const r of conCamas || []) add(r);
+	if (!byKey.size) {
+		try {
+			for (const r of (await executeQuery(sqlTodosI)) || []) add(r);
+		} catch (err) {
+			console.warn('[beds] sectores internación:', err?.message || err);
+		}
+	}
+
+	const vp = Number(valorPersonal);
+	if (Number.isFinite(vp) && vp > 0) {
+		try {
+			const mine = await executeQuery(
+				`
+        SELECT
+          LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS valor,
+          LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
+        FROM dbo.imPersonalSectores ps
+        INNER JOIN dbo.imSectores s
+          ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+        WHERE ps.idPersonal = @p0
+          AND UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'`,
+				[{ value: vp, type: 'Int' }],
+			);
+			const assigned = new Set();
+			for (const r of mine || []) {
+				add(r);
+				const m = _mapSectorInternacion(r);
+				if (m) assigned.add(m.valor.toUpperCase());
+			}
+			if (assigned.size) {
+				return [...byKey.values()]
+					.filter((s) => assigned.has(s.valor.toUpperCase()))
+					.sort((a, b) =>
+						String(a.descripcion).localeCompare(String(b.descripcion), 'es'),
+					);
+			}
+		} catch (err) {
+			console.warn('[beds] sectores del personal:', err?.message || err);
+		}
+	}
+
+	return [...byKey.values()].sort((a, b) =>
+		String(a.descripcion).localeCompare(String(b.descripcion), 'es'),
+	);
 };
 
 /**
