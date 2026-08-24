@@ -27,6 +27,7 @@ const STEMS = [
 	{ keys: ['KINESIO', 'FISIOTER', 'REHABILIT'], stem: 'KINE' },
 	{ keys: ['NUTRIC'], stem: 'NUTRI' },
 	{ keys: ['HEMOTER'], stem: 'HEMO' },
+	{ keys: ['CIRUG'], stem: 'CIR' },
 	{ keys: ['GUARDIA', 'EMERGENC'], stem: 'GUARDIA' },
 	{ keys: ['CUIDADOS INTENS', 'TERAPIA INTENS'], stem: 'UTI' },
 ];
@@ -52,6 +53,10 @@ function codesRelated(a, b) {
 	return x.startsWith(y) || y.startsWith(x);
 }
 
+function itemBandejaCoincideReceptor(itemValor, receptor) {
+	return codesRelated(itemValor, receptor);
+}
+
 function sectorUsuarioCoincideServicio(userSec, srv) {
 	const id = fold(userSec?.idSector).replace(/\s+/g, '');
 	const desc = fold(userSec?.descripcion);
@@ -73,5 +78,7 @@ function sectorUsuarioCoincideServicio(userSec, srv) {
 module.exports = {
 	fold,
 	clinicalStem,
+	codesRelated,
+	itemBandejaCoincideReceptor,
 	sectorUsuarioCoincideServicio,
 };

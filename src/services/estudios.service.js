@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const personalServicios = require('./personalServicios.service');
+const { codesRelated } = require('../utils/sectorServicioMatch');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -500,18 +501,7 @@ function _mapServiciosRows(rows) {
 async function listarSectoresReceptor({ valorPersonal } = {}) {
 	const vp = Number(valorPersonal);
 	if (Number.isFinite(vp) && vp > 0) {
-		await personalServicios.ensureTable();
-		const rows = await executeQuery(
-			`SELECT RTRIM(LTRIM(s.Valor)) AS valor, RTRIM(LTRIM(s.Descripcion)) AS descripcion,
-			        RTRIM(LTRIM(ISNULL(s.PrefijosPractica, ''))) AS prefijosPractica
-			 FROM dbo.imServicios s
-			 INNER JOIN dbo.imPersonalServicios ps
-			   ON UPPER(LTRIM(RTRIM(ps.idServicio))) = UPPER(LTRIM(RTRIM(s.Valor)))
-			 WHERE ps.idPersonal = @p0
-			   AND LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
-			 ORDER BY s.Descripcion`,
-			[{ value: vp, type: 'Int' }],
-		);
+		const rows = await personalServicios.listarParaBandeja(vp);
 		return _mapServiciosRows(rows);
 	}
 
@@ -529,8 +519,14 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 	await ensureTomaTable();
 	const sectores = await listarSectoresReceptor({ valorPersonal });
 	const codes = [
-		...new Set(sectores.map((s) => String(s.valor || '').trim()).filter(Boolean)),
-	];
+		...new Set(
+			(
+				await Promise.all(
+					sectores.map((s) => expandCodigosReceptor(String(s.valor || '').trim())),
+				)
+			).flat(),
+		),
+	].filter(Boolean);
 	const vacio = {
 		estudios: 0,
 		interconsultas: 0,
@@ -572,18 +568,23 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 
 	const porServicio = sectores
 		.map((s) => {
-			const hit = byCode.get(String(s.valor).trim().toUpperCase()) || {
-				estudios: 0,
-				interconsultas: 0,
-				urgentes: 0,
-			};
+			let estudios = 0;
+			let interconsultas = 0;
+			let urgentes = 0;
+			for (const [key, hit] of byCode) {
+				if (codesRelated(s.valor, key)) {
+					estudios += hit.estudios;
+					interconsultas += hit.interconsultas;
+					urgentes += hit.urgentes;
+				}
+			}
 			return {
 				valor: s.valor,
 				descripcion: s.descripcion || s.valor,
-				estudios: hit.estudios,
-				interconsultas: hit.interconsultas,
-				urgentes: hit.urgentes,
-				total: hit.estudios + hit.interconsultas,
+				estudios,
+				interconsultas,
+				urgentes,
+				total: estudios + interconsultas,
 			};
 		})
 		.sort(
@@ -603,12 +604,36 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 
 /**
  * Un código de login/filtro (imSectores o imServicios) puede mapear a varios
- * IdSectorReceptor distintos. La bandeja tiene que ver todos.
+ * IdSectorReceptor distintos (CIR ≈ CIRUGIA). La bandeja tiene que ver todos.
  */
 async function expandCodigosReceptor(sectorReceptor) {
 	const raw = String(sectorReceptor || '').trim();
 	if (!raw) return [];
-	return [raw];
+	const seen = new Set();
+	const out = [];
+	const add = (c) => {
+		const v = String(c || '').trim();
+		if (!v) return;
+		const k = v.toUpperCase();
+		if (seen.has(k)) return;
+		seen.add(k);
+		out.push(v);
+	};
+	add(raw);
+	try {
+		const rows = await executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor
+			 FROM dbo.imServicios
+			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+		);
+		for (const r of rows || []) {
+			const v = String(r.valor || '').trim();
+			if (v && codesRelated(raw, v)) add(v);
+		}
+	} catch {
+		/* catálogo ausente */
+	}
+	return out;
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {

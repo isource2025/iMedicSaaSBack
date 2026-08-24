@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { sectorUsuarioCoincideServicio } = require('../utils/sectorServicioMatch');
 
 let _tableReady = false;
 
@@ -135,6 +136,15 @@ function _descripcionDe(id, descRaw, catalogo) {
 		if (hit) return hit;
 	}
 	return '';
+}
+
+function _normDesc(s) {
+	return String(s || '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.trim()
+		.toUpperCase()
+		.replace(/\s+/g, ' ');
 }
 
 async function ensureTable() {
@@ -456,6 +466,192 @@ async function asignarTodos(valorPersonal) {
 	return listar(vp);
 }
 
+async function _filasPedidos() {
+	try {
+		return await executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor,
+			        RTRIM(LTRIM(CAST(ISNULL(Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+			        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
+			 FROM dbo.imServicios
+			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+		);
+	} catch {
+		return executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor,
+			        RTRIM(LTRIM(CAST(ISNULL(Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+			        '' AS prefijosPractica
+			 FROM dbo.imServicios
+			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+		).catch(() => []);
+	}
+}
+
+function _indexarPedidos(rows) {
+	const byKey = new Map();
+	const byDesc = new Map();
+	for (const r of rows || []) {
+		const valor = _code(_col(r, 'valor', 'Valor'));
+		if (!valor) continue;
+		const item = {
+			valor,
+			descripcion: String(_col(r, 'descripcion', 'Descripcion') || '').trim(),
+			prefijosPractica: String(_col(r, 'prefijosPractica', 'PrefijosPractica') || '').trim(),
+		};
+		for (const k of _claves(valor)) {
+			if (!byKey.has(k)) byKey.set(k, item);
+		}
+		const nd = _normDesc(item.descripcion);
+		if (nd && !byDesc.has(nd)) byDesc.set(nd, item);
+	}
+	return { byKey, byDesc };
+}
+
+async function _catalogoPedidos() {
+	return _indexarPedidos(await _filasPedidos());
+}
+
+function _itemsPedidosUnicos(cat) {
+	const seen = new Set();
+	const items = [];
+	for (const it of cat.byKey.values()) {
+		const k = String(it.valor || '').trim().toUpperCase();
+		if (!k || seen.has(k)) continue;
+		seen.add(k);
+		items.push(it);
+	}
+	return items;
+}
+
+async function _asignacionesNube(vp) {
+	try {
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (!Number.isFinite(tid) || tid <= 0) return [];
+		const nube = require('./nubeTenant.service');
+		const items = await nube.listarServiciosDeUsuario(tid, vp);
+		return (items || [])
+			.map((s) => ({
+				idServicio: _code(s.id || s.valor),
+				Descripcion: String(s.descripcion || '').trim(),
+			}))
+			.filter((s) => s.idServicio);
+	} catch {
+		return [];
+	}
+}
+
+async function _asignacionesDesdeSectores(vp) {
+	const sqlConServicio = `
+		SELECT
+		  RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS idSector,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS sectorDescripcion,
+		  RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Valor, '') AS VARCHAR(50)))) AS valorSector
+		 FROM dbo.imPersonalSectores ps
+		 LEFT JOIN dbo.imSectores s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	const sqlSinServicio = `
+		SELECT
+		  RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS idSector,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS sectorDescripcion,
+		  '' AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Valor, '') AS VARCHAR(50)))) AS valorSector
+		 FROM dbo.imPersonalSectores ps
+		 LEFT JOIN dbo.imSectores s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	let rows = [];
+	try {
+		rows = await executeQuery(sqlConServicio, [{ value: vp, type: 'Int' }]);
+	} catch {
+		rows = await executeQuery(sqlSinServicio, [{ value: vp, type: 'Int' }]).catch(() => []);
+	}
+	return (rows || [])
+		.map((r) => {
+			const idServicio =
+				_code(_col(r, 'valorServicio')) ||
+				_code(_col(r, 'valorSector')) ||
+				_code(_col(r, 'idSector'));
+			if (!idServicio) return null;
+			return {
+				idServicio,
+				Descripcion: String(_col(r, 'sectorDescripcion') || '').trim(),
+			};
+		})
+		.filter(Boolean);
+}
+
+function _pushAsignacion(bucket, seen, item) {
+	const id = _code(item?.idServicio);
+	if (!id) return;
+	const key = id.toUpperCase();
+	if (seen.has(key)) return;
+	for (const k of _claves(id)) {
+		if (seen.has(`k:${String(k).toUpperCase()}`)) return;
+	}
+	seen.add(key);
+	for (const k of _claves(id)) seen.add(`k:${String(k).toUpperCase()}`);
+	bucket.push({ idServicio: id, Descripcion: String(item.Descripcion || '').trim() });
+}
+
+async function listarParaBandeja(valorPersonal) {
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(vp) || vp <= 0) return [];
+	const catalogo = await _catalogoDescripciones();
+	const merged = [];
+	const seen = new Set();
+	for (const a of await listar(vp)) _pushAsignacion(merged, seen, a);
+	for (const a of await _asignacionesNube(vp)) _pushAsignacion(merged, seen, a);
+	for (const a of await _asignacionesDesdeSectores(vp)) _pushAsignacion(merged, seen, a);
+	if (!merged.length) return [];
+
+	const cat = await _catalogoPedidos();
+	const out = [];
+	const seenVal = new Set();
+	for (const a of merged) {
+		let item = null;
+		for (const k of _claves(a.idServicio)) {
+			item = cat.byKey.get(k);
+			if (item) break;
+		}
+		if (!item) {
+			const desc = a.Descripcion || _descripcionDe(a.idServicio, '', catalogo);
+			const nd = _normDesc(desc);
+			if (nd) item = cat.byDesc.get(nd) || null;
+			if (!item) {
+				for (const it of _itemsPedidosUnicos(cat)) {
+					if (
+						sectorUsuarioCoincideServicio(
+							{ idSector: a.idServicio, descripcion: desc },
+							{ valor: it.valor, descripcion: it.descripcion },
+						)
+					) {
+						item = it;
+						break;
+					}
+				}
+			}
+		}
+		const valor = _code(item?.valor || a.idServicio);
+		if (!valor) continue;
+		const key = valor.toUpperCase();
+		if (seenVal.has(key)) continue;
+		seenVal.add(key);
+		out.push({
+			valor,
+			descripcion: String(
+				item?.descripcion || a.Descripcion || _descripcionDe(valor, '', catalogo) || valor,
+			).trim(),
+			prefijosPractica: String(item?.prefijosPractica || '').trim(),
+		});
+	}
+	out.sort((a, b) =>
+		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+	);
+	return out;
+}
+
 module.exports = {
 	ensureTable,
 	listar,
@@ -465,6 +661,7 @@ module.exports = {
 	codigosDePersonal,
 	asignarTodos,
 	listarCatalogo,
+	listarParaBandeja,
 	descripcionDe: _descripcionDe,
 	catalogoDescripciones: _catalogoDescripciones,
 };
