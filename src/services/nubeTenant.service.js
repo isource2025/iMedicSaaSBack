@@ -350,6 +350,7 @@ function mapCatalogoFilas(rows) {
 			id: String(s.Valor ?? s.IdSector ?? s.id ?? '').trim(),
 			descripcion: String(s.Descripcion ?? s.descripcion ?? s.Valor ?? s.id ?? '').trim(),
 			ambInt: s.AmbInt != null ? String(s.AmbInt).trim() : undefined,
+			valorServicio: s.ValorServicio != null ? String(s.ValorServicio).trim() : undefined,
 		}))
 		.filter((s) => s.id);
 }
@@ -428,7 +429,15 @@ async function listarSectores(idEmpresa) {
 		if (!cols.size) return [];
 		const hasAmb = !!colMeta(cols, 'AmbInt');
 		const hasEmp = !!colMeta(cols, 'IdEmpresa');
-		const select = hasAmb ? '`Valor`, `Descripcion`, `AmbInt`' : '`Valor`, `Descripcion`';
+		const hasVs = !!colMeta(cols, 'ValorServicio');
+		const select = [
+			'`Valor`',
+			'`Descripcion`',
+			hasAmb ? '`AmbInt`' : null,
+			hasVs ? '`ValorServicio`' : null,
+		]
+			.filter(Boolean)
+			.join(', ');
 		const sql = hasEmp
 			? `SELECT ${select} FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`
 			: `SELECT ${select} FROM \`imSectores\` ORDER BY Descripcion`;
@@ -1811,6 +1820,7 @@ module.exports = {
 	eliminarServicio,
 	reemplazarServiciosUsuario,
 	resolverServiciosUsuario,
+	resolverSectoresUsuario,
 	listarRoles,
 	listarUsuariosEmpresa,
 	obtenerFichaUsuario,
@@ -1820,7 +1830,8 @@ module.exports = {
 	actualizarUsuarioEmpresa,
 	desvincularUsuarioEmpresa,
 	vincularUsuarioEmpresa,
-	resolverSectoresUsuario,
+	listarSectoresDeUsuario,
+	listarServiciosDeUsuario,
 	esRolAdmin,
 	listarTablasImportables,
 	previewTabla,

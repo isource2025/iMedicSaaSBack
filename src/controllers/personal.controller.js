@@ -64,6 +64,45 @@ const exportarPersonal = async (req, res) => {
 	}
 };
 
+const listarCuentasSoloNube = async (_req, res) => {
+	try {
+		const data = await personalService.listarCuentasSoloNube();
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('[personal.listarCuentasSoloNube] ERROR:', error.message);
+		const code = error.statusCode || 500;
+		res.status(code).json({
+			success: false,
+			mensaje: error.message || 'Error al detectar cuentas sin ficha física',
+		});
+	}
+};
+
+const repararCuentasSoloNube = async (_req, res) => {
+	try {
+		const data = await personalService.repararCuentasSoloNube();
+		const n = (data.reparados || []).length;
+		const err = (data.errores || []).length;
+		res.json({
+			success: true,
+			mensaje:
+				n === 0 && err === 0
+					? 'No había cuentas huérfanas para reparar.'
+					: err
+					  ? `Se restauraron ${n} ficha(s) en el hospital. ${err} no se pudieron reparar.`
+					  : `Se restauraron ${n} ficha(s) en la base del hospital.`,
+			data,
+		});
+	} catch (error) {
+		console.error('[personal.repararCuentasSoloNube] ERROR:', error.message);
+		const code = error.statusCode || 500;
+		res.status(code).json({
+			success: false,
+			mensaje: error.message || 'Error al reparar cuentas sin ficha física',
+		});
+	}
+};
+
 const listar = async (req, res) => {
 	try {
 		const { page = 1, limit = 30, search = '' } = req.query;
@@ -134,6 +173,13 @@ const crear = async (req, res) => {
 			});
 		}
 		const nuevo = await personalService.crear(req.body);
+		if (!nuevo) {
+			return res.status(500).json({
+				success: false,
+				mensaje:
+					'El alta no confirmó la ficha en la base del hospital. Buscá en el listado antes de volver a crearlo.',
+			});
+		}
 		res.status(201).json({
 			success: true,
 			mensaje: 'Personal creado con éxito',
@@ -728,6 +774,8 @@ module.exports = {
 	estadoSyncFisico,
 	syncDesdeFisico,
 	exportarPersonal,
+	listarCuentasSoloNube,
+	repararCuentasSoloNube,
 	listarEspecialidades,
 	listarFunciones,
 	listarServicios,

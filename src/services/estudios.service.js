@@ -1,7 +1,5 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
-const personalServicios = require('./personalServicios.service');
-const { codesRelated } = require('../utils/sectorServicioMatch');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -485,11 +483,13 @@ async function resolverTipoPedidoEstudio(idTipoPedido, idPractica) {
 	return rows[0];
 }
 
-function _mapServiciosRows(rows) {
+function _mapSectoresRows(rows) {
 	return (rows || [])
 		.map((r) => ({
 			valor: String(r.valor || '').trim(),
 			descripcion: String(r.descripcion || '').trim(),
+			valorServicio: String(r.valorServicio || '').trim(),
+			descripcionServicio: String(r.descripcionServicio || '').trim(),
 			prefijos: String(r.prefijosPractica || '')
 				.split(',')
 				.map((s) => s.trim())
@@ -498,35 +498,168 @@ function _mapServiciosRows(rows) {
 		.filter((s) => s.valor);
 }
 
+function _codigosPedidoDeSector(item) {
+	const seen = new Set();
+	const out = [];
+	const add = (c) => {
+		const v = String(c || '').trim();
+		if (!v) return;
+		const k = v.toUpperCase();
+		if (seen.has(k)) return;
+		seen.add(k);
+		out.push(v);
+	};
+	add(item?.valor);
+	add(item?.valorServicio);
+	return out;
+}
+
+async function _queryPrimeraOk(candidates, params = []) {
+	let last = null;
+	for (const sqlText of candidates) {
+		try {
+			return await executeQuery(sqlText, params);
+		} catch (err) {
+			last = err;
+		}
+	}
+	if (last) throw last;
+	return [];
+}
+
+const _SEL_SECTOR = `
+		  RTRIM(LTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+		  RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS descripcionServicio,
+		  RTRIM(LTRIM(ISNULL(srv.PrefijosPractica, ''))) AS prefijosPractica`;
+
+const _SEL_SECTOR_SIN_PREF = `
+		  RTRIM(LTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+		  RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS descripcionServicio,
+		  '' AS prefijosPractica`;
+
+const _SEL_SECTOR_MIN = `
+		  RTRIM(LTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+		  '' AS valorServicio,
+		  '' AS descripcionServicio,
+		  '' AS prefijosPractica`;
+
+async function _catalogoSectoresSql() {
+	const joinSrv =
+		` LEFT JOIN dbo.imServicios srv
+		     ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))`;
+	const where = ` WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> '' ORDER BY s.Descripcion`;
+	try {
+		return await _queryPrimeraOk([
+			`SELECT ${_SEL_SECTOR} FROM dbo.imSectores s ${joinSrv} ${where}`,
+			`SELECT ${_SEL_SECTOR_SIN_PREF} FROM dbo.imSectores s ${joinSrv} ${where}`,
+			`SELECT ${_SEL_SECTOR_MIN} FROM dbo.imSectores s ${where}`,
+		]);
+	} catch {
+		return [];
+	}
+}
+
+async function _sectoresAsignadosSql(vp) {
+	const joinS =
+		` FROM dbo.imPersonalSectores ps
+		   LEFT JOIN dbo.imSectores s
+		     ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))`;
+	const joinSrv =
+		` LEFT JOIN dbo.imServicios srv
+		     ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))`;
+	const where = ` WHERE ps.idPersonal = @p0
+		 ORDER BY ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ps.idSector)`;
+	const params = [{ value: vp, type: 'Int' }];
+	try {
+		const rows = await _queryPrimeraOk(
+			[
+				`SELECT RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS valor,
+				        RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+				        RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+				        RTRIM(LTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS descripcionServicio,
+				        RTRIM(LTRIM(ISNULL(srv.PrefijosPractica, ''))) AS prefijosPractica
+				 ${joinS} ${joinSrv} ${where}`,
+				`SELECT RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS valor,
+				        RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+				        RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+				        RTRIM(LTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS descripcionServicio,
+				        '' AS prefijosPractica
+				 ${joinS} ${joinSrv} ${where}`,
+				`SELECT RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS valor,
+				        RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+				        '' AS valorServicio,
+				        '' AS descripcionServicio,
+				        '' AS prefijosPractica
+				 ${joinS} ${where}`,
+			],
+			params,
+		);
+		return rows || [];
+	} catch {
+		return [];
+	}
+}
+
+async function _sectoresAsignadosNube(vp) {
+	try {
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (!Number.isFinite(tid) || tid <= 0) return [];
+		const nube = require('./nubeTenant.service');
+		const items = await nube.listarSectoresDeUsuario(tid, vp);
+		return (items || [])
+			.map((s) => ({
+				valor: String(s.id || s.valor || '').trim(),
+				descripcion: String(s.descripcion || '').trim(),
+				valorServicio: '',
+				descripcionServicio: '',
+				prefijosPractica: '',
+			}))
+			.filter((s) => s.valor);
+	} catch {
+		return [];
+	}
+}
+
+function _enrichConCatalogo(asignados, catalogo) {
+	const byVal = new Map();
+	for (const c of catalogo || []) {
+		const k = String(c.valor || '').trim().toUpperCase();
+		if (k) byVal.set(k, c);
+	}
+	return (asignados || []).map((a) => {
+		const hit = byVal.get(String(a.valor || '').trim().toUpperCase());
+		if (!hit) return a;
+		return {
+			valor: a.valor,
+			descripcion: a.descripcion || hit.descripcion,
+			valorServicio: a.valorServicio || hit.valorServicio,
+			descripcionServicio: a.descripcionServicio || hit.descripcionServicio,
+			prefijosPractica: a.prefijosPractica || hit.prefijosPractica,
+		};
+	});
+}
+
 async function listarSectoresReceptor({ valorPersonal } = {}) {
 	const vp = Number(valorPersonal);
 	if (Number.isFinite(vp) && vp > 0) {
-		const rows = await personalServicios.listarParaBandeja(vp);
-		return _mapServiciosRows(rows);
+		let rows = await _sectoresAsignadosSql(vp);
+		if (!rows.length) rows = await _sectoresAsignadosNube(vp);
+		const cat = await _catalogoSectoresSql();
+		return _mapSectoresRows(_enrichConCatalogo(rows, cat));
 	}
-
-	const rows = await executeQuery(
-		`SELECT RTRIM(LTRIM(Valor)) AS valor, RTRIM(LTRIM(Descripcion)) AS descripcion,
-		        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
-		 FROM dbo.imServicios
-		 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
-		 ORDER BY Descripcion`,
-	);
-	return _mapServiciosRows(rows);
+	return _mapSectoresRows(await _catalogoSectoresSql());
 }
 
 async function contarLibresPorServicios({ valorPersonal } = {}) {
 	await ensureTomaTable();
 	const sectores = await listarSectoresReceptor({ valorPersonal });
-	const codes = [
-		...new Set(
-			(
-				await Promise.all(
-					sectores.map((s) => expandCodigosReceptor(String(s.valor || '').trim())),
-				)
-			).flat(),
-		),
-	].filter(Boolean);
+	const codes = [...new Set(sectores.flatMap((s) => _codigosPedidoDeSector(s)))].filter(Boolean);
 	const vacio = {
 		estudios: 0,
 		interconsultas: 0,
@@ -568,19 +701,21 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 
 	const porServicio = sectores
 		.map((s) => {
+			const keys = new Set(_codigosPedidoDeSector(s).map((c) => c.toUpperCase()));
 			let estudios = 0;
 			let interconsultas = 0;
 			let urgentes = 0;
 			for (const [key, hit] of byCode) {
-				if (codesRelated(s.valor, key)) {
-					estudios += hit.estudios;
-					interconsultas += hit.interconsultas;
-					urgentes += hit.urgentes;
-				}
+				if (!keys.has(key)) continue;
+				estudios += hit.estudios;
+				interconsultas += hit.interconsultas;
+				urgentes += hit.urgentes;
 			}
 			return {
 				valor: s.valor,
 				descripcion: s.descripcion || s.valor,
+				valorServicio: s.valorServicio || '',
+				descripcionServicio: s.descripcionServicio || '',
 				estudios,
 				interconsultas,
 				urgentes,
@@ -603,37 +738,25 @@ async function contarLibresPorServicios({ valorPersonal } = {}) {
 }
 
 /**
- * Un código de login/filtro (imSectores o imServicios) puede mapear a varios
- * IdSectorReceptor distintos (CIR ≈ CIRUGIA). La bandeja tiene que ver todos.
+ * Códigos con los que puede estar grabado el pedido: el sector (CIRA)
+ * y, por legado SaaS, el ValorServicio de ese sector (CIR).
  */
 async function expandCodigosReceptor(sectorReceptor) {
 	const raw = String(sectorReceptor || '').trim();
 	if (!raw) return [];
-	const seen = new Set();
-	const out = [];
-	const add = (c) => {
-		const v = String(c || '').trim();
-		if (!v) return;
-		const k = v.toUpperCase();
-		if (seen.has(k)) return;
-		seen.add(k);
-		out.push(v);
-	};
-	add(raw);
+	const item = { valor: raw, valorServicio: '' };
 	try {
 		const rows = await executeQuery(
-			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor
-			 FROM dbo.imServicios
-			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+			`SELECT TOP 1 RTRIM(LTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50)))) AS valorServicio
+			 FROM dbo.imSectores
+			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = UPPER(LTRIM(RTRIM(@p0)))`,
+			[{ value: raw, type: 'VarChar' }],
 		);
-		for (const r of rows || []) {
-			const v = String(r.valor || '').trim();
-			if (v && codesRelated(raw, v)) add(v);
-		}
+		item.valorServicio = String(rows?.[0]?.valorServicio || '').trim();
 	} catch {
-		/* catálogo ausente */
+		/* sin ValorServicio */
 	}
-	return out;
+	return _codigosPedidoDeSector(item);
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {

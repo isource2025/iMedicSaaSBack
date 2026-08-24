@@ -6,34 +6,89 @@ function _httpError(message, statusCode = 400) {
 	return e;
 }
 
-/**
- * Obtiene todos los sectores
- */
-const obtenerSectores = async () => {
+function _col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function _mapSector(r) {
+	const id = String(_col(r, 'IdSector', 'idSector', 'Valor', 'valor', 'id') || '').trim();
+	if (!id) return null;
+	return {
+		IdSector: id,
+		Descripcion: String(_col(r, 'Descripcion', 'descripcion') || '').trim(),
+		AmbInt: String(_col(r, 'AmbInt', 'ambInt') || '').trim(),
+		ValorServicio: String(_col(r, 'ValorServicio', 'valorServicio') || '').trim(),
+		DescripcionServicio: String(_col(r, 'DescripcionServicio', 'descripcionServicio') || '').trim(),
+	};
+}
+
+async function _sectoresNube() {
 	try {
-		const consulta = `
-      SELECT 
-        LTRIM(RTRIM(Valor)) as IdSector,
-        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
-        LTRIM(RTRIM(ISNULL(AmbInt, ''))) AS AmbInt
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (!Number.isFinite(tid) || tid <= 0) return [];
+		const nube = require('./nubeTenant.service');
+		const items = await nube.listarSectores(tid);
+		return (items || [])
+			.map((s) =>
+				_mapSector({
+					IdSector: s.id || s.valor,
+					Descripcion: s.descripcion,
+					AmbInt: s.ambInt,
+					ValorServicio: s.valorServicio,
+					DescripcionServicio: s.descripcionServicio,
+				}),
+			)
+			.filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+
+const obtenerSectores = async () => {
+	const sqlConServicio = `
+      SELECT
+        LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS IdSector,
+        LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS Descripcion,
+        LTRIM(RTRIM(CAST(ISNULL(s.AmbInt, '') AS VARCHAR(4)))) AS AmbInt,
+        LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS ValorServicio,
+        LTRIM(RTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS DescripcionServicio
+      FROM dbo.imSectores s
+      LEFT JOIN dbo.imServicios srv
+        ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))
+      WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+      ORDER BY s.Descripcion`;
+	const sqlMin = `
+      SELECT
+        LTRIM(RTRIM(CAST(Valor AS VARCHAR(50)))) AS IdSector,
+        LTRIM(RTRIM(CAST(ISNULL(Descripcion, '') AS VARCHAR(200)))) AS Descripcion
       FROM dbo.imSectores
-      ORDER BY Descripcion
-    `;
-		return await executeQuery(consulta);
-	} catch (error) {
+      WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
+      ORDER BY Descripcion`;
+	let rows = [];
+	try {
+		rows = await executeQuery(sqlConServicio);
+	} catch {
 		try {
-			return await executeQuery(`
-      SELECT 
-        LTRIM(RTRIM(Valor)) as IdSector,
-        LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
-      FROM dbo.imSectores
-      ORDER BY Descripcion
-    `);
+			rows = await executeQuery(sqlMin);
 		} catch (e2) {
 			console.error('Error al obtener sectores:', e2);
-			throw e2;
+			rows = [];
 		}
 	}
+	const mapped = (rows || []).map(_mapSector).filter(Boolean);
+	if (mapped.length) return mapped;
+	return _sectoresNube();
 };
 
 async function crearSector({ valor, descripcion, ambInt }) {
