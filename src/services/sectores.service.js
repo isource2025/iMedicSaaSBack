@@ -50,7 +50,7 @@ async function _sectoresNube() {
 		if (!Number.isFinite(tid) || tid <= 0) return [];
 		const nube = require('./nubeTenant.service');
 		const items = await nube.listarSectores(tid);
-		return (items || [])
+		const mapped = (items || [])
 			.map((s) =>
 				_mapSector({
 					IdSector: s.id || s.valor,
@@ -61,72 +61,40 @@ async function _sectoresNube() {
 				}),
 			)
 			.filter(Boolean);
-	} catch {
+		if (mapped.length) {
+			console.log(`[sectores] catalogo nube emp=${tid} n=${mapped.length}`);
+		}
+		return mapped;
+	} catch (err) {
+		console.warn('[sectores] catalogo nube:', err?.message || err);
 		return [];
 	}
 }
 
-async function _enrichServicio(mapped) {
-	if (!mapped.length) return mapped;
-	try {
-		const rows = _asRows(
-			await executeQuery(`
-      SELECT
-        LTRIM(RTRIM(Valor)) AS IdSector,
-        LTRIM(RTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio
-      FROM dbo.imSectores`),
-		);
-		const byId = new Map();
-		for (const r of rows) {
-			const id = String(_col(r, 'IdSector', 'Valor') || '').trim().toUpperCase();
-			if (id) byId.set(id, String(_col(r, 'ValorServicio') || '').trim());
-		}
-		for (const m of mapped) {
-			if (!m.ValorServicio) m.ValorServicio = byId.get(m.IdSector.toUpperCase()) || '';
-		}
-	} catch (err) {
-		console.warn('[sectores] ValorServicio:', err?.message || err);
-	}
-	try {
-		const rows = _asRows(
-			await executeQuery(`
-      SELECT
-        LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS IdSector,
-        LTRIM(RTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS DescripcionServicio
-      FROM dbo.imSectores s
-      LEFT JOIN dbo.imServicios srv
-        ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))`),
-		);
-		const byId = new Map();
-		for (const r of rows) {
-			const id = String(_col(r, 'IdSector', 'Valor') || '').trim().toUpperCase();
-			if (id) byId.set(id, String(_col(r, 'DescripcionServicio') || '').trim());
-		}
-		for (const m of mapped) {
-			if (!m.DescripcionServicio) m.DescripcionServicio = byId.get(m.IdSector.toUpperCase()) || '';
-		}
-	} catch (err) {
-		console.warn('[sectores] descripcion servicio:', err?.message || err);
-	}
-	return mapped;
-}
-
 const obtenerSectores = async () => {
+	const desdeNube = await _sectoresNube();
+	if (desdeNube.length) {
+		return desdeNube.sort((a, b) =>
+			String(a.Descripcion || a.IdSector).localeCompare(String(b.Descripcion || b.IdSector), 'es'),
+		);
+	}
+
 	const queries = [
 		`
       SELECT
         LTRIM(RTRIM(Valor)) AS IdSector,
         LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
-        LTRIM(RTRIM(ISNULL(AmbInt, ''))) AS AmbInt
-      FROM dbo.imSectores
+        LTRIM(RTRIM(ISNULL(AmbInt, ''))) AS AmbInt,
+        LTRIM(RTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio
+      FROM dbo.imSectores WITH (NOLOCK)
       ORDER BY Descripcion`,
 		`
       SELECT
         LTRIM(RTRIM(Valor)) AS IdSector,
         LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion
-      FROM dbo.imSectores
+      FROM dbo.imSectores WITH (NOLOCK)
       ORDER BY Descripcion`,
-		`SELECT Valor AS IdSector, Descripcion FROM imSectores`,
+		`SELECT Valor AS IdSector, Descripcion FROM imSectores WITH (NOLOCK)`,
 	];
 	let raw = [];
 	for (const sqlText of queries) {
@@ -134,7 +102,7 @@ const obtenerSectores = async () => {
 			raw = _asRows(await executeQuery(sqlText));
 			if (raw.length) break;
 		} catch (err) {
-			console.warn('[sectores] catalogo:', err?.message || err);
+			console.warn('[sectores] catalogo sql:', err?.message || err);
 		}
 	}
 
@@ -151,13 +119,9 @@ const obtenerSectores = async () => {
 	if (raw.length && !mapped.length) {
 		console.warn('[sectores] filas sin mapear, keys=', Object.keys(raw[0] || {}));
 	}
-	if (mapped.length) {
-		await _enrichServicio(mapped);
-		return mapped.sort((a, b) =>
-			String(a.Descripcion || a.IdSector).localeCompare(String(b.Descripcion || b.IdSector), 'es'),
-		);
-	}
-	return _sectoresNube();
+	return mapped.sort((a, b) =>
+		String(a.Descripcion || a.IdSector).localeCompare(String(b.Descripcion || b.IdSector), 'es'),
+	);
 };
 
 async function crearSector({ valor, descripcion, ambInt }) {

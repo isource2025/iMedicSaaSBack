@@ -422,10 +422,6 @@ async function listarSectores(idEmpresa) {
 	const emp = Number(idEmpresa);
 	try {
 		let cols = await columnasMeta('imSectores');
-		if (!cols.size) {
-			await seedSectoresDesdeFisico(emp);
-			cols = await columnasMeta('imSectores');
-		}
 		if (!cols.size) return [];
 		const hasAmb = !!colMeta(cols, 'AmbInt');
 		const hasEmp = !!colMeta(cols, 'IdEmpresa');
@@ -442,24 +438,10 @@ async function listarSectores(idEmpresa) {
 			? `SELECT ${select} FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`
 			: `SELECT ${select} FROM \`imSectores\` ORDER BY Descripcion`;
 		let rows = await mysqlQuery(sql, hasEmp ? [emp] : []);
-		if (!rows.length) {
-			await seedSectoresDesdeFisico(emp);
-			rows = await mysqlQuery(sql, hasEmp ? [emp] : []);
-		}
 		return mapCatalogoFilas(rows);
 	} catch (e) {
 		console.warn('[nube] listarSectores', e.message);
-		try {
-			await seedSectoresDesdeFisico(emp);
-			const rows = await mysqlQuery(
-				`SELECT Valor, Descripcion FROM \`imSectores\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
-				[emp],
-			);
-			return mapCatalogoFilas(rows);
-		} catch (e2) {
-			console.warn('[nube] listarSectores retry', e2.message);
-			return [];
-		}
+		return [];
 	}
 }
 
