@@ -306,20 +306,10 @@ function _mapSectorInternacion(r) {
 }
 
 /**
- * Sectores de internación (AmbInt = I).
- * Primero los que tienen camas; si el JOIN falla por padding, todos los I.
- * Si el usuario tiene sectores I asignados, se listan esos (no se ocultan).
+ * Sectores de internación (AmbInt = I). Todos, no solo los asignados al personal.
+ * El sector del login solo preselecciona el filtro en el front.
  */
-const obtenerSectores = async (valorPersonal) => {
-	const sqlConCamas = `
-    SELECT DISTINCT
-      LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
-      LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
-    FROM dbo.imSectores s
-    INNER JOIN dbo.imHabitacionCamas hc
-      ON LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50))))
-    WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'
-    ORDER BY descripcion`;
+const obtenerSectores = async () => {
 	const sqlTodosI = `
     SELECT
       LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
@@ -328,6 +318,14 @@ const obtenerSectores = async (valorPersonal) => {
     WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'
       AND LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
     ORDER BY s.Descripcion`;
+	const sqlConCamas = `
+    SELECT DISTINCT
+      LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
+      LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
+    FROM dbo.imSectores s
+    INNER JOIN dbo.imHabitacionCamas hc
+      ON LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50))))
+    WHERE UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'`;
 
 	const byKey = new Map();
 	const add = (row) => {
@@ -337,51 +335,16 @@ const obtenerSectores = async (valorPersonal) => {
 		if (!byKey.has(k)) byKey.set(k, m);
 	};
 
-	let conCamas = [];
 	try {
-		conCamas = await executeQuery(sqlConCamas);
+		for (const r of (await executeQuery(sqlTodosI)) || []) add(r);
 	} catch (err) {
-		console.warn('[beds] sectores con camas:', err?.message || err);
+		console.warn('[beds] sectores internación:', err?.message || err);
 	}
-	for (const r of conCamas || []) add(r);
 	if (!byKey.size) {
 		try {
-			for (const r of (await executeQuery(sqlTodosI)) || []) add(r);
+			for (const r of (await executeQuery(sqlConCamas)) || []) add(r);
 		} catch (err) {
-			console.warn('[beds] sectores internación:', err?.message || err);
-		}
-	}
-
-	const vp = Number(valorPersonal);
-	if (Number.isFinite(vp) && vp > 0) {
-		try {
-			const mine = await executeQuery(
-				`
-        SELECT
-          LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS valor,
-          LTRIM(RTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS descripcion
-        FROM dbo.imPersonalSectores ps
-        INNER JOIN dbo.imSectores s
-          ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
-        WHERE ps.idPersonal = @p0
-          AND UPPER(LTRIM(RTRIM(ISNULL(s.AmbInt, '')))) = 'I'`,
-				[{ value: vp, type: 'Int' }],
-			);
-			const assigned = new Set();
-			for (const r of mine || []) {
-				add(r);
-				const m = _mapSectorInternacion(r);
-				if (m) assigned.add(m.valor.toUpperCase());
-			}
-			if (assigned.size) {
-				return [...byKey.values()]
-					.filter((s) => assigned.has(s.valor.toUpperCase()))
-					.sort((a, b) =>
-						String(a.descripcion).localeCompare(String(b.descripcion), 'es'),
-					);
-			}
-		} catch (err) {
-			console.warn('[beds] sectores del personal:', err?.message || err);
+			console.warn('[beds] sectores con camas:', err?.message || err);
 		}
 	}
 

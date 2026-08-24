@@ -130,7 +130,7 @@ const filtrarCamasPorEstado = async (req, res) => {
  */
 const obtenerSectores = async (req, res) => {
 	try {
-		const sectores = await bedsService.obtenerSectores(req.valorPersonal);
+		const sectores = await bedsService.obtenerSectores();
 		res.json({ success: true, data: sectores });
 	} catch (error) {
 		console.error('Error al obtener sectores:', error);
