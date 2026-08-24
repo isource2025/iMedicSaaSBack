@@ -18,6 +18,7 @@ router.use(requireAuth, requireTenant);
 // Orden: rutas más específicas primero
 router.get('/next-id', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerProximoId);
 // Catálogos (dropdowns de "Datos Profesionales")
+router.get('/catalogos/sectores', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCatalogoSectores);
 router.get('/catalogos/especialidades', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarEspecialidades);
 router.get('/catalogos/funciones', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarFunciones);
 router.get('/catalogos/servicios', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarServicios);

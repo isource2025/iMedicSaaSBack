@@ -270,6 +270,10 @@ const listarServicios = _catalogoHandler(
 	personalService.listarServicios,
 	'servicios',
 );
+const listarCatalogoSectores = _catalogoHandler(
+	personalService.listarCatalogoSectores,
+	'sectores',
+);
 const listarCategorias = _catalogoHandler(
 	personalService.listarCategorias,
 	'categorias',
@@ -777,6 +781,7 @@ module.exports = {
 	listarCuentasSoloNube,
 	repararCuentasSoloNube,
 	listarEspecialidades,
+	listarCatalogoSectores,
 	listarFunciones,
 	listarServicios,
 	listarCategorias,

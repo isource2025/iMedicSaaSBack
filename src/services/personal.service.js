@@ -913,6 +913,11 @@ async function listarServicios() {
 	}
 }
 
+async function listarCatalogoSectores() {
+	const sectoresService = require('./sectores.service');
+	return sectoresService.obtenerSectores();
+}
+
 async function _conDescripcionServicio(mapped) {
 	if (!mapped) return mapped;
 	try {
@@ -1811,6 +1816,7 @@ module.exports = {
 	listarEspecialidades,
 	listarFunciones,
 	listarServicios,
+	listarCatalogoSectores,
 	listarCategorias,
 	listarClases,
 	listarEmpresasCatalogo,
