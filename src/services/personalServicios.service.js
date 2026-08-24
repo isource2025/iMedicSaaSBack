@@ -1,5 +1,4 @@
 const { executeQuery } = require('../models/db');
-const { sectorUsuarioCoincideServicio } = require('../utils/sectorServicioMatch');
 
 let _tableReady = false;
 
@@ -510,18 +509,6 @@ async function _catalogoPedidos() {
 	return _indexarPedidos(await _filasPedidos());
 }
 
-function _itemsPedidosUnicos(cat) {
-	const seen = new Set();
-	const items = [];
-	for (const it of cat.byKey.values()) {
-		const k = String(it.valor || '').trim().toUpperCase();
-		if (!k || seen.has(k)) continue;
-		seen.add(k);
-		items.push(it);
-	}
-	return items;
-}
-
 async function _asignacionesNube(vp) {
 	try {
 		const { getTenantId } = require('../context/tenantContext');
@@ -619,19 +606,6 @@ async function listarParaBandeja(valorPersonal) {
 			const desc = a.Descripcion || _descripcionDe(a.idServicio, '', catalogo);
 			const nd = _normDesc(desc);
 			if (nd) item = cat.byDesc.get(nd) || null;
-			if (!item) {
-				for (const it of _itemsPedidosUnicos(cat)) {
-					if (
-						sectorUsuarioCoincideServicio(
-							{ idSector: a.idServicio, descripcion: desc },
-							{ valor: it.valor, descripcion: it.descripcion },
-						)
-					) {
-						item = it;
-						break;
-					}
-				}
-			}
 		}
 		const valor = _code(item?.valor || a.idServicio);
 		if (!valor) continue;
