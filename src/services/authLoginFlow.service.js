@@ -266,6 +266,20 @@ async function completarLogin({
 		}
 	}
 
+	if (
+		idEmpresaEfectiva != null &&
+		Number.isFinite(Number(idEmpresaEfectiva)) &&
+		Number(idEmpresaEfectiva) > 0 &&
+		!esSuperAdmin
+	) {
+		try {
+			const { getTenantPool } = require('../config/tenantDb');
+			await getTenantPool(Number(idEmpresaEfectiva));
+		} catch (e) {
+			console.warn('[auth.login] SQL hospital no disponible aún:', e.message);
+		}
+	}
+
 	const jwtPayload = buildJwtPayload(usuario, idEmpresaEfectiva, rol);
 
 	let token = null;
