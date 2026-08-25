@@ -1577,11 +1577,76 @@ function buildSyncInforme({ bruto: r, personal, passwords, sec, srv, vinculos, r
 	};
 }
 
+/**
+ * Solo catálogos (y asignaciones) de sectores y servicios: SQL físico → MySQL nube.
+ */
+async function syncCatalogosDesdeFisico(idEmpresa) {
+	assertAuthCentral();
+	const emp = resolveIdEmpresa(idEmpresa);
+	const row = await loadEmpresaConnectionRow(emp);
+	if (!empresaRowHasSqlConnection(row)) {
+		const e = new Error(
+			'Esta empresa no tiene conexión al servidor físico configurada en Super Admin',
+		);
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const pool = await getTenantPool(emp);
+	let sectores;
+	try {
+		sectores = await syncSectoresDesdeFisico(emp, pool);
+	} catch (e) {
+		const err = new Error(`No se pudieron traer sectores: ${e.message}`);
+		err.statusCode = 400;
+		throw err;
+	}
+	let servicios;
+	try {
+		servicios = await syncServiciosDesdeFisico(emp, pool);
+	} catch (e) {
+		const err = new Error(`No se pudieron traer servicios: ${e.message}`);
+		err.statusCode = 400;
+		throw err;
+	}
+
+	const secCambios = Number(sectores.sectoresCatalogoCambios) || 0;
+	const srvCambios = Number(servicios.catalogoCambios) || 0;
+	const secAsig = Number(sectores.asignaciones) || 0;
+	const srvAsig = Number(servicios.asignaciones) || 0;
+	const cambios = secCambios + srvCambios + secAsig + srvAsig;
+	let mensaje;
+	if (cambios === 0) {
+		mensaje =
+			'La nube ya estaba al día. No hubo cambios en sectores ni servicios respecto al servidor físico.';
+	} else {
+		mensaje = 'Se copió la configuración del servidor físico a la nube.';
+	}
+
+	return {
+		mensaje,
+		sinCambios: cambios === 0,
+		sectores: {
+			catalogo: Number(sectores.sectoresCatalogo) || 0,
+			cambios: secCambios,
+			asignaciones: secAsig,
+			detalle: sectores.detalleCatalogo || [],
+		},
+		servicios: {
+			catalogo: Number(servicios.catalogo) || 0,
+			cambios: srvCambios,
+			asignaciones: srvAsig,
+			detalle: servicios.detalleCatalogo || [],
+		},
+	};
+}
+
 module.exports = {
 	listExportFields,
 	puedeSyncDesdeFisico,
 	ensureImPersonalExportColumns,
 	syncPersonalDesdeFisico,
+	syncCatalogosDesdeFisico,
 	listarParaExport,
 	PERSONAL_SYNC_COLUMNS,
 };

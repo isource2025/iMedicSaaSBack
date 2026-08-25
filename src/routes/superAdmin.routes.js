@@ -24,6 +24,11 @@ router.post('/empresas/:id/conexion/probar', requirePermiso('PLATAFORMA.EMPRESAS
 router.get('/empresas/:id/importar/tablas', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.listarTablasImportables);
 router.get('/empresas/:id/importar/tablas/:tabla/preview', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.previewTablaImportable);
 router.post('/empresas/:id/importar', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.importarTablas);
+router.post(
+	'/empresas/:id/catalogos/sync-fisico',
+	requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'),
+	ctrl.syncCatalogosDesdeFisico,
+);
 router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.eliminarEmpresa);
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
 router.put('/empresas/:id/onboarding', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarOnboarding);

@@ -141,6 +141,17 @@ async function importarTablas(req, res) {
 	}
 }
 
+async function syncCatalogosDesdeFisico(req, res) {
+	const id = Number(req.params.id);
+	try {
+		const data = await superAdminService.syncCatalogosEmpresaDesdeFisico(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		console.error(`[catalogos-sync] empresa ${id}:`, e?.message);
+		res.status(e.statusCode || 400).json({ success: false, mensaje: e.message });
+	}
+}
+
 async function previewTablaImportable(req, res) {
 	try {
 		const id = Number(req.params.id);
@@ -353,6 +364,7 @@ module.exports = {
 	listarTablasImportables,
 	previewTablaImportable,
 	importarTablas,
+	syncCatalogosDesdeFisico,
 	eliminarEmpresa,
 	actualizarPacks,
 	actualizarOnboarding,
