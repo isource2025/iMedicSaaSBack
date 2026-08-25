@@ -143,13 +143,37 @@ const filtrarCamasPorEstado = async (estadoValor) => {
 	}
 };
 
+function normalizeBedCompositeId(id) {
+	try {
+		return decodeURIComponent(String(id || ''))
+			.trim()
+			.replace(/\s*-\s*/g, '-');
+	} catch {
+		return String(id || '')
+			.trim()
+			.replace(/\s*-\s*/g, '-');
+	}
+}
+
+/** Parte sector / cama. El primer `-` falla si el Valor del catálogo físico trae guion. */
+function parseBedCompositeId(id) {
+	const raw = normalizeBedCompositeId(id);
+	const dash = raw.lastIndexOf('-');
+	if (dash <= 0 || dash === raw.length - 1) {
+		return { id: raw, sector: '', cama: raw };
+	}
+	return {
+		id: raw,
+		sector: raw.slice(0, dash).trim(),
+		cama: raw.slice(dash + 1).trim(),
+	};
+}
+
 /**
- * Obtener una cama por ID
- * @param {number} id - ID de la cama
- * @returns {Promise<Object|null>} Cama encontrada o null
+ * Obtener una cama por ID compuesto sector-cama (el Valor de imSectores puede traer guiones).
  */
 const obtenerCamaPorId = async (id) => {
-	const [ValorSector, ValorHabitacionCama] = id.split('-');
+	const parsed = parseBedCompositeId(id);
 	const sqlBase = (conVisto) => `
     SELECT 
       hc.*,
@@ -176,8 +200,18 @@ const obtenerCamaPorId = async (id) => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param1`;
-	const parametros = [{ value: ValorHabitacionCama }, { value: ValorSector }];
+    WHERE LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) + '-' +
+          LTRIM(RTRIM(CAST(hc.ValorHabitacionCama AS VARCHAR(50)))) = @param0
+       OR (
+            LTRIM(RTRIM(@param1)) <> ''
+        AND LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) = LTRIM(RTRIM(@param1))
+        AND LTRIM(RTRIM(CAST(hc.ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param2))
+       )`;
+	const parametros = [
+		{ value: parsed.id, type: 'VarChar' },
+		{ value: parsed.sector, type: 'VarChar' },
+		{ value: parsed.cama, type: 'VarChar' },
+	];
 	try {
 		const resultado = await queryCamasSeguro(sqlBase(true), sqlBase(false), parametros);
 		return resultado.length > 0 ? resultado[0] : null;
@@ -195,10 +229,9 @@ const obtenerCamaPorId = async (id) => {
  * @returns {Promise<Object>} Cama actualizada
  */
 const actualizarEstadoCama = async (id, estado) => {
-	const idStr = String(id || '');
-	const dash = idStr.indexOf('-');
-	const ValorSector = dash >= 0 ? idStr.slice(0, dash) : null;
-	const ValorHabitacionCama = dash >= 0 ? idStr.slice(dash + 1) : idStr;
+	const parsed = parseBedCompositeId(id);
+	const ValorSector = parsed.sector || null;
+	const ValorHabitacionCama = parsed.cama;
 
 	// Mapear estados descriptivos a valores de la tabla imEstadoCama
 	let valorEstado;
@@ -216,7 +249,7 @@ const actualizarEstadoCama = async (id, estado) => {
 			valorEstado = estado; // Usar el valor directamente si no es uno de los predefinidos
 	}
 
-	if (!ValorSector) {
+	if (!parsed.id) {
 		throw new Error('ValorSector es obligatorio para actualizar el estado de una cama');
 	}
 
@@ -225,7 +258,8 @@ const actualizarEstadoCama = async (id, estado) => {
 	const consulta = `
     UPDATE imHabitacionCamas
     SET ValorEstadoCama = @param1
-    WHERE ValorHabitacionCama = @param0 AND ValorSector = @param2;
+	WHERE LTRIM(RTRIM(CAST(ValorSector AS VARCHAR(50)))) + '-' +
+          LTRIM(RTRIM(CAST(ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param0));
 
     SELECT 
       hc.*,
@@ -246,13 +280,13 @@ const actualizarEstadoCama = async (id, estado) => {
       imClientes c ON v.Cliente = c.Valor
     LEFT JOIN
       imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE hc.ValorHabitacionCama = @param0 AND hc.ValorSector = @param2;
+    WHERE LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) + '-' +
+          LTRIM(RTRIM(CAST(hc.ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param0));
   `;
 
 	const parametros = [
-		{ value: ValorHabitacionCama },
+		{ value: parsed.id, type: 'VarChar' },
 		{ value: valorEstado },
-		{ value: ValorSector },
 	];
 
 	try {
