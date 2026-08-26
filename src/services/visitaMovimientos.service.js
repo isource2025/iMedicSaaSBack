@@ -2123,7 +2123,76 @@ async function asignarPacienteACama(numeroVisita, datos) {
     ' ';
   const servicioHospital = String(visita.ServicioHospital || '').trim() || null;
 
-  const query = `
+  // Si ya hay un pase abierto sin cama (p.ej. egreso anulado), actualizarlo en lugar de insertar otro.
+  const abiertoSinCama = await executeQuery(
+    `
+      SELECT TOP 1
+        FechaAdmision,
+        HoraAdmision
+      FROM dbo.imVisitaMovimiento
+      WHERE NumeroVisita = @p0
+        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+        AND LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) = ''
+      ORDER BY FechaAdmision DESC, HoraAdmision DESC
+    `,
+    [{ value: num }],
+  );
+
+  const query = abiertoSinCama?.length
+    ? `
+    BEGIN TRY
+      BEGIN TRANSACTION;
+
+      UPDATE dbo.imVisitaMovimiento
+      SET
+        FechaAdmision = @param1,
+        HoraAdmision = @param2,
+        FechaEgreso = 0,
+        HoraEgreso = 0,
+        EstadoAmbulatorio = @param3,
+        Diagnostico = CASE
+          WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
+          ELSE @param4
+        END,
+        Operador = @param5,
+        FechaCarga = @param6,
+        HoraCarga = @param7,
+        ValorSector = @param8,
+        ValorHabitacionCama = @param9,
+        EstadoCama = 'O',
+        ServicioHospital = @param11
+      WHERE NumeroVisita = @param0
+        AND FechaAdmision = @param12
+        AND HoraAdmision = @param13;
+
+      UPDATE dbo.imHabitacionCamas
+      SET
+        FechaIngreso = @param1,
+        FechaEgreso = 0,
+        ValorEstadoCama = 'O',
+        NumeroVisita = @param0,
+        Observaciones = 'Asignación inicial de cama'
+      WHERE ValorHabitacionCama = @param9 AND ValorSector = @param8;
+
+      UPDATE dbo.imVisita
+      SET
+        ValorHabitacionCama = @param9,
+        ValorSector = @param8,
+        ClasePaciente = @param10,
+        Diagnostico = CASE
+          WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
+          ELSE @param4
+        END
+      WHERE NumeroVisita = @param0;
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      ROLLBACK;
+      THROW;
+    END CATCH;
+  `
+    : `
     BEGIN TRY
       BEGIN TRANSACTION;
 
@@ -2208,6 +2277,12 @@ async function asignarPacienteACama(numeroVisita, datos) {
     { value: clasePaciente },
     { value: servicioHospital },
   ];
+  if (abiertoSinCama?.length) {
+    params.push(
+      { value: Number(abiertoSinCama[0].FechaAdmision) || 0 },
+      { value: Number(abiertoSinCama[0].HoraAdmision) || 0 },
+    );
+  }
 
   try {
     await executeQuery(query, params);
