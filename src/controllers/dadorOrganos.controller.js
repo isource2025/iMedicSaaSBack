@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para obtener todos los registros de dador de órganos
@@ -24,7 +25,7 @@ const getDadoresOrganos = async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error al obtener dadores de órganos:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al obtener dadores de órganos', 
       details: error.message 
     });
@@ -78,7 +79,7 @@ const createDadorOrganos = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear dador de órganos:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al crear dador de órganos', 
       details: error.message 
     });
@@ -127,7 +128,7 @@ const updateDadorOrganos = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar dador de órganos:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al actualizar dador de órganos', 
       details: error.message 
     });
@@ -166,7 +167,7 @@ const deleteDadorOrganos = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al eliminar dador de órganos:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al eliminar dador de órganos', 
       details: error.message 
     });

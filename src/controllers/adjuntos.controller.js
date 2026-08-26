@@ -31,6 +31,7 @@ const {
   pathLookupCandidates,
   normalizeAdjuntoFilePath,
 } = require('../utils/fileNameEncoding');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /** Notifica en background para no demorar la respuesta HTTP (el UI queda en "Subiendo..."). */
 function enqueueNotificarAdjunto(req, payload) {
@@ -419,7 +420,7 @@ router.post(
       }
     }
 
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: 'Error al subir archivos adjuntos'
     });
@@ -436,7 +437,7 @@ router.get('/tipos-imagenes', requirePermiso('INTERNACION.ADJUNTOS.VER'), async 
     res.json({ success: true, data: tipos });
   } catch (error) {
     console.error('❌ Error al listar tipos de imagen:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al listar tipos de imagen',
     });
@@ -460,7 +461,7 @@ router.get('/visita/:numeroVisita', requirePermiso('INTERNACION.ADJUNTOS.VER'), 
     });
   } catch (error) {
     console.error('❌ Error al obtener adjuntos por visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: 'Error al obtener adjuntos'
     });
@@ -485,7 +486,7 @@ router.get('/visita/:numeroVisita/agrupados', requirePermiso('INTERNACION.ADJUNT
     });
   } catch (error) {
     console.error('❌ Error al obtener adjuntos agrupados:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: 'Error al obtener adjuntos agrupados'
     });
@@ -515,7 +516,7 @@ router.get('/:idAdjunto', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req
     });
   } catch (error) {
     console.error('❌ Error al obtener adjunto:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: 'Error al obtener adjunto'
     });
@@ -640,7 +641,7 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
     }
   } catch (error) {
     console.error('❌ Error al descargar adjunto:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: 'Error al descargar adjunto'
     });
@@ -668,7 +669,7 @@ router.delete(
     });
   } catch (error) {
     console.error('❌ Error al eliminar adjunto:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al eliminar adjunto'
     });

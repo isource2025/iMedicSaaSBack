@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const notificacionesService = require('../services/notificaciones.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 router.use(requireAuth, requireTenant);
 
@@ -29,7 +30,7 @@ router.get('/', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (e) {
     console.error('[notificaciones] list', e);
-    res.status(500).json({ success: false, error: e.message || 'Error al listar notificaciones' });
+    res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error al listar notificaciones' });
   }
 });
 
@@ -46,7 +47,7 @@ router.get('/unread-count', async (req, res) => {
     res.json({ success: true, count });
   } catch (e) {
     console.error('[notificaciones] unread-count', e);
-    res.status(500).json({ success: false, error: e.message || 'Error' });
+    res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error' });
   }
 });
 
@@ -63,7 +64,7 @@ router.put('/mark-all-read', async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     console.error('[notificaciones] mark-all', e);
-    res.status(500).json({ success: false, error: e.message || 'Error' });
+    res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error' });
   }
 });
 
@@ -84,7 +85,7 @@ router.put('/:id/read', async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     console.error('[notificaciones] read', e);
-    res.status(500).json({ success: false, error: e.message || 'Error' });
+    res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error' });
   }
 });
 

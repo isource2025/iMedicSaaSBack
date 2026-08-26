@@ -4,6 +4,7 @@
  */
 
 const provinciaService = require('../services/provincia.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imProvincia
@@ -24,7 +25,7 @@ const provinciaController = {
       });
     } catch (error) {
       console.error('Error en el controlador de provincias:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener las provincias',
         error: error.message
@@ -64,7 +65,7 @@ const provinciaController = {
       });
     } catch (error) {
       console.error('Error en el controlador de provincias:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener la provincia',
         error: error.message
@@ -97,7 +98,7 @@ const provinciaController = {
       });
     } catch (error) {
       console.error('Error en el controlador de provincias:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener provincias por nacionalidad',
         error: error.message
@@ -156,7 +157,7 @@ const provinciaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear la provincia',
         error: error.message
@@ -223,7 +224,7 @@ const provinciaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar la provincia',
         error: error.message
@@ -265,7 +266,7 @@ const provinciaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar la provincia',
         error: error.message

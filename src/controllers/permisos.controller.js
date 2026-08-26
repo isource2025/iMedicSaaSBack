@@ -1,5 +1,6 @@
 const permisosService = require('../services/permisos.service');
 const matriz = require('../utils/permisos');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /** GET /api/permisos/me — devuelve rol(es) y permisos del usuario logueado. */
 const obtenerMisPermisos = async (req, res) => {
@@ -40,7 +41,7 @@ const obtenerMisPermisos = async (req, res) => {
 		res.json({ success: true, data: { rol, roles, permisos } });
 	} catch (error) {
 		console.error('[permisos.obtenerMisPermisos]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener permisos' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al obtener permisos' });
 	}
 };
 
@@ -56,7 +57,7 @@ const obtenerCatalogo = (_req, res) => {
 		});
 	} catch (error) {
 		console.error('[permisos.obtenerCatalogo]', error);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener catálogo de permisos' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener catálogo de permisos' });
 	}
 };
 
@@ -71,7 +72,7 @@ const obtenerPorRol = async (req, res) => {
 		res.json({ success: true, data: { idRol, permisos } });
 	} catch (error) {
 		console.error('[permisos.obtenerPorRol]', error);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener permisos del rol' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener permisos del rol' });
 	}
 };
 

@@ -1,5 +1,6 @@
 const indicacionesService = require("../services/indicaciones.service");
 const { requireOperadorCarga, requireProfesional, resolveOperadorCarga } = require("../utils/sessionIdentity");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtener la última indicación por número de visita
@@ -30,9 +31,9 @@ const obtenerUltimaIndicacionPorVisita = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener última indicación por visita:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener la última indicación de la visita",
+            mensaje: mensajeDeError(error, "Error al obtener la última indicación de la visita"),
             error: error.message,
         });
     }
@@ -65,9 +66,9 @@ const obtenerUltimasIndicacionesPorVisita = async (req, res) => {
             "Error al obtener últimas indicaciones por visita:",
             error
         );
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener las últimas indicaciones de la visita",
+            mensaje: mensajeDeError(error, "Error al obtener las últimas indicaciones de la visita"),
             error: error.message,
         });
     }
@@ -102,9 +103,9 @@ const byDate = async (req, res) => {
         });
     } catch (err) {
         console.error("[IndicacionesController][byDate] error:", err);
-        return res.status(500).json({
+        return res.status(statusDeError(err)).json({
             success: false,
-            mensaje: "Error interno al obtener indicaciones por fecha",
+            mensaje: mensajeDeError(err, "Error interno al obtener indicaciones por fecha"),
         });
     }
 };
@@ -139,9 +140,9 @@ const insumosByDate = async (req, res) => {
         });
     } catch (err) {
         console.error("[IndicacionesController][insumosByDate] error:", err);
-        return res.status(500).json({
+        return res.status(statusDeError(err)).json({
             success: false,
-            mensaje: "Error interno al obtener insumos por fecha",
+            mensaje: mensajeDeError(err, "Error interno al obtener insumos por fecha"),
         });
     }
 };
@@ -159,9 +160,9 @@ const obtenerDatosFormulario = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener datos del formulario:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener los datos del formulario",
+            mensaje: mensajeDeError(error, "Error al obtener los datos del formulario"),
             error: error.message,
         });
     }
@@ -271,7 +272,7 @@ const deleteIndicacion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar indicación:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             mensaje: error.message || "Error al eliminar la indicación",
             error: error.message,
@@ -297,7 +298,7 @@ const deleteIndicacionHija = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar indicación hija:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             mensaje: error.message || "Error al eliminar la indicación adicional",
             error: error.message,
@@ -330,9 +331,9 @@ const getIndicacionById = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener indicación por ID:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener la indicación",
+            mensaje: mensajeDeError(error, "Error al obtener la indicación"),
             error: error.message,
         });
     }
@@ -356,9 +357,9 @@ const updateIndicacion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al actualizar indicación:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al actualizar la indicación",
+            mensaje: mensajeDeError(error, "Error al actualizar la indicación"),
             error: error.message,
         });
     }
@@ -471,7 +472,7 @@ const crearIndicacionHija = async (req, res) => {
         });
     } catch (error) {
         console.error('Error al crear indicación hija:', error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             mensaje: error.message || 'Error al crear indicación hija'
         });
@@ -511,9 +512,9 @@ const marcarVistoEnfermeria = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('[IndicacionesController][marcarVistoEnfermeria] error:', error);
-		return res.status(500).json({
+		return res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al marcar indicaciones como vistas',
+			mensaje: mensajeDeError(error, 'Error al marcar indicaciones como vistas'),
 		});
 	}
 };

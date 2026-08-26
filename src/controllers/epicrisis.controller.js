@@ -1,5 +1,6 @@
 const epicrisisService = require('../services/epicrisis.service');
 const epicrisisIaService = require('../services/epicrisisIa.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const listarPorVisita = async (req, res) => {
 	try {
@@ -11,9 +12,9 @@ const listarPorVisita = async (req, res) => {
 		return res.json({ success: true, data: rows || [] });
 	} catch (err) {
 		console.error('[Epicrisis] listar:', err);
-		return res.status(500).json({
+		return res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al listar epicrisis',
+			mensaje: mensajeDeError(err, 'Error al listar epicrisis'),
 			error: err.message,
 		});
 	}
@@ -32,9 +33,9 @@ const obtenerPorId = async (req, res) => {
 		return res.json({ success: true, data: row });
 	} catch (err) {
 		console.error('[Epicrisis] obtener:', err);
-		return res.status(500).json({
+		return res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al obtener epicrisis',
+			mensaje: mensajeDeError(err, 'Error al obtener epicrisis'),
 			error: err.message,
 		});
 	}
@@ -70,9 +71,9 @@ const crear = async (req, res) => {
 		});
 	} catch (err) {
 		console.error('[Epicrisis] crear:', err);
-		return res.status(500).json({
+		return res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al crear epicrisis',
+			mensaje: mensajeDeError(err, 'Error al crear epicrisis'),
 			error: err.message,
 		});
 	}
@@ -92,9 +93,9 @@ const actualizar = async (req, res) => {
 		return res.json({ success: true, mensaje: 'Epicrisis actualizada correctamente' });
 	} catch (err) {
 		console.error('[Epicrisis] actualizar:', err);
-		return res.status(500).json({
+		return res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al actualizar epicrisis',
+			mensaje: mensajeDeError(err, 'Error al actualizar epicrisis'),
 			error: err.message,
 		});
 	}
@@ -110,9 +111,9 @@ const eliminar = async (req, res) => {
 		return res.json({ success: true, mensaje: 'Epicrisis eliminada correctamente' });
 	} catch (err) {
 		console.error('[Epicrisis] eliminar:', err);
-		return res.status(500).json({
+		return res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al eliminar epicrisis',
+			mensaje: mensajeDeError(err, 'Error al eliminar epicrisis'),
 			error: err.message,
 		});
 	}

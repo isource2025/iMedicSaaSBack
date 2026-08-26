@@ -1,4 +1,5 @@
 const ProvinciasService = require('../services/provincias.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const ProvinciasController = {
    /**
@@ -27,7 +28,7 @@ const ProvinciasController = {
                 message: 'Registro de provincia obtenido correctamente'
             });
         } catch (error) {
-            res.status(500).json({
+            res.status(statusDeError(error)).json({
                 success: false,
                 data: [],
                 message: error.message || 'Error al obtener el registro de la provincia'

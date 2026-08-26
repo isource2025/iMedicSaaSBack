@@ -1,4 +1,5 @@
 const LocalidadesService = require('../services/localidades.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const LocalidadesController = {
    /**
@@ -17,7 +18,7 @@ const LocalidadesController = {
                 message: 'Registros de localidades obtenidos correctamente'
             });
         } catch (error) {
-            res.status(500).json({
+            res.status(statusDeError(error)).json({
                 success: false,
                 data: [],
                 message: error.message || 'Error al obtener registros de localidades'

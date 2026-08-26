@@ -1,4 +1,5 @@
 const superAdminService = require('../services/superAdmin.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 async function dashboard(req, res) {
 	try {
@@ -6,7 +7,7 @@ async function dashboard(req, res) {
 		res.json({ success: true, data });
 	} catch (e) {
 		console.error('[superAdmin.dashboard]', e);
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 
@@ -15,7 +16,7 @@ async function catalogos(req, res) {
 		const data = await superAdminService.obtenerCatalogos();
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 
@@ -34,7 +35,7 @@ async function listarEmpresas(req, res) {
 		const data = await superAdminService.listarEmpresas(req.query.q);
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 
@@ -45,7 +46,7 @@ async function obtenerEmpresa(req, res) {
 		if (!data) return res.status(404).json({ success: false, mensaje: 'Empresa no encontrada' });
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 
@@ -197,7 +198,7 @@ async function listarUsuarios(req, res) {
 		const data = await superAdminService.listarTodosUsuarios(req.query.q);
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 
@@ -229,7 +230,7 @@ async function modulosEmpresa(req, res) {
 		const data = await superAdminService.obtenerModulosEmpresaActiva(id);
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 }
 

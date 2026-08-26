@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para obtener todas las disposiciones de egreso
@@ -24,7 +25,7 @@ const getDisposicionesEgreso = async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error al obtener disposiciones de egreso:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al obtener disposiciones de egreso', 
       details: error.message 
     });
@@ -80,7 +81,7 @@ const createDisposicionEgreso = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear disposición de egreso:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al crear disposición de egreso', 
       details: error.message 
     });
@@ -138,7 +139,7 @@ const updateDisposicionEgreso = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar disposición de egreso:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al actualizar disposición de egreso', 
       details: error.message 
     });
@@ -186,7 +187,7 @@ const deleteDisposicionEgreso = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al eliminar disposición de egreso:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al eliminar disposición de egreso', 
       details: error.message 
     });

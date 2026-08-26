@@ -1,4 +1,5 @@
 const indicadoresService = require('../services/indicadores.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene indicadores de pacientes
@@ -56,7 +57,7 @@ const obtenerIndicadores = async (req, res) => {
 
   } catch (error) {
     console.error('Error en obtenerIndicadores:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error interno del servidor',
       error: error.message
@@ -95,7 +96,7 @@ const obtenerResumenIndicadores = async (req, res) => {
 
   } catch (error) {
     console.error('Error en obtenerResumenIndicadores:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error interno del servidor',
       error: error.message
@@ -134,7 +135,7 @@ const obtenerIndicadoresPorFecha = async (req, res) => {
 
   } catch (error) {
     console.error('Error en obtenerIndicadoresPorFecha:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error interno del servidor',
       error: error.message
@@ -174,7 +175,7 @@ const obtenerResumenPacientesHoy = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en obtenerResumenPacientesHoy:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error interno del servidor',
       error: error.message
@@ -191,7 +192,7 @@ const obtenerEstadoActualCamas = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en obtenerEstadoActualCamas:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error interno del servidor',
       error: error.message
@@ -240,7 +241,7 @@ const obtenerOcupacionCamas = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en obtenerOcupacionCamas:', error);
-    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+    res.status(statusDeError(error)).json({ success: false, message: 'Error interno del servidor', error: error.message });
   }
 };
 
@@ -253,7 +254,7 @@ const obtenerResumenOcupacionCamas = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en obtenerResumenOcupacionCamas:', error);
-    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+    res.status(statusDeError(error)).json({ success: false, message: 'Error interno del servidor', error: error.message });
   }
 };
 
@@ -266,7 +267,7 @@ const obtenerOcupacionCamasPorFecha = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en obtenerOcupacionCamasPorFecha:', error);
-    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+    res.status(statusDeError(error)).json({ success: false, message: 'Error interno del servidor', error: error.message });
   }
 };
 

@@ -2,6 +2,7 @@
  * Controlador para gestionar la información de la empresa
  */
 const empresaService = require('../services/empresa.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const obtenerInfoEmpresa = async (req, res) => {
   try {
@@ -19,7 +20,7 @@ const obtenerInfoEmpresa = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener información de la empresa:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al obtener información de la empresa',
       error: error.message

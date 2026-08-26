@@ -5,6 +5,7 @@
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -50,9 +51,9 @@ const obtenerUltimoMovimientoVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener último movimiento de visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener el último movimiento de la visita',
+      mensaje: mensajeDeError(error, 'Error al obtener el último movimiento de la visita'),
       error: error.message
     });
   }
@@ -247,9 +248,9 @@ const obtenerMovimientosVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener movimientos de visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener los movimientos de la visita',
+      mensaje: mensajeDeError(error, 'Error al obtener los movimientos de la visita'),
       error: error.message
     });
   }
@@ -395,9 +396,9 @@ const obtenerMovimientosRecientes = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener movimientos recientes:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener los movimientos recientes de internación',
+      mensaje: mensajeDeError(error, 'Error al obtener los movimientos recientes de internación'),
       error: error.message
     });
   }
@@ -417,9 +418,9 @@ const obtenerPacientesInternadosSinCama = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al listar internados sin cama:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener pacientes internados sin cama',
+      mensaje: mensajeDeError(error, 'Error al obtener pacientes internados sin cama'),
       error: error.message,
     });
   }

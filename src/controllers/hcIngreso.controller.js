@@ -1,4 +1,5 @@
 const hcIngresoService = require("../services/hcIngreso.service");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtener HC de Ingreso por visita
@@ -22,7 +23,7 @@ const obtenerHCIngresoPorVisita = async (req, res) => {
         });
     } catch (error) {
         console.error("Error en obtenerHCIngresoPorVisita:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: "Error al obtener HC de Ingreso",
             error: error.message,
@@ -59,7 +60,7 @@ const obtenerHCIngresoPorId = async (req, res) => {
         });
     } catch (error) {
         console.error("Error en obtenerHCIngresoPorId:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: "Error al obtener HC de Ingreso",
             error: error.message,
@@ -90,7 +91,7 @@ const crearHCIngreso = async (req, res) => {
         });
     } catch (error) {
         console.error("Error en crearHCIngreso:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: "Error al crear HC de Ingreso",
             error: error.message,
@@ -122,7 +123,7 @@ const actualizarHCIngreso = async (req, res) => {
         });
     } catch (error) {
         console.error("Error en actualizarHCIngreso:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: "Error al actualizar HC de Ingreso",
             error: error.message,
@@ -153,7 +154,7 @@ const eliminarHCIngreso = async (req, res) => {
         });
     } catch (error) {
         console.error("Error en eliminarHCIngreso:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: "Error al eliminar HC de Ingreso",
             error: error.message,

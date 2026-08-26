@@ -3,6 +3,7 @@ const botLogService = require('../services/botLog.service');
 const botAgenda = require('../services/botAgenda.service');
 const whatsappEmpresa = require('../services/whatsappEmpresa.service');
 const { parseApiKeys } = require('../middlewares/botApiKey.middleware');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 async function obtenerConfigAdmin(req, res) {
 	try {
@@ -22,7 +23,7 @@ async function obtenerConfigAdmin(req, res) {
 			},
 		});
 	} catch (err) {
-		res.status(500).json({ success: false, mensaje: err.message });
+		res.status(statusDeError(err)).json({ success: false, mensaje: err.message });
 	}
 }
 
@@ -55,7 +56,7 @@ async function listarLogs(req, res) {
 		const data = await botLogService.listarLogsRecientes(limit);
 		res.json({ success: true, data });
 	} catch (err) {
-		res.status(500).json({ success: false, mensaje: err.message });
+		res.status(statusDeError(err)).json({ success: false, mensaje: err.message });
 	}
 }
 

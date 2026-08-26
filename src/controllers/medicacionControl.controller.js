@@ -1,4 +1,5 @@
 const medicacionControlService = require("../services/medicacionControl.service");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtener medicación suministrada por número de visita
@@ -25,9 +26,9 @@ const obtenerMedicacionPorVisita = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener medicación por visita:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener la medicación suministrada",
+            mensaje: mensajeDeError(error, "Error al obtener la medicación suministrada"),
             error: error.message,
         });
     }
@@ -93,9 +94,9 @@ const obtenerMedicacionPorVisitaYFecha = async (req, res) => {
         });
     } catch (error) {
         console.error("❌ [medicacionControl.controller] Error al obtener medicación por visita y fecha:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener la medicación suministrada por fecha",
+            mensaje: mensajeDeError(error, "Error al obtener la medicación suministrada por fecha"),
             error: error.message,
         });
     }
@@ -133,9 +134,9 @@ const obtenerMedicacionPorId = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener medicación por ID:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener el registro de medicación",
+            mensaje: mensajeDeError(error, "Error al obtener el registro de medicación"),
             error: error.message,
         });
     }
@@ -164,9 +165,9 @@ const eliminarMedicacion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar medicación:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al eliminar el registro de medicación",
+            mensaje: mensajeDeError(error, "Error al eliminar el registro de medicación"),
             error: error.message,
         });
     }
@@ -195,9 +196,9 @@ const actualizarMedicacion = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al actualizar medicación:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al actualizar el registro de medicación',
+			mensaje: mensajeDeError(error, 'Error al actualizar el registro de medicación'),
 			error: error.message,
 		});
 	}

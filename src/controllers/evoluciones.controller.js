@@ -1,4 +1,5 @@
 const evolucionesService = require("../services/evoluciones.service");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtener evoluciones por visita y fecha
@@ -52,9 +53,9 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
         });
     } catch (err) {
         console.error("[EvolucionesController][byDate] error:", err);
-        return res.status(500).json({
+        return res.status(statusDeError(err)).json({
             success: false,
-            mensaje: "Error interno al obtener evoluciones por fecha",
+            mensaje: mensajeDeError(err, "Error interno al obtener evoluciones por fecha"),
         });
     }
 };
@@ -118,9 +119,9 @@ const crearEvolucion = async (req, res) => {
         });
     } catch (err) {
         console.error("Error al crear evolución:", err);
-        res.status(500).json({
+        res.status(statusDeError(err)).json({
             success: false,
-            mensaje: "Error interno al crear evolución",
+            mensaje: mensajeDeError(err, "Error interno al crear evolución"),
             error: err.message || err,
         });
     }
@@ -156,9 +157,9 @@ const obtenerEvolucionPorId = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener evolución por ID:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener la evolución",
+            mensaje: mensajeDeError(error, "Error al obtener la evolución"),
             error: error.message,
         });
     }
@@ -187,9 +188,9 @@ const eliminarEvolucion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar evolución:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al eliminar la evolución",
+            mensaje: mensajeDeError(error, "Error al eliminar la evolución"),
             error: error.message,
         });
     }
@@ -220,9 +221,9 @@ const actualizarEvolucion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al actualizar evolución:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al actualizar la evolución",
+            mensaje: mensajeDeError(error, "Error al actualizar la evolución"),
             error: error.message,
         });
     }

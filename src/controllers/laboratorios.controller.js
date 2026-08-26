@@ -2,6 +2,7 @@ const laboratoriosService = require('../services/laboratorios-simple.service');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 // Configurar multer para subida de archivos
 const storage = multer.memoryStorage();
@@ -70,7 +71,7 @@ const uploadYProcesarOCR = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en uploadYProcesarOCR:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al procesar el archivo'
     });
@@ -105,7 +106,7 @@ const guardarExamen = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en guardarExamen:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al guardar el examen'
     });
@@ -136,7 +137,7 @@ const obtenerExamenesPorVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en obtenerExamenesPorVisita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al obtener exámenes'
     });
@@ -166,7 +167,7 @@ const obtenerExamenPorId = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en obtenerExamenPorId:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al obtener el examen'
     });
@@ -191,7 +192,7 @@ const actualizarExamen = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en actualizarExamen:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al actualizar el examen'
     });
@@ -214,7 +215,7 @@ const eliminarExamen = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en eliminarExamen:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al eliminar el examen'
     });
@@ -236,7 +237,7 @@ const obtenerParametrosConfig = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en obtenerParametrosConfig:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al obtener parámetros de configuración'
     });
@@ -264,7 +265,7 @@ const actualizarParametroConfig = async (req, res) => {
     });
   } catch (error) {
     console.error('Error en actualizarParametroConfig:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       error: error.message || 'Error al actualizar parámetro'
     });

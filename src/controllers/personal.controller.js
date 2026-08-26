@@ -4,13 +4,14 @@
 const personalService = require('../services/personal.service');
 const personalSyncService = require('../services/personalSync.service');
 const { getTenantId } = require('../context/tenantContext');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const listarCamposExport = async (_req, res) => {
 	try {
 		res.json({ success: true, data: personalSyncService.listExportFields() });
 	} catch (error) {
 		console.error('[personal.listarCamposExport] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al listar campos de exportación' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al listar campos de exportación' });
 	}
 };
 
@@ -20,7 +21,7 @@ const estadoSyncFisico = async (_req, res) => {
 		res.json({ success: true, data: { disponible } });
 	} catch (error) {
 		console.error('[personal.estadoSyncFisico] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al consultar estado de sync' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al consultar estado de sync' });
 	}
 };
 
@@ -133,7 +134,7 @@ const listar = async (req, res) => {
 					'No se puede conectar al servidor SQL de la clínica. Verificá que el puerto 1433 esté accesible desde Railway (firewall / red).',
 			});
 		}
-		res.status(500).json({ success: false, mensaje: 'Error al obtener el personal' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener el personal' });
 	}
 };
 
@@ -150,7 +151,7 @@ const obtenerPorId = async (req, res) => {
 		res.json({ success: true, data: personal });
 	} catch (error) {
 		console.error('[personal.obtenerPorId] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener el personal' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener el personal' });
 	}
 };
 
@@ -160,7 +161,7 @@ const obtenerProximoId = async (_req, res) => {
 		res.json({ success: true, data: { Valor: valor } });
 	} catch (error) {
 		console.error('[personal.obtenerProximoId] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener el próximo ID' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener el próximo ID' });
 	}
 };
 
@@ -302,7 +303,7 @@ const obtenerServicioPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.obtenerServicioPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener servicio del personal' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener servicio del personal' });
 	}
 };
 
@@ -334,7 +335,7 @@ const listarEmpresasPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.listarEmpresasPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al listar empresas' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al listar empresas' });
 	}
 };
 
@@ -369,7 +370,7 @@ const quitarEmpresaPersonal = async (req, res) => {
 		res.json({ success: true, mensaje: 'Empresa quitada', data });
 	} catch (error) {
 		console.error('[personal.quitarEmpresaPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al quitar empresa' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al quitar empresa' });
 	}
 };
 
@@ -383,7 +384,7 @@ const obtenerFirmaPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.obtenerFirmaPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener firma' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener firma' });
 	}
 };
 
@@ -398,7 +399,7 @@ const obtenerFirmaPorMatricula = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.obtenerFirmaPorMatricula] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener firma' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener firma' });
 	}
 };
 
@@ -413,7 +414,7 @@ const obtenerFirmaPorIdPublic = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.obtenerFirmaPorIdPublic] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener firma' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener firma' });
 	}
 };
 
@@ -451,7 +452,7 @@ const eliminarFirmaPersonal = async (req, res) => {
 		res.json({ success: true, mensaje: 'Firma eliminada' });
 	} catch (error) {
 		console.error('[personal.eliminarFirmaPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al eliminar firma' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al eliminar firma' });
 	}
 };
 
@@ -465,7 +466,7 @@ const listarSectoresPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.listarSectoresPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al listar sectores' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al listar sectores' });
 	}
 };
 
@@ -520,7 +521,7 @@ const listarServiciosPedidosPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.listarServiciosPedidosPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al listar servicios' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al listar servicios' });
 	}
 };
 
@@ -599,7 +600,7 @@ const listarCodigosFacturacionPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.listarCodigosFacturacionPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al listar códigos de facturación' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al listar códigos de facturación' });
 	}
 };
 
@@ -689,7 +690,7 @@ const obtenerCuentaPersonal = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[personal.obtenerCuentaPersonal] ERROR:', error.message);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener la cuenta de acceso' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener la cuenta de acceso' });
 	}
 };
 

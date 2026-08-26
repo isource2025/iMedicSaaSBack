@@ -16,6 +16,7 @@ const {
 } = require('../config/security');
 const authCentralService = require('../services/authCentral.service');
 const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 function normalizarUsername(username) {
 	return String(username || '').trim().toLowerCase();
@@ -199,9 +200,9 @@ const inicioSesion = async (req, res) => {
 		}
 
 		console.error('Error durante la autenticación:', error);
-		return res.status(500).json({
+		return res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error en el servidor durante la autenticación',
+			mensaje: mensajeDeError(error, 'Error en el servidor durante la autenticación'),
 		});
 	} finally {
 		await timingPad(t0);
@@ -403,7 +404,7 @@ const obtenerSectores = async (req, res) => {
 		res.json({ success: true, data: sectores });
 	} catch (error) {
 		console.error('Error al obtener sectores:', error);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener los sectores' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener los sectores' });
 	}
 };
 
@@ -427,7 +428,7 @@ const listarPaisesPermitidos = async (_req, res) => {
 		const data = await geoPolicy.listarPaises();
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 };
 
@@ -446,7 +447,7 @@ const togglePaisPermitido = async (req, res) => {
 		const data = await geoPolicy.setPaisActivo(req.params.codigo, req.body?.activo !== false);
 		res.json({ success: true, data });
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 };
 
@@ -465,7 +466,7 @@ const obtenerConfigSeguridad = async (_req, res) => {
 			},
 		});
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 };
 
@@ -493,7 +494,7 @@ const actualizarConfigSeguridad = async (req, res) => {
 			},
 		});
 	} catch (e) {
-		res.status(500).json({ success: false, mensaje: e.message });
+		res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 };
 
@@ -512,7 +513,7 @@ const repararCuentasCriticas = async (req, res) => {
 		return res.json({ success: true, data });
 	} catch (e) {
 		console.error('[auth.repararCuentasCriticas]', e.message);
-		return res.status(500).json({ success: false, mensaje: e.message });
+		return res.status(statusDeError(e)).json({ success: false, mensaje: e.message });
 	}
 };
 

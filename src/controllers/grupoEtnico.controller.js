@@ -3,6 +3,7 @@
  * Controlador para las operaciones CRUD de la tabla imGrupoEtnico
  */
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 // Obtener todos los grupos étnicos
 const getGruposEtnicos = async (req, res) => {
@@ -11,7 +12,7 @@ const getGruposEtnicos = async (req, res) => {
     const result = await executeQuery(sql);
     res.status(200).json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener los grupos étnicos: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener los grupos étnicos: ' + error.message, details: error.message });
   }
 };
 
@@ -29,7 +30,7 @@ const getGrupoEtnicoByValor = async (req, res) => {
     }
     res.status(200).json(result[0]);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener el grupo étnico: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener el grupo étnico: ' + error.message, details: error.message });
   }
 };
 
@@ -61,7 +62,7 @@ const createGrupoEtnico = async (req, res) => {
     const newRecord = { valor: valor.toUpperCase(), descripcion };
     res.status(201).json(newRecord);
   } catch (error) {
-    res.status(500).json({ error: 'Error al crear el grupo étnico: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al crear el grupo étnico: ' + error.message, details: error.message });
   }
 };
 
@@ -90,7 +91,7 @@ const updateGrupoEtnico = async (req, res) => {
     const updatedRecord = { valor: valor.toUpperCase(), descripcion };
     res.status(200).json(updatedRecord);
   } catch (error) {
-    res.status(500).json({ error: 'Error al actualizar el grupo étnico: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al actualizar el grupo étnico: ' + error.message, details: error.message });
   }
 };
 
@@ -116,7 +117,7 @@ const deleteGrupoEtnico = async (req, res) => {
     
     res.status(200).json({ message: 'Grupo étnico eliminado correctamente' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al eliminar el grupo étnico: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al eliminar el grupo étnico: ' + error.message, details: error.message });
   }
 };
 

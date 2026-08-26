@@ -1,6 +1,7 @@
 const evolucionEnfermeriaService = require("../services/evolucionEnfermeria.service");
 const { requireProfesional, requireOperadorCarga } = require("../utils/sessionIdentity");
 const { parseDaysFiltro } = require("../utils/dateUtils");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 function parseClaveFromQuery(req) {
     const numeroVisitaInt = parseInt(req.query.numeroVisita, 10);
@@ -93,9 +94,9 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener evoluciones de enfermería por visita y fecha:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener las evoluciones de enfermería",
+            mensaje: mensajeDeError(error, "Error al obtener las evoluciones de enfermería"),
             error: error.message,
         });
     }
@@ -136,9 +137,9 @@ const eliminarEvolucion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar evolución de enfermería:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al eliminar la evolución de enfermería",
+            mensaje: mensajeDeError(error, "Error al eliminar la evolución de enfermería"),
             error: error.message,
         });
     }
@@ -189,9 +190,9 @@ const actualizarEvolucion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al actualizar evolución de enfermería:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al actualizar la evolución de enfermería",
+            mensaje: mensajeDeError(error, "Error al actualizar la evolución de enfermería"),
             error: error.message,
         });
     }
@@ -254,9 +255,9 @@ const crearEvolucion = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al crear evolución de enfermería:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al crear la evolución de enfermería",
+            mensaje: mensajeDeError(error, "Error al crear la evolución de enfermería"),
             error: error.message,
         });
     }

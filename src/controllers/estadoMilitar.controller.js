@@ -3,6 +3,7 @@
  * Controlador para las operaciones CRUD de la tabla imEstadoMilitar
  */
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 // Obtener todos los estados militares
 const getEstadosMilitares = async (req, res) => {
@@ -11,7 +12,7 @@ const getEstadosMilitares = async (req, res) => {
     const result = await executeQuery(sql);
     res.status(200).json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener los estados militares: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener los estados militares: ' + error.message, details: error.message });
   }
 };
 
@@ -29,7 +30,7 @@ const getEstadoMilitarByValor = async (req, res) => {
     }
     res.status(200).json(result[0]);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener el estado militar: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener el estado militar: ' + error.message, details: error.message });
   }
 };
 
@@ -52,7 +53,7 @@ const createEstadoMilitar = async (req, res) => {
     await executeQuery(insertSql, [valorDB, descripcion]);
     res.status(201).json({ valor: valorDB, descripcion });
   } catch (error) {
-    res.status(500).json({ error: 'Error al crear el estado militar: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al crear el estado militar: ' + error.message, details: error.message });
   }
 };
 
@@ -76,7 +77,7 @@ const updateEstadoMilitar = async (req, res) => {
     await executeQuery(updateSql, [descripcion, valorDB]);
     res.status(200).json({ valor: valorDB, descripcion });
   } catch (error) {
-    res.status(500).json({ error: 'Error al actualizar el estado militar: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al actualizar el estado militar: ' + error.message, details: error.message });
   }
 };
 
@@ -99,7 +100,7 @@ const deleteEstadoMilitar = async (req, res) => {
     await executeQuery(deleteSql, [valorDB]);
     res.status(200).json({ message: 'Estado militar eliminado correctamente' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al eliminar el estado militar: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al eliminar el estado militar: ' + error.message, details: error.message });
   }
 };
 

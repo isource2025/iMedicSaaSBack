@@ -2,6 +2,7 @@
  * Controlador para gestión de rendiciones
  */
 const rendicionesService = require('../services/rendiciones.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene rendiciones con paginación y búsqueda
@@ -20,7 +21,7 @@ const obtenerRendiciones = async (req, res) => {
 		res.json(result);
 	} catch (error) {
 		console.error('Error en obtenerRendiciones:', error);
-		res.status(500).json({ 
+		res.status(statusDeError(error)).json({ 
 			error: 'Error al obtener rendiciones',
 			message: error.message 
 		});
@@ -47,7 +48,7 @@ const obtenerRendicionPorId = async (req, res) => {
 		res.json(rendicion);
 	} catch (error) {
 		console.error('Error en obtenerRendicionPorId:', error);
-		res.status(500).json({ 
+		res.status(statusDeError(error)).json({ 
 			error: 'Error al obtener rendición',
 			message: error.message 
 		});
@@ -63,7 +64,7 @@ const crearRendicion = async (req, res) => {
 		res.status(201).json(nuevaRendicion);
 	} catch (error) {
 		console.error('Error en crearRendicion:', error);
-		res.status(500).json({ 
+		res.status(statusDeError(error)).json({ 
 			error: 'Error al crear rendición',
 			message: error.message 
 		});
@@ -85,7 +86,7 @@ const actualizarRendicion = async (req, res) => {
 		res.json(rendicionActualizada);
 	} catch (error) {
 		console.error('Error en actualizarRendicion:', error);
-		res.status(500).json({ 
+		res.status(statusDeError(error)).json({ 
 			error: 'Error al actualizar rendición',
 			message: error.message 
 		});
@@ -107,7 +108,7 @@ const eliminarRendicion = async (req, res) => {
 		res.json({ message: 'Rendición eliminada exitosamente' });
 	} catch (error) {
 		console.error('Error en eliminarRendicion:', error);
-		res.status(500).json({ 
+		res.status(statusDeError(error)).json({ 
 			error: 'Error al eliminar rendición',
 			message: error.message 
 		});

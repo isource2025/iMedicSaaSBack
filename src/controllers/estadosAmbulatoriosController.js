@@ -1,4 +1,5 @@
 const estadosAmbulatoriosService = require('../services/estadosAmbulatoriosService');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para manejar las operaciones relacionadas con los estados ambulatorios
@@ -15,7 +16,7 @@ const estadosAmbulatoriosController = {
       res.json(estadosAmbulatorios);
     } catch (error) {
       console.error('Error al obtener estados ambulatorios:', error);
-      res.status(500).json({ 
+      res.status(statusDeError(error)).json({ 
         success: false, 
         message: 'Error al obtener los estados ambulatorios',
         error: error.message 
@@ -43,7 +44,7 @@ const estadosAmbulatoriosController = {
       res.json(estadoAmbulatorio);
     } catch (error) {
       console.error(`Error al obtener estado ambulatorio con valor ${req.params.valor}:`, error);
-      res.status(500).json({ 
+      res.status(statusDeError(error)).json({ 
         success: false, 
         message: 'Error al obtener el estado ambulatorio',
         error: error.message 

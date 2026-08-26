@@ -4,6 +4,7 @@
  */
 
 const tipoAdmisionService = require('../services/tipoAdmision.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imTipoAdmision
@@ -25,7 +26,7 @@ const tipoAdmisionController = {
       });
     } catch (error) {
       console.error('Error en el controlador de tipos de admisión:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener los tipos de admisión'
@@ -68,7 +69,7 @@ const tipoAdmisionController = {
       });
     } catch (error) {
       console.error('Error en el controlador de tipos de admisión:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener el tipo de admisión'
@@ -130,7 +131,7 @@ const tipoAdmisionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al crear el tipo de admisión'
       });
@@ -188,7 +189,7 @@ const tipoAdmisionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al actualizar el tipo de admisión'
       });
@@ -229,7 +230,7 @@ const tipoAdmisionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al eliminar el tipo de admisión'
       });

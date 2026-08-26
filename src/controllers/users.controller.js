@@ -1,4 +1,5 @@
 const usersService = require('../services/users.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene todos los usuarios
@@ -12,9 +13,9 @@ const obtenerUsuarios = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener usuarios:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener los usuarios'
+      mensaje: mensajeDeError(error, 'Error al obtener los usuarios')
     });
   }
 };
@@ -41,9 +42,9 @@ const obtenerUsuario = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener usuario:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener el usuario'
+      mensaje: mensajeDeError(error, 'Error al obtener el usuario')
     });
   }
 };
@@ -84,9 +85,9 @@ const actualizarUsuario = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar usuario:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al actualizar el usuario'
+      mensaje: mensajeDeError(error, 'Error al actualizar el usuario')
     });
   }
 };
@@ -113,9 +114,9 @@ const cambiarPassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al cambiar contraseña:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al cambiar la contraseña'
+      mensaje: mensajeDeError(error, 'Error al cambiar la contraseña')
     });
   }
 };
@@ -142,7 +143,7 @@ const asignarSector = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al asignar sector:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       mensaje: error.message || 'Error al asignar el sector'
     });
@@ -163,9 +164,9 @@ const quitarSector = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al quitar sector:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al quitar el sector'
+      mensaje: mensajeDeError(error, 'Error al quitar el sector')
     });
   }
 };

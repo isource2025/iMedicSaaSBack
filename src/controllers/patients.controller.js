@@ -2,6 +2,7 @@ const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/date
 const patientsService = require('../services/patients.service');
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Lista pacientes con paginación real.
@@ -34,9 +35,9 @@ const obtenerPacientes = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener pacientes:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener los pacientes',
+			mensaje: mensajeDeError(error, 'Error al obtener los pacientes'),
 		});
 	}
 };
@@ -60,9 +61,9 @@ const buscarPacientes = async (req, res) => {
 		res.json({ success: true, data: pacientes });
 	} catch (error) {
 		console.error('Error al buscar pacientes:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al buscar pacientes',
+			mensaje: mensajeDeError(error, 'Error al buscar pacientes'),
 		});
 	}
 };
@@ -100,9 +101,9 @@ const obtenerPacientePorId = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener paciente:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener el paciente',
+			mensaje: mensajeDeError(error, 'Error al obtener el paciente'),
 		});
 	}
 };
@@ -337,9 +338,9 @@ const crearPaciente = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al crear paciente:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al crear el paciente',
+			mensaje: mensajeDeError(error, 'Error al crear el paciente'),
 			error: error.message,
 		});
 	}
@@ -634,9 +635,9 @@ const actualizarPaciente = async (req, res) => {
 		} catch (_) {}
 	} catch (error) {
 		console.error('Error al actualizar paciente:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al actualizar el paciente',
+			mensaje: mensajeDeError(error, 'Error al actualizar el paciente'),
 		});
 	}
 };
@@ -672,9 +673,9 @@ const eliminarPaciente = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al eliminar paciente:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al eliminar el paciente',
+			mensaje: mensajeDeError(error, 'Error al eliminar el paciente'),
 		});
 	}
 };
@@ -694,9 +695,9 @@ const obtenerTablasReferencia = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener tablas de referencia:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener las tablas de referencia',
+			mensaje: mensajeDeError(error, 'Error al obtener las tablas de referencia'),
 		});
 	}
 };
@@ -747,9 +748,9 @@ const obtenerVisitaPorNumero = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener visita:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener los datos de la visita',
+			mensaje: mensajeDeError(error, 'Error al obtener los datos de la visita'),
 			error: error.message,
 		});
 	}
@@ -856,9 +857,9 @@ const registrarEgresoPaciente = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al registrar egreso:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al registrar el egreso',
+			mensaje: mensajeDeError(error, 'Error al registrar el egreso'),
 		});
 	}
 };
@@ -878,9 +879,9 @@ const obtenerCatalogosLaborales = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener catálogos laborales:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener los catálogos laborales',
+			mensaje: mensajeDeError(error, 'Error al obtener los catálogos laborales'),
 		});
 	}
 };
