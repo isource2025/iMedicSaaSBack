@@ -139,7 +139,7 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar último movimiento de visita:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       mensaje: error.message || 'Error al actualizar el último movimiento de la visita',
       error: error.message
@@ -315,9 +315,9 @@ const moverPacienteACamaVacia = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al mover paciente a nueva cama:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      mensaje: 'Error al mover al paciente a la nueva cama',
+      mensaje: error.message || 'Error al mover al paciente a la nueva cama',
       error: error.message
     });
   }
@@ -361,9 +361,9 @@ const intercambiarCamasPacientes = async (req, res) => {
     res.json(resultado);
   } catch (error) {
     console.error('Error al intercambiar camas:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      mensaje: 'Error al intercambiar las camas entre pacientes',
+      mensaje: error.message || 'Error al intercambiar las camas entre pacientes',
       error: error.message
     });
   }
@@ -482,7 +482,7 @@ const asignarPacienteACama = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al asignar cama:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       mensaje: error.message || 'Error al asignar la cama',
       error: error.message,
