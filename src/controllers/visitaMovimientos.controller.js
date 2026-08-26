@@ -38,9 +38,11 @@ const obtenerUltimoMovimientoVisita = async (req, res) => {
     const movimiento = await visitaMovimientosService.obtenerUltimoMovimientoVisita(numeroVisitaInt);
 
     if (!movimiento) {
-      return res.status(404).json({
-        success: false,
-        mensaje: 'No se encontró ningún movimiento para esta visita'
+      // Visita sin movimientos (p.ej. denuncia/Binaria sin cama): no es error de cliente.
+      return res.status(200).json({
+        success: true,
+        data: null,
+        mensaje: 'La visita no tiene movimientos registrados',
       });
     }
 
