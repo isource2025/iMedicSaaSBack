@@ -6,6 +6,7 @@ const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
 const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
+const { normalizarFilas } = require('../utils/codigoSector');
 
 function mapSectorRow(r) {
 	return {
@@ -270,7 +271,7 @@ const obtenerSectores = async () => {
         imSectores s
     `;
     
-    const resultado = await executeQuery(consulta);
+    const resultado = normalizarFilas(await executeQuery(consulta));
     console.log('Datos obtenidos de sectores:', JSON.stringify(resultado, null, 2));
     return resultado;
   } catch (error) {

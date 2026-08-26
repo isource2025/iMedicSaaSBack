@@ -4,6 +4,7 @@
  */
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString, clarionAIsoCalendario } = require('../utils/dateUtils');
+const { normalizarFilas } = require('../utils/codigoSector');
 
 function clarionInt(v) {
   const n = Number(v);
@@ -406,7 +407,7 @@ async function queryMovimientosPorNumero(num) {
     `,
     [{ value: num }],
   );
-  return rows || [];
+  return normalizarFilas(rows || []);
 }
 
 /** Alta inicial en imVisita (cama/sector) cuando no hubo insert en imVisitaMovimiento. */
@@ -453,7 +454,7 @@ async function queryMovimientoInicialDesdeCabecera(num) {
     `,
     [{ value: num }],
   );
-  return rows || [];
+  return normalizarFilas(rows || []);
 }
 
 function _codigoOperadorRow(row) {
@@ -1875,7 +1876,7 @@ async function obtenerMovimientosRecientes(limite = 10) {
   `;
   
   try {
-    const result = await executeQuery(sql, [{ value: limite }]);
+    const result = normalizarFilas(await executeQuery(sql, [{ value: limite }]));
     
     // Convertir fechas y horas Clarion usando las funciones de dateUtils
     const resultadoConFechas = result.map(row => {

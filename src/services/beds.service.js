@@ -2,6 +2,7 @@
 
 const { executeQuery } = require('../models/db');
 const { enrichControlesWithIMC } = require('../utils/antropometria');
+const { normalizarFilas } = require('../utils/codigoSector');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 
 async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
@@ -9,7 +10,7 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 		const listo = await vistoEnfermeria.tablaLista();
 		if (listo) {
 			try {
-				return await executeQuery(sqlConVisto, params);
+				return normalizarFilas(await executeQuery(sqlConVisto, params));
 			} catch (err) {
 				console.warn('[beds] Aviso de indicaciones omitido:', err?.message || err);
 			}
@@ -17,7 +18,7 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	} catch (err) {
 		console.warn('[beds] Chequeo de indicaciones nuevas omitido:', err?.message || err);
 	}
-	const rows = await executeQuery(sqlSinVisto, params);
+	const rows = normalizarFilas(await executeQuery(sqlSinVisto, params));
 	void vistoEnfermeria.ensureTable().catch((e) => {
 		console.warn('[beds] No se pudo preparar tabla de aviso de indicaciones:', e?.message || e);
 	});
