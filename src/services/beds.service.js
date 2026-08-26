@@ -458,7 +458,7 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') =
 
 	const parametros = [{ value: numeroVisita }];
 	try {
-		const rows = await executeQuery(consulta, parametros);
+		const rows = normalizarFilas(await executeQuery(consulta, parametros));
 		return enrichControlesWithIMC(rows);
 	} catch (error) {
 		console.error('Error al obtener controles frecuentes por visita:', error);

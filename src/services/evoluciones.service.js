@@ -4,6 +4,7 @@ const {
     convertirHoraAClarion,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { normalizarFilas } = require("../utils/codigoSector");
 
 /**
  * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).
@@ -94,7 +95,7 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
     `;
 
     try {
-        const resultado = await executeQuery(sql, params);
+        const resultado = normalizarFilas(await executeQuery(sql, params));
         return resultado;
     } catch (error) {
         console.error("Error al obtener evoluciones por visita y fecha:", error);
@@ -187,7 +188,7 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
     const params = [{ value: idHCEvolucion }];
 
     try {
-        const resultado = await executeQuery(sql, params);
+        const resultado = normalizarFilas(await executeQuery(sql, params));
         return Array.isArray(resultado) && resultado.length > 0 ? resultado[0] : null;
     } catch (error) {
         console.error("Error al obtener evolución por ID:", error);

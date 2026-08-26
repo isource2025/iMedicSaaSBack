@@ -2,6 +2,7 @@ const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
 const authCentralSync = require('./authCentralSync.service');
+const { codigo, normalizarFilas } = require('../utils/codigoSector');
 
 /** Cache de esquema imPassword por tenant (evita mezclar metadatos entre BDs). */
 const schemaCacheByTenant = new Map();
@@ -463,7 +464,7 @@ const obtenerTodosLosUsuarios = async () => {
       // Agregar sector si existe
       if (row.idSector) {
         usuariosMap.get(userId).sectores.push({
-          idSector: row.idSector,
+          idSector: codigo(row.idSector),
           descripcionSector: row.descripcionSector
         });
       }
@@ -514,7 +515,7 @@ const obtenerUsuarioPorId = async (valorPersonal) => {
         WHERE ps.idPersonal = @p0
       `;
       
-      const sectores = await executeQuery(sectoresConsulta, [{ value: valorPersonal }]);
+      const sectores = normalizarFilas(await executeQuery(sectoresConsulta, [{ value: valorPersonal }]));
       usuario.sectores = sectores || [];
       
       return usuario;

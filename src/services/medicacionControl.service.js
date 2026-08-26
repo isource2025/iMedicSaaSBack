@@ -1,5 +1,6 @@
 const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion } = require("../utils/dateUtils");
+const { normalizarFilas } = require("../utils/codigoSector");
 
 /**
  * Obtener medicación suministrada por número de visita
@@ -63,7 +64,7 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
   `;
     const parametros = [{ value: numeroVisita }];
     try {
-        const resultado = await executeQuery(consulta, parametros);
+        const resultado = normalizarFilas(await executeQuery(consulta, parametros));
         const medicaciones = Array.isArray(resultado) ? resultado : [];
         
         // Agrupar medicaciones padre con sus hijas (adicionales)
@@ -231,7 +232,7 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
     });
 
     try {
-        const resultado = await executeQuery(consulta, parametros);
+        const resultado = normalizarFilas(await executeQuery(consulta, parametros));
         const medicaciones = Array.isArray(resultado) ? resultado : [];
         
         console.log('🔵 [medicacionControl.service] Query result:', {
@@ -342,7 +343,7 @@ const obtenerMedicacionPorId = async (idCtrlMedica) => {
   `;
     const parametros = [{ value: idCtrlMedica }];
     try {
-        const resultado = await executeQuery(consulta, parametros);
+        const resultado = normalizarFilas(await executeQuery(consulta, parametros));
         return Array.isArray(resultado) && resultado.length > 0 ? resultado[0] : null;
     } catch (error) {
         console.error("Error al obtener medicación por ID:", error);

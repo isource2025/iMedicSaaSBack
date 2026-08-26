@@ -865,7 +865,7 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
 				v.DiagnosticoEgreso AS diagnosticoEgreso,
 				p.IDPaciente AS idPaciente,
 				p.ApellidoyNombre AS nombrePaciente,
-				h.ValorHabitacionCama AS habitacionCama,
+				LTRIM(RTRIM(h.ValorHabitacionCama)) AS habitacionCama,
 				h.Observaciones AS descripcionHabitacionCama
 			FROM imvisita v
 			LEFT JOIN impacientes p ON v.IDPaciente = p.IDPaciente

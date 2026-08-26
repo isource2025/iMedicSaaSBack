@@ -1,5 +1,6 @@
 const { executeQuery } = require("../models/db");
 const { jsonSafe } = require("../utils/jsonSafe");
+const { normalizarFilas } = require("../utils/codigoSector");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
@@ -276,7 +277,7 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
     const params = [{ value: numeroVisita }];
 
     try {
-        const resultado = await executeQuery(sql, params);
+        const resultado = normalizarFilas(await executeQuery(sql, params));
         return jsonSafe(resultado || []);
     } catch (error) {
         console.error("Error al obtener HC de Ingreso por visita:", error);
@@ -339,7 +340,7 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
     const params = [{ value: idHCIngreso }];
 
     try {
-        const resultado = await executeQuery(sql, params);
+        const resultado = normalizarFilas(await executeQuery(sql, params));
         return resultado.length > 0 ? resultado[0] : null;
     } catch (error) {
         console.error("Error al obtener HC de Ingreso por ID:", error);

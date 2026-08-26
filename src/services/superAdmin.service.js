@@ -1285,8 +1285,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
 						[{ value: idPersonal, type: 'Int' }],
 					);
 					sectores = (secRows || []).map((s) => ({
-						id: String(s.idSector || ''),
-						descripcion: String(s.descripcion || s.idSector || ''),
+						id: String(s.idSector || '').trim(),
+						descripcion: String(s.descripcion || s.idSector || '').trim(),
 					}));
 				} catch {
 					sectores = [];

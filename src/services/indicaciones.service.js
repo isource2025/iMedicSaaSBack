@@ -6,6 +6,7 @@ const {
     convertirHoraClarionAString,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { normalizarFilas } = require("../utils/codigoSector");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -340,7 +341,7 @@ WHERE ${whereParts.join('\n  AND ')}
 ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
   `;
 
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
 
     // Agrupar indicaciones padre con sus hijas
     const indicacionesPadre = [];
@@ -473,7 +474,7 @@ ORDER BY iim.Orden ASC;
         { value: convertirFechaAClarion(ymdDate) },
     ];
 
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
     
     console.log('🔍 BACKEND INSUMOS - Total registros:', rows.length);
     if (rows.length > 0) {
@@ -1067,7 +1068,7 @@ WHERE iim.NroIndicacion = @param0
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;
     const params = [{ value: nroIndicacion }];
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
     const indicacionPadre = rows[0] || null;
     
     if (!indicacionPadre) return null;

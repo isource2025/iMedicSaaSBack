@@ -2,6 +2,7 @@ const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
+const { normalizarFilas } = require("../utils/codigoSector");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -83,7 +84,7 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
     });
 
     try {
-        const resultado = await executeQuery(consulta, parametros);
+        const resultado = normalizarFilas(await executeQuery(consulta, parametros));
         console.log('🔵 [controlesFrecuentes.service] Resultado:', {
             resultadoType: typeof resultado,
             isArray: Array.isArray(resultado),
@@ -145,7 +146,7 @@ const obtenerControlPorId = async (valor) => {
   `;
     const parametros = [{ value: valor }];
     try {
-        const resultado = await executeQuery(consulta, parametros);
+        const resultado = normalizarFilas(await executeQuery(consulta, parametros));
         return Array.isArray(resultado) && resultado.length > 0 ? enrichControlWithIMC(resultado[0]) : null;
     } catch (error) {
         console.error("Error al obtener control frecuente por ID:", error);

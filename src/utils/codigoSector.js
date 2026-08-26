@@ -16,6 +16,8 @@ const CAMPOS_CODIGO = [
 	'valorSector',
 	'IdSector',
 	'idSector',
+	'Sector',
+	'sector',
 	'ValorHabitacionCama',
 	'valorHabitacionCama',
 	'ValorServicio',
