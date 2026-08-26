@@ -848,8 +848,9 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
 }
 
 /**
- * Contexto de reversión: misma cama, conflictos y textos para la UI.
- * No se reubica a otra cama: si la original no está disponible, se bloquea.
+ * Contexto de reversión: intenta la misma cama; si no existe o no está
+ * disponible, permite anular el egreso dejando al paciente sin ubicación
+ * para asignarla después en movimientos.
  */
 async function resolverContextoRevertirEgreso(numeroVisita) {
   const num = parseInt(numeroVisita, 10);
@@ -1007,9 +1008,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
   const bed = bedRows?.[0];
   if (!bed) {
     ctx.camaEstado = 'inexistente';
-    ctx.conflictos.push({
+    ctx.avisos.push({
       codigo: 'cama_inexistente',
-      mensaje: `No se encontró la ${etiquetaUbicacion || 'cama anterior'}. ${ctx.pacienteNombre} no puede volver a esa ubicación hasta que se regularice.`,
+      mensaje: `No se encontró la ${etiquetaUbicacion || 'cama anterior'} (p. ej. código viejo de Binaria). Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -1044,9 +1045,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
       ctx.ocupanteNombre = '';
     }
     const quienOcupa = ctx.ocupanteNombre ? ` Hoy está ${ctx.ocupanteNombre}.` : '';
-    ctx.conflictos.push({
+    ctx.avisos.push({
       codigo: 'cama_ocupada',
-      mensaje: `No se puede volver a la ${etiquetaUbicacion}: esa cama ya está ocupada.${quienOcupa} Hasta que quede libre, ${ctx.pacienteNombre} no puede regresar ahí.`,
+      mensaje: `La ${etiquetaUbicacion} ya está ocupada.${quienOcupa} Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -1056,9 +1057,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     const detalle = ctx.estadoCamaDescripcion && ctx.estadoCamaDescripcion !== estado
       ? ` (${ctx.estadoCamaDescripcion})`
       : '';
-    ctx.conflictos.push({
+    ctx.avisos.push({
       codigo: 'cama_no_disponible',
-      mensaje: `No se puede volver a la ${etiquetaUbicacion}: esa cama no está libre${detalle}. Hasta que se libere, ${ctx.pacienteNombre} no puede regresar ahí.`,
+      mensaje: `La ${etiquetaUbicacion} no está libre${detalle}. Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -1079,8 +1080,13 @@ function mensajeEstadoRevertir(ctx) {
   if (!ctx.puedeRevertir && ctx.conflictos.length) {
     return ctx.conflictos.map((c) => c.mensaje).join('\n\n');
   }
-  if (ctx.camaEstado === 'sin_cama') {
-    return `Se va a anular el egreso de ${quien}. Volverá a internación sin cama, como estaba.`;
+  if (
+    ctx.camaEstado === 'sin_cama' ||
+    ctx.camaEstado === 'inexistente' ||
+    ctx.camaEstado === 'ocupada' ||
+    ctx.camaEstado === 'no_disponible'
+  ) {
+    return `Se va a anular el egreso de ${quien}. Quedará en internación sin cama; después podés asignarle ubicación en movimientos.`;
   }
   return `Se va a anular el egreso de ${quien}. Volverá a internación en la ${donde}.`;
 }
@@ -1103,7 +1109,8 @@ async function consultarEstadoRevertirEgreso(numeroVisita) {
 
 /**
  * Revierte un egreso hospitalario (solo admin).
- * Solo restaura la misma cama. Si esa cama no está disponible, no se toca nada.
+ * Si la cama anterior está libre, la restaura; si no existe o no está
+ * disponible, deja al paciente en internación sin cama.
  */
 async function revertirEgresoVisita(numeroVisita, opciones = {}) {
   const ctx = await resolverContextoRevertirEgreso(numeroVisita);
@@ -1116,6 +1123,7 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
   const num = ctx.numeroVisita;
   const { cama, sector, ultimo, fechaIngresoMov } = ctx;
   const reubicarEnCama = ctx.camaEstado === 'libre' || ctx.camaEstado === 'propia';
+  const limpiarCama = !reubicarEnCama;
 
   const pool = await getRequestPool();
   const tx = new sql.Transaction(pool);
@@ -1160,7 +1168,8 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
       reqMov.input('nv', sql.Int, num);
       reqMov.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
       reqMov.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
-      reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : String(ultimo.EstadoCama || '').trim());
+      reqMov.input('limpiar', sql.Int, limpiarCama ? 1 : 0);
+      reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : '');
       const codOp = Number(opciones.codOperador);
       reqMov.input('op', sql.VarChar(20), Number.isFinite(codOp) && codOp > 0 ? String(codOp) : '');
       await reqMov.query(`
@@ -1169,7 +1178,10 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
           FechaEgreso = 0,
           HoraEgreso = 0,
           DisposicionEgreso = 0,
+          ValorHabitacionCama = CASE WHEN @limpiar = 1 THEN '' ELSE ValorHabitacionCama END,
+          ValorSector = CASE WHEN @limpiar = 1 THEN '' ELSE ValorSector END,
           EstadoCama = CASE
+            WHEN @limpiar = 1 THEN ''
             WHEN LTRIM(RTRIM(@estado)) = '' THEN EstadoCama
             ELSE @estado
           END,
@@ -1188,6 +1200,7 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
     const reqVis = new sql.Request(tx);
     reqVis.input('nv', sql.Int, num);
     reqVis.input('reubicar', sql.Int, reubicarEnCama ? 1 : 0);
+    reqVis.input('limpiar', sql.Int, limpiarCama ? 1 : 0);
     reqVis.input('cama', sql.VarChar(20), cama || '');
     reqVis.input('sec', sql.VarChar(20), sector || '');
     await reqVis.query(`
@@ -1198,22 +1211,30 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
         DisposicionEgreso = 0,
         DiagnosticoEgreso = '',
         OperadorEgreso = 0,
-        ValorHabitacionCama = CASE WHEN @reubicar = 1 THEN @cama ELSE ValorHabitacionCama END,
-        ValorSector = CASE WHEN @reubicar = 1 AND LTRIM(RTRIM(@sec)) <> '' THEN @sec ELSE ValorSector END
+        ValorHabitacionCama = CASE
+          WHEN @reubicar = 1 THEN @cama
+          WHEN @limpiar = 1 THEN ''
+          ELSE ValorHabitacionCama
+        END,
+        ValorSector = CASE
+          WHEN @reubicar = 1 AND LTRIM(RTRIM(@sec)) <> '' THEN @sec
+          WHEN @limpiar = 1 THEN ''
+          ELSE ValorSector
+        END
       WHERE NumeroVisita = @nv
     `);
 
     await tx.commit();
     const message = reubicarEnCama
       ? `Se anuló el egreso. ${ctx.pacienteNombre} volvió a la ${ctx.etiquetaUbicacion}.`
-      : `Se anuló el egreso. ${ctx.pacienteNombre} volvió a internación, sin cama, como estaba.`;
+      : `Se anuló el egreso. ${ctx.pacienteNombre} quedó en internación sin cama; asignale ubicación en movimientos.`;
     return {
       success: true,
       message,
       data: {
         numeroVisita: num,
         cama: reubicarEnCama ? cama : '',
-        sector: reubicarEnCama ? sector : ctx.sector,
+        sector: reubicarEnCama ? sector : '',
         sinCama: !reubicarEnCama,
       },
     };
