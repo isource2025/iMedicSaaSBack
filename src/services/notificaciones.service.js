@@ -28,13 +28,154 @@ function colAs(cols, key, alias, nullSql) {
   return `${sqlEscapeIdent(cols[key])} AS ${alias}`;
 }
 
+const TIPOS_PEDIDO = `('PEDIDO_ESTUDIO', 'INTERCONSULTA')`;
+
+function exprEsNotifPedido(cols, tableAlias = '') {
+  const p = tableAlias ? `${tableAlias}.` : '';
+  const parts = [];
+  if (cols.tipoNotificacion) {
+    parts.push(
+      `UPPER(LTRIM(RTRIM(ISNULL(${p}${sqlEscapeIdent(cols.tipoNotificacion)}, '')))) IN ${TIPOS_PEDIDO}`,
+    );
+  }
+  if (cols.entidadTipo) {
+    parts.push(
+      `UPPER(LTRIM(RTRIM(ISNULL(${p}${sqlEscapeIdent(cols.entidadTipo)}, '')))) IN ${TIPOS_PEDIDO}`,
+    );
+  }
+  return parts.length ? `(${parts.join(' OR ')})` : '0=1';
+}
+
+/** Pedido aún “libre”: existe, sin protocolo y sin toma. */
+function exprPedidoLibre(cols, tableAlias = '') {
+  if (!cols.entidadId) return '0=1';
+  const p = tableAlias ? `${tableAlias}.` : '';
+  const entId = `${p}${sqlEscapeIdent(cols.entidadId)}`;
+  return `EXISTS (
+    SELECT 1
+    FROM dbo.imPedidosEstudios pe
+    LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
+    WHERE pe.IdPedido = ${entId}
+      AND (pe.IdProtocolo IS NULL OR pe.IdProtocolo = 0)
+      AND toma.IdPedido IS NULL
+  )`;
+}
+
+async function ensureTomaTableSafe() {
+  try {
+    await executeQuery(`
+      IF OBJECT_ID(N'dbo.imPedidosEstudiosToma', N'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.imPedidosEstudiosToma (
+          IdPedido INT NOT NULL PRIMARY KEY,
+          Matricula INT NOT NULL,
+          CodOperador INT NULL,
+          FechaToma DATETIME NOT NULL CONSTRAINT DF_imPedidosEstudiosToma_Fecha_notif DEFAULT (GETDATE())
+        );
+      END
+    `);
+  } catch (e) {
+    console.warn('[notificaciones] ensureTomaTable:', e.message);
+  }
+}
+
+/**
+ * Borra avisos de un pedido (cualquier destinatario) por EntidadTipo/EntidadId.
+ */
+async function eliminarPorEntidadPedido(idPedido) {
+  const id = Number(idPedido);
+  if (!Number.isFinite(id) || id <= 0) return { success: false, deleted: 0 };
+  try {
+    const cols = await getCols();
+    if (!cols.usable || !cols.entidadId) return { success: false, deleted: 0 };
+
+    const entId = sqlEscapeIdent(cols.entidadId);
+    const esPedido = exprEsNotifPedido(cols);
+    const result = await executeQuery(
+      `
+      DELETE FROM dbo.imNotificaciones
+      WHERE ${entId} = @param0
+        AND ${esPedido}
+      `,
+      [{ value: id, type: 'Int' }],
+    );
+    const deleted = Number(result?.rowsAffected?.[0] ?? result?.length ?? 0) || 0;
+    return { success: true, deleted };
+  } catch (e) {
+    console.warn('[notificaciones] eliminarPorEntidadPedido:', e.message);
+    return { success: false, deleted: 0 };
+  }
+}
+
+/**
+ * Elimina avisos de pedido ya inexistentes, tomados o cumplidos.
+ * Si valorPersonal viene, solo de ese usuario (p. ej. al abrir la campanita).
+ */
+async function limpiarNotificacionesPedidosObsoletas(valorPersonal = null) {
+  try {
+    const cols = await getCols();
+    if (!cols.usable || !cols.entidadId) return { success: false, deleted: 0 };
+    await ensureTomaTableSafe();
+
+    const esPedido = exprEsNotifPedido(cols);
+    const libre = exprPedidoLibre(cols);
+    const vpFilter =
+      valorPersonal != null && cols.valorPersonal
+        ? `AND ${sqlEscapeIdent(cols.valorPersonal)} = @param0`
+        : '';
+    const params =
+      valorPersonal != null && cols.valorPersonal
+        ? [{ value: Number(valorPersonal), type: 'Int' }]
+        : [];
+
+    await executeQuery(
+      `
+      DELETE FROM dbo.imNotificaciones
+      WHERE ${esPedido}
+        ${vpFilter}
+        AND (
+          ${sqlEscapeIdent(cols.entidadId)} IS NULL
+          OR ${sqlEscapeIdent(cols.entidadId)} <= 0
+          OR NOT (${libre})
+        )
+      `,
+      params,
+    );
+    return { success: true };
+  } catch (e) {
+    console.warn('[notificaciones] limpiarNotificacionesPedidosObsoletas:', e.message);
+    return { success: false };
+  }
+}
+
+/**
+ * Condición de listado/conteo: pedidos solo si no leídos y aún libres;
+ * el resto de tipos se listan con la regla habitual de leída.
+ */
+function whereListadoVisible(cols, { soloNoLeidas }) {
+  const vp = sqlEscapeIdent(cols.valorPersonal);
+  const leida = sqlEscapeIdent(cols.leida);
+  const esPedido = exprEsNotifPedido(cols);
+  const libre = exprPedidoLibre(cols);
+  const noLeida = `ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0`;
+
+  const pedidoOk = `(${esPedido} AND ${noLeida} AND ${libre})`;
+  const otras = `(NOT ${esPedido}${soloNoLeidas ? ` AND ${noLeida}` : ''})`;
+
+  return `WHERE ${vp} = @param0 AND (${pedidoOk} OR ${otras})`;
+}
+
 /**
  * Lista notificaciones del usuario (paginado).
+ * Avisos de pedido: solo no leídos y con pedido libre (el totalizador cubre el resto).
  */
 async function listarPorUsuario(valorPersonal, page = 1, limit = 20, soloNoLeidas = false) {
   try {
     const cols = await getCols();
     if (!cols.usable) return emptyList(page, limit);
+
+    await ensureTomaTableSafe();
+    await limpiarNotificacionesPedidosObsoletas(valorPersonal);
 
     const vp = sqlEscapeIdent(cols.valorPersonal);
     const leida = sqlEscapeIdent(cols.leida);
@@ -44,10 +185,7 @@ async function listarPorUsuario(valorPersonal, page = 1, limit = 20, soloNoLeida
         ? `${sqlEscapeIdent(cols.id)} DESC`
         : '(SELECT 1)';
 
-    const where = soloNoLeidas
-      ? `WHERE ${vp} = @param0 AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0`
-      : `WHERE ${vp} = @param0`;
-
+    const where = whereListadoVisible(cols, { soloNoLeidas });
     const params = [{ value: valorPersonal, type: 'Int' }];
     let total = 0;
     try {
@@ -174,14 +312,44 @@ async function marcarTodasLeidas(valorPersonal) {
   }
 }
 
+/**
+ * Marca leídos solo avisos de pedido/interconsulta (p. ej. al cerrar la campanita).
+ * Dejan de listarse; el totalizador de bandeja sigue reflejando libres.
+ */
+async function marcarPedidosLeidas(valorPersonal) {
+  try {
+    const cols = await getCols();
+    if (!cols.usable) return { success: false };
+
+    const vp = sqlEscapeIdent(cols.valorPersonal);
+    const leida = sqlEscapeIdent(cols.leida);
+    const esPedido = exprEsNotifPedido(cols);
+
+    await executeQuery(
+      `
+      UPDATE dbo.imNotificaciones
+      SET ${leida} = 1
+      WHERE ${vp} = @param0
+        AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0
+        AND ${esPedido}
+      `,
+      [{ value: valorPersonal, type: 'Int' }],
+    );
+    return { success: true };
+  } catch (e) {
+    console.warn('[notificaciones] marcarPedidosLeidas:', e.message);
+    return { success: false };
+  }
+}
+
 async function contarNoLeidas(valorPersonal) {
   try {
     const cols = await getCols();
     if (!cols.usable) return 0;
 
-    const vp = sqlEscapeIdent(cols.valorPersonal);
-    const leida = sqlEscapeIdent(cols.leida);
+    await ensureTomaTableSafe();
     const params = [{ value: valorPersonal, type: 'Int' }];
+    const where = whereListadoVisible(cols, { soloNoLeidas: true });
 
     let rows;
     try {
@@ -189,11 +357,13 @@ async function contarNoLeidas(valorPersonal) {
         `
         SELECT COUNT(*) AS c
         FROM dbo.imNotificaciones
-        WHERE ${vp} = @param0 AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0
+        ${where}
         `,
         params,
       );
     } catch {
+      const vp = sqlEscapeIdent(cols.valorPersonal);
+      const leida = sqlEscapeIdent(cols.leida);
       rows = await executeQuery(
         `
         SELECT COUNT(*) AS c
@@ -341,6 +511,9 @@ module.exports = {
   listarPorUsuario,
   marcarLeida,
   marcarTodasLeidas,
+  marcarPedidosLeidas,
   contarNoLeidas,
   crear,
+  eliminarPorEntidadPedido,
+  limpiarNotificacionesPedidosObsoletas,
 };

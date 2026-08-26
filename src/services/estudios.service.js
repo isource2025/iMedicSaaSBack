@@ -988,6 +988,12 @@ async function eliminarPedido({ idPedido, matricula, valorPersonal, codOperador 
 		   AND (IdProtocolo IS NULL OR IdProtocolo = 0)`,
 		[{ value: id, type: 'Int' }],
 	);
+	try {
+		const notificacionesService = require('./notificaciones.service');
+		await notificacionesService.eliminarPorEntidadPedido(id);
+	} catch (err) {
+		console.warn('[estudios] cleanup notif pedido:', err.message || err);
+	}
 	return { idPedido: id };
 }
 
@@ -1137,6 +1143,12 @@ async function tomarPedido({ idPedido, matricula, codOperador }) {
 			);
 		}
 		throw err;
+	}
+	try {
+		const notificacionesService = require('./notificaciones.service');
+		await notificacionesService.eliminarPorEntidadPedido(id);
+	} catch (err) {
+		console.warn('[estudios] cleanup notif toma:', err.message || err);
 	}
 	return obtenerPorId(id);
 }
@@ -1329,6 +1341,12 @@ async function cumplirPedido({
 		}
 
 		await tx.commit();
+		try {
+			const notificacionesService = require('./notificaciones.service');
+			await notificacionesService.eliminarPorEntidadPedido(id);
+		} catch (err) {
+			console.warn('[estudios] cleanup notif cumplir:', err.message || err);
+		}
 		return obtenerPorId(id);
 	} catch (err) {
 		try {

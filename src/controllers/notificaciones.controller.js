@@ -69,6 +69,24 @@ router.put('/mark-all-read', async (req, res) => {
 });
 
 /**
+ * PUT /api/notificaciones/mark-pedidos-read
+ * Descarta avisos individuales de pedido/interconsulta (al cerrar la campanita).
+ */
+router.put('/mark-pedidos-read', async (req, res) => {
+  try {
+    const vp = valorPersonalReq(req);
+    if (!vp) {
+      return res.status(400).json({ success: false, error: 'userId o valorPersonal requerido' });
+    }
+    await notificacionesService.marcarPedidosLeidas(vp);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[notificaciones] mark-pedidos', e);
+    res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error' });
+  }
+});
+
+/**
  * PUT /api/notificaciones/:id/read  (query o body: userId)
  */
 router.put('/:id/read', async (req, res) => {

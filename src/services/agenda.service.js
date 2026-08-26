@@ -2198,15 +2198,18 @@ async function cerrarTurno({
 	} catch (err) {
 		// Rollback best-effort en orden inverso
 		try {
+			const notificacionesService = require('./notificaciones.service');
 			for (const idPed of creados.pedidosInterconsultas.slice().reverse()) {
 				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
 					{ value: idPed, type: 'Int' },
 				]);
+				await notificacionesService.eliminarPorEntidadPedido(idPed).catch(() => {});
 			}
 			for (const idPed of creados.pedidosEstudios.slice().reverse()) {
 				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
 					{ value: idPed, type: 'Int' },
 				]);
+				await notificacionesService.eliminarPorEntidadPedido(idPed).catch(() => {});
 			}
 			for (let i = creados.profesionalesExtra.length - 1; i >= 0; i--) {
 				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
