@@ -435,7 +435,8 @@ const aplicarIndicacion = async (req, res) => {
         })
     } catch (error) {
         console.log(error.message);
-        res.status(500).json({
+        const status = error.statusCode || 500;
+        res.status(status).json({
             success: false,
             mensaje: error.message
         })

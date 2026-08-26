@@ -17,6 +17,16 @@ const toNumberOrNull = (v) =>
 
 const toBitOrNull = (v) => (v == null ? null : v ? 1 : 0);
 
+/** Estado Clarion: recorta espacios (CHAR/VARCHAR). */
+const normalizarEstadoIndicacion = (estado) =>
+	String(estado ?? '').trim().toUpperCase();
+
+const esEstadoSinEfecto = (estado) => normalizarEstadoIndicacion(estado) === 'S';
+
+/** SQL: no listar indicaciones dejadas sin efecto (incluye 'S ' / CHAR). */
+const SQL_EXCLUIR_SIN_EFECTO =
+	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'";
+
 /**
  * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
  * Sistema viejo: "Más", "Alterno", "Paralero" (con espacios y variantes de capitalización)
@@ -245,7 +255,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
     // Tabla de cama: no listar indicaciones suspendidas (Estado = 'S')
     if (excluirSuspendidas) {
-        whereParts.push("(iim.Estado IS NULL OR iim.Estado <> 'S')");
+        whereParts.push(SQL_EXCLUIR_SIN_EFECTO);
     }
 
     const sql = `
@@ -337,9 +347,14 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
     const indicacionesHijas = new Map();
     
     rows.forEach((r) => {
+        if (esEstadoSinEfecto(r.Estado)) {
+            return;
+        }
+
         const nroAdicional = r.NroAdicional || 0;
         
         if (nroAdicional === 0) {
+            const estadoNorm = normalizarEstadoIndicacion(r.Estado);
             indicacionesPadre.push({
                 id: String(r.NroIndicacion),
                 nroIndicacion: r.NroIndicacion,
@@ -368,13 +383,13 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 medicamento: r.AliasMedicamento,
                 ultimaAplicacion: r.UltimaAplicacion,
                 proximaAplicacion: r.ProximaAplicacion,
-                estado: r.Estado,
-                suspendida: r.Estado === 'S',
+                estado: estadoNorm || r.Estado,
+                suspendida: estadoNorm === 'S',
                 unicaVez: r.Frecuencia && (
                     r.Frecuencia.toUpperCase().includes('UNICA VEZ') || 
                     r.Frecuencia.toUpperCase().includes('ÚNICA VEZ') ||
                     r.Frecuencia.toUpperCase().includes('POR UNICA') ||
-                    r.Estado === 'U'
+                    estadoNorm === 'U'
                 ),
                 nuevaEnfermeria: Number(r.NuevaEnfermeria) === 1,
                 indicacionesHijas: []
@@ -1292,7 +1307,7 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
 		e.statusCode = 404;
 		throw e;
 	}
-	if (String(rows[0].Estado || '').trim().toUpperCase() === 'S') {
+	if (esEstadoSinEfecto(rows[0].Estado)) {
 		const e = new Error('La indicación ya está sin efecto');
 		e.statusCode = 400;
 		throw e;
@@ -1311,14 +1326,26 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
     UPDATE dbo.imInterIndMedicas
     SET Estado = 'S',
         FechaExpiro = @p1,
-        HoraExpiro = @p2,
-        Observaciones = @p3
+        HoraExpiro = @p2
     WHERE NroIndicacion = @p0
+       OR NroAdicional = @p0
     `,
 		[
 			{ value: Number(nroIndicacion) },
 			{ value: convertirFechaAClarion(fechaIso) },
 			{ value: convertirHoraAClarion(horaIso + ':00') },
+		],
+	);
+
+	await executeQuery(
+		`
+    UPDATE dbo.imInterIndMedicas
+    SET Observaciones = @p1
+    WHERE NroIndicacion = @p0
+      AND ISNULL(NroAdicional, 0) = 0
+    `,
+		[
+			{ value: Number(nroIndicacion) },
 			{ value: observaciones },
 		],
 	);
@@ -1335,9 +1362,15 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             throw new Error('Indicación no encontrada');
         }
 
+        if (esEstadoSinEfecto(indicacionActual.Estado)) {
+            const e = new Error('No se puede aplicar una indicación dejada sin efecto');
+            e.statusCode = 400;
+            throw e;
+        }
+
         // ✅ NUEVO: Detectar si es única vez por frecuencia
         const frecuenciaUpper = indicacionActual.Frecuencia ? indicacionActual.Frecuencia.toUpperCase().trim() : '';
-        const esUnicaVez = indicacionActual.Estado === 'U' || 
+        const esUnicaVez = normalizarEstadoIndicacion(indicacionActual.Estado) === 'U' || 
                           frecuenciaUpper.includes('UNICA VEZ') || 
                           frecuenciaUpper.includes('ÚNICA VEZ') ||
                           frecuenciaUpper.includes('POR UNICA');

@@ -90,7 +90,7 @@ const OUTER_APPLY_COUNT = `
         AND ISNULL(hc.NumeroVisita, 0) <> 0
         AND ISNULL(iim.NroAdicional, 0) = 0
         AND iim.TipoIndicacion <> 9
-        AND (iim.Estado IS NULL OR iim.Estado <> 'S')
+        AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
         AND NOT EXISTS (
           SELECT 1
           FROM dbo.imIndicacionesVistoEnfermeria v
@@ -115,7 +115,7 @@ async function marcarVistoPorVisita(numeroVisita, operadorVista) {
 	WHERE iim.NumeroVisita = @param0
 	  AND ISNULL(iim.NroAdicional, 0) = 0
 	  AND iim.TipoIndicacion <> 9
-	  AND (iim.Estado IS NULL OR iim.Estado <> 'S')
+	  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
 	  AND NOT EXISTS (
 	    SELECT 1
 	    FROM dbo.imIndicacionesVistoEnfermeria v
@@ -144,7 +144,7 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 			WHERE iim.NumeroVisita = @param0
 			  AND ISNULL(iim.NroAdicional, 0) = 0
 			  AND iim.TipoIndicacion <> 9
-			  AND (iim.Estado IS NULL OR iim.Estado <> 'S')
+			  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM dbo.imIndicacionesVistoEnfermeria visto
@@ -182,7 +182,7 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 		WHERE iim.NumeroVisita = @param0
 		  AND ISNULL(iim.NroAdicional, 0) = 0
 		  AND iim.TipoIndicacion <> 9
-		  AND (iim.Estado IS NULL OR iim.Estado <> 'S')
+		  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM dbo.imIndicacionesVistoEnfermeria visto
