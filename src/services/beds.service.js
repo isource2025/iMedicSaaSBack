@@ -71,7 +71,7 @@ const obtenerCamas = async (idSector) => {
     ORDER BY
       hc.ValorHabitacionCama ASC`;
 	const t0 = Date.now();
-	const rows = await executeQuery(sqlList, params);
+	const rows = normalizarFilas(await executeQuery(sqlList, params));
 	console.log(
 		`[beds] list sector=${sector || 'ALL'} n=${(rows || []).length} ms=${Date.now() - t0}`,
 	);
@@ -291,7 +291,7 @@ const actualizarEstadoCama = async (id, estado) => {
 	];
 
 	try {
-		const resultado = await executeQuery(consulta, parametros);
+		const resultado = normalizarFilas(await executeQuery(consulta, parametros));
 		return resultado.length > 0 ? resultado[0] : null;
 	} catch (error) {
 		console.error('Error al actualizar estado de cama:', error);
