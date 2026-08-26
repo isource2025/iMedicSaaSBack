@@ -7,6 +7,12 @@
   Primera vez / URL nueva:
     powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1
 
+  Vidal (E:\imagenes\vidal, empresa 1, graba FileServerUrl en Super Admin):
+    powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1 -Root E:\imagenes\vidal -EmpresaId 1 -EmpresaMatch vidal
+
+  O desde el repo:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tunnel\vidal-pc\Start-QuickTunnel.ps1
+
   Solo reiniciar file server (tunel Cloudflare NO cambia):
     powershell -NoProfile -ExecutionPolicy Bypass -File C:\imedic\Start-QuickTunnel.ps1 -KeepTunnel
 
@@ -16,6 +22,7 @@ param(
 	[int] $Port = 9012,
 	[string] $Root = 'C:\imedic\adjuntos',
 	[int] $EmpresaId = 101,
+	[string] $EmpresaMatch = 'sarmiento',
 	[string] $Api = 'https://imedicsaasback-production.up.railway.app/api',
 	[string] $SaUser = 'superadmin',
 	[string] $SaPass = 'SuperAdmin2026!',
@@ -189,6 +196,7 @@ function Find-Cloudflared {
 }
 
 function Write-FileServerRuntime {
+	$legacyAdjuntos = if ($Root -match '(?i)adjuntos') { 'E:\adjuntos' } else { '' }
 	$content = @'
 param(
   [Parameter(Mandatory=$true)][int]$Port,
@@ -196,6 +204,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $RootDir = $Root
+$LegacyAdjuntosPrefix = '__LEGACY_ADJUNTOS_PREFIX__'
 $fsLog = Join-Path $env:ProgramData 'iMedic\adjuntos-tunnel\file-server.log'
 function FsLog([string]$m) {
   try { Add-Content -LiteralPath $fsLog -Value "$(Get-Date -Format o) $m" -ErrorAction SilentlyContinue } catch {}
@@ -224,9 +233,8 @@ function Normalize-Path([string]$p) {
   $x = Repair-Utf8Mojibake ([Uri]::UnescapeDataString($p))
   if ($x.StartsWith("D:\", [StringComparison]::OrdinalIgnoreCase)) { $x = "E:\" + $x.Substring(3) }
   if ($x.StartsWith("F:\", [StringComparison]::OrdinalIgnoreCase)) { $x = "E:\" + $x.Substring(3) }
-  $eAdj = 'E:\adjuntos'
-  if ($x.StartsWith($eAdj, [StringComparison]::OrdinalIgnoreCase)) {
-    $rel = $x.Substring($eAdj.Length).TrimStart('\')
+  if ($LegacyAdjuntosPrefix -and $x.StartsWith($LegacyAdjuntosPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    $rel = $x.Substring($LegacyAdjuntosPrefix.Length).TrimStart('\')
     $x = if ($rel) { Join-Path $RootDir $rel } else { $RootDir }
   }
   return (Normalize-UnicodeText $x)
@@ -501,6 +509,7 @@ try {
   if ($listener) { $listener.Close() }
 }
 '@
+	$content = $content.Replace('__LEGACY_ADJUNTOS_PREFIX__', $legacyAdjuntos.Replace('\', '\\'))
 	$utf8 = New-Object System.Text.UTF8Encoding $false
 	[System.IO.File]::WriteAllText($runtime, $content, $utf8)
 }
@@ -553,9 +562,10 @@ function Save-FileServerUrlRest([string]$publicUrl) {
 			if ([int]$id -eq $EmpresaId) { $pick = $e; break }
 		}
 		if (-not $pick) {
+			$match = [regex]::Escape($EmpresaMatch)
 			foreach ($e in @($first.empresas)) {
 				$n = [string]($e.descripcion + ' ' + $e.nombre)
-				if ($n -match 'sarmiento') { $pick = $e; break }
+				if ($n -match $match) { $pick = $e; break }
 			}
 		}
 		if (-not $pick) { $pick = @($first.empresas)[0] }
