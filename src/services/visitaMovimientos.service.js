@@ -1008,10 +1008,6 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
   const bed = bedRows?.[0];
   if (!bed) {
     ctx.camaEstado = 'inexistente';
-    ctx.avisos.push({
-      codigo: 'cama_inexistente',
-      mensaje: `No se encontró la ${etiquetaUbicacion || 'cama anterior'} (p. ej. código viejo de Binaria). Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
-    });
     return finalizarContextoRevertir(ctx);
   }
 
