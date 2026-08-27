@@ -816,7 +816,7 @@ const actualizarUsuario = async (valorPersonal, userData) => {
  * Crea registro en imPassword vinculado al Valor de imPersonal (mismo ValorPersonal).
  * Usado al dar de alta personal con usuario de acceso.
  */
-async function crearImPasswordParaPersonal(valorPersonal, data) {
+async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
   if (valorPersonal == null || !Number.isFinite(Number(valorPersonal))) {
     const e = new Error('ValorPersonal inválido para crear usuario');
     e.statusCode = 400;
@@ -908,7 +908,9 @@ async function crearImPasswordParaPersonal(valorPersonal, data) {
     throw err;
   }
 
-  await afterUserMutation(vp);
+  if (!options.skipAuthSync) {
+    await afterUserMutation(vp);
+  }
   return obtenerUsuarioPorId(vp);
 }
 

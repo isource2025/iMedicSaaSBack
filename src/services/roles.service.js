@@ -74,9 +74,11 @@ async function _leerDatosPersonalFisico(vp) {
 /**
  * Garantiza ficha en Railway MySQL (como el wizard Super Admin) leyendo datos del SQL físico.
  */
-async function _asegurarFichaPersonalEnRailway(idEmpresa, vp, { idRol } = {}) {
-	await authCentralSync.syncPersonal(idEmpresa, vp);
-	await authCentralSync.syncPersonalEmpresa(idEmpresa, vp);
+async function _asegurarFichaPersonalEnRailway(idEmpresa, vp, { idRol, skipSync = false } = {}) {
+	if (!skipSync) {
+		await authCentralSync.syncPersonal(idEmpresa, vp);
+		await authCentralSync.syncPersonalEmpresa(idEmpresa, vp);
+	}
 
 	const datos = await _leerDatosPersonalFisico(vp);
 	if (!datos) {
@@ -209,10 +211,10 @@ async function obtenerRolPorId(idRol) {
  * Asigna (o limpia) un único rol de un personal (compatibilidad).
  * Equivale a asignarRolesAPersonal con un solo id.
  */
-async function asignarRolAPersonal(valorPersonal, idRol) {
+async function asignarRolAPersonal(valorPersonal, idRol, options = {}) {
 	const ids =
 		idRol == null || idRol === '' || idRol === 0 ? [] : [Number(idRol)];
-	const result = await asignarRolesAPersonal(valorPersonal, ids, ids[0] ?? null);
+	const result = await asignarRolesAPersonal(valorPersonal, ids, ids[0] ?? null, options);
 	return result.principal;
 }
 
@@ -223,7 +225,7 @@ async function asignarRolAPersonal(valorPersonal, idRol) {
  * @param {number|null} [idRolPrincipal]
  * @returns {{ roles: object[], principal: object|null }}
  */
-async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal) {
+async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal, options = {}) {
 	if (!Number.isFinite(Number(valorPersonal))) {
 		const e = new Error('valorPersonal inválido');
 		e.statusCode = 400;
@@ -262,6 +264,7 @@ async function asignarRolesAPersonal(valorPersonal, idRoles, idRolPrincipal) {
 	if (enRailway) {
 		await _asegurarFichaPersonalEnRailway(idEmpresa, vp, {
 			idRol: principalId ?? undefined,
+			skipSync: !!options.deferAuthSync,
 		});
 		const mapped = await authCentralService.asignarRolesDeValorPersonal(
 			idEmpresa,

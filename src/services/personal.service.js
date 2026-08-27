@@ -232,6 +232,8 @@ async function listar(page = 1, limit = 30, search = '') {
 			`(p.ApellidoNombre LIKE @search
 			  OR CAST(p.Numero AS VARCHAR(20)) LIKE @search
 			  OR CAST(p.Valor AS VARCHAR(20)) LIKE @search
+			  OR CAST(p.Matricula AS VARCHAR(20)) LIKE @search
+			  OR CAST(p.MatriculaNacional AS VARCHAR(20)) LIKE @search
 			  OR EXISTS (
 			    SELECT 1 FROM dbo.imPassword pw
 			    WHERE pw.ValorPersonal = p.Valor AND pw.NombreRed LIKE @search
@@ -647,8 +649,9 @@ async function crear(data) {
 	let lastErr = null;
 	for (let intento = 0; intento < 5; intento++) {
 		const nuevoValor = await obtenerProximoValor();
-		const matriculaFinal =
-			input.MatriculaProvincial != null ? input.MatriculaProvincial : nuevoValor;
+		const matriculaFinal = input.MatriculaProvincial;
+		const codOperadorAlta =
+			matriculaFinal != null ? String(matriculaFinal) : String(nuevoValor);
 		try {
 			await insertarFichaFisica(nuevoValor, input, matriculaFinal);
 		} catch (err) {
@@ -668,6 +671,9 @@ async function crear(data) {
 		}
 
 		try {
+			const tenantIdPre = resolveTenantEmpresaId();
+			const deferAuthSync = crearUsuario && tenantIdPre != null;
+
 			if (crearUsuario) {
 				const idParam = [{ value: nuevoValor, type: 'Int' }];
 				await executeQuery(`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`, idParam).catch(
@@ -682,36 +688,34 @@ async function crear(data) {
 					idParam,
 				).catch(() => {});
 
-				const tenantIdPre = resolveTenantEmpresaId();
 				if (tenantIdPre != null) {
-					await authCentralSync.purgePersonalAuth(nuevoValor, tenantIdPre);
-					await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor);
+					await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor, {
+						skipSync: true,
+					});
 				}
 
-				await usersService.crearImPasswordParaPersonal(nuevoValor, {
-					NombreRed: nombreRedUsuario,
-					Password: passwordUsuario,
-					ApellidoNombre: input.ApellidoNombre,
-					NumeroDocumento: input.Numero != null ? String(input.Numero) : '',
-					Legajo: String(matriculaFinal),
-					CodOperador: String(matriculaFinal),
-				});
-
-				if (tenantIdPre != null) {
-					await authCentralSync.syncPersonal(tenantIdPre, nuevoValor);
-					await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
-				}
-			} else {
-				const tenantId = resolveTenantEmpresaId();
-				if (tenantId != null) {
-					await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
-					await authCentralSync.syncPersonal(tenantId, nuevoValor);
-				}
+				await usersService.crearImPasswordParaPersonal(
+					nuevoValor,
+					{
+						NombreRed: nombreRedUsuario,
+						Password: passwordUsuario,
+						ApellidoNombre: input.ApellidoNombre,
+						NumeroDocumento: input.Numero != null ? String(input.Numero) : '',
+						Legajo: codOperadorAlta,
+						CodOperador: codOperadorAlta,
+					},
+					{ skipAuthSync: deferAuthSync },
+				);
+			} else if (tenantIdPre != null) {
+				await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor);
+				await authCentralSync.syncPersonal(tenantIdPre, nuevoValor);
 			}
 
 			try {
 				const rolesService = require('./roles.service');
-				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta);
+				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta, {
+					deferAuthSync,
+				});
 			} catch (roleErr) {
 				await rollbackOPropagar(nuevoValor, roleErr);
 			}
@@ -725,9 +729,18 @@ async function crear(data) {
 				try {
 					await reemplazarAsignacionesPersonal(nuevoValor, {
 						sectores: sectoresAlta,
+						skipCloudSync: deferAuthSync,
 					});
 				} catch (asigErr) {
 					console.warn('[personal.crear] asignaciones:', asigErr?.message || asigErr);
+				}
+			}
+
+			if (deferAuthSync) {
+				try {
+					await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
+				} catch (syncErr) {
+					console.warn('[personal.crear] syncUserLoginBundle:', syncErr?.message || syncErr);
 				}
 			}
 
@@ -787,10 +800,7 @@ async function actualizar(valor, data) {
 
 	await ensureMatriculaEspecialidadUnique();
 
-	// Si no mandaron matrícula provincial, caemos al Valor para mantener la
-	// unicidad del índice (no admite múltiples NULL).
-	const matriculaFinal =
-		input.MatriculaProvincial != null ? input.MatriculaProvincial : valor;
+	const matriculaFinal = input.MatriculaProvincial;
 
 	await executeQuery(
 		`
@@ -1330,7 +1340,7 @@ async function quitarServicioPedidosPersonal(valor, idServicio) {
 	return personalServicios.quitar(valor, idServicio);
 }
 
-async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
+async function reemplazarAsignacionesPersonal(valor, { sectores, servicios, skipCloudSync = false }) {
 	const vp = Number(valor);
 	if (Array.isArray(sectores)) {
 		await ensurePersonalSectoresTable();
@@ -1351,7 +1361,7 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 			);
 		}
 		const tenantId = resolveTenantEmpresaId();
-		if (tenantId != null) {
+		if (tenantId != null && !skipCloudSync) {
 			try {
 				await authCentralSync.syncPersonalSectores(tenantId, vp);
 			} catch (err) {
@@ -1363,7 +1373,7 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 	if (Array.isArray(servicios)) {
 		srvList = await personalServicios.reemplazar(vp, servicios);
 		const tenantId = resolveTenantEmpresaId();
-		if (tenantId != null) {
+		if (tenantId != null && !skipCloudSync) {
 			try {
 				await authCentralSync.syncPersonalServicios(tenantId, vp);
 			} catch (err) {
