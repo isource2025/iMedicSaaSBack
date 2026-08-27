@@ -253,8 +253,7 @@ async function _contextoTurnos(filtros) {
 				CAST(${fechaTurno} AS DATETIME)
 			) AS InstanteTurno,
 			${_intervalo('u.HoraAsignada', 'u.Horallegada')} AS MinPuntualidad,
-			${_intervalo('u.Horallegada', 'u.HoraIngreso')} AS MinEspera,
-			${_intervalo('u.HoraAsignada', 'u.HoraIngreso')} AS MinRetraso,
+			${_intervalo('u.HoraAsignada', 'u.HoraIngreso')} AS MinEspera,
 			${_intervalo('u.HoraIngreso', 'u.HoraSalida')} AS MinConsulta
 		FROM TurnosUnion u
 	),
@@ -286,8 +285,6 @@ function _agregadosTiempo(prefijo = '') {
 		MAX(${p}MinEspera) AS EsperaMax,
 		COUNT(${p}MinPuntualidad) AS PuntualidadMuestras,
 		AVG(${p}MinPuntualidad) AS PuntualidadProm,
-		COUNT(${p}MinRetraso) AS RetrasoMuestras,
-		AVG(${p}MinRetraso) AS RetrasoProm,
 		COUNT(${p}MinConsulta) AS ConsultaMuestras,
 		AVG(${p}MinConsulta) AS ConsultaProm`;
 }
@@ -335,8 +332,7 @@ async function _consultarPercentiles(cte, params) {
 				${pct('MinEspera', 0.5)} AS EsperaP50,
 				${pct('MinEspera', 0.9)} AS EsperaP90,
 				${pct('MinPuntualidad', 0.5)} AS PuntualidadP50,
-				${pct('MinRetraso', 0.5)} AS RetrasoP50,
-				${pct('MinRetraso', 0.9)} AS RetrasoP90,
+				${pct('MinPuntualidad', 0.9)} AS PuntualidadP90,
 				${pct('MinConsulta', 0.5)} AS ConsultaP50
 			FROM TurnosEstado`,
 			params,
@@ -500,7 +496,7 @@ function _mapResumen(row, pct, graciaMin) {
 	const base = Math.max(0, programados - cancelados);
 
 	const atendidosCobertura = _num(row.AtendidosParaCobertura);
-	const conAmbos = _num(row.AtendidosConAmbos);
+	const conIngreso = _num(row.AtendidosConIngreso);
 
 	return {
 		graciaMin,
@@ -528,12 +524,7 @@ function _mapResumen(row, pct, graciaMin) {
 				muestras: _num(row.PuntualidadMuestras),
 				promedio: _dec(row.PuntualidadProm),
 				p50: _dec(pct.PuntualidadP50),
-			},
-			retraso: {
-				muestras: _num(row.RetrasoMuestras),
-				promedio: _dec(row.RetrasoProm),
-				p50: _dec(pct.RetrasoP50),
-				p90: _dec(pct.RetrasoP90),
+				p90: _dec(pct.PuntualidadP90),
 			},
 			consulta: {
 				muestras: _num(row.ConsultaMuestras),
@@ -545,8 +536,8 @@ function _mapResumen(row, pct, graciaMin) {
 			atendidos: atendidosCobertura,
 			conLlegada: _num(row.AtendidosConLlegada),
 			conIngreso: _num(row.AtendidosConIngreso),
-			conAmbos,
-			coberturaPct: _porcentaje(conAmbos, atendidosCobertura),
+			conAmbos: _num(row.AtendidosConAmbos),
+			coberturaPct: _porcentaje(conIngreso, atendidosCobertura),
 		},
 	};
 }
