@@ -9,7 +9,7 @@ router.use(requireTenant);
 router.get('/', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerCamas);
 router.get('/estados', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerEstadosCama);
 router.get('/sectores', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerSectores);
-router.get('/total', requirePermiso('INTERNACION.OCUPACION.VER'), bedsController.obtenerTotalCamas);
+router.get('/total', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerTotalCamas);
 router.get('/filtrar/:estado', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.filtrarCamasPorEstado);
 router.get(
 	'/controles-frecuentes/:numeroVisita',
