@@ -7,7 +7,7 @@
  * Toda consulta ambulatoria entra por uno de dos caminos, y las métricas de
  * volumen los discriminan siempre:
  *   • AGENDA     → la visita tiene un turno asociado (imTurnos.NumeroVisita).
- *   • ESPONTANEO → visita ambulatoria sin turno (demanda no programada).
+ *   • A_DEMANDA  → visita ambulatoria sin turno (demanda no programada).
  *
  * Inasistencia
  * ------------
@@ -447,35 +447,170 @@ async function _consultarHeatmap(cte, params) {
 	);
 }
 
+/** Turnos con visita asociada (un solo LEFT JOIN reutilizable). */
+const SQL_TURNOS_CON_VISITA = `
+	SELECT DISTINCT NumeroVisita
+	FROM dbo.imTurnos
+	WHERE ISNULL(NumeroVisita, 0) > 0`;
+
+/**
+ * WHERE + parámetros compartidos por todas las consultas sobre imVisita.
+ * Respeta sector, profesional y especialidad cuando vienen en los filtros.
+ */
+function _paramsVisitasBase(filtros) {
+	const params = [{ value: filtros.fechaInicio }, { value: filtros.fechaFin }];
+	const condiciones = [
+		`UPPER(LTRIM(RTRIM(ISNULL(v.ClasePaciente, '')))) = 'A'`,
+		`v.FechaAdmisionS >= @p0`,
+		`v.FechaAdmisionS < DATEADD(DAY, 1, @p1)`,
+	];
+
+	if (filtros.sector) {
+		condiciones.push(`LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) = @p${params.length}`);
+		params.push({ value: filtros.sector, type: 'VarChar', length: 4 });
+	}
+	if (filtros.profesional != null) {
+		condiciones.push(
+			`(v.DOCTORADMISOR = @p${params.length} OR v.DOCTORASISTIENDO = @p${params.length})`,
+		);
+		params.push({ value: filtros.profesional, type: 'Int' });
+	}
+	if (filtros.especialidad != null) {
+		condiciones.push(`(
+			EXISTS (
+				SELECT 1 FROM dbo.imTurnos t2
+				WHERE t2.NumeroVisita = v.NUMEROVISITA AND t2.Especialidad = @p${params.length}
+			)
+			OR EXISTS (
+				SELECT 1 FROM dbo.imPersonal p2
+				WHERE (p2.Matricula = v.DOCTORADMISOR OR p2.Valor = v.DOCTORADMISOR)
+				  AND p2.ValorEspecialidad = @p${params.length}
+			)
+		)`);
+		params.push({ value: filtros.especialidad, type: 'Int' });
+	}
+
+	return { condiciones, params };
+}
+
+function _sqlConteoVisitasPorOrigen(aliasTurno = 'tt') {
+	return `
+		SUM(CASE WHEN ${aliasTurno}.NumeroVisita IS NOT NULL THEN 1 ELSE 0 END) AS ConTurno,
+		SUM(CASE WHEN ${aliasTurno}.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS ADemanda`;
+}
+
 /**
  * Volumen de consultas ambulatorias reales (imVisita) separando las que nacen de
- * un turno de agenda de las espontáneas.
+ * un turno de agenda de las atenciones a demanda.
  */
 async function _consultarOrigen(filtros) {
 	try {
+		const { condiciones, params } = _paramsVisitasBase(filtros);
 		return await executeQuery(
 			`SELECT
 				CAST(v.FechaAdmisionS AS DATE) AS Fecha,
-				SUM(CASE WHEN tt.NumeroVisita IS NOT NULL THEN 1 ELSE 0 END) AS Agenda,
-				SUM(CASE WHEN tt.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS Espontaneo
+				${_sqlConteoVisitasPorOrigen()}
 			FROM dbo.imVisita v
-			LEFT JOIN (
-				SELECT DISTINCT NumeroVisita
-				FROM dbo.imTurnos
-				WHERE ISNULL(NumeroVisita, 0) > 0
-			) tt ON tt.NumeroVisita = v.NumeroVisita
-			WHERE UPPER(LTRIM(RTRIM(ISNULL(v.ClasePaciente, '')))) = 'A'
-			  AND v.FechaAdmisionS >= @p0
-			  AND v.FechaAdmisionS < DATEADD(DAY, 1, @p1)
+			LEFT JOIN (${SQL_TURNOS_CON_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+			WHERE ${condiciones.join('\n\t\t\t  AND ')}
 			GROUP BY CAST(v.FechaAdmisionS AS DATE)
 			ORDER BY CAST(v.FechaAdmisionS AS DATE)`,
-			[{ value: filtros.fechaInicio }, { value: filtros.fechaFin }],
+			params,
 		);
 	} catch (error) {
 		if (esObjetoSqlMissing(error)) {
 			console.warn('[ambulatorio] imVisita no disponible, se omite el split por origen');
 			return [];
 		}
+		throw error;
+	}
+}
+
+async function _consultarVisitasPorSector(filtros) {
+	try {
+		const { condiciones, params } = _paramsVisitasBase(filtros);
+		return await executeQuery(
+			`SELECT TOP 30
+				LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS Codigo,
+				MAX(sec.Descripcion) AS Descripcion,
+				MAX(sec.AmbInt) AS AmbInt,
+				${_sqlConteoVisitasPorOrigen()}
+			FROM dbo.imVisita v
+			LEFT JOIN (${SQL_TURNOS_CON_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+			LEFT JOIN dbo.imSectores sec
+				ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ISNULL(v.VALORSECTOR, '')))
+			WHERE ${condiciones.join('\n\t\t\t  AND ')}
+			GROUP BY LTRIM(RTRIM(ISNULL(v.VALORSECTOR, '')))
+			HAVING LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) <> ''
+			ORDER BY COUNT(*) DESC`,
+			params,
+		);
+	} catch (error) {
+		if (esObjetoSqlMissing(error)) return [];
+		throw error;
+	}
+}
+
+async function _consultarVisitasPorProfesional(filtros) {
+	try {
+		const { condiciones, params } = _paramsVisitasBase(filtros);
+		return await executeQuery(
+			`SELECT TOP 30
+				v.DOCTORADMISOR AS Matricula,
+				MAX(per.ApellidoNombre) AS Nombre,
+				${_sqlConteoVisitasPorOrigen()}
+			FROM dbo.imVisita v
+			LEFT JOIN (${SQL_TURNOS_CON_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+			OUTER APPLY (
+				SELECT TOP 1 p.ApellidoNombre
+				FROM dbo.imPersonal p
+				WHERE p.Matricula = v.DOCTORADMISOR OR p.Valor = v.DOCTORADMISOR
+				ORDER BY p.Valor
+			) per
+			WHERE ${condiciones.join('\n\t\t\t  AND ')}
+			  AND ISNULL(v.DOCTORADMISOR, 0) > 0
+			GROUP BY v.DOCTORADMISOR
+			ORDER BY COUNT(*) DESC`,
+			params,
+		);
+	} catch (error) {
+		if (esObjetoSqlMissing(error)) return [];
+		throw error;
+	}
+}
+
+async function _consultarVisitasPorEspecialidad(filtros) {
+	try {
+		const { condiciones, params } = _paramsVisitasBase(filtros);
+		return await executeQuery(
+			`SELECT TOP 30
+				COALESCE(tur.Especialidad, per.ValorEspecialidad, 0) AS Codigo,
+				MAX(esp.Descripcion) AS Descripcion,
+				${_sqlConteoVisitasPorOrigen()}
+			FROM dbo.imVisita v
+			LEFT JOIN (${SQL_TURNOS_CON_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+			OUTER APPLY (
+				SELECT TOP 1 t.Especialidad
+				FROM dbo.imTurnos t
+				WHERE t.NumeroVisita = v.NUMEROVISITA AND ISNULL(t.Especialidad, 0) > 0
+				ORDER BY t.IdTurno
+			) tur
+			OUTER APPLY (
+				SELECT TOP 1 p.ValorEspecialidad
+				FROM dbo.imPersonal p
+				WHERE p.Matricula = v.DOCTORADMISOR OR p.Valor = v.DOCTORADMISOR
+				ORDER BY p.Valor
+			) per
+			LEFT JOIN dbo.imEspecialidad esp
+				ON esp.Valor = COALESCE(tur.Especialidad, per.ValorEspecialidad, 0)
+			WHERE ${condiciones.join('\n\t\t\t  AND ')}
+			GROUP BY COALESCE(tur.Especialidad, per.ValorEspecialidad, 0)
+			HAVING COALESCE(tur.Especialidad, per.ValorEspecialidad, 0) > 0
+			ORDER BY COUNT(*) DESC`,
+			params,
+		);
+	} catch (error) {
+		if (esObjetoSqlMissing(error)) return [];
 		throw error;
 	}
 }
@@ -546,8 +681,8 @@ function _mapSerie(rows, origenRows) {
 	const origenPorFecha = new Map();
 	for (const r of origenRows || []) {
 		origenPorFecha.set(_iso(r.Fecha), {
-			agenda: _num(r.Agenda),
-			espontaneo: _num(r.Espontaneo),
+			agenda: _num(r.ConTurno),
+			aDemanda: _num(r.ADemanda),
 		});
 	}
 
@@ -563,7 +698,7 @@ function _mapSerie(rows, origenRows) {
 		.sort()
 		.map((fecha) => {
 			const t = porFechaTurnos.get(fecha) || {};
-			const o = origenPorFecha.get(fecha) || { agenda: 0, espontaneo: 0 };
+			const o = origenPorFecha.get(fecha) || { agenda: 0, aDemanda: 0 };
 			return {
 				fecha,
 				programados: _num(t.Programados),
@@ -573,27 +708,85 @@ function _mapSerie(rows, origenRows) {
 				pendientes: _num(t.Pendientes),
 				esperaProm: _dec(t.EsperaProm),
 				ambulatoriasAgenda: o.agenda,
-				ambulatoriasEspontaneas: o.espontaneo,
-				ambulatoriasTotal: o.agenda + o.espontaneo,
+				ambulatoriasADemanda: o.aDemanda,
+				ambulatoriasTotal: o.agenda + o.aDemanda,
 			};
 		});
 }
 
 function _mapOrigen(origenRows) {
 	let agenda = 0;
-	let espontaneo = 0;
+	let aDemanda = 0;
 	for (const r of origenRows || []) {
-		agenda += _num(r.Agenda);
-		espontaneo += _num(r.Espontaneo);
+		agenda += _num(r.ConTurno);
+		aDemanda += _num(r.ADemanda);
 	}
-	const total = agenda + espontaneo;
+	const total = agenda + aDemanda;
 	return {
 		total,
 		agenda,
-		espontaneo,
+		aDemanda,
 		agendaPct: _porcentaje(agenda, total),
-		espontaneoPct: _porcentaje(espontaneo, total),
+		aDemandaPct: _porcentaje(aDemanda, total),
 	};
+}
+
+function _mapVisitasPorDimension(rows, campoCodigo) {
+	const map = new Map();
+	for (const r of rows || []) {
+		const codigo =
+			campoCodigo === 'Matricula'
+				? String(_num(r.Matricula))
+				: String(r[campoCodigo] ?? '').trim();
+		if (!codigo || codigo === '0') continue;
+		map.set(codigo, {
+			codigo,
+			descripcion: _txt(r.Descripcion) || _txt(r.Nombre),
+			ambInt: _txt(r.AmbInt),
+			conTurno: _num(r.ConTurno),
+			aDemanda: _num(r.ADemanda),
+		});
+	}
+	return map;
+}
+
+/** Combina métricas de agenda (imTurnos) con volumen real de visitas (imVisita). */
+function _mergeDimensionConVisitas(turnoDims, visitaRows, campoCodigo, extra = () => ({})) {
+	const visitaMap = _mapVisitasPorDimension(visitaRows, campoCodigo);
+	const seen = new Set();
+	const merged = [];
+
+	for (const dim of turnoDims || []) {
+		seen.add(dim.codigo);
+		const v = visitaMap.get(dim.codigo) || { conTurno: 0, aDemanda: 0 };
+		merged.push({
+			...dim,
+			conTurno: v.conTurno,
+			aDemanda: v.aDemanda,
+		});
+	}
+
+	for (const [codigo, v] of visitaMap) {
+		if (seen.has(codigo)) continue;
+		if (v.conTurno + v.aDemanda <= 0) continue;
+		merged.push({
+			codigo: v.codigo,
+			descripcion: v.descripcion,
+			programados: 0,
+			atendidos: 0,
+			ausentes: 0,
+			tasaAusentismo: 0,
+			esperaProm: null,
+			conTurno: v.conTurno,
+			aDemanda: v.aDemanda,
+			...extra(v),
+		});
+	}
+
+	return merged.sort(
+		(a, b) =>
+			b.conTurno + b.aDemanda + b.programados - (a.conTurno + a.aDemanda + a.programados),
+	);
 }
 
 function _mapDimension(rows, campoCodigo, extra = () => ({})) {
@@ -634,7 +827,7 @@ async function obtenerAnaliticaAmbulatoria(filtrosIn = {}) {
 	const filtros = normalizarFiltros(filtrosIn);
 	const { cte, params } = await _contextoTurnos(filtros);
 
-	const [resumenRow, percentiles, serieRows, origenRows, espRows, secRows, profRows, heatRows] =
+	const [resumenRow, percentiles, serieRows, origenRows, espRows, secRows, profRows, heatRows, visSecRows, visEspRows, visProfRows] =
 		await Promise.all([
 			_consultarResumen(cte, params),
 			_consultarPercentiles(cte, params),
@@ -644,7 +837,30 @@ async function obtenerAnaliticaAmbulatoria(filtrosIn = {}) {
 			_consultarPorSector(cte, params),
 			_consultarPorProfesional(cte, params),
 			_consultarHeatmap(cte, params),
+			_consultarVisitasPorSector(filtros),
+			_consultarVisitasPorEspecialidad(filtros),
+			_consultarVisitasPorProfesional(filtros),
 		]);
+
+	const porEspecialidad = _mergeDimensionConVisitas(
+		_mapDimension(espRows, 'Codigo'),
+		visEspRows,
+		'Codigo',
+	);
+	const porSector = _mergeDimensionConVisitas(
+		_mapDimension(secRows, 'Codigo', (r) => ({ ambInt: _txt(r.AmbInt) })),
+		visSecRows,
+		'Codigo',
+		(r) => ({ ambInt: r.ambInt ?? null }),
+	);
+	const porProfesional = _mergeDimensionConVisitas(
+		_mapDimension(profRows, 'Matricula', (r) => ({
+			cancelados: _num(r.Cancelados),
+			consultaProm: _dec(r.ConsultaProm),
+		})),
+		visProfRows,
+		'Matricula',
+	);
 
 	return {
 		periodo: {
@@ -660,12 +876,9 @@ async function obtenerAnaliticaAmbulatoria(filtrosIn = {}) {
 		resumen: _mapResumen(resumenRow, percentiles, filtros.graciaMin),
 		porOrigen: _mapOrigen(origenRows),
 		serie: _mapSerie(serieRows, origenRows),
-		porEspecialidad: _mapDimension(espRows, 'Codigo'),
-		porSector: _mapDimension(secRows, 'Codigo', (r) => ({ ambInt: _txt(r.AmbInt) })),
-		porProfesional: _mapDimension(profRows, 'Matricula', (r) => ({
-			cancelados: _num(r.Cancelados),
-			consultaProm: _dec(r.ConsultaProm),
-		})),
+		porEspecialidad,
+		porSector,
+		porProfesional,
 		heatmap: _mapHeatmap(heatRows),
 	};
 }
@@ -712,7 +925,7 @@ async function obtenerResumenAmbulatorioHoy(graciaMinIn) {
 		esperaPromedioMin: hoyMap.tiempos.espera.promedio,
 		coberturaPct: hoyMap.calidadDatos.coberturaPct,
 		ambulatoriasTotal: origen.total,
-		ambulatoriasEspontaneas: origen.espontaneo,
+		ambulatoriasADemanda: origen.aDemanda,
 		porcentajeCambioAtendidos: _variacion(hoyMap.atendidos, _num(rowAyer.Atendidos)),
 	};
 }
