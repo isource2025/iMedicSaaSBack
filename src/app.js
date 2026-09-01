@@ -45,6 +45,7 @@ const controlesFrecuentesRoutes = require('./routes/controlesFrecuentes.routes')
 const evolucionEnfermeriaRoutes = require('./routes/evolucionEnfermeria.routes');
 const actualizacionRoutes = require('./routes/actualizacion.routes');
 const hcIngresoRoutes = require('./routes/hcIngreso.routes');
+const auditoriaHciRoutes = require('./routes/auditoriaHci.routes');
 const hciRoutes = require('./routes/hci.routes');
 const adjuntosRoutes = require('./routes/adjuntos.routes');
 const signosVitalesRoutes = require('./routes/signosVitales.routes');
@@ -177,6 +178,7 @@ app.use('/api/controles-frecuentes', controlesFrecuentesRoutes);
 app.use('/api/evolucion-enfermeria', evolucionEnfermeriaRoutes);
 app.use('/api/actualizacion', actualizacionRoutes);
 app.use('/api/hc-ingreso', hcIngresoRoutes);
+app.use('/api/auditoria-hci', auditoriaHciRoutes);
 app.use('/api/hci', hciRoutes);
 app.use('/api/adjuntos', adjuntosRoutes);
 app.use('/api/signos-vitales', signosVitalesRoutes);
