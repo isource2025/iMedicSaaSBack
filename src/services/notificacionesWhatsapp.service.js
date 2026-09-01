@@ -85,9 +85,13 @@ async function marcarLeidasConversacion(idConversacion, valorPersonal) {
 
 		const vp = sqlEscapeIdent(cols.valorPersonal);
 		const leida = sqlEscapeIdent(cols.leida);
-		const tipo = sqlEscapeIdent(cols.tipoNotificacion);
-		const entT = sqlEscapeIdent(cols.entidadTipo);
-		const entI = sqlEscapeIdent(cols.entidadId);
+		const tipoClause = cols.tipoNotificacion
+			? `${sqlEscapeIdent(cols.tipoNotificacion)} = 'WHATSAPP_MENSAJE'`
+			: '1 = 0';
+		const entClause =
+			cols.entidadTipo && cols.entidadId
+				? `(${sqlEscapeIdent(cols.entidadTipo)} = 'BOT_CONVERSACION' AND CAST(${sqlEscapeIdent(cols.entidadId)} AS VARCHAR(120)) = @param1)`
+				: '1 = 0';
 
 		await executeQuery(
 			`
@@ -95,8 +99,7 @@ async function marcarLeidasConversacion(idConversacion, valorPersonal) {
 			SET ${leida} = 1
 			WHERE ${vp} = @param0
 			  AND ${leida} = 0
-			  AND (${tipo} = 'WHATSAPP_MENSAJE' OR ${entT} = 'BOT_CONVERSACION')
-			  AND CAST(${entI} AS VARCHAR(120)) = @param1
+			  AND (${tipoClause} OR ${entClause})
 			`,
 			[
 				{ value: Number(valorPersonal) },

@@ -364,7 +364,7 @@ async function syncUserLoginBundle(idEmpresa, valorPersonal) {
 	}
 }
 
-async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal) {
+async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal, options = {}) {
 	await executeQuery(
 		`
     IF NOT EXISTS (SELECT 1 FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0 AND IdEmpresa = @p1)
@@ -375,7 +375,9 @@ async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal) {
 			{ value: idEmpresa, type: 'Int' },
 		],
 	);
-	await syncPersonalEmpresa(idEmpresa, valorPersonal);
+	if (!options.skipSync) {
+		await syncPersonalEmpresa(idEmpresa, valorPersonal);
+	}
 }
 
 module.exports = {

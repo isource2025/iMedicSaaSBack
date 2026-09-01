@@ -1,4 +1,5 @@
 const { executeQuery, sql } = require('../models/db');
+const { normalizarFilas } = require('../utils/codigoSector');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 
@@ -397,7 +398,7 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
     console.log(`✅ [CAMAS] Query SQL completada en ${queryTime}ms`);
     console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
     
-    let datos = result || [];
+    let datos = normalizarFilas(result || []);
 
 
     // Ajuste funcional: analizar solo camas de internación (Tipo='cama').

@@ -1,5 +1,6 @@
 const controlesFrecuentesService = require("../services/controlesFrecuentes.service");
 const { requireOperadorCarga } = require("../utils/sessionIdentity");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -57,9 +58,9 @@ const obtenerControlesPorVisitaYFecha = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener controles frecuentes por visita y fecha:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener los controles frecuentes",
+            mensaje: mensajeDeError(error, "Error al obtener los controles frecuentes"),
             error: error.message,
         });
     }
@@ -95,9 +96,9 @@ const obtenerControlPorId = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al obtener control frecuente por ID:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al obtener el control frecuente",
+            mensaje: mensajeDeError(error, "Error al obtener el control frecuente"),
             error: error.message,
         });
     }
@@ -126,9 +127,9 @@ const eliminarControl = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al eliminar control frecuente:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al eliminar el control frecuente",
+            mensaje: mensajeDeError(error, "Error al eliminar el control frecuente"),
             error: error.message,
         });
     }
@@ -204,9 +205,9 @@ const crearControl = async (req, res) => {
         });
     } catch (error) {
         console.error("Error al crear control frecuente:", error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
-            mensaje: "Error al crear el control frecuente",
+            mensaje: mensajeDeError(error, "Error al crear el control frecuente"),
             error: error.message,
         });
     }
@@ -245,9 +246,9 @@ const actualizarControl = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al actualizar control frecuente:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al actualizar el control frecuente',
+			mensaje: mensajeDeError(error, 'Error al actualizar el control frecuente'),
 			error: error.message,
 		});
 	}

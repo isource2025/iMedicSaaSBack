@@ -7,6 +7,144 @@ function _code(v) {
 	return String(v || '').trim().slice(0, ID_SERVICIO_LEN);
 }
 
+function _col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function _claves(valor) {
+	const raw = String(valor || '').trim();
+	if (!raw) return [];
+	const keys = new Set([raw, raw.toUpperCase()]);
+	const compact = raw.replace(/\s+/g, '');
+	keys.add(compact);
+	keys.add(compact.toUpperCase());
+	if (/^\d+$/.test(compact)) {
+		keys.add(String(Number(compact)));
+		const sinCeros = compact.replace(/^0+/, '');
+		if (sinCeros) keys.add(sinCeros);
+	}
+	return [...keys];
+}
+
+function _esCodigo(desc, codigo) {
+	const d = String(desc || '').trim();
+	const c = String(codigo || '').trim();
+	if (!d || !c) return false;
+	const dk = _claves(d);
+	return _claves(c).some((k) => dk.includes(k));
+}
+
+function _indexKey(valor) {
+	const compact = _code(valor).replace(/\s+/g, '');
+	if (!compact) return '';
+	if (/^\d+$/.test(compact)) return `n:${Number(compact)}`;
+	return `s:${compact.toUpperCase()}`;
+}
+
+function _descReal(valor, desc) {
+	const d = String(desc || '').trim();
+	if (!d || _esCodigo(d, valor)) return '';
+	return d;
+}
+
+function _ingestCatalogo(byKey, valorRaw, descRaw) {
+	const valor = _code(valorRaw);
+	if (!valor) return;
+	const idx = _indexKey(valor);
+	if (!idx) return;
+	const real = _descReal(valor, descRaw);
+	const prev = byKey.get(idx);
+	if (!prev) {
+		byKey.set(idx, { valor, descripcion: real });
+		return;
+	}
+	if (!prev.descripcion && real) prev.descripcion = real;
+}
+
+async function _fuentesCatalogo() {
+	const byKey = new Map();
+	for (const sql of [
+		`SELECT Valor, Descripcion FROM dbo.imServicios`,
+		`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos`,
+	]) {
+		try {
+			const rows = await executeQuery(sql);
+			for (const r of rows || []) {
+				_ingestCatalogo(
+					byKey,
+					_col(r, 'Valor', 'IdServicio', 'id', 'idServicio', 'valor'),
+					_col(r, 'Descripcion', 'descripcion'),
+				);
+			}
+		} catch {
+			/* tabla ausente */
+		}
+	}
+	try {
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (Number.isFinite(tid) && tid > 0) {
+			const nube = require('./nubeTenant.service');
+			const items = await nube.listarServicios(tid);
+			for (const s of items || []) {
+				_ingestCatalogo(byKey, s.id || s.valor, s.descripcion);
+			}
+		}
+	} catch {
+		/* sin tenant / mysql */
+	}
+	return [...byKey.values()];
+}
+
+async function listarCatalogo() {
+	const items = await _fuentesCatalogo();
+	return items.sort((a, b) =>
+		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+	);
+}
+
+async function _catalogoDescripciones() {
+	const map = new Map();
+	for (const it of await _fuentesCatalogo()) {
+		if (!it.descripcion) continue;
+		for (const k of _claves(it.valor)) {
+			if (!map.has(k)) map.set(k, it.descripcion);
+		}
+	}
+	return map;
+}
+
+function _descripcionDe(id, descRaw, catalogo) {
+	const idN = _code(id);
+	const extra = String(descRaw || '').trim();
+	if (extra && !_esCodigo(extra, idN)) return extra;
+	if (!idN || !catalogo) return '';
+	for (const k of _claves(idN)) {
+		const hit = catalogo.get(k);
+		if (hit) return hit;
+	}
+	return '';
+}
+
+function _normDesc(s) {
+	return String(s || '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.trim()
+		.toUpperCase()
+		.replace(/\s+/g, ' ');
+}
+
 const ensureTable = createTenantOnce(async () => {
 	try {
 		await executeQuery(`
@@ -107,66 +245,84 @@ const ensureTable = createTenantOnce(async () => {
 	}
 });
 
-function _mapRows(rows) {
+async function _mapRows(rows, catalogo) {
+	const cat = catalogo || (await _catalogoDescripciones());
 	return (rows || [])
-		.map((r) => ({
-			idServicio: _code(r.idServicio),
-			Descripcion: String(r.Descripcion || r.idServicio || '').trim() || _code(r.idServicio),
-		}))
-		.filter((r) => r.idServicio);
+		.map((r) => {
+			const idServicio = _code(_col(r, 'idServicio'));
+			if (!idServicio) return null;
+			return {
+				idServicio,
+				Descripcion: _descripcionDe(idServicio, _col(r, 'Descripcion'), cat),
+			};
+		})
+		.filter(Boolean);
 }
 
 async function listar(valorPersonal) {
 	await ensureTable();
 	const vp = Number(valorPersonal);
-	const sqlConCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
-		        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idServicio))) AS Descripcion
+	const catalogo = await _catalogoDescripciones();
+	const sqlConCatalogo = `SELECT RTRIM(LTRIM(CAST(ps.idServicio AS VARCHAR(50)))) AS idServicio,
+		        COALESCE(
+		          NULLIF(LTRIM(RTRIM(CAST(s.Descripcion AS VARCHAR(200)))), ''),
+		          NULLIF(LTRIM(RTRIM(CAST(sm.Descripcion AS VARCHAR(200)))), '')
+		        ) AS Descripcion
 		 FROM dbo.imPersonalServicios ps
-		 LEFT JOIN dbo.imServicios s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idServicio))
-		 WHERE ps.idPersonal = @p0
-		 ORDER BY ISNULL(s.Descripcion, ps.idServicio)`;
-	const sqlSinCatalogo = `SELECT RTRIM(LTRIM(ps.idServicio)) AS idServicio,
-		        RTRIM(LTRIM(ps.idServicio)) AS Descripcion
+		 LEFT JOIN dbo.imServicios s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idServicio AS VARCHAR(50))))
+		 LEFT JOIN dbo.imServiciosMedicos sm
+		   ON LTRIM(RTRIM(CAST(sm.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idServicio AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	const sqlSinCatalogo = `SELECT RTRIM(LTRIM(CAST(ps.idServicio AS VARCHAR(50)))) AS idServicio
 		 FROM dbo.imPersonalServicios ps
 		 WHERE ps.idPersonal = @p0`;
 	let list = [];
 	try {
-		list = _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+		list = await _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 	} catch (err) {
 		try {
-			list = _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
+			list = await _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 		} catch (err2) {
 			console.warn('[personalServicios] listar:', err2?.message || err?.message);
 			return [];
 		}
 	}
 
-	if (list.length) return list;
+	if (list.length) {
+		list.sort((a, b) =>
+			String(a.Descripcion || a.idServicio).localeCompare(String(b.Descripcion || b.idServicio), 'es'),
+		);
+		return list;
+	}
 
 	const legacy = await executeQuery(
 		`SELECT TOP 1 RTRIM(LTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio
 		 FROM dbo.imPersonal WHERE Valor = @p0`,
 		[{ value: vp, type: 'Int' }],
 	).catch(() => []);
-	const vs = _code(legacy?.[0]?.ValorServicio);
+	const vs = _code(_col(legacy?.[0], 'ValorServicio'));
 	if (!vs) return [];
 	try {
 		await agregar(vp, vs);
 	} catch (err) {
 		if (Number(err?.statusCode) !== 409) {
 			console.warn('[personalServicios] legacy:', err?.message || err);
-			return [{ idServicio: vs, Descripcion: vs }];
+			return [{ idServicio: vs, Descripcion: _descripcionDe(vs, '', catalogo) }];
 		}
 	}
 	try {
-		return _mapRows(await executeQuery(sqlConCatalogo, [{ value: vp, type: 'Int' }]));
+		list = await _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]), catalogo);
 	} catch {
-		try {
-			return _mapRows(await executeQuery(sqlSinCatalogo, [{ value: vp, type: 'Int' }]));
-		} catch {
-			return [{ idServicio: vs, Descripcion: vs }];
-		}
+		list = [];
 	}
+	if (list.length) {
+		list.sort((a, b) =>
+			String(a.Descripcion || a.idServicio).localeCompare(String(b.Descripcion || b.idServicio), 'es'),
+		);
+		return list;
+	}
+	return [{ idServicio: vs, Descripcion: _descripcionDe(vs, '', catalogo) }];
 }
 
 async function agregar(valorPersonal, idServicio) {
@@ -305,6 +461,167 @@ async function asignarTodos(valorPersonal) {
 	return listar(vp);
 }
 
+async function _filasPedidos() {
+	try {
+		return await executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor,
+			        RTRIM(LTRIM(CAST(ISNULL(Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+			        RTRIM(LTRIM(ISNULL(PrefijosPractica, ''))) AS prefijosPractica
+			 FROM dbo.imServicios
+			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+		);
+	} catch {
+		return executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor,
+			        RTRIM(LTRIM(CAST(ISNULL(Descripcion, '') AS VARCHAR(200)))) AS descripcion,
+			        '' AS prefijosPractica
+			 FROM dbo.imServicios
+			 WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''`,
+		).catch(() => []);
+	}
+}
+
+function _indexarPedidos(rows) {
+	const byKey = new Map();
+	const byDesc = new Map();
+	for (const r of rows || []) {
+		const valor = _code(_col(r, 'valor', 'Valor'));
+		if (!valor) continue;
+		const item = {
+			valor,
+			descripcion: String(_col(r, 'descripcion', 'Descripcion') || '').trim(),
+			prefijosPractica: String(_col(r, 'prefijosPractica', 'PrefijosPractica') || '').trim(),
+		};
+		for (const k of _claves(valor)) {
+			if (!byKey.has(k)) byKey.set(k, item);
+		}
+		const nd = _normDesc(item.descripcion);
+		if (nd && !byDesc.has(nd)) byDesc.set(nd, item);
+	}
+	return { byKey, byDesc };
+}
+
+async function _catalogoPedidos() {
+	return _indexarPedidos(await _filasPedidos());
+}
+
+async function _asignacionesNube(vp) {
+	try {
+		const { getTenantId } = require('../context/tenantContext');
+		const tid = Number(getTenantId());
+		if (!Number.isFinite(tid) || tid <= 0) return [];
+		const nube = require('./nubeTenant.service');
+		const items = await nube.listarServiciosDeUsuario(tid, vp);
+		return (items || [])
+			.map((s) => ({
+				idServicio: _code(s.id || s.valor),
+				Descripcion: String(s.descripcion || '').trim(),
+			}))
+			.filter((s) => s.idServicio);
+	} catch {
+		return [];
+	}
+}
+
+async function _asignacionesDesdeSectores(vp) {
+	const sqlConServicio = `
+		SELECT
+		  RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS idSector,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS sectorDescripcion,
+		  RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Valor, '') AS VARCHAR(50)))) AS valorSector
+		 FROM dbo.imPersonalSectores ps
+		 LEFT JOIN dbo.imSectores s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	const sqlSinServicio = `
+		SELECT
+		  RTRIM(LTRIM(CAST(ps.idSector AS VARCHAR(50)))) AS idSector,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Descripcion, '') AS VARCHAR(200)))) AS sectorDescripcion,
+		  '' AS valorServicio,
+		  RTRIM(LTRIM(CAST(ISNULL(s.Valor, '') AS VARCHAR(50)))) AS valorSector
+		 FROM dbo.imPersonalSectores ps
+		 LEFT JOIN dbo.imSectores s
+		   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+		 WHERE ps.idPersonal = @p0`;
+	let rows = [];
+	try {
+		rows = await executeQuery(sqlConServicio, [{ value: vp, type: 'Int' }]);
+	} catch {
+		rows = await executeQuery(sqlSinServicio, [{ value: vp, type: 'Int' }]).catch(() => []);
+	}
+	return (rows || [])
+		.map((r) => {
+			const idServicio =
+				_code(_col(r, 'valorServicio')) ||
+				_code(_col(r, 'valorSector')) ||
+				_code(_col(r, 'idSector'));
+			if (!idServicio) return null;
+			return {
+				idServicio,
+				Descripcion: String(_col(r, 'sectorDescripcion') || '').trim(),
+			};
+		})
+		.filter(Boolean);
+}
+
+function _pushAsignacion(bucket, seen, item) {
+	const id = _code(item?.idServicio);
+	if (!id) return;
+	const key = id.toUpperCase();
+	if (seen.has(key)) return;
+	for (const k of _claves(id)) {
+		if (seen.has(`k:${String(k).toUpperCase()}`)) return;
+	}
+	seen.add(key);
+	for (const k of _claves(id)) seen.add(`k:${String(k).toUpperCase()}`);
+	bucket.push({ idServicio: id, Descripcion: String(item.Descripcion || '').trim() });
+}
+
+async function listarParaBandeja(valorPersonal) {
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(vp) || vp <= 0) return [];
+	const catalogo = await _catalogoDescripciones();
+	const merged = [];
+	const seen = new Set();
+	for (const a of await listar(vp)) _pushAsignacion(merged, seen, a);
+	for (const a of await _asignacionesNube(vp)) _pushAsignacion(merged, seen, a);
+	for (const a of await _asignacionesDesdeSectores(vp)) _pushAsignacion(merged, seen, a);
+	if (!merged.length) return [];
+
+	const cat = await _catalogoPedidos();
+	const out = [];
+	const seenVal = new Set();
+	for (const a of merged) {
+		let item = null;
+		for (const k of _claves(a.idServicio)) {
+			item = cat.byKey.get(k);
+			if (item) break;
+		}
+		if (!item) {
+			const desc = a.Descripcion || _descripcionDe(a.idServicio, '', catalogo);
+			const nd = _normDesc(desc);
+			if (nd) item = cat.byDesc.get(nd) || null;
+		}
+		const valor = _code(item?.valor || a.idServicio);
+		if (!valor) continue;
+		const key = valor.toUpperCase();
+		if (seenVal.has(key)) continue;
+		seenVal.add(key);
+		out.push({
+			valor,
+			descripcion: String(
+				item?.descripcion || a.Descripcion || _descripcionDe(valor, '', catalogo) || valor,
+			).trim(),
+			prefijosPractica: String(item?.prefijosPractica || '').trim(),
+		});
+	}
+	out.sort((a, b) =>
+		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+	);
+	return out;
+}
+
 module.exports = {
 	ensureTable,
 	listar,
@@ -313,4 +630,8 @@ module.exports = {
 	reemplazar,
 	codigosDePersonal,
 	asignarTodos,
+	listarCatalogo,
+	listarParaBandeja,
+	descripcionDe: _descripcionDe,
+	catalogoDescripciones: _catalogoDescripciones,
 };

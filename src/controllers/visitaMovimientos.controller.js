@@ -5,6 +5,7 @@
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene el último movimiento de una visita
@@ -37,9 +38,11 @@ const obtenerUltimoMovimientoVisita = async (req, res) => {
     const movimiento = await visitaMovimientosService.obtenerUltimoMovimientoVisita(numeroVisitaInt);
 
     if (!movimiento) {
-      return res.status(404).json({
-        success: false,
-        mensaje: 'No se encontró ningún movimiento para esta visita'
+      // Visita sin movimientos (p.ej. denuncia/Binaria sin cama): no es error de cliente.
+      return res.status(200).json({
+        success: true,
+        data: null,
+        mensaje: 'La visita no tiene movimientos registrados',
       });
     }
 
@@ -50,9 +53,9 @@ const obtenerUltimoMovimientoVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener último movimiento de visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener el último movimiento de la visita',
+      mensaje: mensajeDeError(error, 'Error al obtener el último movimiento de la visita'),
       error: error.message
     });
   }
@@ -139,7 +142,7 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar último movimiento de visita:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       mensaje: error.message || 'Error al actualizar el último movimiento de la visita',
       error: error.message
@@ -247,9 +250,9 @@ const obtenerMovimientosVisita = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener movimientos de visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener los movimientos de la visita',
+      mensaje: mensajeDeError(error, 'Error al obtener los movimientos de la visita'),
       error: error.message
     });
   }
@@ -315,9 +318,9 @@ const moverPacienteACamaVacia = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al mover paciente a nueva cama:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      mensaje: 'Error al mover al paciente a la nueva cama',
+      mensaje: error.message || 'Error al mover al paciente a la nueva cama',
       error: error.message
     });
   }
@@ -361,9 +364,9 @@ const intercambiarCamasPacientes = async (req, res) => {
     res.json(resultado);
   } catch (error) {
     console.error('Error al intercambiar camas:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      mensaje: 'Error al intercambiar las camas entre pacientes',
+      mensaje: error.message || 'Error al intercambiar las camas entre pacientes',
       error: error.message
     });
   }
@@ -395,9 +398,9 @@ const obtenerMovimientosRecientes = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener movimientos recientes:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener los movimientos recientes de internación',
+      mensaje: mensajeDeError(error, 'Error al obtener los movimientos recientes de internación'),
       error: error.message
     });
   }
@@ -417,9 +420,9 @@ const obtenerPacientesInternadosSinCama = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al listar internados sin cama:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener pacientes internados sin cama',
+      mensaje: mensajeDeError(error, 'Error al obtener pacientes internados sin cama'),
       error: error.message,
     });
   }
@@ -482,7 +485,7 @@ const asignarPacienteACama = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al asignar cama:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       mensaje: error.message || 'Error al asignar la cama',
       error: error.message,

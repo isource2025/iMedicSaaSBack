@@ -1,12 +1,14 @@
 const bedsService = require('../services/beds.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const obtenerCamas = async (req, res) => {
 	try {
-		const camas = await bedsService.obtenerCamas();
+		const sector = String(req.query?.sector || req.query?.idSector || '').trim();
+		const camas = await bedsService.obtenerCamas(sector || null);
 		res.json({ success: true, data: camas });
 	} catch (error) {
 		console.error('Error al obtener camas:', error);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener las camas' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener las camas' });
 	}
 };
 
@@ -18,9 +20,9 @@ const obtenerCamasPorId = async (req, res) => {
 		res.json({ success: true, data: cama });
 	} catch (err) {
 		console.error('Error al obtener camas:', err);
-		res.status(500).json({
+		res.status(statusDeError(err)).json({
 			success: false,
-			mensaje: 'Error al obtener la cama',
+			mensaje: mensajeDeError(err, 'Error al obtener la cama'),
 		});
 	}
 };
@@ -31,9 +33,9 @@ const obtenerEstadosCama = async (req, res) => {
 		res.json({ success: true, data: estados });
 	} catch (error) {
 		console.error('Error al obtener estados de cama:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener los estados de cama',
+			mensaje: mensajeDeError(error, 'Error al obtener los estados de cama'),
 		});
 	}
 };
@@ -55,7 +57,7 @@ const obtenerCamaPorId = async (req, res) => {
 		res.json({ success: true, data: cama });
 	} catch (error) {
 		console.error('Error al obtener cama:', error);
-		res.status(500).json({ success: false, mensaje: 'Error al obtener la cama' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener la cama' });
 	}
 };
 
@@ -83,9 +85,9 @@ const actualizarEstadoCama = async (req, res) => {
 		res.json({ success: true, data: camaActualizada });
 	} catch (error) {
 		console.error('Error al actualizar estado de cama:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al actualizar el estado de la cama',
+			mensaje: mensajeDeError(error, 'Error al actualizar el estado de la cama'),
 		});
 	}
 };
@@ -115,9 +117,9 @@ const filtrarCamasPorEstado = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al filtrar camas por estado:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al filtrar camas por estado',
+			mensaje: mensajeDeError(error, 'Error al filtrar camas por estado'),
 			error: error.message,
 		});
 	}
@@ -134,9 +136,9 @@ const obtenerSectores = async (req, res) => {
 		res.json({ success: true, data: sectores });
 	} catch (error) {
 		console.error('Error al obtener sectores:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener los sectores',
+			mensaje: mensajeDeError(error, 'Error al obtener los sectores'),
 			error: error.message,
 		});
 	}
@@ -156,9 +158,9 @@ const obtenerTotalCamas = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener total de camas:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al obtener el total de camas',
+			mensaje: mensajeDeError(error, 'Error al obtener el total de camas'),
 			error: error.message,
 		});
 	}
@@ -180,7 +182,7 @@ const obtenerControlesFrecuentesPorVisita = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error al obtener los controles frecuentes:', error);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
 			message: 'Error al obtener los controles frecuentes',
 			error: error.message,

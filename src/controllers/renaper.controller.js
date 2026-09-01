@@ -1,4 +1,5 @@
 const renaperService = require('../services/renaper.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER. */
 function normalizePersonaForClient(raw) {
@@ -49,9 +50,9 @@ const getToken = async (req, res) => {
 		res.json({ token });
 	} catch (error) {
 		console.error('[RENAPER][getToken] ERROR:', error?.message);
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: 'Error al generar el token del renaper',
+			mensaje: mensajeDeError(error, 'Error al generar el token del renaper'),
 			error: error.message,
 		});
 	}

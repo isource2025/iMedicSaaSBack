@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para obtener todas las clases de paciente
@@ -24,7 +25,7 @@ const getClasesPaciente = async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error al obtener clases de paciente:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al obtener clases de paciente', 
       details: error.message 
     });
@@ -78,7 +79,7 @@ const createClasePaciente = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear clase de paciente:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al crear clase de paciente', 
       details: error.message 
     });
@@ -127,7 +128,7 @@ const updateClasePaciente = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar clase de paciente:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al actualizar clase de paciente', 
       details: error.message 
     });
@@ -179,7 +180,7 @@ const deleteClasePaciente = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al eliminar clase de paciente:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al eliminar clase de paciente', 
       details: error.message 
     });

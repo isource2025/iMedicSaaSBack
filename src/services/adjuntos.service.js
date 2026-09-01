@@ -6,6 +6,7 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const { decodeMultipartFilename, sanitizeWindowsFileName, pathLookupCandidates, normalizeAdjuntoFilePath } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
@@ -46,7 +47,10 @@ class AdjuntosService {
           { value: numeroVisita, type: 'Int' },
           { value: idTurno, type: 'Int' },
           {
-            value: normalizarTextoParaClarionAnsi(file.originalname, { maxLength: 255 }),
+            value: normalizarTextoParaClarionAnsi(
+              sanitizeWindowsFileName(file.originalname),
+              { maxLength: 255 },
+            ),
             type: 'NVarChar',
           },
           { value: rutaArchivo, type: 'NVarChar' },
@@ -123,11 +127,46 @@ class AdjuntosService {
   }
 
   normalizarRutaPatch(rutaOriginal) {
-    if (!rutaOriginal) return rutaOriginal;
-    let ruta = rutaOriginal;
-    if (ruta.startsWith('D:\\')) ruta = ruta.replace(/^D:\\/, 'E:\\');
-    if (ruta.startsWith('F:\\')) ruta = ruta.replace(/^F:\\/, 'E:\\');
-    return ruta;
+    return normalizeAdjuntoFilePath(rutaOriginal);
+  }
+
+  async fetchFileFromServer(rutaBase) {
+    const fileServerUrl = await resolveFileServerUrl();
+    const candidates = pathLookupCandidates(this.normalizarRutaPatch(rutaBase));
+    let lastErr = null;
+    for (const ruta of candidates) {
+      const url = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+      try {
+        const res = await axios.get(url, {
+          responseType: 'arraybuffer',
+          timeout: FILE_SERVER_TIMEOUT_MS,
+          maxContentLength: 50 * 1024 * 1024,
+          maxBodyLength: 50 * 1024 * 1024,
+          validateStatus: (s) => s >= 200 && s < 300,
+        });
+        const buffer = Buffer.from(res.data);
+        if (buffer.length) return { buffer, rutaUsada: ruta };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('Archivo no encontrado en el servidor de archivos');
+  }
+
+  async deleteFileFromServer(rutaBase) {
+    const fileServerUrl = await resolveFileServerUrl();
+    const candidates = pathLookupCandidates(this.normalizarRutaPatch(rutaBase));
+    let lastErr = null;
+    for (const ruta of candidates) {
+      const deleteUrl = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+      try {
+        const response = await axios.delete(deleteUrl, { timeout: 30000 });
+        if (response.data?.success) return { deleted: true, rutaUsada: ruta };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('No se pudo eliminar el archivo en el servidor de archivos');
   }
 
   /**
@@ -142,21 +181,12 @@ class AdjuntosService {
     const rutaN = this.normalizarRutaPatch(adj.RutaArchivo);
     const nombreArchivo = adj.NombreArchivo || path.basename(String(adj.RutaArchivo)) || 'adjunto';
     try {
-      const fileServerUrl = await resolveFileServerUrl();
-      const url = `${fileServerUrl}/file?path=${encodeURIComponent(rutaN)}`;
-      const res = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: FILE_SERVER_TIMEOUT_MS,
-        maxContentLength: 50 * 1024 * 1024,
-        maxBodyLength: 50 * 1024 * 1024,
-      });
-      const buffer = Buffer.from(res.data);
-      if (!buffer.length) {
-        return { buffer: null, nombreArchivo, error: 'Archivo vacío en el servidor de archivos' };
-      }
+      const { buffer } = await this.fetchFileFromServer(adj.RutaArchivo);
       return { buffer, nombreArchivo };
     } catch (e) {
-      const candidates = [rutaN, adj.RutaArchivo].filter((p) => typeof p === 'string' && p.length > 0);
+      const candidates = pathLookupCandidates(rutaN).concat(
+        pathLookupCandidates(adj.RutaArchivo),
+      );
       for (const p of candidates) {
         try {
           if (fsSync.existsSync(p)) {
@@ -191,6 +221,7 @@ class AdjuntosService {
       const rutaCompleta = adj.PatchServidor || '';
       nombreArchivo = rutaCompleta.split(/[\\\/]/).pop() || '';
     }
+    nombreArchivo = decodeMultipartFilename(nombreArchivo);
 
     return {
       IdAdjunto: adj.IdAdjunto,
@@ -300,6 +331,20 @@ class AdjuntosService {
     return { updated: result?.rowsAffected?.[0] ?? 0 };
   }
 
+  async getNombrePacientePorVisita(numeroVisita) {
+    const rows = await executeQuery(
+      `
+      SELECT TOP 1 p.ApellidoYNombre
+      FROM imVisita v
+      INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
+      WHERE v.NumeroVisita = @param0
+      `,
+      [{ value: parseInt(numeroVisita, 10) }],
+    );
+    const nombre = rows?.[0]?.ApellidoYNombre;
+    return nombre ? String(nombre).trim() : `PACIENTE_${numeroVisita}`;
+  }
+
   async getNombrePacientePorTurno(idTurno) {
     const rows = await executeQuery(
       `SELECT TOP 1 p.ApellidoyNombre
@@ -392,21 +437,9 @@ class AdjuntosService {
 
       if (adjunto.RutaArchivo) {
         try {
-          const encodedPath = encodeURIComponent(adjunto.RutaArchivo);
-          const fileServerUrl = await resolveFileServerUrl();
-          const deleteUrl = `${fileServerUrl}/file?path=${encodedPath}`;
-
           console.log(`🗑️ Eliminando archivo del servidor: ${adjunto.RutaArchivo}`);
-
-          const response = await axios.delete(deleteUrl, {
-            timeout: 30000,
-          });
-
-          if (response.data.success) {
-            console.log(`✅ Archivo físico eliminado: ${adjunto.RutaArchivo}`);
-          } else {
-            console.warn(`⚠️ Respuesta del servidor: ${response.data.message || 'Error desconocido'}`);
-          }
+          const result = await this.deleteFileFromServer(adjunto.RutaArchivo);
+          console.log(`✅ Archivo físico eliminado: ${result.rutaUsada}`);
         } catch (fileError) {
           console.warn(`⚠️ No se pudo eliminar archivo físico: ${adjunto.RutaArchivo}`);
           console.warn(`   Error: ${fileError.message}`);

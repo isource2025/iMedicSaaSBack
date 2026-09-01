@@ -228,29 +228,49 @@ async function descubrirEmpresas(username) {
 async function obtenerSectores(username, idEmpresa) {
 	if (!isAuthCentralEnabled()) return [];
 	const emp = Number(idEmpresa);
-	const rows = await query(
-		`
-    SELECT DISTINCT
-      ps.idPersonal AS idPersonal,
-      ps.idSector AS idSector,
-      s.Descripcion AS descripcionSector
+	const sqlBase = `
     FROM \`imPassword\` pw
     INNER JOIN \`imPersonalEmpresas\` pe ON ${JOIN_PERSONAL_EMPRESA} AND pe.IdEmpresa = ?
     INNER JOIN \`imPersonalSectores\` ps
       ON ps.idPersonal = pw.ValorPersonal AND ps.IdEmpresa = pw.IdEmpresa
     INNER JOIN \`imSectores\` s
-      ON s.Valor COLLATE ${COLLATE} = ps.idSector COLLATE ${COLLATE}
+      ON TRIM(s.Valor) COLLATE ${COLLATE} = TRIM(ps.idSector) COLLATE ${COLLATE}
      AND s.IdEmpresa = pe.IdEmpresa
     WHERE pw.IdEmpresa = ?
       AND ${USER_MATCH} = ?
-    ORDER BY descripcionSector
+    ORDER BY descripcionSector`;
+	const params = [emp, emp, normalizarUsername(username)];
+	let rows = [];
+	try {
+		rows = await query(
+			`
+    SELECT DISTINCT
+      ps.idPersonal AS idPersonal,
+      ps.idSector AS idSector,
+      s.Descripcion AS descripcionSector,
+      TRIM(IFNULL(s.ValorServicio, '')) AS valorServicio
+    ${sqlBase}
     `,
-		[emp, emp, normalizarUsername(username)],
-	);
+			params,
+		);
+	} catch (e) {
+		console.warn('[authCentral] sectores ValorServicio:', e.message);
+		rows = await query(
+			`
+    SELECT DISTINCT
+      ps.idPersonal AS idPersonal,
+      ps.idSector AS idSector,
+      s.Descripcion AS descripcionSector
+    ${sqlBase}
+    `,
+			params,
+		);
+	}
 	return rows.map((row) => ({
 		idPersonal: String(row.idPersonal),
-		idSector: String(row.idSector),
+		idSector: String(row.idSector || '').trim(),
 		descripcionSector: String(row.descripcionSector || '').trim(),
+		valorServicio: String(row.valorServicio || row.ValorServicio || '').trim(),
 	}));
 }
 
@@ -260,7 +280,7 @@ async function obtenerDescripcionSector(idEmpresa, idSector) {
 		`
     SELECT Valor AS idSector, Descripcion AS descripcion
     FROM \`imSectores\`
-    WHERE Valor = ? AND IdEmpresa = ?
+    WHERE TRIM(Valor) = TRIM(?) AND IdEmpresa = ?
     LIMIT 1
     `,
 		[String(idSector), Number(idEmpresa)],

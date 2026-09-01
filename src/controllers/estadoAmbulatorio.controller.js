@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Obtiene todos los estados ambulatorios
@@ -17,7 +18,7 @@ const getEstadosAmbulatorios = async (req, res) => {
     const result = await executeQuery(sql);
     return res.status(200).json(result);
   } catch (error) {
-    return res.status(500).json({ error: 'Error al obtener estados ambulatorios', details: error.message });
+    return res.status(statusDeError(error)).json({ error: 'Error al obtener estados ambulatorios', details: error.message });
   }
 };
 
@@ -49,7 +50,7 @@ const getEstadoAmbulatorio = async (req, res) => {
     
     return res.status(200).json(result[0]);
   } catch (error) {
-    return res.status(500).json({ error: 'Error al obtener el estado ambulatorio', details: error.message });
+    return res.status(statusDeError(error)).json({ error: 'Error al obtener el estado ambulatorio', details: error.message });
   }
 };
 
@@ -94,7 +95,7 @@ const createEstadoAmbulatorio = async (req, res) => {
     
     return res.status(201).json({ valor, descripcion }); // Devolver claves en minúscula
   } catch (error) {
-    return res.status(500).json({ error: 'Error al crear el estado ambulatorio', details: error.message });
+    return res.status(statusDeError(error)).json({ error: 'Error al crear el estado ambulatorio', details: error.message });
   }
 };
 
@@ -141,7 +142,7 @@ const updateEstadoAmbulatorio = async (req, res) => {
     
     return res.status(200).json({ valor: Valor, descripcion }); // Devolver 'valor' (de params) y 'descripcion' (actualizada) en minúscula
   } catch (error) {
-    return res.status(500).json({ error: 'Error al actualizar el estado ambulatorio', details: error.message });
+    return res.status(statusDeError(error)).json({ error: 'Error al actualizar el estado ambulatorio', details: error.message });
   }
 };
 
@@ -177,7 +178,7 @@ const deleteEstadoAmbulatorio = async (req, res) => {
     
     return res.status(200).json({ message: 'Estado ambulatorio eliminado con éxito' });
   } catch (error) {
-    return res.status(500).json({ error: 'Error al eliminar el estado ambulatorio', details: error.message });
+    return res.status(statusDeError(error)).json({ error: 'Error al eliminar el estado ambulatorio', details: error.message });
   }
 };
 

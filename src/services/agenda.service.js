@@ -1890,6 +1890,7 @@ async function cerrarTurno({
 	idTurno,
 	codOperador,
 	valorPersonal,
+	idSector,
 	diagnostico,
 	contrato,
 	hci,
@@ -1983,7 +1984,7 @@ async function cerrarTurno({
 	const listaPedidosInterconsultas = Array.isArray(pedidosInterconsultas)
 		? pedidosInterconsultas
 		: [];
-	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
 	const now = new Date();
 
 	try {
@@ -2197,15 +2198,18 @@ async function cerrarTurno({
 	} catch (err) {
 		// Rollback best-effort en orden inverso
 		try {
+			const notificacionesService = require('./notificaciones.service');
 			for (const idPed of creados.pedidosInterconsultas.slice().reverse()) {
 				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
 					{ value: idPed, type: 'Int' },
 				]);
+				await notificacionesService.eliminarPorEntidadPedido(idPed).catch(() => {});
 			}
 			for (const idPed of creados.pedidosEstudios.slice().reverse()) {
 				await executeQuery(`DELETE FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`, [
 					{ value: idPed, type: 'Int' },
 				]);
+				await notificacionesService.eliminarPorEntidadPedido(idPed).catch(() => {});
 			}
 			for (let i = creados.profesionalesExtra.length - 1; i >= 0; i--) {
 				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
@@ -2250,6 +2254,7 @@ async function actualizarAtencionPostCierre({
 	idTurno,
 	codOperador,
 	valorPersonal,
+	idSector,
 	diagnostico,
 	hci,
 	porIdTurno,
@@ -2301,7 +2306,7 @@ async function actualizarAtencionPostCierre({
 		[{ value: id, type: 'Int' }],
 	);
 	const sector = String(detalle[0]?.Sector || '').trim().padEnd(4, ' ').slice(0, 4);
-	const sectorSolicitante = String(detalle[0]?.Sector || '').trim().slice(0, 4);
+	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
 	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
 	const fechaIso = fechaCalendarioArgentina();
 	const horaStr = horaWallArgentina(true);

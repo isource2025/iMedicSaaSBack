@@ -1,4 +1,5 @@
 const miPerfilService = require('../services/miPerfil.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const obtenerPerfil = async (req, res) => {
 	try {
@@ -6,7 +7,7 @@ const obtenerPerfil = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[miPerfil.obtenerPerfil]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al cargar el perfil' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al cargar el perfil' });
 	}
 };
 
@@ -31,7 +32,7 @@ const obtenerFotoPerfil = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[miPerfil.obtenerFotoPerfil]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener la foto' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al obtener la foto' });
 	}
 };
 
@@ -55,7 +56,7 @@ const eliminarFotoPerfil = async (req, res) => {
 		res.json({ success: true, mensaje: 'Foto eliminada' });
 	} catch (error) {
 		console.error('[miPerfil.eliminarFotoPerfil]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al eliminar la foto' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al eliminar la foto' });
 	}
 };
 

@@ -3,6 +3,7 @@ const { JWT_SECRET } = require('../config/jwt');
 const { middlewareFromAuth } = require('../context/tenantContext');
 const sessionService = require('../services/session.service');
 const { COOKIE_ACCESS } = require('../config/security');
+const { sectoresFromDecoded } = require('../utils/sectoresSesion');
 
 function resolveValorPersonal(decoded) {
 	const u = decoded?.usuario || {};
@@ -63,6 +64,8 @@ function assignAuthFromDecoded(req, decoded) {
 		idEmp != null && idEmp !== '' && Number.isFinite(Number(idEmp)) && Number(idEmp) > 0
 			? Number(idEmp)
 			: null;
+	req.idSector = String(decoded?.idSector || decoded?.usuario?.idSector || '').trim() || null;
+	req.sectores = sectoresFromDecoded(decoded);
 }
 
 function extractTokenFromRequest(req) {

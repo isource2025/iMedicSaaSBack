@@ -3,6 +3,7 @@
  * Controlador para las operaciones CRUD de la tabla imEstadoCivil
  */
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 // Obtener todos los estados civiles
 const getEstadosCiviles = async (req, res) => {
@@ -11,7 +12,7 @@ const getEstadosCiviles = async (req, res) => {
     const result = await executeQuery(sql);
     res.status(200).json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener los estados civiles: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener los estados civiles: ' + error.message, details: error.message });
   }
 };
 
@@ -29,7 +30,7 @@ const getEstadoCivilByValor = async (req, res) => {
     }
     res.status(200).json(result[0]);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener el estado civil: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener el estado civil: ' + error.message, details: error.message });
   }
 };
 
@@ -53,7 +54,7 @@ const createEstadoCivil = async (req, res) => {
     await executeQuery(insertSql, [valorDB, descripcion]);
     res.status(201).json({ valor: valorDB, descripcion }); // Devolver claves en minúscula (valor original o valorDB)
   } catch (error) {
-    res.status(500).json({ error: 'Error al crear el estado civil: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al crear el estado civil: ' + error.message, details: error.message });
   }
 };
 
@@ -78,7 +79,7 @@ const updateEstadoCivil = async (req, res) => {
     await executeQuery(updateSql, [descripcion, valorDB]);
     res.status(200).json({ valor: valorDB, descripcion }); // Devolver claves en minúscula
   } catch (error) {
-    res.status(500).json({ error: 'Error al actualizar el estado civil: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al actualizar el estado civil: ' + error.message, details: error.message });
   }
 };
 
@@ -101,7 +102,7 @@ const deleteEstadoCivil = async (req, res) => {
     await executeQuery(deleteSql, [valorDB]);
     res.status(200).json({ message: 'Estado civil eliminado correctamente' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al eliminar el estado civil: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al eliminar el estado civil: ' + error.message, details: error.message });
   }
 };
 

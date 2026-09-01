@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS `imSectores` (
   `IdEmpresa` INT NOT NULL DEFAULT 1,
   `Valor` VARCHAR(30) NOT NULL,
   `Descripcion` VARCHAR(255) NOT NULL,
+  `ValorServicio` VARCHAR(50) NULL,
+  `AmbInt` VARCHAR(4) NULL,
   PRIMARY KEY (`IdEmpresa`, `Valor`)
 );
 

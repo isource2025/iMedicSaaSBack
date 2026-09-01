@@ -479,6 +479,11 @@ async function previewTablaImportable(idEmpresa, tabla, limite) {
 	return nubeTenant.previewTabla(Number(idEmpresa), String(tabla), limite);
 }
 
+async function syncCatalogosEmpresaDesdeFisico(idEmpresa) {
+	const personalSync = require('./personalSync.service');
+	return personalSync.syncCatalogosDesdeFisico(Number(idEmpresa));
+}
+
 function conexionDesdeBody(data) {
 	const conexion = data.conexion && typeof data.conexion === 'object' ? { ...data.conexion } : {};
 	if (data.fileServerUrl !== undefined) conexion.fileServerUrl = data.fileServerUrl;
@@ -1280,8 +1285,8 @@ async function listarUsuariosEmpresa(idEmpresa) {
 						[{ value: idPersonal, type: 'Int' }],
 					);
 					sectores = (secRows || []).map((s) => ({
-						id: String(s.idSector || ''),
-						descripcion: String(s.descripcion || s.idSector || ''),
+						id: String(s.idSector || '').trim(),
+						descripcion: String(s.descripcion || s.idSector || '').trim(),
 					}));
 				} catch {
 					sectores = [];
@@ -1538,7 +1543,7 @@ async function obtenerChecklistEmpresa(idEmpresa, detallePreload = null) {
 	const items = [
 		checklistItem('identidad', 'alta', 'Datos de la empresa', tieneIdentidad, 'datos'),
 		checklistItem('packs', 'alta', 'Módulos contratados', tienePacks, 'modulos'),
-		checklistItem('sector', 'alta', 'Sector inicial', tieneSector, 'sectores'),
+		checklistItem('sector', 'alta', 'Sector inicial', tieneSector, 'catalogos'),
 		checklistItem('admin', 'alta', 'Usuario administrador', tieneAdmin, 'usuarios'),
 		checklistItem(
 			'conexion',
@@ -1855,6 +1860,7 @@ module.exports = {
 	listarTablasImportables,
 	previewTablaImportable,
 	importarTablasEmpresa,
+	syncCatalogosEmpresaDesdeFisico,
 	eliminarEmpresa,
 	actualizarPacksEmpresa,
 	upsertOnboarding,

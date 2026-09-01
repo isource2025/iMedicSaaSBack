@@ -88,7 +88,7 @@ router.get(
 	requirePermiso('INTERNACION.CAMAS.VER'),
 	patientsController.obtenerContextoClinicoVisita,
 );
-router.get('/visitas/:numeroVisita', requirePermiso('ADMISION.VIGENTES.VER'), patientsController.obtenerVisitaPorNumero);
+router.get('/visitas/:numeroVisita', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerVisitaPorNumero);
 router.get('/', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerPacientes);
 router.get('/search', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.buscarPacientes);
 router.get('/reference-tables', requirePermiso('ADMISION.PACIENTES.VER'), patientsController.obtenerTablasReferencia);

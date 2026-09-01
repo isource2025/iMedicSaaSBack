@@ -4,6 +4,7 @@
  */
 
 const parentescoService = require('../services/parentesco.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para manejar operaciones CRUD sobre la tabla imParentesco
@@ -25,7 +26,7 @@ const parentescoController = {
       });
     } catch (error) {
       console.error('Error en controlador de parentescos:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener registros de parentescos'
@@ -67,7 +68,7 @@ const parentescoController = {
       });
     } catch (error) {
       console.error('Error en controlador de parentescos:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener el parentesco'

@@ -1,4 +1,5 @@
 const localidadService = require('../services/localidad.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar la tabla imLocalidades
@@ -43,7 +44,7 @@ const localidadController = {
       });
     } catch (error) {
       console.error('Error en getLocalidades:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error interno del servidor'
       });
@@ -84,7 +85,7 @@ const localidadController = {
       });
     } catch (error) {
       console.error('Error en controlador de localidad por valor:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener registro de localidad'
@@ -124,7 +125,7 @@ const localidadController = {
       });
     } catch (error) {
       console.error('Error en controlador de localidad por descripción:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener registro de localidad'
@@ -181,7 +182,7 @@ const localidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al crear registro de localidad'
       });
@@ -237,7 +238,7 @@ const localidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al actualizar registro de localidad'
       });
@@ -277,7 +278,7 @@ const localidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al eliminar registro de localidad'
       });

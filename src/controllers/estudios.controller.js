@@ -1,6 +1,7 @@
 const estudiosService = require('../services/estudios.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
 
 async function _veTodosLosServicios(req) {
 	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
@@ -49,8 +50,20 @@ async function listarPorVisita(req, res) {
 
 async function listarPendientes(req, res) {
 	try {
+		const todos = await _veTodosLosServicios(req);
+		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const sector = String(req.query.sector || '').trim();
-		if (!sector) {
+		if (sector && !todos && sesion.length && !sectorEnSesion(sesion, sector)) {
+			return res.status(403).json({ success: false, mensaje: 'Sector no asignado en su sesión' });
+		}
+		let codigos = [];
+		if (sesion.length) {
+			codigos = codigosParaFiltro(sesion, sector);
+		} else if (sector) {
+			codigos = null;
+		} else if (!todos) {
+			return res.json({ success: true, data: [] });
+		} else {
 			return res.status(400).json({ success: false, mensaje: 'Query sector requerido' });
 		}
 		const limit = req.query.limit != null ? Number(req.query.limit) : 100;
@@ -60,6 +73,8 @@ async function listarPendientes(req, res) {
 			fechaDesde: req.query.fechaDesde,
 			fechaHasta: req.query.fechaHasta,
 			soloEstudios: true,
+			codigos: codigos || undefined,
+			permitirVacio: true,
 		});
 		return res.json({ success: true, data: data || [] });
 	} catch (err) {
@@ -98,7 +113,7 @@ async function crear(req, res) {
 		const data = await estudiosService.crearPedido({
 			idVisita: Number(body.idVisita),
 			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
-			sectorSolicitante: body.sectorSolicitante,
+			sectorSolicitante: idSectorSesion(req) || String(body.sectorSolicitante || '').trim(),
 			idTipoPedido: body.idTipoPedido,
 			idPractica: body.idPractica,
 			idSectorReceptor: body.idSectorReceptor,
@@ -180,7 +195,7 @@ async function cumplir(req, res) {
 			textoInforme: body.textoInforme,
 			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
 			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
-			sectorServicio: body.sectorServicio,
+			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 			codPractica: body.codPractica,
 		});
 		return res.json({ success: true, data });
@@ -248,8 +263,10 @@ async function contarLibres(req, res) {
 			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
 			String(req.query.soloMios || '').toLowerCase() === 'true';
 		const todosServicios = await _veTodosLosServicios(req);
+		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const data = await estudiosService.contarLibresPorServicios({
-			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
+			valorPersonal: soloMios && !todosServicios && !sesion.length ? req.valorPersonal : null,
+			sectoresSesion: soloMios && !todosServicios ? sesion : null,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -264,6 +281,10 @@ async function listarSectores(req, res) {
 			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
 			String(req.query.soloMios || '').toLowerCase() === 'true';
 		const todosServicios = await _veTodosLosServicios(req);
+		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
+		if (soloMios && !todosServicios && sesion.length) {
+			return res.json({ success: true, data: sesion });
+		}
 		const data = await estudiosService.listarSectoresReceptor({
 			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
 		});

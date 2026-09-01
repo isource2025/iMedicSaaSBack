@@ -3,6 +3,13 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const {
+  buildVidalDest,
+  fixMulterFile,
+  decodeMultipartFilename,
+  pathLookupCandidates,
+  sanitizeWindowsFileName,
+} = require('./src/utils/fileNameEncoding');
 
 const app = express();
 const PORT = process.env.FILE_SERVER_PORT || 3902;
@@ -32,9 +39,39 @@ function normalizarRuta(rutaOriginal) {
   return ruta;
 }
 
-function ensureFolderForFile(filePath) {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
+function findExistingFile(filePath) {
+  const candidates = pathLookupCandidates(filePath);
+  const decodedName = sanitizeWindowsFileName(path.basename(filePath || ''));
+  candidates.push(path.join(DEFAULT_UPLOAD_ROOT, decodedName));
+  candidates.push(path.join(DEFAULT_UPLOAD_ROOT, path.basename(filePath || '')));
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const parent = path.dirname(filePath || '');
+  const folders = [parent, DEFAULT_UPLOAD_ROOT].filter(Boolean);
+  const want = decodeMultipartFilename(decodedName).toLowerCase();
+  for (const folder of folders) {
+    if (!fs.existsSync(folder)) continue;
+    try {
+      for (const entry of fs.readdirSync(folder)) {
+        const full = path.join(folder, entry);
+        if (!fs.statSync(full).isFile()) continue;
+        if (decodeMultipartFilename(entry).toLowerCase() === want) return full;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
 }
 
 /**
@@ -53,13 +90,14 @@ app.get('/file', (req, res) => {
     }
 
     const normalizedPath = normalizarRuta(filePath);
+    const foundPath = findExistingFile(normalizedPath) || findExistingFile(filePath);
     
     console.log(`📂 Solicitando archivo: ${filePath}`);
     if (normalizedPath !== filePath) {
       console.log(`🔄 Ruta normalizada: ${normalizedPath}`);
     }
 
-    if (!fs.existsSync(normalizedPath)) {
+    if (!foundPath) {
       console.error(`❌ Archivo no encontrado: ${normalizedPath}`);
       return res.status(404).json({ 
         success: false, 
@@ -68,7 +106,7 @@ app.get('/file', (req, res) => {
       });
     }
 
-    const ext = path.extname(normalizedPath).toLowerCase();
+    const ext = path.extname(foundPath).toLowerCase();
     const mimeTypes = {
       '.pdf': 'application/pdf',
       '.jpg': 'image/jpeg',
@@ -86,12 +124,12 @@ app.get('/file', (req, res) => {
     const contentType = mimeTypes[ext] || 'application/octet-stream';
     
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${path.basename(normalizedPath)}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(foundPath)}"`);
     
-    const fileStream = fs.createReadStream(normalizedPath);
+    const fileStream = fs.createReadStream(foundPath);
     fileStream.pipe(res);
     
-    console.log(`✅ Archivo enviado: ${normalizedPath}`);
+    console.log(`✅ Archivo enviado: ${foundPath}`);
     
   } catch (error) {
     console.error('❌ Error al servir archivo:', error);
@@ -115,18 +153,27 @@ app.post('/upload', upload.single('file'), (req, res) => {
       return res.status(400).json({ success: false, error: 'Archivo requerido (field: file)' });
     }
 
+    fixMulterFile(req.file);
+
     const requestedPath = (req.body?.path || '').trim();
     const destinationPath = requestedPath
       ? normalizarRuta(requestedPath)
-      : path.join(DEFAULT_UPLOAD_ROOT, req.file.originalname);
+      : buildVidalDest(
+          DEFAULT_UPLOAD_ROOT,
+          req.body?.numeroVisita,
+          req.body?.nombrePaciente,
+          req.file.originalname,
+        );
 
-    ensureFolderForFile(destinationPath);
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
     fs.renameSync(req.file.path, destinationPath);
 
     console.log(`✅ Archivo subido: ${destinationPath}`);
     return res.status(201).json({
       success: true,
+      ok: true,
       path: destinationPath,
+      filePath: destinationPath,
       originalName: req.file.originalname,
       size: req.file.size
     });

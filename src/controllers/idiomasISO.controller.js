@@ -3,6 +3,7 @@
  * Controlador para las operaciones CRUD de la tabla imIdiomasISO
  */
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 // Obtener todos los idiomas ISO
 const getIdiomasISO = async (req, res) => {
@@ -11,7 +12,7 @@ const getIdiomasISO = async (req, res) => {
     const result = await executeQuery(sql);
     res.status(200).json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener los idiomas ISO: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener los idiomas ISO: ' + error.message, details: error.message });
   }
 };
 
@@ -29,7 +30,7 @@ const getIdiomaISOByValor = async (req, res) => {
     }
     res.status(200).json(result[0]);
   } catch (error) {
-    res.status(500).json({ error: 'Error al obtener el idioma ISO: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al obtener el idioma ISO: ' + error.message, details: error.message });
   }
 };
 
@@ -65,7 +66,7 @@ const createIdiomaISO = async (req, res) => {
     
     res.status(201).json({ message: 'Idioma ISO creado con éxito' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al crear el idioma ISO: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al crear el idioma ISO: ' + error.message, details: error.message });
   }
 };
 
@@ -101,7 +102,7 @@ const updateIdiomaISO = async (req, res) => {
     
     res.status(200).json({ message: 'Idioma ISO actualizado con éxito' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al actualizar el idioma ISO: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al actualizar el idioma ISO: ' + error.message, details: error.message });
   }
 };
 
@@ -128,7 +129,7 @@ const deleteIdiomaISO = async (req, res) => {
     
     res.status(200).json({ message: 'Idioma ISO eliminado con éxito' });
   } catch (error) {
-    res.status(500).json({ error: 'Error al eliminar el idioma ISO: ' + error.message, details: error.message });
+    res.status(statusDeError(error)).json({ error: 'Error al eliminar el idioma ISO: ' + error.message, details: error.message });
   }
 };
 

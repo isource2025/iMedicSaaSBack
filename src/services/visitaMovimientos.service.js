@@ -4,6 +4,7 @@
  */
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString, clarionAIsoCalendario } = require('../utils/dateUtils');
+const { normalizarFilas } = require('../utils/codigoSector');
 
 function clarionInt(v) {
   const n = Number(v);
@@ -12,6 +13,41 @@ function clarionInt(v) {
 
 function visitaYaEgresada(fechaEgreso) {
   return clarionInt(fechaEgreso) > 0;
+}
+
+/**
+ * Los ingresos importados de otros sistemas traen fechas fuera de rango Clarion
+ * (por ejemplo AAAAMMDD). Sin este tope, DATEADD desborda y cae toda la consulta.
+ */
+const CLARION_EPOCH = "'1800-12-28'";
+const CLARION_FECHA_MAX = 400000;
+const CLARION_HORA_MAX = 8640000;
+
+function esFechaClarionValida(valor) {
+  const n = clarionInt(valor);
+  return n > 0 && n <= CLARION_FECHA_MAX;
+}
+
+function esHoraClarionValida(valor) {
+  const n = clarionInt(valor);
+  return n > 0 && n <= CLARION_HORA_MAX;
+}
+
+function sqlFechaClarionISO(columna) {
+  return `CASE WHEN TRY_CAST(${columna} AS int) BETWEEN 1 AND ${CLARION_FECHA_MAX}
+        THEN CONVERT(varchar(10), DATEADD(day, TRY_CAST(${columna} AS int), ${CLARION_EPOCH}), 23) END`;
+}
+
+function sqlHoraClarionISO(columna) {
+  return `CASE WHEN TRY_CAST(${columna} AS int) BETWEEN 1 AND ${CLARION_HORA_MAX}
+        THEN CONVERT(varchar(5), DATEADD(ms, (TRY_CAST(${columna} AS int) - 1) * 10, 0), 108) END`;
+}
+
+/** Error de regla de negocio: el controller lo devuelve como 409 con su mensaje. */
+function errorNegocio(mensaje, statusCode = 409) {
+  const e = new Error(mensaje);
+  e.statusCode = statusCode;
+  return e;
 }
 
 /** Si llega "SECTOR-CAMA", devuelve solo el código de cama. */
@@ -72,6 +108,115 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
 }
 
 /**
+ * Los ingresos que entran automáticamente desde otro sistema quedan en imVisita y
+ * en imHabitacionCamas pero sin ninguna fila en imVisitaMovimiento, así que no se
+ * pueden trasladar ni egresar. Reconstruye ese movimiento de ingreso con la cama
+ * que ya ocupa el paciente para que enfermería pueda operar la visita.
+ *
+ * @param {number} numeroVisita
+ * @param {{fecha: number, hora: number}|null} limite - El ingreso reconstruido
+ *   queda siempre antes de este momento (fecha/hora Clarion del traslado o egreso).
+ */
+async function asegurarMovimientoDeIngreso(numeroVisita, limite = null) {
+  const num = parseInt(numeroVisita, 10);
+  if (isNaN(num)) throw new Error(`Visita inválida: ${numeroVisita}`);
+
+  const existente = await obtenerUltimoMovimientoVisita(num);
+  if (existente) return existente;
+
+  const rows = await executeQuery(
+    `
+      SELECT TOP 1
+        CASE
+          WHEN v.FECHAADMISIONS IS NULL THEN 0
+          ELSE DATEDIFF(day, ${CLARION_EPOCH}, CAST(v.FECHAADMISIONS AS date))
+        END AS FechaAdmision,
+        CASE
+          WHEN v.FECHAADMISIONS IS NULL THEN 1
+          ELSE (DATEDIFF(millisecond, CAST(CAST(v.FECHAADMISIONS AS date) AS datetime), v.FECHAADMISIONS) / 10) + 1
+        END AS HoraAdmision,
+        LTRIM(RTRIM(ISNULL(v.EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
+        LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(v.ServicioHospital, ''))) AS ServicioHospital,
+        NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0') AS Operador,
+        LTRIM(RTRIM(COALESCE(hc.ValorSector, v.VALORSECTOR, ''))) AS ValorSector,
+        LTRIM(RTRIM(COALESCE(hc.ValorHabitacionCama, v.VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama,
+        ISNULL(TRY_CAST(hc.FechaIngreso AS int), 0) AS FechaIngreso
+      FROM dbo.imVisita v
+      OUTER APPLY (
+        SELECT TOP 1 ValorSector, ValorHabitacionCama, FechaIngreso
+        FROM dbo.imHabitacionCamas
+        WHERE NumeroVisita = v.NumeroVisita AND ISNULL(NumeroVisita, 0) <> 0
+      ) hc
+      WHERE v.NumeroVisita = @p0
+    `,
+    [{ value: num }],
+  );
+
+  const base = rows?.[0];
+  if (!base) return null;
+
+  const sector = String(base.ValorSector || '').trim();
+  const cama = String(base.ValorHabitacionCama || '').trim();
+  if (!sector && !cama) return null;
+
+  let fecha = esFechaClarionValida(base.FechaAdmision)
+    ? clarionInt(base.FechaAdmision)
+    : clarionInt(base.FechaIngreso);
+  if (!esFechaClarionValida(fecha)) return null;
+  let hora = esHoraClarionValida(base.HoraAdmision) ? clarionInt(base.HoraAdmision) : 1;
+
+  if (limite && esFechaClarionValida(limite.fecha)) {
+    const fueraDeOrden =
+      fecha > limite.fecha || (fecha === limite.fecha && hora >= clarionInt(limite.hora));
+    if (fueraDeOrden) {
+      fecha = clarionInt(limite.fecha);
+      hora = Math.max(clarionInt(limite.hora) - 1, 1);
+    }
+  }
+
+  await executeQuery(
+    `
+      IF NOT EXISTS (SELECT 1 FROM dbo.imVisitaMovimiento WHERE NumeroVisita = @p0)
+      BEGIN
+        INSERT INTO dbo.imVisitaMovimiento (
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
+        )
+        VALUES (
+          @p0, @p1, @p2,
+          0, 0,
+          @p3, @p4, @p5,
+          DATEDIFF(day, ${CLARION_EPOCH}, CAST(GETDATE() AS date)),
+          (DATEDIFF(millisecond, CAST(CAST(GETDATE() AS date) AS datetime), GETDATE()) / 10) + 1,
+          @p6, @p7, 'O',
+          @p8, 0
+        );
+      END
+    `,
+    [
+      { value: num },
+      { value: fecha },
+      { value: hora },
+      { value: String(base.EstadoAmbulatorio || '').trim() || ' ' },
+      { value: String(base.Diagnostico || '').trim() || null },
+      { value: String(base.Operador || '').trim() || '0' },
+      { value: sector || null },
+      { value: cama || null },
+      { value: String(base.ServicioHospital || '').trim() || null },
+    ],
+  );
+
+  console.log(
+    `[movimientos] visita ${num}: se reconstruyó el movimiento de ingreso en ${sector}-${cama}`,
+  );
+  return obtenerUltimoMovimientoVisita(num);
+}
+
+/**
  * Actualiza el último movimiento (egreso + disposición + diagnóstico)
  * y libera la cama asociada (bedId)
  */
@@ -83,17 +228,23 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
  */
 
 function _hhmmClarion(horaClarion) {
+  if (!esHoraClarionValida(horaClarion)) return null;
   const s = convertirHoraClarionAString(horaClarion);
   return s ? s.slice(0, 5) : null;
+}
+
+function _fechaIsoClarion(fechaClarion) {
+  if (!esFechaClarionValida(fechaClarion)) return null;
+  return clarionAIsoCalendario(fechaClarion) || null;
 }
 
 function _mapMovimientoIso(row) {
   if (!row) return row;
   return {
     ...row,
-    FechaAdmisionISO: clarionAIsoCalendario(row.FechaAdmision) || null,
-    FechaEgresoISO: clarionAIsoCalendario(row.FechaEgreso) || null,
-    FechaCargaISO: clarionAIsoCalendario(row.FechaCarga) || null,
+    FechaAdmisionISO: _fechaIsoClarion(row.FechaAdmision),
+    FechaEgresoISO: _fechaIsoClarion(row.FechaEgreso),
+    FechaCargaISO: _fechaIsoClarion(row.FechaCarga),
     HoraAdmisionISO: _hhmmClarion(row.HoraAdmision),
     HoraEgresoISO: _hhmmClarion(row.HoraEgreso),
     HoraCargaISO: _hhmmClarion(row.HoraCarga),
@@ -120,12 +271,12 @@ const SQL_MOVIMIENTO_SELECT = `
       LTRIM(RTRIM(ISNULL(s.Descripcion, m.ValorSector))) AS NombreSector,
       NULLIF(LTRIM(RTRIM(ISNULL(d.Descripcion, ''))), '') AS DiagnosticoDescripcion,
       NULLIF(LTRIM(RTRIM(ISNULL(disp.Descripcion, ''))), '') AS DisposicionEgresoDescripcion,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaAdmision,0), '1800-12-28'), 23) AS FechaAdmisionISO,
-      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraAdmision,0)-1)*10, 0), 108) AS HoraAdmisionISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaEgreso,0),  '1800-12-28'), 23) AS FechaEgresoISO,
-      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraEgreso,0)-1)*10, 0), 108)  AS HoraEgresoISO,
-      CONVERT(varchar(10), DATEADD(day, NULLIF(m.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
-      CONVERT(varchar(5), DATEADD(ms, (NULLIF(m.HoraCarga,0)-1)*10, 0), 108) AS HoraCargaISO
+      ${sqlFechaClarionISO('m.FechaAdmision')} AS FechaAdmisionISO,
+      ${sqlHoraClarionISO('m.HoraAdmision')} AS HoraAdmisionISO,
+      ${sqlFechaClarionISO('m.FechaEgreso')} AS FechaEgresoISO,
+      ${sqlHoraClarionISO('m.HoraEgreso')} AS HoraEgresoISO,
+      ${sqlFechaClarionISO('m.FechaCarga')} AS FechaCargaISO,
+      ${sqlHoraClarionISO('m.HoraCarga')} AS HoraCargaISO
 `;
 
 const SQL_MOVIMIENTO_JOINS = `
@@ -256,7 +407,7 @@ async function queryMovimientosPorNumero(num) {
     `,
     [{ value: num }],
   );
-  return rows || [];
+  return normalizarFilas(rows || []);
 }
 
 /** Alta inicial en imVisita (cama/sector) cuando no hubo insert en imVisitaMovimiento. */
@@ -303,7 +454,7 @@ async function queryMovimientoInicialDesdeCabecera(num) {
     `,
     [{ value: num }],
   );
-  return rows || [];
+  return normalizarFilas(rows || []);
 }
 
 function _codigoOperadorRow(row) {
@@ -556,13 +707,15 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
   const disposicion = Number.isFinite(Number(disposicionEgreso)) ? Number(disposicionEgreso) : 0;
   const diagRaw = String(diagnostico || '').trim().slice(0, 8);
 
-  const ultimo = await obtenerUltimoMovimientoVisita(num);
+  const ultimo = await asegurarMovimientoDeIngreso(num, { fecha: cDate, hora: cTime });
   if (!ultimo) {
-    throw new Error(`No se encontró el movimiento actual de la visita ${num}`);
+    throw errorNegocio(
+      `La visita ${num} no tiene movimiento de internación ni cama registrada; no se puede egresar.`,
+    );
   }
   const cabecera = await obtenerCabeceraVisita(num);
   if (!cabecera) {
-    throw new Error(`No se encontró la visita ${num}`);
+    throw errorNegocio(`No se encontró la visita ${num}`, 404);
   }
 
   const sectorActual = String(ultimo.ValorSector || '').trim();
@@ -695,8 +848,9 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
 }
 
 /**
- * Contexto de reversión: misma cama, conflictos y textos para la UI.
- * No se reubica a otra cama: si la original no está disponible, se bloquea.
+ * Contexto de reversión: intenta la misma cama; si no existe o no está
+ * disponible, permite anular el egreso dejando al paciente sin ubicación
+ * para asignarla después en movimientos.
  */
 async function resolverContextoRevertirEgreso(numeroVisita) {
   const num = parseInt(numeroVisita, 10);
@@ -854,10 +1008,6 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
   const bed = bedRows?.[0];
   if (!bed) {
     ctx.camaEstado = 'inexistente';
-    ctx.conflictos.push({
-      codigo: 'cama_inexistente',
-      mensaje: `No se encontró la ${etiquetaUbicacion || 'cama anterior'}. ${ctx.pacienteNombre} no puede volver a esa ubicación hasta que se regularice.`,
-    });
     return finalizarContextoRevertir(ctx);
   }
 
@@ -891,9 +1041,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
       ctx.ocupanteNombre = '';
     }
     const quienOcupa = ctx.ocupanteNombre ? ` Hoy está ${ctx.ocupanteNombre}.` : '';
-    ctx.conflictos.push({
+    ctx.avisos.push({
       codigo: 'cama_ocupada',
-      mensaje: `No se puede volver a la ${etiquetaUbicacion}: esa cama ya está ocupada.${quienOcupa} Hasta que quede libre, ${ctx.pacienteNombre} no puede regresar ahí.`,
+      mensaje: `La ${etiquetaUbicacion} ya está ocupada.${quienOcupa} Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -903,9 +1053,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     const detalle = ctx.estadoCamaDescripcion && ctx.estadoCamaDescripcion !== estado
       ? ` (${ctx.estadoCamaDescripcion})`
       : '';
-    ctx.conflictos.push({
+    ctx.avisos.push({
       codigo: 'cama_no_disponible',
-      mensaje: `No se puede volver a la ${etiquetaUbicacion}: esa cama no está libre${detalle}. Hasta que se libere, ${ctx.pacienteNombre} no puede regresar ahí.`,
+      mensaje: `La ${etiquetaUbicacion} no está libre${detalle}. Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -926,8 +1076,13 @@ function mensajeEstadoRevertir(ctx) {
   if (!ctx.puedeRevertir && ctx.conflictos.length) {
     return ctx.conflictos.map((c) => c.mensaje).join('\n\n');
   }
-  if (ctx.camaEstado === 'sin_cama') {
-    return `Se va a anular el egreso de ${quien}. Volverá a internación sin cama, como estaba.`;
+  if (
+    ctx.camaEstado === 'sin_cama' ||
+    ctx.camaEstado === 'inexistente' ||
+    ctx.camaEstado === 'ocupada' ||
+    ctx.camaEstado === 'no_disponible'
+  ) {
+    return `Se va a anular el egreso de ${quien}. Quedará en internación sin cama; después podés asignarle ubicación en movimientos.`;
   }
   return `Se va a anular el egreso de ${quien}. Volverá a internación en la ${donde}.`;
 }
@@ -950,7 +1105,8 @@ async function consultarEstadoRevertirEgreso(numeroVisita) {
 
 /**
  * Revierte un egreso hospitalario (solo admin).
- * Solo restaura la misma cama. Si esa cama no está disponible, no se toca nada.
+ * Si la cama anterior está libre, la restaura; si no existe o no está
+ * disponible, deja al paciente en internación sin cama.
  */
 async function revertirEgresoVisita(numeroVisita, opciones = {}) {
   const ctx = await resolverContextoRevertirEgreso(numeroVisita);
@@ -963,6 +1119,7 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
   const num = ctx.numeroVisita;
   const { cama, sector, ultimo, fechaIngresoMov } = ctx;
   const reubicarEnCama = ctx.camaEstado === 'libre' || ctx.camaEstado === 'propia';
+  const limpiarCama = !reubicarEnCama;
 
   const pool = await getRequestPool();
   const tx = new sql.Transaction(pool);
@@ -1007,7 +1164,8 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
       reqMov.input('nv', sql.Int, num);
       reqMov.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
       reqMov.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
-      reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : String(ultimo.EstadoCama || '').trim());
+      reqMov.input('limpiar', sql.Int, limpiarCama ? 1 : 0);
+      reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : '');
       const codOp = Number(opciones.codOperador);
       reqMov.input('op', sql.VarChar(20), Number.isFinite(codOp) && codOp > 0 ? String(codOp) : '');
       await reqMov.query(`
@@ -1016,7 +1174,10 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
           FechaEgreso = 0,
           HoraEgreso = 0,
           DisposicionEgreso = 0,
+          ValorHabitacionCama = CASE WHEN @limpiar = 1 THEN '' ELSE ValorHabitacionCama END,
+          ValorSector = CASE WHEN @limpiar = 1 THEN '' ELSE ValorSector END,
           EstadoCama = CASE
+            WHEN @limpiar = 1 THEN ''
             WHEN LTRIM(RTRIM(@estado)) = '' THEN EstadoCama
             ELSE @estado
           END,
@@ -1035,6 +1196,7 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
     const reqVis = new sql.Request(tx);
     reqVis.input('nv', sql.Int, num);
     reqVis.input('reubicar', sql.Int, reubicarEnCama ? 1 : 0);
+    reqVis.input('limpiar', sql.Int, limpiarCama ? 1 : 0);
     reqVis.input('cama', sql.VarChar(20), cama || '');
     reqVis.input('sec', sql.VarChar(20), sector || '');
     await reqVis.query(`
@@ -1045,22 +1207,30 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
         DisposicionEgreso = 0,
         DiagnosticoEgreso = '',
         OperadorEgreso = 0,
-        ValorHabitacionCama = CASE WHEN @reubicar = 1 THEN @cama ELSE ValorHabitacionCama END,
-        ValorSector = CASE WHEN @reubicar = 1 AND LTRIM(RTRIM(@sec)) <> '' THEN @sec ELSE ValorSector END
+        ValorHabitacionCama = CASE
+          WHEN @reubicar = 1 THEN @cama
+          WHEN @limpiar = 1 THEN ''
+          ELSE ValorHabitacionCama
+        END,
+        ValorSector = CASE
+          WHEN @reubicar = 1 AND LTRIM(RTRIM(@sec)) <> '' THEN @sec
+          WHEN @limpiar = 1 THEN ''
+          ELSE ValorSector
+        END
       WHERE NumeroVisita = @nv
     `);
 
     await tx.commit();
     const message = reubicarEnCama
       ? `Se anuló el egreso. ${ctx.pacienteNombre} volvió a la ${ctx.etiquetaUbicacion}.`
-      : `Se anuló el egreso. ${ctx.pacienteNombre} volvió a internación, sin cama, como estaba.`;
+      : `Se anuló el egreso. ${ctx.pacienteNombre} quedó en internación sin cama; asignale ubicación en movimientos.`;
     return {
       success: true,
       message,
       data: {
         numeroVisita: num,
         cama: reubicarEnCama ? cama : '',
-        sector: reubicarEnCama ? sector : ctx.sector,
+        sector: reubicarEnCama ? sector : '',
         sinCama: !reubicarEnCama,
       },
     };
@@ -1111,23 +1281,31 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
 
   if (!FechaAdmision || !HoraAdmision || !FechaEgreso || !HoraEgreso ||
       !bedId || !ValorSector || !Operador || !FechaCarga || !HoraCarga) {
-    throw new Error('Faltan datos obligatorios para el movimiento de cama. Se requiere: FechaAdmision, HoraAdmision, FechaEgreso, HoraEgreso, bedId, ValorSector, Operador, FechaCarga, HoraCarga');
+    throw errorNegocio(
+      'Faltan datos obligatorios para el movimiento de cama. Se requiere: FechaAdmision, HoraAdmision, FechaEgreso, HoraEgreso, bedId, ValorSector, Operador, FechaCarga, HoraCarga',
+      400,
+    );
   }
 
-  const ultimoMovimiento = await obtenerUltimoMovimientoVisita(num);
+  const ultimoMovimiento = await asegurarMovimientoDeIngreso(num, {
+    fecha: FechaEgreso,
+    hora: HoraEgreso,
+  });
   if (!ultimoMovimiento) {
-    throw new Error(`No se encontró el último movimiento para la visita ${num}`);
+    throw errorNegocio(
+      `La visita ${num} no tiene movimiento de internación ni cama registrada. Asignale una cama antes de trasladarla.`,
+    );
   }
   if (visitaYaEgresada(ultimoMovimiento.FechaEgreso)) {
-    throw new Error(`La visita ${num} ya tiene egreso; no se puede trasladar`);
+    throw errorNegocio(`La visita ${num} ya tiene egreso; no se puede trasladar`);
   }
 
   const cabecera = await obtenerCabeceraVisita(num);
   if (!cabecera) {
-    throw new Error(`No se encontró información del paciente para la visita ${num}`);
+    throw errorNegocio(`No se encontró información del paciente para la visita ${num}`, 404);
   }
   if (visitaYaEgresada(cabecera.FechaEgreso)) {
-    throw new Error(`La visita ${num} ya tiene egreso hospitalario; no se puede trasladar`);
+    throw errorNegocio(`La visita ${num} ya tiene egreso hospitalario; no se puede trasladar`);
   }
 
   const estadoEnviado = String(EstadoAmbulatorio || '').trim();
@@ -1156,7 +1334,9 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
     [{ value: num }],
   );
   if (!camaActualResult || camaActualResult.length === 0) {
-    throw new Error(`No se encontró la cama actual para la visita ${num}`);
+    throw errorNegocio(
+      `La visita ${num} no tiene cama ocupada en internación. Usá "Asignar cama" para ubicar al paciente.`,
+    );
   }
 
   const sectorPreferido = String(ultimoMovimiento.ValorSector || '').trim();
@@ -1180,12 +1360,14 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   );
 
   if (!camaDestinoResult || camaDestinoResult.length === 0) {
-    throw new Error(`La cama destino ${camaDestino} en el sector ${sectorDestino} no existe`);
+    throw errorNegocio(`La cama destino ${camaDestino} en el sector ${sectorDestino} no existe`);
   }
 
   const estadoCama = camaDestinoResult[0].ValorEstadoCama;
   if (estadoCama !== 'U') {
-    throw new Error(`La cama destino ${camaDestino} en el sector ${sectorDestino} no está disponible. Estado actual: ${camaDestinoResult[0].EstadoDescripcion || estadoCama}`);
+    throw errorNegocio(
+      `La cama destino ${camaDestino} en el sector ${sectorDestino} no está disponible. Estado actual: ${camaDestinoResult[0].EstadoDescripcion || estadoCama}`,
+    );
   }
 
 
@@ -1711,7 +1893,7 @@ async function obtenerMovimientosRecientes(limite = 10) {
   `;
   
   try {
-    const result = await executeQuery(sql, [{ value: limite }]);
+    const result = normalizarFilas(await executeQuery(sql, [{ value: limite }]));
     
     // Convertir fechas y horas Clarion usando las funciones de dateUtils
     const resultadoConFechas = result.map(row => {
@@ -1941,7 +2123,76 @@ async function asignarPacienteACama(numeroVisita, datos) {
     ' ';
   const servicioHospital = String(visita.ServicioHospital || '').trim() || null;
 
-  const query = `
+  // Si ya hay un pase abierto sin cama (p.ej. egreso anulado), actualizarlo en lugar de insertar otro.
+  const abiertoSinCama = await executeQuery(
+    `
+      SELECT TOP 1
+        FechaAdmision,
+        HoraAdmision
+      FROM dbo.imVisitaMovimiento
+      WHERE NumeroVisita = @p0
+        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+        AND LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) = ''
+      ORDER BY FechaAdmision DESC, HoraAdmision DESC
+    `,
+    [{ value: num }],
+  );
+
+  const query = abiertoSinCama?.length
+    ? `
+    BEGIN TRY
+      BEGIN TRANSACTION;
+
+      UPDATE dbo.imVisitaMovimiento
+      SET
+        FechaAdmision = @param1,
+        HoraAdmision = @param2,
+        FechaEgreso = 0,
+        HoraEgreso = 0,
+        EstadoAmbulatorio = @param3,
+        Diagnostico = CASE
+          WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
+          ELSE @param4
+        END,
+        Operador = @param5,
+        FechaCarga = @param6,
+        HoraCarga = @param7,
+        ValorSector = @param8,
+        ValorHabitacionCama = @param9,
+        EstadoCama = 'O',
+        ServicioHospital = @param11
+      WHERE NumeroVisita = @param0
+        AND FechaAdmision = @param12
+        AND HoraAdmision = @param13;
+
+      UPDATE dbo.imHabitacionCamas
+      SET
+        FechaIngreso = @param1,
+        FechaEgreso = 0,
+        ValorEstadoCama = 'O',
+        NumeroVisita = @param0,
+        Observaciones = 'Asignación inicial de cama'
+      WHERE ValorHabitacionCama = @param9 AND ValorSector = @param8;
+
+      UPDATE dbo.imVisita
+      SET
+        ValorHabitacionCama = @param9,
+        ValorSector = @param8,
+        ClasePaciente = @param10,
+        Diagnostico = CASE
+          WHEN @param4 IS NULL OR LTRIM(RTRIM(@param4)) = '' THEN Diagnostico
+          ELSE @param4
+        END
+      WHERE NumeroVisita = @param0;
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      ROLLBACK;
+      THROW;
+    END CATCH;
+  `
+    : `
     BEGIN TRY
       BEGIN TRANSACTION;
 
@@ -2026,6 +2277,12 @@ async function asignarPacienteACama(numeroVisita, datos) {
     { value: clasePaciente },
     { value: servicioHospital },
   ];
+  if (abiertoSinCama?.length) {
+    params.push(
+      { value: Number(abiertoSinCama[0].FechaAdmision) || 0 },
+      { value: Number(abiertoSinCama[0].HoraAdmision) || 0 },
+    );
+  }
 
   try {
     await executeQuery(query, params);

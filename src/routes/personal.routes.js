@@ -18,6 +18,7 @@ router.use(requireAuth, requireTenant);
 // Orden: rutas más específicas primero
 router.get('/next-id', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerProximoId);
 // Catálogos (dropdowns de "Datos Profesionales")
+router.get('/catalogos/sectores', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCatalogoSectores);
 router.get('/catalogos/especialidades', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarEspecialidades);
 router.get('/catalogos/funciones', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarFunciones);
 router.get('/catalogos/servicios', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarServicios);
@@ -29,6 +30,8 @@ router.get('/catalogos/empresas', requirePermiso('CONFIGURACION.PERSONAL.VER'), 
 router.get('/export-fields', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCamposExport);
 router.get('/sync-fisico/estado', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.estadoSyncFisico);
 router.post('/sync-desde-fisico', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.syncDesdeFisico);
+router.get('/cuentas-solo-nube', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCuentasSoloNube);
+router.post('/reparar-cuentas-solo-nube', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.repararCuentasSoloNube);
 router.post('/exportar', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.exportarPersonal);
 
 // Firma para PDFs clínicos (auth+tenant; sin permiso de configuración)

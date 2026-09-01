@@ -11,6 +11,7 @@
 const { executeQuery, sql, getRequestPool } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { createTenantOnce } = require('../context/tenantCache');
+const { getAuthCentralPool } = require('../config/authCentralDb');
 const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const {
@@ -56,6 +57,21 @@ const strOrNull = (v) => {
 	const s = String(v).trim();
 	return s === '' ? null : s;
 };
+
+/** Lee una columna sin importar mayúsculas (drivers TDS a veces minúsculan). */
+function col(row, ...names) {
+	if (!row) return undefined;
+	for (const n of names) {
+		if (Object.prototype.hasOwnProperty.call(row, n) && row[n] != null) return row[n];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const n of names) {
+		const v = lower[String(n).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
 
 const stripDiacritics = (s) =>
 	String(s)
@@ -145,6 +161,7 @@ function mapRow(row) {
 		ValorEspecialidad: row.ValorEspecialidad != null ? Number(row.ValorEspecialidad) : null,
 		ValorFunciones: row.ValorFunciones != null ? Number(row.ValorFunciones) : null,
 		ValorServicio: strOrNull(row.ValorServicio),
+		ServicioDescripcion: strOrNull(row.ServicioDescripcion),
 		ValorServicioParaFacturar: strOrNull(row.ValorServicioParaFacturar),
 		ValorCategoria: row.ValorCategoria != null ? Number(row.ValorCategoria) : null,
 		ValorClase: strOrNull(row.ValorClase),
@@ -213,7 +230,15 @@ async function listar(page = 1, limit = 30, search = '') {
 	const whereArgs = [];
 	if (hasSearch) {
 		whereParts.push(
-			`(p.ApellidoNombre LIKE @search OR CAST(p.Numero AS VARCHAR(20)) LIKE @search OR CAST(p.Valor AS VARCHAR(20)) LIKE @search)`,
+			`(p.ApellidoNombre LIKE @search
+			  OR CAST(p.Numero AS VARCHAR(20)) LIKE @search
+			  OR CAST(p.Valor AS VARCHAR(20)) LIKE @search
+			  OR CAST(p.Matricula AS VARCHAR(20)) LIKE @search
+			  OR CAST(p.MatriculaNacional AS VARCHAR(20)) LIKE @search
+			  OR EXISTS (
+			    SELECT 1 FROM dbo.imPassword pw
+			    WHERE pw.ValorPersonal = p.Valor AND pw.NombreRed LIKE @search
+			  ))`,
 		);
 	}
 	const whereSql = whereParts.join(' AND ');
@@ -242,7 +267,7 @@ async function listar(page = 1, limit = 30, search = '') {
 	`);
 
 	return {
-		data: dataRes.recordset.map(mapRow),
+		data: await _conDescripcionServicioLista(dataRes.recordset.map(mapRow)),
 		totalCount,
 		totalPages: Math.max(1, Math.ceil(totalCount / limit)),
 	};
@@ -253,7 +278,7 @@ async function obtenerPorId(valor) {
 		`SELECT ${SELECT_COLS} FROM dbo.imPersonal p WHERE p.Valor = @p0`,
 		[{ value: valor, type: 'Int' }],
 	);
-	return rows.length ? mapRow(rows[0]) : null;
+	return rows.length ? _conDescripcionServicio(mapRow(rows[0])) : null;
 }
 
 /** Obtiene el próximo Valor (MAX+1) excluyendo admins. */
@@ -391,6 +416,140 @@ const ensureMatriculaEspecialidadUnique = createTenantOnce(async () => {
 	}
 });
 
+function isDuplicateKeyError(err) {
+	const n = err?.number ?? err?.originalError?.info?.number;
+	if (n === 2601 || n === 2627) return true;
+	const msg = String(err?.message || '').toLowerCase();
+	return (
+		msg.includes('duplicate key') ||
+		msg.includes('violation of unique key') ||
+		msg.includes('violation of primary key')
+	);
+}
+
+async function existeFichaFisica(valor) {
+	const rows = await executeQuery(`SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Valor = @p0`, [
+		{ value: Number(valor), type: 'Int' },
+	]);
+	return rows.length > 0;
+}
+
+async function insertarFichaFisica(nuevoValor, input, matriculaFinal) {
+	await executeQuery(
+		`
+		INSERT INTO dbo.imPersonal (
+			Valor, Matricula, MatriculaNacional, TipoDocumento, Numero,
+			ApellidoNombre, Domicilio, ValorLocalidad, Provincia, Nacionalidad,
+			FechaNacimiento, Sexo, EstadoCivil, Telefono,
+			ValorEspecialidad, ValorFunciones, ValorServicio, ValorCategoria,
+			ValorClase, LugarTrabajo, LugarCobro, NumeroSocio,
+			ConvenioFacturacion, IdEspecialidadME, Estado
+		) VALUES (
+			@p0, @p1, @p2, @p3, @p4,
+			@p5, @p6, @p7, @p8, @p9,
+			@p10, @p11, @p12, @p13,
+			@p14, @p15, NULL, @p16,
+			@p17, @p18, @p19, @p20,
+			@p21, @p22, @p23
+		)
+		`,
+		[
+			{ value: nuevoValor, type: 'Int' },
+			{ value: matriculaFinal, type: 'Int' },
+			{ value: input.MatriculaNacional, type: 'Int' },
+			{ value: input.TipoDocumento, type: 'VarChar', length: 10 },
+			{ value: input.Numero, type: 'Int' },
+			{ value: input.ApellidoNombre, type: 'VarChar', length: 80 },
+			{ value: input.Domicilio, type: 'VarChar', length: 100 },
+			{ value: input.ValorLocalidad, type: 'Int' },
+			{ value: input.Provincia, type: 'SmallInt' },
+			{ value: input.Nacionalidad, type: 'VarChar', length: 2 },
+			{ value: input.FechaNacimiento, type: 'Int' },
+			{ value: input.Sexo || ' ', type: 'Char', length: 1 },
+			{ value: input.EstadoCivil || ' ', type: 'Char', length: 1 },
+			{ value: input.Telefono, type: 'VarChar', length: 30 },
+			{ value: input.ValorEspecialidad, type: 'SmallInt' },
+			{ value: input.ValorFunciones, type: 'TinyInt' },
+			{ value: input.ValorCategoria, type: 'TinyInt' },
+			{ value: input.ValorClase, type: 'VarChar' },
+			{ value: input.LugarTrabajo, type: 'VarChar' },
+			{ value: input.LugarCobro, type: 'VarChar' },
+			{ value: input.NumeroSocio, type: 'Int' },
+			{ value: input.ConvenioFacturacion, type: 'VarChar' },
+			{ value: input.IdEspecialidadME, type: 'Int' },
+			{ value: input.Estado != null ? input.Estado : 1, type: 'TinyInt' },
+		],
+	);
+}
+
+async function mysqlAuthQuery(sqlText, params = []) {
+	if (!authCentralService.isAuthCentralEnabled()) return [];
+	const pool = await getAuthCentralPool();
+	const [rows] = await pool.query(sqlText, params);
+	return rows || [];
+}
+
+function apellidoNombreDesdeNube(row) {
+	const fromFicha = strOrNull(row.ApellidoNombre);
+	if (fromFicha) return fromFicha;
+	const ape = String(row.Apellido || '').trim();
+	const nom = String(row.Nombres || '').trim();
+	return `${ape}${ape && nom ? ', ' : ''}${nom}`.trim() || `Usuario ${row.ValorPersonal}`;
+}
+
+async function leerCuentasNubeEmpresa(emp) {
+	try {
+		return await mysqlAuthQuery(
+			`
+    SELECT
+      pw.ValorPersonal AS ValorPersonal,
+      pw.NombreRed AS NombreRed,
+      pw.Password AS Password,
+      pw.Apellido AS Apellido,
+      pw.Nombres AS Nombres,
+      pw.NumeroDocumento AS NumeroDocumento,
+      pw.CodOperador AS CodOperador,
+      pw.Legajo AS Legajo,
+      p.ApellidoNombre AS ApellidoNombre,
+      p.Numero AS Numero,
+      p.TipoDocumento AS TipoDocumento,
+      p.Matricula AS Matricula,
+      p.Telefono AS Telefono,
+      p.Domicilio AS Domicilio,
+      p.Sexo AS Sexo,
+      p.Rol AS Rol
+    FROM \`imPassword\` pw
+    LEFT JOIN \`imPersonal\` p
+      ON p.IdEmpresa = pw.IdEmpresa AND p.Valor = pw.ValorPersonal
+    WHERE pw.IdEmpresa = ?
+    ORDER BY pw.Apellido, pw.Nombres, pw.NombreRed
+    `,
+			[emp],
+		);
+	} catch (e) {
+		console.warn('[personal] leerCuentasNubeEmpresa join:', e.message);
+		return mysqlAuthQuery(
+			`
+    SELECT
+      pw.ValorPersonal AS ValorPersonal,
+      pw.NombreRed AS NombreRed,
+      pw.Password AS Password,
+      pw.Apellido AS Apellido,
+      pw.Nombres AS Nombres,
+      pw.NumeroDocumento AS NumeroDocumento,
+      pw.CodOperador AS CodOperador,
+      pw.Legajo AS Legajo,
+      NULL AS ApellidoNombre, NULL AS Numero, NULL AS TipoDocumento,
+      NULL AS Matricula, NULL AS Telefono, NULL AS Domicilio, NULL AS Sexo, NULL AS Rol
+    FROM \`imPassword\` pw
+    WHERE pw.IdEmpresa = ?
+    ORDER BY pw.Apellido, pw.Nombres, pw.NombreRed
+    `,
+			[emp],
+		);
+	}
+}
+
 async function crear(data) {
 	const input = normalizarInput(data);
 
@@ -453,126 +612,110 @@ async function crear(data) {
 		await executeQuery(`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`, idParam).catch(
 			() => {},
 		);
+		await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, idParam).catch(
+			() => {},
+		);
 		await executeQuery(`DELETE FROM dbo.imPersonal WHERE Valor = @p0`, idParam).catch(() => {});
 		const tenantIdRollback = resolveTenantEmpresaId();
-		if (tenantIdRollback != null) {
-			await authCentralSync.purgePersonalAuth(valorAlta, tenantIdRollback).catch(() => {});
+		if (tenantIdRollback == null) return;
+		try {
+			await authCentralSync.purgePersonalAuth(valorAlta, tenantIdRollback);
+		} catch (purgeErr) {
+			const e = new Error(
+				`El alta se deshizo en el hospital, pero la cuenta de acceso pudo quedar en la nube (${purgeErr.message}). No uses esa cuenta hasta reparar la ficha física.`,
+			);
+			e.statusCode = 500;
+			e.purgeFailed = true;
+			throw e;
 		}
+	};
+
+	const rollbackOPropagar = async (valorAlta, originalErr) => {
+		try {
+			await rollbackAlta(valorAlta);
+		} catch (rbErr) {
+			throw rbErr.purgeFailed ? rbErr : originalErr;
+		}
+		originalErr.didRollback = true;
+		throw originalErr;
 	};
 
 	await ensureMatriculaEspecialidadUnique();
 
-	// Intentar hasta 5 veces por si hay carrera en MAX+1
+	// Solo se reintenta el INSERT inicial (carrera de MAX+1). Si ya hubo efectos
+	// en la nube, un retry silencioso dejaba la cuenta logueable sin ficha física.
 	let lastErr = null;
 	for (let intento = 0; intento < 5; intento++) {
 		const nuevoValor = await obtenerProximoValor();
-		// Si el usuario NO ingresó matrícula provincial, la seteamos en Valor.
-		const matriculaFinal =
-			input.MatriculaProvincial != null ? input.MatriculaProvincial : nuevoValor;
+		const matriculaFinal = input.MatriculaProvincial;
+		const codOperadorAlta =
+			matriculaFinal != null ? String(matriculaFinal) : String(nuevoValor);
 		try {
-			await executeQuery(
-				`
-				INSERT INTO dbo.imPersonal (
-					Valor, Matricula, MatriculaNacional, TipoDocumento, Numero,
-					ApellidoNombre, Domicilio, ValorLocalidad, Provincia, Nacionalidad,
-					FechaNacimiento, Sexo, EstadoCivil, Telefono,
-					ValorEspecialidad, ValorFunciones, ValorServicio, ValorCategoria,
-					ValorClase, LugarTrabajo, LugarCobro, NumeroSocio,
-					ConvenioFacturacion, IdEspecialidadME, Estado
-				) VALUES (
-					@p0, @p1, @p2, @p3, @p4,
-					@p5, @p6, @p7, @p8, @p9,
-					@p10, @p11, @p12, @p13,
-					@p14, @p15, NULL, @p16,
-					@p17, @p18, @p19, @p20,
-					@p21, @p22, @p23
-				)
-				`,
-				[
-					{ value: nuevoValor, type: 'Int' },
-					{ value: matriculaFinal, type: 'Int' },
-					{ value: input.MatriculaNacional, type: 'Int' },
-					{ value: input.TipoDocumento, type: 'VarChar', length: 10 },
-					{ value: input.Numero, type: 'Int' },
-					{ value: input.ApellidoNombre, type: 'VarChar', length: 80 },
-					{ value: input.Domicilio, type: 'VarChar', length: 100 },
-					{ value: input.ValorLocalidad, type: 'Int' },
-					{ value: input.Provincia, type: 'SmallInt' },
-					{ value: input.Nacionalidad, type: 'VarChar', length: 2 },
-					{ value: input.FechaNacimiento, type: 'Int' },
-					{ value: input.Sexo || ' ', type: 'Char', length: 1 },
-					{ value: input.EstadoCivil || ' ', type: 'Char', length: 1 },
-					{ value: input.Telefono, type: 'VarChar', length: 30 },
-					{ value: input.ValorEspecialidad, type: 'SmallInt' },
-					{ value: input.ValorFunciones, type: 'TinyInt' },
-					{ value: input.ValorCategoria, type: 'TinyInt' },
-					{ value: input.ValorClase, type: 'VarChar' },
-					{ value: input.LugarTrabajo, type: 'VarChar' },
-					{ value: input.LugarCobro, type: 'VarChar' },
-					{ value: input.NumeroSocio, type: 'Int' },
-					{ value: input.ConvenioFacturacion, type: 'VarChar' },
-					{ value: input.IdEspecialidadME, type: 'Int' },
-					{ value: 1, type: 'TinyInt' },
-				],
+			await insertarFichaFisica(nuevoValor, input, matriculaFinal);
+		} catch (err) {
+			if (isDuplicateKeyError(err)) {
+				lastErr = err;
+				continue;
+			}
+			throw err;
+		}
+
+		if (!(await existeFichaFisica(nuevoValor))) {
+			const e = new Error(
+				'La ficha no quedó grabada en la base del hospital. No se creó el usuario de acceso. Reintentá el alta.',
 			);
+			e.statusCode = 500;
+			throw e;
+		}
+
+		try {
+			const tenantIdPre = resolveTenantEmpresaId();
+			const deferAuthSync = crearUsuario && tenantIdPre != null;
+
 			if (crearUsuario) {
-				try {
-					const idParam = [{ value: nuevoValor, type: 'Int' }];
-					// Huérfanos de una baja incompleta (mismo Valor reutilizado).
-					await executeQuery(
-						`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`,
-						idParam,
-					).catch(() => {});
-					await executeQuery(
-						`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`,
-						idParam,
-					).catch(() => {});
-					await executeQuery(
-						`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`,
-						idParam,
-					).catch(() => {});
+				const idParam = [{ value: nuevoValor, type: 'Int' }];
+				await executeQuery(`DELETE FROM dbo.imPassword WHERE ValorPersonal = @p0`, idParam).catch(
+					() => {},
+				);
+				await executeQuery(
+					`DELETE FROM dbo.imPersonalEmpresas WHERE IdPersonal = @p0`,
+					idParam,
+				).catch(() => {});
+				await executeQuery(
+					`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`,
+					idParam,
+				).catch(() => {});
 
-					const tenantIdPre = resolveTenantEmpresaId();
-					if (tenantIdPre != null) {
-						await authCentralSync.purgePersonalAuth(nuevoValor, tenantIdPre);
-					}
+				if (tenantIdPre != null) {
+					await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor, {
+						skipSync: true,
+					});
+				}
 
-					// Vínculo empresa antes del login bundle (MySQL exige imPersonalEmpresas).
-					if (tenantIdPre != null) {
-						await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor);
-					}
-
-					await usersService.crearImPasswordParaPersonal(nuevoValor, {
+				await usersService.crearImPasswordParaPersonal(
+					nuevoValor,
+					{
 						NombreRed: nombreRedUsuario,
 						Password: passwordUsuario,
 						ApellidoNombre: input.ApellidoNombre,
 						NumeroDocumento: input.Numero != null ? String(input.Numero) : '',
-						Legajo: String(matriculaFinal),
-						CodOperador: String(matriculaFinal),
-					});
-
-					if (tenantIdPre != null) {
-						await authCentralSync.syncPersonal(tenantIdPre, nuevoValor);
-						await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
-					}
-				} catch (userErr) {
-					await rollbackAlta(nuevoValor);
-					throw userErr;
-				}
-			} else {
-				const tenantId = resolveTenantEmpresaId();
-				if (tenantId != null) {
-					await authCentralSync.vincularUsuarioEmpresaTenant(tenantId, nuevoValor);
-					await authCentralSync.syncPersonal(tenantId, nuevoValor);
-				}
+						Legajo: codOperadorAlta,
+						CodOperador: codOperadorAlta,
+					},
+					{ skipAuthSync: deferAuthSync },
+				);
+			} else if (tenantIdPre != null) {
+				await authCentralSync.vincularUsuarioEmpresaTenant(tenantIdPre, nuevoValor);
+				await authCentralSync.syncPersonal(tenantIdPre, nuevoValor);
 			}
 
 			try {
 				const rolesService = require('./roles.service');
-				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta);
+				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta, {
+					deferAuthSync,
+				});
 			} catch (roleErr) {
-				await rollbackAlta(nuevoValor);
-				throw roleErr;
+				await rollbackOPropagar(nuevoValor, roleErr);
 			}
 
 			const sectoresAlta = Array.isArray(data.sectores)
@@ -580,31 +723,46 @@ async function crear(data) {
 				: Array.isArray(data.Sectores)
 					? data.Sectores
 					: [];
-			const serviciosAlta = Array.isArray(data.servicios)
-				? data.servicios
-				: Array.isArray(data.Servicios)
-					? data.Servicios
-					: [];
-			if (sectoresAlta.length || serviciosAlta.length) {
+			if (sectoresAlta.length) {
 				try {
 					await reemplazarAsignacionesPersonal(nuevoValor, {
 						sectores: sectoresAlta,
-						servicios: serviciosAlta,
+						skipCloudSync: deferAuthSync,
 					});
 				} catch (asigErr) {
 					console.warn('[personal.crear] asignaciones:', asigErr?.message || asigErr);
 				}
 			}
 
-			return await obtenerPorId(nuevoValor);
-		} catch (err) {
-			const n = err?.number ?? err?.originalError?.info?.number;
-			// 2601/2627 = Duplicate key (PK). Reintentar.
-			if (n === 2601 || n === 2627) {
-				lastErr = err;
-				continue;
+			if (deferAuthSync) {
+				try {
+					await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
+				} catch (syncErr) {
+					console.warn('[personal.crear] syncUserLoginBundle:', syncErr?.message || syncErr);
+				}
 			}
-			throw err;
+
+			if (!(await existeFichaFisica(nuevoValor))) {
+				const e = new Error(
+					'La ficha desapareció de la base del hospital después del alta. Se anuló el acceso en la nube. Reintentá.',
+				);
+				e.statusCode = 500;
+				await rollbackOPropagar(nuevoValor, e);
+			}
+
+			const creado = await obtenerPorId(nuevoValor);
+			if (!creado) {
+				const e = new Error(
+					'El personal se grabó en el hospital pero no se pudo leer para mostrar. Buscalo en el listado antes de volver a crearlo.',
+				);
+				e.statusCode = 500;
+				e.skipRollback = true;
+				throw e;
+			}
+			return creado;
+		} catch (err) {
+			if (err?.purgeFailed || err?.didRollback || err?.skipRollback) throw err;
+			await rollbackOPropagar(nuevoValor, err);
 		}
 	}
 	throw lastErr || new Error('No se pudo crear el personal (conflicto de ID)');
@@ -640,10 +798,7 @@ async function actualizar(valor, data) {
 
 	await ensureMatriculaEspecialidadUnique();
 
-	// Si no mandaron matrícula provincial, caemos al Valor para mantener la
-	// unicidad del índice (no admite múltiples NULL).
-	const matriculaFinal =
-		input.MatriculaProvincial != null ? input.MatriculaProvincial : valor;
+	const matriculaFinal = input.MatriculaProvincial;
 
 	await executeQuery(
 		`
@@ -758,29 +913,52 @@ async function listarFunciones() {
 }
 
 async function listarServicios() {
-	const mapRows = (rows) =>
-		(rows || [])
-			.map((r) => ({
-				valor: String(r.Valor || '').trim(),
-				descripcion: String(r.Descripcion || r.Valor || '').trim(),
-			}))
-			.filter((r) => r.valor);
 	try {
-		return mapRows(
-			await executeQuery(`SELECT Valor, Descripcion FROM dbo.imServicios ORDER BY Descripcion`),
-		);
+		return await personalServicios.listarCatalogo();
 	} catch (err) {
-		try {
-			return mapRows(
-				await executeQuery(
-					`SELECT Valor, Descripcion FROM dbo.imServiciosMedicos ORDER BY Descripcion`,
-				),
-			);
-		} catch (err2) {
-			console.warn('[personal.listarServicios]', err2?.message || err?.message);
-			return [];
-		}
+		console.warn('[personal.listarServicios]', err?.message || err);
+		return [];
 	}
+}
+
+async function listarCatalogoSectores() {
+	const sectoresService = require('./sectores.service');
+	return sectoresService.obtenerSectores();
+}
+
+async function _conDescripcionServicio(mapped) {
+	if (!mapped) return mapped;
+	try {
+		const cat = await personalServicios.catalogoDescripciones();
+		const desc = personalServicios.descripcionDe(
+			mapped.ValorServicio,
+			mapped.ServicioDescripcion,
+			cat,
+		);
+		mapped.ServicioDescripcion = desc || null;
+	} catch (err) {
+		console.warn('[personal.servicioDescripcion]', err?.message || err);
+	}
+	return mapped;
+}
+
+async function _conDescripcionServicioLista(rows) {
+	if (!rows?.length) return rows;
+	try {
+		const cat = await personalServicios.catalogoDescripciones();
+		for (const mapped of rows) {
+			if (!mapped) continue;
+			const desc = personalServicios.descripcionDe(
+				mapped.ValorServicio,
+				mapped.ServicioDescripcion,
+				cat,
+			);
+			mapped.ServicioDescripcion = desc || null;
+		}
+	} catch (err) {
+		console.warn('[personal.servicioDescripcion]', err?.message || err);
+	}
+	return rows;
 }
 
 async function listarCategorias() {
@@ -1050,19 +1228,39 @@ const ensurePersonalSectoresTable = createTenantOnce(async () => {
 
 async function listarSectoresPersonal(valor) {
 	try {
-		const rows = await executeQuery(
-			`SELECT RTRIM(LTRIM(ps.idSector)) AS idSector,
-			        RTRIM(LTRIM(ISNULL(s.Descripcion, ps.idSector))) AS Descripcion
+		const sqlConServicio = `
+			SELECT RTRIM(LTRIM(ps.idSector)) AS idSector,
+			        RTRIM(LTRIM(ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ''))) AS Descripcion,
+			        RTRIM(LTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS ValorServicio,
+			        RTRIM(LTRIM(CAST(ISNULL(srv.Descripcion, '') AS VARCHAR(200)))) AS DescripcionServicio
 			 FROM dbo.imPersonalSectores ps
-			 LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(s.Valor)) = LTRIM(RTRIM(ps.idSector))
+			 LEFT JOIN dbo.imSectores s
+			   ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+			 LEFT JOIN dbo.imServicios srv
+			   ON LTRIM(RTRIM(CAST(srv.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(s.ValorServicio AS VARCHAR(50))))
 			 WHERE ps.idPersonal = @p0
-			 ORDER BY ISNULL(s.Descripcion, ps.idSector)`,
-			[{ value: valor, type: 'Int' }],
-		);
-		return (rows || []).map((r) => ({
-			idSector: String(r.idSector || '').trim(),
-			Descripcion: String(r.Descripcion || '').trim(),
-		})).filter((r) => r.idSector);
+			 ORDER BY ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ps.idSector)`;
+		const sqlMin = `
+			SELECT RTRIM(LTRIM(ps.idSector)) AS idSector,
+			        RTRIM(LTRIM(ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ''))) AS Descripcion
+			 FROM dbo.imPersonalSectores ps
+			 LEFT JOIN dbo.imSectores s ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
+			 WHERE ps.idPersonal = @p0
+			 ORDER BY ISNULL(NULLIF(LTRIM(RTRIM(s.Descripcion)), ''), ps.idSector)`;
+		let rows = [];
+		try {
+			rows = await executeQuery(sqlConServicio, [{ value: valor, type: 'Int' }]);
+		} catch {
+			rows = await executeQuery(sqlMin, [{ value: valor, type: 'Int' }]);
+		}
+		return (rows || [])
+			.map((r) => ({
+				idSector: String(col(r, 'idSector') || '').trim(),
+				Descripcion: String(col(r, 'Descripcion') || '').trim(),
+				ValorServicio: String(col(r, 'ValorServicio') || '').trim(),
+				DescripcionServicio: String(col(r, 'DescripcionServicio') || '').trim(),
+			}))
+			.filter((r) => r.idSector);
 	} catch (err) {
 		console.warn('[personal.listarSectoresPersonal]', err?.message);
 		return [];
@@ -1136,7 +1334,7 @@ async function quitarServicioPedidosPersonal(valor, idServicio) {
 	return personalServicios.quitar(valor, idServicio);
 }
 
-async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
+async function reemplazarAsignacionesPersonal(valor, { sectores, servicios, skipCloudSync = false }) {
 	const vp = Number(valor);
 	if (Array.isArray(sectores)) {
 		await ensurePersonalSectoresTable();
@@ -1157,7 +1355,7 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 			);
 		}
 		const tenantId = resolveTenantEmpresaId();
-		if (tenantId != null) {
+		if (tenantId != null && !skipCloudSync) {
 			try {
 				await authCentralSync.syncPersonalSectores(tenantId, vp);
 			} catch (err) {
@@ -1169,7 +1367,7 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios }) {
 	if (Array.isArray(servicios)) {
 		srvList = await personalServicios.reemplazar(vp, servicios);
 		const tenantId = resolveTenantEmpresaId();
-		if (tenantId != null) {
+		if (tenantId != null && !skipCloudSync) {
 			try {
 				await authCentralSync.syncPersonalServicios(tenantId, vp);
 			} catch (err) {
@@ -1462,6 +1660,156 @@ async function cambiarPasswordCuentaPersonal(id, nuevaPassword) {
 	return true;
 }
 
+/**
+ * Cuentas en la nube (login MySQL) sin ficha en el SQL del hospital.
+ * Es el caso "puede loguearse pero no aparece en Administrador de Personal".
+ */
+async function listarCuentasSoloNube() {
+	const emp = resolveTenantEmpresaId();
+	if (emp == null || !authCentralService.isAuthCentralEnabled()) return [];
+
+	const rows = await leerCuentasNubeEmpresa(emp);
+
+	const ids = [
+		...new Set(
+			(rows || [])
+				.map((r) => Number(r.ValorPersonal))
+				.filter((n) => Number.isFinite(n) && n > 0),
+		),
+	];
+	if (!ids.length) return [];
+
+	const fisico = await executeQuery(
+		`SELECT Valor FROM dbo.imPersonal WHERE Valor IN (${ids.map((_, i) => `@p${i}`).join(', ')})`,
+		ids.map((id) => ({ value: id, type: 'Int' })),
+	).catch(() => []);
+	const have = new Set((fisico || []).map((r) => Number(r.Valor)));
+
+	return (rows || [])
+		.filter((r) => !have.has(Number(r.ValorPersonal)))
+		.map((r) => ({
+			valor: Number(r.ValorPersonal),
+			nombreRed: strOrNull(r.NombreRed),
+			apellidoNombre: apellidoNombreDesdeNube(r),
+			numeroDocumento: r.Numero != null ? Number(r.Numero) : numOrNull(r.NumeroDocumento),
+			ocultoPorIdReservado: Number(r.ValorPersonal) >= ADMIN_VALOR_THRESHOLD,
+		}));
+}
+
+async function repararUnaCuentaSoloNube(row, emp) {
+	const valor = Number(row.ValorPersonal);
+	if (!Number.isFinite(valor) || valor <= 0) {
+		throw new Error('ID de personal inválido');
+	}
+	if (await existeFichaFisica(valor)) return { valor, accion: 'ya_existia' };
+
+	const apellidoNombre = truncStr(apellidoNombreDesdeNube(row), 80) || `Usuario ${valor}`;
+	const numero = numOrNull(row.Numero != null ? row.Numero : row.NumeroDocumento);
+	const matricula = numOrNull(row.Matricula) || valor;
+	const input = {
+		TipoDocumento: truncStr(row.TipoDocumento, 10) || 'DNI',
+		Numero: numero,
+		ApellidoNombre: apellidoNombre,
+		Domicilio: truncStr(row.Domicilio, 100),
+		ValorLocalidad: null,
+		Provincia: null,
+		Nacionalidad: null,
+		FechaNacimiento: null,
+		Sexo: truncStr(row.Sexo, 1),
+		EstadoCivil: null,
+		Telefono: truncStr(row.Telefono, 30),
+		MatriculaProvincial: matricula,
+		MatriculaNacional: null,
+		ValorEspecialidad: null,
+		ValorFunciones: null,
+		ValorCategoria: null,
+		ValorClase: null,
+		LugarTrabajo: null,
+		LugarCobro: null,
+		NumeroSocio: null,
+		ConvenioFacturacion: null,
+		IdEspecialidadME: null,
+		Estado: 1,
+	};
+
+	try {
+		await insertarFichaFisica(valor, input, matricula);
+	} catch (err) {
+		if (isDuplicateKeyError(err) && numero != null) {
+			input.Numero = null;
+			input.MatriculaProvincial = valor;
+			await insertarFichaFisica(valor, input, valor);
+		} else {
+			throw err;
+		}
+	}
+
+	if (!(await existeFichaFisica(valor))) {
+		throw new Error('La ficha no quedó grabada en la base del hospital');
+	}
+
+	try {
+		await authCentralSync.vincularUsuarioEmpresaTenant(emp, valor);
+	} catch (vErr) {
+		console.warn(`[personal.reparar] vínculo Valor=${valor}:`, vErr.message);
+	}
+
+	const idRol = numOrNull(row.Rol);
+	if (idRol) {
+		try {
+			const rolesService = require('./roles.service');
+			await rolesService.asignarRolAPersonal(valor, idRol);
+		} catch (rolErr) {
+			console.warn(`[personal.reparar] rol Valor=${valor}:`, rolErr.message);
+		}
+	}
+
+	return { valor, accion: 'reparado' };
+}
+
+async function repararCuentasSoloNube() {
+	const emp = resolveTenantEmpresaId();
+	if (emp == null) {
+		const e = new Error('Se requiere empresa activa');
+		e.statusCode = 400;
+		throw e;
+	}
+	if (!authCentralService.isAuthCentralEnabled()) {
+		return { reparados: [], errores: [], total: 0 };
+	}
+
+	const rows = await leerCuentasNubeEmpresa(emp);
+
+	const reparados = [];
+	const errores = [];
+	for (const row of rows || []) {
+		const valor = Number(row.ValorPersonal);
+		if (!Number.isFinite(valor) || valor <= 0) continue;
+		if (await existeFichaFisica(valor)) continue;
+		try {
+			const r = await repararUnaCuentaSoloNube(row, emp);
+			reparados.push({
+				valor: r.valor,
+				nombreRed: strOrNull(row.NombreRed),
+				apellidoNombre: apellidoNombreDesdeNube(row),
+			});
+		} catch (err) {
+			errores.push({
+				valor,
+				nombreRed: strOrNull(row.NombreRed),
+				apellidoNombre: apellidoNombreDesdeNube(row),
+				error: String(err.message || err).slice(0, 240),
+			});
+		}
+	}
+
+	return {
+		total: reparados.length + errores.length,
+		reparados,
+		errores,
+	};
+}
+
 module.exports = {
 	listar,
 	obtenerPorId,
@@ -1472,6 +1820,7 @@ module.exports = {
 	listarEspecialidades,
 	listarFunciones,
 	listarServicios,
+	listarCatalogoSectores,
 	listarCategorias,
 	listarClases,
 	listarEmpresasCatalogo,
@@ -1500,4 +1849,6 @@ module.exports = {
 	crearCuentaPersonal,
 	actualizarCuentaPersonal,
 	cambiarPasswordCuentaPersonal,
+	listarCuentasSoloNube,
+	repararCuentasSoloNube,
 };

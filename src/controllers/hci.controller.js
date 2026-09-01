@@ -1,4 +1,5 @@
 const hciService = require('../services/hci.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para Historia Clínica de Ingreso
@@ -27,9 +28,9 @@ exports.getByNumeroVisita = async (req, res) => {
     
   } catch (error) {
     console.error('Error al obtener HC por visita:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener historia clínica',
+      mensaje: mensajeDeError(error, 'Error al obtener historia clínica'),
       error: error.message
     });
   }
@@ -66,9 +67,9 @@ exports.getById = async (req, res) => {
       });
     }
     
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener historia clínica',
+      mensaje: mensajeDeError(error, 'Error al obtener historia clínica'),
       error: error.message
     });
   }
@@ -97,9 +98,9 @@ exports.getByIdPaciente = async (req, res) => {
     
   } catch (error) {
     console.error('Error al obtener HC por paciente:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener historia clínica',
+      mensaje: mensajeDeError(error, 'Error al obtener historia clínica'),
       error: error.message
     });
   }
@@ -130,9 +131,9 @@ exports.crear = async (req, res) => {
     
   } catch (error) {
     console.error('Error al crear HC:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al crear historia clínica',
+      mensaje: mensajeDeError(error, 'Error al crear historia clínica'),
       error: error.message
     });
   }
@@ -178,9 +179,9 @@ exports.actualizar = async (req, res) => {
       });
     }
     
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al actualizar historia clínica',
+      mensaje: mensajeDeError(error, 'Error al actualizar historia clínica'),
       error: error.message
     });
   }
@@ -209,9 +210,9 @@ exports.eliminar = async (req, res) => {
     
   } catch (error) {
     console.error('Error al eliminar HC:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al eliminar historia clínica',
+      mensaje: mensajeDeError(error, 'Error al eliminar historia clínica'),
       error: error.message
     });
   }

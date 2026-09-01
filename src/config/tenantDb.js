@@ -13,6 +13,8 @@ const authCentralService = require('../services/authCentral.service');
 
 /** @type {Map<number, { pool: sql.ConnectionPool, key: string }>} */
 const poolCache = new Map();
+/** Conexiones en curso: evita N pools simultáneos al mismo SQL (Sarmiento, etc.). */
+const connectInflight = new Map();
 let empresasColumnsCache = null;
 
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
@@ -190,38 +192,59 @@ async function getTenantPool(idEmpresa) {
 		return cached.pool;
 	}
 
-	if (cached?.pool) {
-		try {
-			await cached.pool.close();
-		} catch {
-			/* ignore */
-		}
-	}
+	const inflightKey = `${id}|${key}`;
+	const pending = connectInflight.get(inflightKey);
+	if (pending) return pending;
 
-	const pool = new sql.ConnectionPool(config);
-	pool.on('error', (err) => {
-		console.error(`[tenant] error pool empresa ${id}:`, err.message);
-		poolCache.delete(id);
-	});
+	const connecting = (async () => {
+		const existing = poolCache.get(id);
+		if (existing && existing.key === key && existing.pool.connected) {
+			return existing.pool;
+		}
+		if (existing?.pool) {
+			try {
+				await existing.pool.close();
+			} catch {
+				/* ignore */
+			}
+			poolCache.delete(id);
+		}
+
+		const pool = new sql.ConnectionPool(config);
+		pool.on('error', (err) => {
+			console.error(`[tenant] error pool empresa ${id}:`, err.message);
+			poolCache.delete(id);
+		});
+		try {
+			await pool.connect();
+			console.log(
+				`[tenant] pool empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}`,
+			);
+		} catch (e) {
+			console.error(
+				`[tenant] SQL empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}:`,
+				e.message,
+			);
+			throw e;
+		}
+		poolCache.set(id, { pool, key });
+		return pool;
+	})();
+
+	connectInflight.set(inflightKey, connecting);
 	try {
-		await pool.connect();
-		console.log(
-			`[tenant] pool empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}`,
-		);
-	} catch (e) {
-		console.error(
-			`[tenant] SQL empresa ${id} → ${config.server}${config.port ? `:${config.port}` : ''}/${config.database}:`,
-			e.message,
-		);
-		throw e;
+		return await connecting;
+	} finally {
+		connectInflight.delete(inflightKey);
 	}
-	poolCache.set(id, { pool, key });
-	return pool;
 }
 
 /** Invalida pool cacheado tras cambiar credenciales SQL en Empresas (MySQL). */
 function invalidateTenantPool(idEmpresa) {
 	const id = Number(idEmpresa);
+	for (const k of [...connectInflight.keys()]) {
+		if (k.startsWith(`${id}|`)) connectInflight.delete(k);
+	}
 	const cached = poolCache.get(id);
 	if (cached?.pool) {
 		cached.pool.close().catch(() => {});

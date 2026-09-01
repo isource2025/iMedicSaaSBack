@@ -4,6 +4,7 @@
  */
 
 const razaService = require('../services/raza.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imRaza
@@ -24,7 +25,7 @@ const razaController = {
       });
     } catch (error) {
       console.error('Error en el controlador de razas:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener las razas',
         error: error.message
@@ -64,7 +65,7 @@ const razaController = {
       });
     } catch (error) {
       console.error('Error en el controlador de razas:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener la raza',
         error: error.message
@@ -121,7 +122,7 @@ const razaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear la raza',
         error: error.message
@@ -173,7 +174,7 @@ const razaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar la raza',
         error: error.message
@@ -215,7 +216,7 @@ const razaController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar la raza',
         error: error.message

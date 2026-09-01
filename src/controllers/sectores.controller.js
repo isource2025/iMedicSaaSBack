@@ -1,4 +1,5 @@
 const sectoresService = require('../services/sectores.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const obtenerSectores = async (req, res) => {
 	try {
@@ -10,8 +11,8 @@ const obtenerSectores = async (req, res) => {
 		});
 	} catch (error) {
 		console.error('Error en obtenerSectores:', error);
-		res.json({
-			success: true,
+		res.status(statusDeError(error)).json({
+			success: false,
 			data: [],
 			total: 0,
 			mensaje: error.message || 'Error al obtener sectores',
@@ -48,7 +49,7 @@ const obtenerServicios = async (req, res) => {
 		const data = await sectoresService.obtenerServiciosMedicos();
 		res.json({ success: true, data, total: data.length });
 	} catch (error) {
-		res.status(500).json({
+		res.status(statusDeError(error)).json({
 			success: false,
 			mensaje: error.message || 'Error al obtener servicios',
 		});

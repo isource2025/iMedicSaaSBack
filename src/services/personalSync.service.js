@@ -287,15 +287,17 @@ function mapNombreCatalogo(rows) {
 }
 
 /**
- * Upsert catálogo físico → MySQL (Valor + Descripcion, AmbInt si existe en ambos).
+ * Upsert catálogo físico → MySQL (Valor + Descripcion, AmbInt / ValorServicio si existen).
  */
-async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false } = {}) {
+async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false, valorServicio = false } = {}) {
 	const mysqlCols = await getMysqlColumnNames(mysqlTable);
 	const writeAmb = ambInt && mysqlCols.has('ambint');
+	const writeVs = valorServicio && mysqlCols.has('valorservicio');
+	const selectCols = ['Valor', 'Descripcion'];
+	if (writeAmb) selectCols.push('AmbInt');
+	if (writeVs) selectCols.push('ValorServicio');
 	const existing = await mysqlQuery(
-		writeAmb
-			? `SELECT Valor, Descripcion, AmbInt FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`
-			: `SELECT Valor, Descripcion FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`,
+		`SELECT ${selectCols.join(', ')} FROM ${q(mysqlTable)} WHERE IdEmpresa = ?`,
 		[emp],
 	);
 	const byValor = new Map(
@@ -304,6 +306,7 @@ async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false
 			{
 				desc: normCmp(rowField(r, 'Descripcion')),
 				amb: writeAmb ? normCmp(rowField(r, 'AmbInt')) : '',
+				vs: writeVs ? normCmp(rowField(r, 'ValorServicio')) : '',
 			},
 		]),
 	);
@@ -315,10 +318,12 @@ async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false
 		if (!valor) continue;
 		const desc = String(rowField(s, 'Descripcion') || '').trim() || valor;
 		const amb = writeAmb ? String(rowField(s, 'AmbInt') || '').trim() : '';
+		const vs = writeVs ? String(rowField(s, 'ValorServicio') || '').trim() : '';
 		const prev = byValor.get(valor);
 		const descChanged = !prev || prev.desc !== normCmp(desc);
 		const ambChanged = writeAmb && amb !== '' && (!prev || prev.amb !== normCmp(amb));
-		if (!descChanged && !ambChanged) continue;
+		const vsChanged = writeVs && (!prev || prev.vs !== normCmp(vs));
+		if (!descChanged && !ambChanged && !vsChanged) continue;
 		cambios += 1;
 		detalleCatalogo.push({
 			valor,
@@ -326,21 +331,25 @@ async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false
 			accion: prev === undefined ? 'alta' : 'actualizacion',
 			de: prev === undefined ? '—' : displayVal(prev.desc),
 		});
+		const cols = ['IdEmpresa', 'Valor', 'Descripcion'];
+		const vals = [emp, valor, desc];
+		const updates = ['Descripcion = VALUES(Descripcion)'];
 		if (writeAmb && (amb || prev === undefined)) {
-			await mysqlExec(
-				`INSERT INTO ${q(mysqlTable)} (IdEmpresa, Valor, Descripcion, AmbInt)
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion), AmbInt = VALUES(AmbInt)`,
-				[emp, valor, desc, amb || 'A'],
-			);
-		} else {
-			await mysqlExec(
-				`INSERT INTO ${q(mysqlTable)} (IdEmpresa, Valor, Descripcion)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE Descripcion = VALUES(Descripcion)`,
-				[emp, valor, desc],
-			);
+			cols.push('AmbInt');
+			vals.push(amb || 'A');
+			updates.push('AmbInt = VALUES(AmbInt)');
 		}
+		if (writeVs) {
+			cols.push('ValorServicio');
+			vals.push(vs);
+			updates.push('ValorServicio = VALUES(ValorServicio)');
+		}
+		await mysqlExec(
+			`INSERT INTO ${q(mysqlTable)} (${cols.join(', ')})
+       VALUES (${cols.map(() => '?').join(', ')})
+       ON DUPLICATE KEY UPDATE ${updates.join(', ')}`,
+			vals,
+		);
 	}
 	return { catalogo: (fisicoRows || []).length, catalogoCambios: cambios, detalleCatalogo };
 }
@@ -454,12 +463,15 @@ async function syncAsignacionesMysql(emp, { mysqlTable, idItemCol, asignRows, la
 	};
 }
 
-async function leerCatalogoFisico(pool, tabla, { ambInt = false } = {}) {
+async function leerCatalogoFisico(pool, tabla, { ambInt = false, valorServicio = false } = {}) {
 	const allowed = new Set(['imSectores', 'imServicios']);
 	if (!allowed.has(tabla)) {
 		throw new Error(`Catálogo físico no permitido: ${tabla}`);
 	}
-	if (ambInt) {
+	const extra = [];
+	if (ambInt) extra.push(`RTRIM(LTRIM(ISNULL(AmbInt, ''))) AS AmbInt`);
+	if (valorServicio) extra.push(`RTRIM(LTRIM(ISNULL(ValorServicio, ''))) AS ValorServicio`);
+	if (extra.length) {
 		try {
 			return await queryFisicoRecordset(
 				pool,
@@ -467,12 +479,12 @@ async function leerCatalogoFisico(pool, tabla, { ambInt = false } = {}) {
       SELECT
         Valor,
         RTRIM(LTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
-        RTRIM(LTRIM(ISNULL(AmbInt, ''))) AS AmbInt
+        ${extra.join(',\n        ')}
       FROM dbo.${tabla}
     `,
 			);
 		} catch {
-			/* AmbInt puede no existir en este SQL físico */
+			/* columnas opcionales ausentes en este SQL físico */
 		}
 	}
 	return queryFisicoRecordset(
@@ -484,11 +496,19 @@ async function leerCatalogoFisico(pool, tabla, { ambInt = false } = {}) {
 	);
 }
 
+async function ensureImSectoresNubeColumns() {
+	await mysqlExec(
+		`ALTER TABLE ${q('imSectores')} ADD COLUMN ValorServicio VARCHAR(50) NULL`,
+	).catch(() => {});
+	await mysqlExec(`ALTER TABLE ${q('imSectores')} ADD COLUMN AmbInt VARCHAR(4) NULL`).catch(() => {});
+}
+
 async function syncSectoresDesdeFisico(idEmpresa, pool) {
 	const emp = Number(idEmpresa);
+	await ensureImSectoresNubeColumns();
 	let secRows = [];
 	try {
-		secRows = await leerCatalogoFisico(pool, 'imSectores', { ambInt: true });
+		secRows = await leerCatalogoFisico(pool, 'imSectores', { ambInt: true, valorServicio: true });
 	} catch (e) {
 		console.warn('[personalSync] catálogo imSectores físico:', e.message);
 		return {
@@ -498,7 +518,7 @@ async function syncSectoresDesdeFisico(idEmpresa, pool) {
 		};
 	}
 
-	const cat = await upsertCatalogoMysql(emp, 'imSectores', secRows, { ambInt: true });
+	const cat = await upsertCatalogoMysql(emp, 'imSectores', secRows, { ambInt: true, valorServicio: true });
 
 	let asignRows = null;
 	try {
@@ -1557,11 +1577,76 @@ function buildSyncInforme({ bruto: r, personal, passwords, sec, srv, vinculos, r
 	};
 }
 
+/**
+ * Solo catálogos (y asignaciones) de sectores y servicios: SQL físico → MySQL nube.
+ */
+async function syncCatalogosDesdeFisico(idEmpresa) {
+	assertAuthCentral();
+	const emp = resolveIdEmpresa(idEmpresa);
+	const row = await loadEmpresaConnectionRow(emp);
+	if (!empresaRowHasSqlConnection(row)) {
+		const e = new Error(
+			'Esta empresa no tiene conexión al servidor físico configurada en Super Admin',
+		);
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const pool = await getTenantPool(emp);
+	let sectores;
+	try {
+		sectores = await syncSectoresDesdeFisico(emp, pool);
+	} catch (e) {
+		const err = new Error(`No se pudieron traer sectores: ${e.message}`);
+		err.statusCode = 400;
+		throw err;
+	}
+	let servicios;
+	try {
+		servicios = await syncServiciosDesdeFisico(emp, pool);
+	} catch (e) {
+		const err = new Error(`No se pudieron traer servicios: ${e.message}`);
+		err.statusCode = 400;
+		throw err;
+	}
+
+	const secCambios = Number(sectores.sectoresCatalogoCambios) || 0;
+	const srvCambios = Number(servicios.catalogoCambios) || 0;
+	const secAsig = Number(sectores.asignaciones) || 0;
+	const srvAsig = Number(servicios.asignaciones) || 0;
+	const cambios = secCambios + srvCambios + secAsig + srvAsig;
+	let mensaje;
+	if (cambios === 0) {
+		mensaje =
+			'La nube ya estaba al día. No hubo cambios en sectores ni servicios respecto al servidor físico.';
+	} else {
+		mensaje = 'Se copió la configuración del servidor físico a la nube.';
+	}
+
+	return {
+		mensaje,
+		sinCambios: cambios === 0,
+		sectores: {
+			catalogo: Number(sectores.sectoresCatalogo) || 0,
+			cambios: secCambios,
+			asignaciones: secAsig,
+			detalle: sectores.detalleCatalogo || [],
+		},
+		servicios: {
+			catalogo: Number(servicios.catalogo) || 0,
+			cambios: srvCambios,
+			asignaciones: srvAsig,
+			detalle: servicios.detalleCatalogo || [],
+		},
+	};
+}
+
 module.exports = {
 	listExportFields,
 	puedeSyncDesdeFisico,
 	ensureImPersonalExportColumns,
 	syncPersonalDesdeFisico,
+	syncCatalogosDesdeFisico,
 	listarParaExport,
 	PERSONAL_SYNC_COLUMNS,
 };

@@ -1,5 +1,6 @@
 const coberturaService = require('../services/cobertura.service');
 const afiliacionService = require('../services/afiliacion.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 async function getCobertura(req, res) {
 	try {
@@ -7,7 +8,7 @@ async function getCobertura(req, res) {
 		res.json(data);
 	} catch (error) {
 		console.error('Error al obtener cobertura:', error);
-		res.status(500).json({ error: 'Error al obtener cobertura' });
+		res.status(statusDeError(error)).json({ error: 'Error al obtener cobertura' });
 	}
 }
 
@@ -21,7 +22,7 @@ async function validarAfiliado(req, res) {
 		res.json(data);
 	} catch (error) {
 		console.error('Error al validar afiliado:', error);
-		res.status(500).json({ error: 'Error al validar afiliado' });
+		res.status(statusDeError(error)).json({ error: 'Error al validar afiliado' });
 	}
 }
 

@@ -90,11 +90,13 @@ function buildDisplayName(usuario, username) {
 	return { nombre: red || 'Usuario', apellido: '', full: red || 'Usuario' };
 }
 
-function buildJwtPayload(userData, idEmpresa, rol) {
+function buildJwtPayload(userData, idEmpresa, rol, idSector, sectores) {
+	const { compactSectoresJwt } = require('../utils/sectoresSesion');
 	const matricula =
 		userData.Matricula != null && Number(userData.Matricula) > 0
 			? Number(userData.Matricula)
 			: null;
+	const sector = String(idSector || '').trim();
 	return {
 		usuario: {
 			id: userData.ValorPersonal,
@@ -109,31 +111,70 @@ function buildJwtPayload(userData, idEmpresa, rol) {
 			idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0
 				? Number(idEmpresa)
 				: null,
+		idSector: sector || '',
+		sectores: compactSectoresJwt(sectores),
 	};
 }
 
-async function resolverSectorAutomatico(username, idEmpresaSesion, usuario, esSuperAdmin) {
+function mapSectoresLogin(rows, valorPersonal) {
+	const seen = new Set();
+	const out = [];
+	for (const s of rows || []) {
+		const idSector = String(s.idSector || s.IdSector || '').trim();
+		if (!idSector) continue;
+		const k = idSector.toUpperCase();
+		if (seen.has(k)) continue;
+		seen.add(k);
+		out.push({
+			idPersonal: String(s.idPersonal || valorPersonal || ''),
+			idSector,
+			descripcion: String(s.descripcionSector || s.descripcion || idSector).trim(),
+			valorServicio: String(s.valorServicio || s.ValorServicio || '').trim(),
+		});
+	}
+	return out;
+}
+
+async function resolverSectorSesion(username, idEmpresaSesion, usuario, esSuperAdmin, idSectorBody) {
 	if (esSuperAdmin || authService.eximeSeleccionSectorPorUsuario(usuario)) {
 		return {
 			idPersonal: usuario.ValorPersonal,
 			idSector: '',
 			descripcion: esSuperAdmin ? 'Plataforma' : 'Administración',
+			sectores: [],
 		};
 	}
-	const sectores = await authService.obtenerSectoresPorUsuarioConTenant(username, idEmpresaSesion);
-	if (sectores.length >= 1) {
-		const s = sectores[0];
+	const sectores = mapSectoresLogin(
+		await authService.obtenerSectoresPorUsuarioConTenant(username, idEmpresaSesion),
+		usuario.ValorPersonal,
+	);
+	if (!sectores.length) {
 		return {
-			idPersonal: s.idPersonal,
-			idSector: s.idSector,
-			descripcion: s.descripcionSector || 'Sector',
+			idPersonal: usuario.ValorPersonal,
+			idSector: '',
+			descripcion: '',
+			sectores,
 		};
 	}
-	return {
-		idPersonal: usuario.ValorPersonal,
-		idSector: '',
-		descripcion: '',
-	};
+	if (sectores.length === 1) {
+		return { ...sectores[0], sectores };
+	}
+	const wanted = String(idSectorBody || '').trim().toUpperCase();
+	if (wanted) {
+		const hit = sectores.find((s) => s.idSector.toUpperCase() === wanted);
+		if (hit) return { ...hit, sectores };
+		const err = new Error('El sector seleccionado no está asignado a su usuario');
+		err.statusCode = 403;
+		throw err;
+	}
+	const e = new Error('MULTI_SECTOR');
+	e.statusCode = 200;
+	e.sectores = sectores.map((s) => ({
+		idSector: s.idSector,
+		descripcion: s.descripcion || s.idSector,
+		valorServicio: s.valorServicio || '',
+	}));
+	throw e;
 }
 
 async function completarLogin({
@@ -142,6 +183,7 @@ async function completarLogin({
 	usuario,
 	idEmpresaSesion,
 	idEmpresaBody,
+	idSectorBody,
 	ip,
 	userAgent,
 }) {
@@ -161,13 +203,6 @@ async function completarLogin({
 			console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
 		}
 	}
-
-	const sectorInfo = await resolverSectorAutomatico(
-		username,
-		idEmpresaSesion,
-		usuario,
-		esSuperAdmin,
-	);
 
 	let empresaSeleccionada = null;
 	let modulosEmpresa = null;
@@ -245,6 +280,22 @@ async function completarLogin({
 		idEmpresaEfectiva = Number(idEmpresaSesion);
 	}
 
+	let sectorInfo;
+	try {
+		sectorInfo = await resolverSectorSesion(
+			username,
+			idEmpresaEfectiva,
+			usuario,
+			esSuperAdmin,
+			idSectorBody,
+		);
+	} catch (sectorErr) {
+		if (sectorErr.message === 'MULTI_SECTOR') {
+			sectorErr.idEmpresa = idEmpresaEfectiva;
+		}
+		throw sectorErr;
+	}
+
 	let rol = rolPreliminar;
 
 	// Matricula del JWT debe coincidir con imPersonal del tenant (horarios/agenda).
@@ -266,7 +317,27 @@ async function completarLogin({
 		}
 	}
 
-	const jwtPayload = buildJwtPayload(usuario, idEmpresaEfectiva, rol);
+	if (
+		idEmpresaEfectiva != null &&
+		Number.isFinite(Number(idEmpresaEfectiva)) &&
+		Number(idEmpresaEfectiva) > 0 &&
+		!esSuperAdmin
+	) {
+		try {
+			const { getTenantPool } = require('../config/tenantDb');
+			await getTenantPool(Number(idEmpresaEfectiva));
+		} catch (e) {
+			console.warn('[auth.login] SQL hospital no disponible aún:', e.message);
+		}
+	}
+
+	const jwtPayload = buildJwtPayload(
+		usuario,
+		idEmpresaEfectiva,
+		rol,
+		sectorInfo.idSector,
+		sectorInfo.sectores,
+	);
 
 	let token = null;
 	if (isAuthCentralEnabled()) {
@@ -359,6 +430,7 @@ async function completarLogin({
 			idSector: sectorInfo.idSector || '',
 			descripcion: sectorInfo.descripcion || '',
 		},
+		sectoresAsignados: sectorInfo.sectores || [],
 		empresaSeleccionada,
 		modulosEmpresa,
 		token,

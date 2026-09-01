@@ -1,4 +1,5 @@
 const sexoService = require('../services/sexo.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar la tabla imSexo
@@ -20,7 +21,7 @@ const sexoController = {
       });
     } catch (error) {
       console.error('Error en controlador de sexos:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener registros de sexo'
@@ -62,7 +63,7 @@ const sexoController = {
       });
     } catch (error) {
       console.error('Error en controlador de sexo por valor:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener registro de sexo'
@@ -120,7 +121,7 @@ const sexoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al crear registro de sexo'
       });
@@ -169,7 +170,7 @@ const sexoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al actualizar registro de sexo'
       });
@@ -209,7 +210,7 @@ const sexoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al eliminar registro de sexo'
       });

@@ -1,4 +1,5 @@
 const opcGrdService = require('../services/opcGrd.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones CRUD de la tabla imOpcGrd
@@ -43,7 +44,7 @@ const opcGrdController = {
       });
     } catch (error) {
       console.error('Error en controlador de opciones de grilla:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener opciones de grilla'
@@ -85,7 +86,7 @@ const opcGrdController = {
       });
     } catch (error) {
       console.error('Error en controlador de opción de grilla por ID:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener opción de grilla'
@@ -125,7 +126,7 @@ const opcGrdController = {
       });
     } catch (error) {
       console.error('Error en controlador al crear opción de grilla:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al crear opción de grilla'
@@ -185,7 +186,7 @@ const opcGrdController = {
       });
     } catch (error) {
       console.error('Error en controlador al actualizar opción de grilla:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al actualizar opción de grilla'
@@ -233,7 +234,7 @@ const opcGrdController = {
       });
     } catch (error) {
       console.error('Error en controlador al eliminar opción de grilla:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al eliminar opción de grilla'

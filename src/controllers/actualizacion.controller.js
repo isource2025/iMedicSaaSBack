@@ -3,6 +3,7 @@
  */
 
 const { executeQuery } = require("../models/db");
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Ejecuta la actualización masiva de FechaProximo/HoraProximo
@@ -131,7 +132,7 @@ const ejecutarActualizacionMasiva = async (req, res) => {
         
     } catch (error) {
         console.error('Error en actualización masiva:', error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             message: 'Error al ejecutar actualización',
             error: error.message
@@ -164,7 +165,7 @@ const verificarFrecuencias = async (req, res) => {
         });
     } catch (error) {
         console.error('Error verificando frecuencias:', error);
-        res.status(500).json({
+        res.status(statusDeError(error)).json({
             success: false,
             error: error.message
         });

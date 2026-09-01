@@ -4,6 +4,7 @@
  */
 
 const tipoPacienteService = require('../services/tipoPaciente.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para los tipos de paciente
@@ -25,7 +26,7 @@ const tipoPacienteController = {
       });
     } catch (error) {
       console.error('Error en controlador getTiposPaciente:', error);
-      return res.status(500).json({
+      return res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener los tipos de paciente',
         error: error.message
@@ -66,7 +67,7 @@ const tipoPacienteController = {
       });
     } catch (error) {
       console.error('Error en controlador getTipoPaciente:', error);
-      return res.status(500).json({
+      return res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener el tipo de paciente',
         error: error.message
@@ -128,7 +129,7 @@ const tipoPacienteController = {
         });
       }
       
-      return res.status(500).json({
+      return res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear el tipo de paciente',
         error: error.message
@@ -187,7 +188,7 @@ const tipoPacienteController = {
         });
       }
       
-      return res.status(500).json({
+      return res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar el tipo de paciente',
         error: error.message
@@ -231,7 +232,7 @@ const tipoPacienteController = {
         });
       }
       
-      return res.status(500).json({
+      return res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar el tipo de paciente',
         error: error.message

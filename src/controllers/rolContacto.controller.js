@@ -4,6 +4,7 @@
  */
 
 const rolContactoService = require('../services/rolContacto.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imRolContacto
@@ -24,7 +25,7 @@ const rolContactoController = {
       });
     } catch (error) {
       console.error('Error en el controlador de roles de contacto:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener los roles de contacto',
         error: error.message
@@ -64,7 +65,7 @@ const rolContactoController = {
       });
     } catch (error) {
       console.error('Error en el controlador de roles de contacto:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener el rol de contacto',
         error: error.message
@@ -129,7 +130,7 @@ const rolContactoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear el rol de contacto',
         error: error.message
@@ -189,7 +190,7 @@ const rolContactoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar el rol de contacto',
         error: error.message
@@ -231,7 +232,7 @@ const rolContactoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar el rol de contacto',
         error: error.message

@@ -2,6 +2,7 @@
  * Controlador para gestionar la tabla de nacionalidades (imNacionalidad)
  */
 const nacionalidadService = require('../services/nacionalidad.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las peticiones HTTP relacionadas con nacionalidades
@@ -23,7 +24,7 @@ const nacionalidadController = {
       });
     } catch (error) {
       console.error('Error en controlador de nacionalidades:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener registros de nacionalidades'
@@ -65,7 +66,7 @@ const nacionalidadController = {
       });
     } catch (error) {
       console.error('Error en controlador de nacionalidad por valor:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener registro de nacionalidad'
@@ -114,7 +115,7 @@ const nacionalidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al crear registro de nacionalidad'
       });
@@ -163,7 +164,7 @@ const nacionalidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al actualizar registro de nacionalidad'
       });
@@ -203,7 +204,7 @@ const nacionalidadController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: error.message || 'Error al eliminar registro de nacionalidad'
       });

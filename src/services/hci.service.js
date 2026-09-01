@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const { conContextoAuditoria } = require('../utils/auditoriaHci');
+const { normalizarFila, normalizarFilas } = require('../utils/codigoSector');
 
 /**
  * Servicio para gestionar Historia Clínica de Ingreso (imHCI)
@@ -32,7 +33,7 @@ class HCIService {
       ]);
       
       console.log(`[HCI SERVICE] ✅ ${result.length} registros encontrados`);
-      return result;
+      return normalizarFilas(result);
       
     } catch (error) {
       console.error('[HCI SERVICE] ❌ Error al obtener HC:', error.message);
@@ -69,7 +70,7 @@ class HCIService {
       }
       
       console.log('[HCI SERVICE] ✅ HC encontrada');
-      return result[0];
+      return normalizarFila(result[0]);
       
     } catch (error) {
       console.error('[HCI SERVICE] ❌ Error al obtener HC:', error.message);
@@ -203,7 +204,7 @@ class HCIService {
       ]);
       
       console.log(`[HCI SERVICE] ✅ ${result.length} registros encontrados`);
-      return result;
+      return normalizarFilas(result);
       
     } catch (error) {
       console.error('[HCI SERVICE] ❌ Error al obtener HC por paciente:', error.message);

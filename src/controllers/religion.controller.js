@@ -4,6 +4,7 @@
  */
 
 const religionService = require('../services/religion.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imReligion
@@ -24,7 +25,7 @@ const religionController = {
       });
     } catch (error) {
       console.error('Error en el controlador de religiones:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener las religiones',
         error: error.message
@@ -64,7 +65,7 @@ const religionController = {
       });
     } catch (error) {
       console.error('Error en el controlador de religiones:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener la religión',
         error: error.message
@@ -121,7 +122,7 @@ const religionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear la religión',
         error: error.message
@@ -173,7 +174,7 @@ const religionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar la religión',
         error: error.message
@@ -215,7 +216,7 @@ const religionController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar la religión',
         error: error.message

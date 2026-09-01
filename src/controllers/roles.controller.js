@@ -1,4 +1,5 @@
 const rolesService = require('../services/roles.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const listar = async (req, res) => {
 	try {
@@ -6,7 +7,7 @@ const listar = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[roles.listar]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al listar roles' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al listar roles' });
 	}
 };
 
@@ -23,7 +24,7 @@ const obtenerPorId = async (req, res) => {
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('[roles.obtenerPorId]', error);
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
 	}
 };
 
@@ -94,7 +95,7 @@ const obtenerDePersonal = async (req, res) => {
 		if (msg.includes("invalid object name 'imroles'")) {
 			return res.json({ success: true, data: { roles: [], principal: null } });
 		}
-		res.status(500).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
+		res.status(statusDeError(error)).json({ success: false, mensaje: error.message || 'Error al obtener rol' });
 	}
 };
 

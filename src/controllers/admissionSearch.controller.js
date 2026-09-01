@@ -5,6 +5,7 @@ const {
   buildSelectiveExportPdf,
   buildMultiVisitExportPdf,
 } = require('../services/admissionSearchExportPdf');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 function publicErrorDetail(error) {
   const raw = error?.message || String(error || '');
@@ -64,7 +65,7 @@ async function buscar(req, res) {
     });
   } catch (error) {
     console.error('Error en búsqueda integral de admisiones:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al buscar admisiones',
       detail: error?.message || String(error),
@@ -96,7 +97,7 @@ async function detalle(req, res) {
     });
   } catch (error) {
     console.error('Error al obtener detalle de admisión:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al obtener detalle de admisión',
       detail: publicErrorDetail(error),
@@ -125,7 +126,7 @@ async function datosPrincipales(req, res) {
     res.json({ success: true, data: payload });
   } catch (error) {
     console.error('Error al obtener datos principales de admisión:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al obtener datos principales de admisión',
     });
@@ -164,7 +165,7 @@ async function catalogosAdmision(req, res) {
     res.json({ success: true, data: catalogos });
   } catch (error) {
     console.error('Error al obtener catálogos de admisión:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al obtener catálogos de admisión',
     });
@@ -247,7 +248,7 @@ async function exportSelectivo(req, res) {
       });
     }
     console.error('Error en export selectivo de admisi?n:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al generar la exportaci?n',
     });
@@ -354,7 +355,7 @@ async function exportGeneralPaciente(req, res) {
       });
     }
     console.error('Error en export general de paciente:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al generar la exportaci?n general',
     });

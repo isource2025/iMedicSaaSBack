@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para obtener todos los diagnósticos
@@ -24,7 +25,7 @@ const getDiagnosticos = async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error al obtener diagnósticos:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al obtener diagnósticos', 
       details: error.message 
     });
@@ -78,7 +79,7 @@ const createDiagnostico = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear diagnóstico:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al crear diagnóstico', 
       details: error.message 
     });
@@ -127,7 +128,7 @@ const updateDiagnostico = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al actualizar diagnóstico:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al actualizar diagnóstico', 
       details: error.message 
     });
@@ -166,7 +167,7 @@ const deleteDiagnostico = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al eliminar diagnóstico:', error);
-    return res.status(500).json({ 
+    return res.status(statusDeError(error)).json({ 
       error: 'Error al eliminar diagnóstico', 
       details: error.message 
     });

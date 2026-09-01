@@ -1,5 +1,6 @@
 const catalogsService = require('../services/catalogs.service');
 const diagnosticosService = require('../services/diagnosticos.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar los catálogos del sistema
@@ -21,7 +22,7 @@ const catalogsController = {
       });
     } catch (error) {
       console.error('Error en controlador de disposiciones de egreso:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener disposiciones de egreso'
@@ -43,7 +44,7 @@ const catalogsController = {
       });
     } catch (error) {
       console.error('Error en controlador de estados ambulatorios:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener estados ambulatorios',
@@ -67,7 +68,7 @@ const catalogsController = {
       });
     } catch (error) {
       console.error('Error en controlador de diagnósticos CIE10:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al obtener diagnósticos CIE10'
@@ -101,7 +102,7 @@ const catalogsController = {
       });
     } catch (error) {
       console.error('Error en controlador de búsqueda de diagnósticos CIE10:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: [],
         message: error.message || 'Error al buscar diagnósticos CIE10'
@@ -143,7 +144,7 @@ const catalogsController = {
       });
     } catch (error) {
       console.error('Error en controlador de diagnóstico por ID:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         data: null,
         message: error.message || 'Error al obtener diagnóstico CIE10'

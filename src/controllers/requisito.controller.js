@@ -4,6 +4,7 @@
  */
 
 const requisitoService = require('../services/requisito.service');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar las operaciones con la tabla imRequisitos
@@ -24,7 +25,7 @@ const requisitoController = {
       });
     } catch (error) {
       console.error('Error en el controlador de requisitos:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener los requisitos',
         error: error.message
@@ -64,7 +65,7 @@ const requisitoController = {
       });
     } catch (error) {
       console.error('Error en el controlador de requisitos:', error);
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al obtener el requisito',
         error: error.message
@@ -138,7 +139,7 @@ const requisitoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al crear el requisito',
         error: error.message
@@ -210,7 +211,7 @@ const requisitoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al actualizar el requisito',
         error: error.message
@@ -252,7 +253,7 @@ const requisitoController = {
         });
       }
       
-      res.status(500).json({
+      res.status(statusDeError(error)).json({
         success: false,
         message: 'Error al eliminar el requisito',
         error: error.message

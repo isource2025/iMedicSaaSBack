@@ -6,6 +6,7 @@ const {
     convertirHoraClarionAString,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { normalizarFilas } = require("../utils/codigoSector");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -16,6 +17,16 @@ const toNumberOrNull = (v) =>
     v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
 
 const toBitOrNull = (v) => (v == null ? null : v ? 1 : 0);
+
+/** Estado Clarion: recorta espacios (CHAR/VARCHAR). */
+const normalizarEstadoIndicacion = (estado) =>
+	String(estado ?? '').trim().toUpperCase();
+
+const esEstadoSinEfecto = (estado) => normalizarEstadoIndicacion(estado) === 'S';
+
+/** SQL: no listar indicaciones dejadas sin efecto (incluye 'S ' / CHAR). */
+const SQL_EXCLUIR_SIN_EFECTO =
+	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'";
 
 /**
  * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
@@ -245,7 +256,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
     // Tabla de cama: no listar indicaciones suspendidas (Estado = 'S')
     if (excluirSuspendidas) {
-        whereParts.push("(iim.Estado IS NULL OR iim.Estado <> 'S')");
+        whereParts.push(SQL_EXCLUIR_SIN_EFECTO);
     }
 
     const sql = `
@@ -330,16 +341,21 @@ WHERE ${whereParts.join('\n  AND ')}
 ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
   `;
 
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
 
     // Agrupar indicaciones padre con sus hijas
     const indicacionesPadre = [];
     const indicacionesHijas = new Map();
     
     rows.forEach((r) => {
+        if (esEstadoSinEfecto(r.Estado)) {
+            return;
+        }
+
         const nroAdicional = r.NroAdicional || 0;
         
         if (nroAdicional === 0) {
+            const estadoNorm = normalizarEstadoIndicacion(r.Estado);
             indicacionesPadre.push({
                 id: String(r.NroIndicacion),
                 nroIndicacion: r.NroIndicacion,
@@ -368,13 +384,13 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 medicamento: r.AliasMedicamento,
                 ultimaAplicacion: r.UltimaAplicacion,
                 proximaAplicacion: r.ProximaAplicacion,
-                estado: r.Estado,
-                suspendida: r.Estado === 'S',
+                estado: estadoNorm || r.Estado,
+                suspendida: estadoNorm === 'S',
                 unicaVez: r.Frecuencia && (
                     r.Frecuencia.toUpperCase().includes('UNICA VEZ') || 
                     r.Frecuencia.toUpperCase().includes('ÚNICA VEZ') ||
                     r.Frecuencia.toUpperCase().includes('POR UNICA') ||
-                    r.Estado === 'U'
+                    estadoNorm === 'U'
                 ),
                 nuevaEnfermeria: Number(r.NuevaEnfermeria) === 1,
                 indicacionesHijas: []
@@ -458,7 +474,7 @@ ORDER BY iim.Orden ASC;
         { value: convertirFechaAClarion(ymdDate) },
     ];
 
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
     
     console.log('🔍 BACKEND INSUMOS - Total registros:', rows.length);
     if (rows.length > 0) {
@@ -1052,7 +1068,7 @@ WHERE iim.NroIndicacion = @param0
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;
     const params = [{ value: nroIndicacion }];
-    const rows = await executeQuery(sql, params);
+    const rows = normalizarFilas(await executeQuery(sql, params));
     const indicacionPadre = rows[0] || null;
     
     if (!indicacionPadre) return null;
@@ -1292,7 +1308,7 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
 		e.statusCode = 404;
 		throw e;
 	}
-	if (String(rows[0].Estado || '').trim().toUpperCase() === 'S') {
+	if (esEstadoSinEfecto(rows[0].Estado)) {
 		const e = new Error('La indicación ya está sin efecto');
 		e.statusCode = 400;
 		throw e;
@@ -1311,14 +1327,26 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
     UPDATE dbo.imInterIndMedicas
     SET Estado = 'S',
         FechaExpiro = @p1,
-        HoraExpiro = @p2,
-        Observaciones = @p3
+        HoraExpiro = @p2
     WHERE NroIndicacion = @p0
+       OR NroAdicional = @p0
     `,
 		[
 			{ value: Number(nroIndicacion) },
 			{ value: convertirFechaAClarion(fechaIso) },
 			{ value: convertirHoraAClarion(horaIso + ':00') },
+		],
+	);
+
+	await executeQuery(
+		`
+    UPDATE dbo.imInterIndMedicas
+    SET Observaciones = @p1
+    WHERE NroIndicacion = @p0
+      AND ISNULL(NroAdicional, 0) = 0
+    `,
+		[
+			{ value: Number(nroIndicacion) },
 			{ value: observaciones },
 		],
 	);
@@ -1335,9 +1363,15 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             throw new Error('Indicación no encontrada');
         }
 
+        if (esEstadoSinEfecto(indicacionActual.Estado)) {
+            const e = new Error('No se puede aplicar una indicación dejada sin efecto');
+            e.statusCode = 400;
+            throw e;
+        }
+
         // ✅ NUEVO: Detectar si es única vez por frecuencia
         const frecuenciaUpper = indicacionActual.Frecuencia ? indicacionActual.Frecuencia.toUpperCase().trim() : '';
-        const esUnicaVez = indicacionActual.Estado === 'U' || 
+        const esUnicaVez = normalizarEstadoIndicacion(indicacionActual.Estado) === 'U' || 
                           frecuenciaUpper.includes('UNICA VEZ') || 
                           frecuenciaUpper.includes('ÚNICA VEZ') ||
                           frecuenciaUpper.includes('POR UNICA');

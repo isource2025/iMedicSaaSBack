@@ -2,6 +2,7 @@ const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
 const authCentralSync = require('./authCentralSync.service');
+const { codigo, normalizarFilas } = require('../utils/codigoSector');
 
 /** Cache de esquema imPassword por tenant (evita mezclar metadatos entre BDs). */
 const schemaCacheByTenant = new Map();
@@ -463,7 +464,7 @@ const obtenerTodosLosUsuarios = async () => {
       // Agregar sector si existe
       if (row.idSector) {
         usuariosMap.get(userId).sectores.push({
-          idSector: row.idSector,
+          idSector: codigo(row.idSector),
           descripcionSector: row.descripcionSector
         });
       }
@@ -514,7 +515,7 @@ const obtenerUsuarioPorId = async (valorPersonal) => {
         WHERE ps.idPersonal = @p0
       `;
       
-      const sectores = await executeQuery(sectoresConsulta, [{ value: valorPersonal }]);
+      const sectores = normalizarFilas(await executeQuery(sectoresConsulta, [{ value: valorPersonal }]));
       usuario.sectores = sectores || [];
       
       return usuario;
@@ -764,30 +765,43 @@ const quitarSector = async (valorPersonal, idSector) => {
 const actualizarUsuario = async (valorPersonal, userData) => {
   try {
     const { codOperador, apellido, nombres, nombreRed, numeroDocumento, legajo } = userData;
-    
+    const cols = await getImPasswordColumns();
+    // Vidal y otros legados: CodOperador es IDENTITY → no puede ir en el SET.
+    const omitCodOperador = await getImPasswordCodOperadorIsIdentity();
+
+    const setParts = [];
+    const parametros = [{ value: valorPersonal, type: 'Int' }];
+
+    if (!omitCodOperador) {
+      setParts.push(`CodOperador = @p${parametros.length}`);
+      parametros.push(
+        bindPasswordString(cols, 'CodOperador', codOperador || String(valorPersonal), 30),
+      );
+    }
+
+    setParts.push(`Apellido = @p${parametros.length}`);
+    parametros.push(bindPasswordString(cols, 'Apellido', apellido));
+
+    setParts.push(`Nombres = @p${parametros.length}`);
+    parametros.push(bindPasswordString(cols, 'Nombres', nombres));
+
+    setParts.push(`NombreRed = @p${parametros.length}`);
+    parametros.push(bindPasswordString(cols, 'NombreRed', nombreRed));
+
+    setParts.push(`NumeroDocumento = @p${parametros.length}`);
+    parametros.push(
+      bindPasswordString(cols, 'NumeroDocumento', numeroDocumento || '', 30),
+    );
+
+    setParts.push(`Legajo = @p${parametros.length}`);
+    parametros.push(bindPasswordLegajo(cols, legajo, valorPersonal));
+
     const consulta = `
-      UPDATE imPassword 
-      SET 
-        CodOperador = @p1,
-        Apellido = @p2,
-        Nombres = @p3,
-        NombreRed = @p4,
-        NumeroDocumento = @p5,
-        Legajo = @p6
+      UPDATE imPassword
+      SET ${setParts.join(',\n        ')}
       WHERE ValorPersonal = @p0
     `;
-    
-    const cols = await getImPasswordColumns();
-    const parametros = [
-      { value: valorPersonal, type: 'Int' },
-      bindPasswordString(cols, 'CodOperador', codOperador || String(valorPersonal), 30),
-      bindPasswordString(cols, 'Apellido', apellido),
-      bindPasswordString(cols, 'Nombres', nombres),
-      bindPasswordString(cols, 'NombreRed', nombreRed),
-      bindPasswordString(cols, 'NumeroDocumento', numeroDocumento || '', 30),
-      bindPasswordLegajo(cols, legajo, valorPersonal),
-    ];
-    
+
     await executeQuery(consulta, parametros);
     await afterUserMutation(valorPersonal);
 
@@ -802,7 +816,7 @@ const actualizarUsuario = async (valorPersonal, userData) => {
  * Crea registro en imPassword vinculado al Valor de imPersonal (mismo ValorPersonal).
  * Usado al dar de alta personal con usuario de acceso.
  */
-async function crearImPasswordParaPersonal(valorPersonal, data) {
+async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
   if (valorPersonal == null || !Number.isFinite(Number(valorPersonal))) {
     const e = new Error('ValorPersonal inválido para crear usuario');
     e.statusCode = 400;
@@ -894,7 +908,9 @@ async function crearImPasswordParaPersonal(valorPersonal, data) {
     throw err;
   }
 
-  await afterUserMutation(vp);
+  if (!options.skipAuthSync) {
+    await afterUserMutation(vp);
+  }
   return obtenerUsuarioPorId(vp);
 }
 

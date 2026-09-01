@@ -1,5 +1,6 @@
 const signosVitalesService = require('../services/signosVitales.service');
 const { requireOperadorCarga, requireProfesional } = require('../utils/sessionIdentity');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para Signos Vitales
@@ -66,9 +67,9 @@ const guardarSignosVitales = async (req, res) => {
     
   } catch (error) {
     console.error('[SignosVitales Controller] Error:', error);
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al guardar signos vitales',
+      mensaje: mensajeDeError(error, 'Error al guardar signos vitales'),
       error: error.message
     });
   }
@@ -106,9 +107,9 @@ const obtenerSignosVitales = async (req, res) => {
       });
     }
     
-    res.status(500).json({
+    res.status(statusDeError(error)).json({
       success: false,
-      mensaje: 'Error al obtener signos vitales',
+      mensaje: mensajeDeError(error, 'Error al obtener signos vitales'),
       error: error.message
     });
   }

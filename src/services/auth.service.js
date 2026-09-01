@@ -6,12 +6,14 @@ const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const { empresaRowHasSqlConnection } = require('../utils/empresaDbConnection');
 const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
+const { normalizarFilas } = require('../utils/codigoSector');
 
 function mapSectorRow(r) {
 	return {
 		idPersonal: String(r.idPersonal ?? r.IdPersonal ?? ''),
 		idSector: String(r.idSector ?? r.IdSector ?? '').trim(),
 		descripcionSector: String(r.descripcionSector ?? r.Descripcion ?? '').trim(),
+		valorServicio: String(r.valorServicio ?? r.ValorServicio ?? '').trim(),
 	};
 }
 
@@ -21,10 +23,12 @@ async function obtenerSectoresPorUsuarioEnFisico(username) {
     SELECT
       ps.idPersonal AS idPersonal,
       ps.idSector AS idSector,
-      s.Descripcion AS descripcionSector
+      s.Descripcion AS descripcionSector,
+      LTRIM(RTRIM(CAST(ISNULL(s.ValorServicio, '') AS VARCHAR(50)))) AS valorServicio
     FROM impassword pw
     INNER JOIN imPersonalSectores ps ON pw.ValorPersonal = ps.idPersonal
-    INNER JOIN imSectores s ON ps.idSector = s.Valor
+    INNER JOIN imSectores s
+      ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
     WHERE UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@p0)))
        OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@p0)))
   `;
@@ -267,7 +271,7 @@ const obtenerSectores = async () => {
         imSectores s
     `;
     
-    const resultado = await executeQuery(consulta);
+    const resultado = normalizarFilas(await executeQuery(consulta));
     console.log('Datos obtenidos de sectores:', JSON.stringify(resultado, null, 2));
     return resultado;
   } catch (error) {
@@ -363,7 +367,7 @@ const obtenerIdSectorPorIdPersonal = async (idPersonal) => {
       FROM 
         imPersonalSectores ps
       INNER JOIN 
-        imSectores s ON ps.idSector = s.Valor
+        imSectores s ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(CAST(ps.idSector AS VARCHAR(50))))
       WHERE 
         ps.idPersonal = @p0
     `;
