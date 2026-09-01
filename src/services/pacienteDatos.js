@@ -1,7 +1,7 @@
 /**
- * Datos filiatorios del paciente (dbo.imPacientes) para adjuntar a un pedido o
- * a una historia clínica: los mismos campos y los mismos alias en todos lados,
- * así el front los muestra igual venga de donde venga.
+ * Datos filiatorios del paciente (dbo.imPacientes) para adjuntar a la historia
+ * clínica de ingreso. Usa los mismos alias que la consulta de pedidos, así el
+ * front los muestra igual venga de donde venga.
  */
 const { executeQuery } = require('../models/db');
 const { createTenantOnce } = require('../context/tenantCache');
