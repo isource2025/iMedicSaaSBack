@@ -2,6 +2,11 @@ const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { createTenantOnce } = require('../context/tenantCache');
 const {
+	SELECT_DATOS_PACIENTE,
+	mapDatosPaciente,
+	completarLocalidades,
+} = require('./pacienteDatos');
+const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
 	fechaCalendarioArgentina,
@@ -175,70 +180,6 @@ function _txt(value) {
 	return s === '' ? null : s;
 }
 
-/** Edad en años a partir de una fecha ISO (yyyy-mm-dd). */
-function _edadDesdeISO(iso) {
-	const raw = _txt(iso);
-	if (!raw) return null;
-	const [y, m, d] = raw.slice(0, 10).split('-').map(Number);
-	if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
-	const hoy = new Date();
-	let edad = hoy.getFullYear() - y;
-	const cumplioEsteAnio =
-		hoy.getMonth() + 1 > m || (hoy.getMonth() + 1 === m && hoy.getDate() >= d);
-	if (!cumplioEsteAnio) edad -= 1;
-	return edad >= 0 && edad < 130 ? edad : null;
-}
-
-/**
- * Catálogo imLocalidades cacheado (valor -> nombre). Se resuelve fuera del SQL
- * de pedidos: la tabla es opcional y el nombre de la columna varía entre
- * instalaciones, así que un problema acá no debe tumbar la bandeja de pedidos.
- */
-const _localidadesPorValor = createTenantOnce(async () => {
-	let resultado;
-	try {
-		const cols = await executeQuery(
-			`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'imLocalidades'`,
-		);
-		const disponibles = new Set(
-			(cols || []).map((c) => String(c.COLUMN_NAME || '').toLowerCase()),
-		);
-		const columna = ['nombrelocalidad', 'localidad', 'descripcion'].find((c) =>
-			disponibles.has(c),
-		);
-		if (!columna || !disponibles.has('valor')) {
-			resultado = new Map();
-		} else {
-			const rows = await executeQuery(
-				`SELECT Valor, LTRIM(RTRIM(ISNULL(${columna}, ''))) AS Nombre FROM dbo.imLocalidades`,
-			);
-			resultado = new Map(
-				(rows || [])
-					.filter((r) => r.Valor != null && _txt(r.Nombre))
-					.map((r) => [String(r.Valor).trim(), String(r.Nombre).trim()]),
-			);
-		}
-	} catch (e) {
-		console.warn('[estudios] no se pudo leer imLocalidades:', e.message || e);
-		resultado = new Map();
-	}
-	return resultado;
-});
-
-/** Completa PacienteLocalidad en los pedidos ya mapeados. */
-async function _completarLocalidades(pedidos) {
-	const lista = pedidos || [];
-	if (!lista.some((p) => p && p.PacienteValorLocalidad != null)) return lista;
-	const mapa = await _localidadesPorValor();
-	if (!mapa.size) return lista;
-	for (const p of lista) {
-		if (p && p.PacienteValorLocalidad != null) {
-			p.PacienteLocalidad = mapa.get(String(p.PacienteValorLocalidad).trim()) || null;
-		}
-	}
-	return lista;
-}
-
 function mapPedidoRow(row) {
 	const idProtocolo = Number(row.IdProtocolo) || 0;
 	const cumplido = idProtocolo > 0;
@@ -330,28 +271,7 @@ function mapPedidoRow(row) {
 		NombreToma: row.NombreToma ? String(row.NombreToma).trim() : null,
 		FechaToma: row.FechaToma || null,
 		EstadoWorkflow: cumplido ? 'CUMPLIDO' : tomado ? 'TOMADO' : 'PENDIENTE',
-		PacienteNombre: row.PacienteNombre ? String(row.PacienteNombre).trim() : null,
-		PacienteDocumento:
-			row.PacienteDocumento != null && String(row.PacienteDocumento).trim() !== ''
-				? String(row.PacienteDocumento).trim()
-				: null,
-		PacienteTipoDocumento: _txt(row.PacienteTipoDocumento),
-		PacienteSexo: row.PacienteSexo ? String(row.PacienteSexo).trim() : null,
-		PacienteSexoDescripcion: row.PacienteSexoDescripcion
-			? String(row.PacienteSexoDescripcion).trim()
-			: null,
-		ObraSocial: row.ObraSocial ? String(row.ObraSocial).trim() : null,
-		PacienteAfiliado: _txt(row.PacienteAfiliado),
-		PacienteNumeroHC: _txt(row.PacienteNumeroHC),
-		PacienteDomicilio: _txt(row.PacienteDomicilio),
-		PacienteValorLocalidad:
-			row.PacienteValorLocalidad != null ? Number(row.PacienteValorLocalidad) : null,
-		PacienteLocalidad: null,
-		PacienteTelefono: _txt(row.PacienteTelefono),
-		PacienteTelefonoAlternativo: _txt(row.PacienteTelefonoAlternativo),
-		PacienteEmail: _txt(row.PacienteEmail),
-		PacienteFechaNacimiento: _txt(row.PacienteFechaNacimiento),
-		PacienteEdad: _edadDesdeISO(row.PacienteFechaNacimiento),
+		...mapDatosPaciente(row),
 		TipoAtencion: tipoAtencion,
 		Ubicacion: ubicacion,
 		IdPaciente: row.IdPaciente != null ? Number(row.IdPaciente) : null,
@@ -394,23 +314,7 @@ const SELECT_PEDIDO = `
   v.IDPACIENTE AS IdPaciente,
   LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) AS ClasePaciente,
   LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) AS TipoAdmision,
-  LTRIM(RTRIM(ISNULL(pac.ApellidoyNombre, ''))) AS PacienteNombre,
-  pac.NumeroDocumento AS PacienteDocumento,
-  LTRIM(RTRIM(ISNULL(pac.TipoDocumento, ''))) AS PacienteTipoDocumento,
-  LTRIM(RTRIM(ISNULL(pac.Sexo, ''))) AS PacienteSexo,
-  LTRIM(RTRIM(ISNULL(sx.Descripcion, ''))) AS PacienteSexoDescripcion,
-  LTRIM(RTRIM(ISNULL(cob.RazonSocial, ''))) AS ObraSocial,
-  LTRIM(RTRIM(ISNULL(CAST(pac.NumeroSSN AS VARCHAR(40)), ''))) AS PacienteAfiliado,
-  LTRIM(RTRIM(ISNULL(CAST(pac.NumeroHC AS VARCHAR(40)), ''))) AS PacienteNumeroHC,
-  LTRIM(RTRIM(ISNULL(pac.Domicilio, ''))) AS PacienteDomicilio,
-  pac.ValorLocalidad AS PacienteValorLocalidad,
-  LTRIM(RTRIM(ISNULL(CAST(pac.TelefonoParticular AS VARCHAR(40)), ''))) AS PacienteTelefono,
-  LTRIM(RTRIM(ISNULL(CAST(pac.TelefonoNegocio AS VARCHAR(40)), ''))) AS PacienteTelefonoAlternativo,
-  LTRIM(RTRIM(ISNULL(pac.Mail, ''))) AS PacienteEmail,
-  CASE
-    WHEN pac.FechaNacimiento IS NULL OR pac.FechaNacimiento <= 0 OR pac.FechaNacimiento > 1000000 THEN NULL
-    ELSE CONVERT(varchar(10), DATEADD(day, pac.FechaNacimiento, '1800-12-28'), 23)
-  END AS PacienteFechaNacimiento,
+  ${SELECT_DATOS_PACIENTE},
   CASE
     WHEN LTRIM(RTRIM(ISNULL(hc.ValorHabitacionCama, ''))) <> '' THEN LTRIM(RTRIM(hc.ValorHabitacionCama))
     WHEN LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) <> '' THEN LTRIM(RTRIM(v.VALORHABITACIONCAMA))
@@ -1120,7 +1024,7 @@ async function listarPorVisita(idVisita) {
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
 		[{ value: Number(idVisita), type: 'Int' }],
 	);
-	return _completarLocalidades(dedupePedidos((rows || []).map(mapPedidoRow)));
+	return completarLocalidades(dedupePedidos((rows || []).map(mapPedidoRow)));
 }
 
 /** Interconsultas (IdTipoPedido = 33) de una visita, con texto de respuesta si hay protocolo. */
@@ -1134,7 +1038,7 @@ async function listarInterconsultasPorVisita(idVisita) {
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
 		[{ value: Number(idVisita), type: 'Int' }],
 	);
-	return _completarLocalidades((rows || []).map(mapPedidoRow));
+	return completarLocalidades((rows || []).map(mapPedidoRow));
 }
 
 async function listarPendientesPorSector(sectorReceptor, opts = {}) {
@@ -1191,7 +1095,7 @@ async function listarPendientesPorSector(sectorReceptor, opts = {}) {
 		 ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC`,
 		params,
 	);
-	return _completarLocalidades(dedupePedidos((rows || []).map(mapPedidoRow)));
+	return completarLocalidades(dedupePedidos((rows || []).map(mapPedidoRow)));
 }
 
 async function obtenerPorId(idPedido) {
@@ -1203,7 +1107,7 @@ async function obtenerPorId(idPedido) {
 		[{ value: Number(idPedido), type: 'Int' }],
 	);
 	if (!rows?.length) return null;
-	const [pedido] = await _completarLocalidades([mapPedidoRow(rows[0])]);
+	const [pedido] = await completarLocalidades([mapPedidoRow(rows[0])]);
 	return pedido;
 }
 
