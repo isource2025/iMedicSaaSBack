@@ -1,4 +1,5 @@
 const { executeQuery } = require("../models/db");
+const { getTenantId } = require("../context/tenantContext");
 const { jsonSafe } = require("../utils/jsonSafe");
 const {
     convertirFechaAClarion,
@@ -7,6 +8,7 @@ const {
     horaWallArgentina,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { conContextoAuditoria } = require("../utils/auditoriaHci");
 const { calcularIMC } = require("../utils/antropometria");
 
 /** Texto libre / memos hacia imHCI (ANSI Clarion). */
@@ -350,17 +352,122 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
 /**
  * Crear nueva HC de Ingreso
  */
-// Lista de campos válidos de imHCI que se pueden insertar/actualizar dinámicamente
-// (excluimos IdHCIngreso que es identity, NumeroVisita, Fecha, y los campos base)
+// Campos que se arman aparte del bucle dinámico (o que no son columnas de imHCI)
 const CAMPOS_BASICOS_HCI = ['NumeroVisita', 'IdSector', 'MotivoConsulta', 'EnfermedadActual', 'IdProfecional'];
+const CAMPOS_NO_COLUMNA = new Set([
+    ...CAMPOS_BASICOS_HCI,
+    'IdHCIngreso',
+    'Fecha',
+    'fecha',
+    'hora',
+    'sincronizarSignosVitales',
+]);
 
-// Mapeo de nombres de columnas con typos en la BD (frontend -> BD real)
+/**
+ * Nombre que manda el cliente -> columna real de imHCI.
+ * La tabla viene de Clarion y tiene typos y abreviaturas propias; además hay
+ * clientes con bundles viejos que siguen mandando los nombres anteriores.
+ */
 const COLUMN_NAME_MAP = {
-    'SN_PARESCRANEANOS': 'SN _PARESCRANEANOS',  // Typo en la BD: espacio antes del _
+    SN_PARESCRANEANOS: 'SN _PARESCRANEANOS',
+    C_TAMANO: 'C_TAMANIO',
+    C_PABELLONESAURICULARESCAE: 'C_PABELLONESAURICULARESYCAE',
+    AR_EXPANSIONDEBASES: 'AR_BASES',
+    AR_OBSERVACIONES: 'AR_TEXTO',
+    AC_RELLENOCAPILAR: 'AC_RELLENOAPILAR',
+    AC_LATIDOSPALPABLES: 'AC_LATIDOPALPABLES',
+    AC_RUDOSAGREGADOS: 'AC_RUIDOSAGREGADOS',
+    AC_OBSERVACIONES: 'AC_TEXTO',
+    A_OBSERVACIONES: 'A_TEXTO',
+    AUG_PUNOPERCUSION: 'AUG_PUNIOPERCUSION',
+    AUG_TACTORECTAL: 'AIG_TACTORECTAL',
+    AUG_OBSERVACIONES: 'AUG_TEXTO',
+    EG_EXAMENABVARE: 'EG_EXAMENAB_VA_RE',
+    EG_OBSERVACIONES: 'EG_TEXTO',
+    EO_MEDIOSBIREFRINGENTES: 'EO_MEDIOSBIREFRIGENTES',
+    EO_BISHOPP: 'EO_BISHOP_P',
+    EO_BISHOPR: 'EO_BISHOP_R',
+    EO_BISHOPE: 'EO_BISHOP_E',
+    EO_BISHOPL: 'EO_BISHOP_L',
+    EO_BISHOPD: 'EO_BISHOP_D',
+    EO_MANIOBRATAMER: 'EO_MANIOBRADETAMIER',
+    EC_DETALLE: 'EXAMENCOMPLEMENTARIO',
+    ECG_RITMO: 'EC_RITMO',
+    ECG_FRECUENCIA: 'EC_FRECUENCIA',
+    ECG_PR: 'EC_PR',
+    ECG_QT: 'EC_QT',
+    ECG_ONDAPEJE: 'EC_ONDAP',
+    ECG_DURACION: 'EC_DURACION',
+    ECG_AMPLITUD: 'EC_AMPLITUD',
+    ECG_CONFORMACION: 'EC_CONFORMACION',
+    ECG_QRSEJE: 'EC_QRS',
+    ECG_DURACIONQRS: 'EC_DURACION1',
+    ECG_ONDAT: 'EC_ONDAT',
+    ECG_ST: 'EC_ST',
+    ECG_CONCLUSIONES: 'EC_CONCLUSIONES',
+    RT_TECNICA: 'RDT_TECNICA',
+    RT_PARTESBLANDAS: 'RDT_PARTESBLANDAS',
+    RT_PARTESOSEAS: 'RDT_PARTESOSEAS',
+    RT_HEMIDIAFRAGMAS: 'RDT_HEMIDIAFRAGMAS',
+    RT_ICT: 'RDT_ICT',
+    RT_SENOSCOSTOFRENICOS: 'RDT_SENOSCOSTOFRENICOS',
+    RT_MEDIASTINO: 'RDT_MEDIASTINO',
+    RT_SILUETACARDIOVASCULAR: 'RDT_SILUETACARDIOVASCULAR',
+    RT_HILIOS: 'RDT_HILIOS',
+    RT_CAMPOSPULMONARES: 'RDT_CAMPOSPULMONARES',
+    RT_CONCLUSIONES: 'RDT_CONCLUSIONES',
+    RT_LABORATORIO: 'RDT_LABORATORIO',
 };
 const mapColumnName = (key) => COLUMN_NAME_MAP[key] || key;
 
-const buildDynamicFields = (data) => {
+const columnasPorTenant = new Map();
+
+/** Columnas reales de imHCI del tenant activo (cacheadas). */
+const obtenerColumnasHci = async () => {
+    const clave = String(getTenantId() ?? 'plataforma');
+    const cacheada = columnasPorTenant.get(clave);
+    if (cacheada) return cacheada;
+
+    const filas = await executeQuery(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'imHCI'`,
+    );
+    const columnas = new Set(filas.map((f) => f.COLUMN_NAME));
+    if (columnas.size > 0) columnasPorTenant.set(clave, columnas);
+    return columnas;
+};
+
+/**
+ * Columnas de examen físico del payload que existen realmente en la tabla.
+ * Un nombre desconocido se descarta con warning: antes llegaba al SQL y
+ * "Invalid column name" abortaba el INSERT/UPDATE entero, perdiendo toda la HC.
+ */
+const resolverCamposExamen = (data, columnas) => {
+    const campos = [];
+    const descartados = [];
+
+    for (const key of Object.keys(data)) {
+        if (CAMPOS_NO_COLUMNA.has(key)) continue;
+        const valor = data[key];
+        if (valor === undefined) continue;
+
+        const columna = mapColumnName(key);
+        if (!columnas.has(columna)) {
+            descartados.push(key);
+            continue;
+        }
+        campos.push({ columna, valor });
+    }
+
+    if (descartados.length > 0) {
+        console.warn(
+            `[HC Ingreso] ${descartados.length} campos descartados por no existir en imHCI:`,
+            descartados.join(', '),
+        );
+    }
+    return campos;
+};
+
+const buildDynamicFields = (data, columnas) => {
     const columns = [];
     const values = [];
     const params = [];
@@ -398,48 +505,33 @@ const buildDynamicFields = (data) => {
     params.push({ value: normalizarFechaHci(data) });
     paramIndex++;
     
-    // Agregar dinámicamente todos los campos con prefijo (SV_, PF_, TCS_, etc.)
-    Object.keys(data).forEach(key => {
-        if (CAMPOS_BASICOS_HCI.includes(key)) return;
-        // Solo campos con prefijo de sección (contienen _)
-        if (!key.includes('_')) return;
-        // Verificar que sea un prefijo válido de sección
-        const prefijo = key.split('_')[0];
-        const prefijosValidos = ['SV','PF','TCS','SL','SOAM','C','CU','M','AR','AC','A','AUG','AIG','SN','EO','EC','RDT','PD','PT','AD','EN','MI','MP','EG','DIA'];
-        if (!prefijosValidos.includes(prefijo)) return;
-        
-        const valor = data[key];
-        if (valor === undefined || valor === null) return;
-        
-        columns.push(`[${mapColumnName(key)}]`);
+    for (const { columna, valor } of resolverCamposExamen(data, columnas)) {
+        if (valor === null) continue;
+        columns.push(`[${columna}]`);
         values.push(`@param${paramIndex}`);
         params.push({ value: valorTextoHci(valor) });
         paramIndex++;
-    });
-    
-    // Campos especiales sin prefijo que también son parte de la HC
-    ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO', 'IMC'].forEach(campo => {
-        if (data[campo] !== undefined && data[campo] !== null) {
-            columns.push(`[${campo}]`);
-            values.push(`@param${paramIndex}`);
-            params.push({ value: valorTextoHci(data[campo]) });
-            paramIndex++;
-        }
-    });
-    
+    }
+
     return { columns, values, params };
 };
 
 const crearHCIngreso = async (data, auth = null) => {
     try {
         const payload = await aplicarAutorSesion(data, auth);
-        const { columns, values, params } = buildDynamicFields(payload);
-        
-        const sql = `
+        const columnas = await obtenerColumnasHci();
+        const { columns, values, params } = buildDynamicFields(payload, columnas);
+
+        const sql = conContextoAuditoria(
+            `
             INSERT INTO dbo.imHCI (${columns.join(', ')})
             VALUES (${values.join(', ')});
             SELECT SCOPE_IDENTITY() AS IdHCIngreso;
-        `;
+        `,
+            params,
+            auth,
+            payload.IdProfecional,
+        );
         
         console.log('[HC Ingreso] Creando con', columns.length, 'campos');
         
@@ -506,44 +598,28 @@ const actualizarHCIngreso = async (idHCIngreso, data, auth = null) => {
             paramIndex++;
         }
         
-        // Campos dinámicos del examen físico
-        const prefijosValidos = ['SV','PF','TCS','SL','SOAM','C','CU','M','AR','AC','A','AUG','AIG','SN','EO','EC','RDT','PD','PT','AD','EN','MI','MP','EG','DIA'];
-        
-        Object.keys(dataConAutor).forEach(key => {
-            if (key === 'sincronizarSignosVitales') return;
-            if (CAMPOS_BASICOS_HCI.includes(key)) return;
-            if (key === 'fecha' || key === 'hora') return;
-            if (!key.includes('_')) return;
-            const prefijo = key.split('_')[0];
-            if (!prefijosValidos.includes(prefijo)) return;
-            
-            const valor = dataConAutor[key];
-            if (valor === undefined) return;
-            
-            setClauses.push(`[${mapColumnName(key)}] = @param${paramIndex}`);
+        const columnas = await obtenerColumnasHci();
+        for (const { columna, valor } of resolverCamposExamen(dataConAutor, columnas)) {
+            setClauses.push(`[${columna}] = @param${paramIndex}`);
             params.push({ value: valor !== null ? valorTextoHci(valor) : '' });
             paramIndex++;
-        });
-        
-        // Campos especiales sin prefijo
-        ['ModMedica', 'Semiologia', 'IMPRESIONDIAGNOSTICA', 'COMENTARIODEINGRESO', 'EXAMENCOMPLEMENTARIO', 'IMC'].forEach(campo => {
-            if (dataConAutor[campo] !== undefined) {
-                setClauses.push(`[${campo}] = @param${paramIndex}`);
-                params.push({ value: dataConAutor[campo] !== null ? valorTextoHci(dataConAutor[campo]) : '' });
-                paramIndex++;
-            }
-        });
-        
+        }
+
         if (setClauses.length === 0 && !sincronizarSignosVitales) {
             return { success: true, signosVitalesEnControles: false, sinCambios: true };
         }
 
         if (setClauses.length > 0) {
-            const sql = `
+            const sql = conContextoAuditoria(
+                `
                 UPDATE dbo.imHCI
                 SET ${setClauses.join(',\n                ')}
                 WHERE IdHCIngreso = @param0
-            `;
+            `,
+                params,
+                auth,
+                dataConAutor.IdProfecional,
+            );
 
             console.log('[HC Ingreso] Actualizando', setClauses.length, 'campos para IdHCIngreso:', idHCIngreso);
             await executeQuery(sql, params);
@@ -579,13 +655,17 @@ const actualizarHCIngreso = async (idHCIngreso, data, auth = null) => {
 /**
  * Eliminar HC de Ingreso
  */
-const eliminarHCIngreso = async (idHCIngreso) => {
-    const sql = `
+const eliminarHCIngreso = async (idHCIngreso, auth = null) => {
+    const params = [{ value: idHCIngreso }];
+    const sql = conContextoAuditoria(
+        `
         DELETE FROM dbo.imHCI
         WHERE IdHCIngreso = @param0
-    `;
-
-    const params = [{ value: idHCIngreso }];
+    `,
+        params,
+        auth,
+        await resolverCodOperadorSesion(auth),
+    );
 
     try {
         await executeQuery(sql, params);
