@@ -38,12 +38,12 @@ class SignosVitalesService {
       
       if (data.IdHCIngreso) {
         // Actualizar HC existente
-        await hciService.actualizar(data.IdHCIngreso, datosHCI);
+        await hciService.actualizar(data.IdHCIngreso, datosHCI, data.auth || null);
         resultado.IdHCIngreso = data.IdHCIngreso;
         console.log('[SignosVitales] HC actualizada:', data.IdHCIngreso);
       } else {
         // Crear nueva HC
-        const hcCreada = await hciService.crear(datosHCI);
+        const hcCreada = await hciService.crear(datosHCI, data.auth || null);
         resultado.IdHCIngreso = hcCreada.IdHCIngreso;
         console.log('[SignosVitales] HC creada:', hcCreada.IdHCIngreso);
       }

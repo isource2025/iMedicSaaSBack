@@ -58,7 +58,8 @@ const guardarSignosVitales = async (req, res) => {
       antropometricos: antropometricos || {},
       OperadorCarga,
       Profesional,
-      IdSector: IdSector || null
+      IdSector: IdSector || null,
+      auth: req.auth
     });
     
     res.status(200).json(resultado);

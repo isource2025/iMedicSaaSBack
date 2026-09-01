@@ -120,7 +120,7 @@ exports.crear = async (req, res) => {
       });
     }
     
-    const hc = await hciService.crear(data);
+    const hc = await hciService.crear(data, req.auth);
     
     res.status(201).json({
       success: true,
@@ -153,7 +153,7 @@ exports.actualizar = async (req, res) => {
       });
     }
     
-    const hc = await hciService.actualizar(parseInt(id), data);
+    const hc = await hciService.actualizar(parseInt(id), data, req.auth);
     
     res.json({
       success: true,
@@ -200,7 +200,7 @@ exports.eliminar = async (req, res) => {
       });
     }
     
-    await hciService.eliminar(parseInt(id));
+    await hciService.eliminar(parseInt(id), req.auth);
     
     res.json({
       success: true,

@@ -1,4 +1,5 @@
 const { executeQuery } = require('../models/db');
+const { conContextoAuditoria } = require('../utils/auditoriaHci');
 
 /**
  * Servicio para gestionar Historia Clínica de Ingreso (imHCI)
@@ -81,31 +82,38 @@ class HCIService {
    * @param {Object} data - Datos de la historia clínica
    * @returns {Promise<Object>} Historia clínica creada
    */
-  async crear(data) {
+  async crear(data, auth = null) {
     try {
       console.log('[HCI SERVICE] 📝 Creando nueva HC');
       
-      // Construir query dinámicamente basado en campos presentes
       const campos = Object.keys(data).filter(k => data[k] !== undefined && data[k] !== null);
-      const valores = campos.map(c => `@${c}`).join(', ');
-      const columnas = campos.join(', ');
-      
-      const query = `
-        INSERT INTO imHCI (${columnas})
-        OUTPUT INSERTED.*
-        VALUES (${valores})
-      `;
-      
+      if (campos.length === 0) {
+        throw new Error('No hay campos para crear la historia clínica');
+      }
+
       const params = campos.map(campo => ({
-        name: campo,
         type: this.getTipoSQL(campo),
         value: data[campo]
       }));
-      
+
+      // Sin OUTPUT: imHCI tiene el trigger de auditoría y OUTPUT sin INTO
+      // sobre una tabla con triggers falla con error 334.
+      const query = conContextoAuditoria(
+        `
+        INSERT INTO imHCI (${campos.map(c => `[${c}]`).join(', ')})
+        VALUES (${campos.map((_, i) => `@param${i}`).join(', ')});
+        SELECT SCOPE_IDENTITY() AS IdHCIngreso;
+      `,
+        params,
+        auth,
+        data.IdProfecional,
+      );
+
       const result = await executeQuery(query, params);
+      const id = result?.[0]?.IdHCIngreso;
       
       console.log('[HCI SERVICE] ✅ HC creada exitosamente');
-      return result[0];
+      return id != null ? this.getById(Number(id)) : null;
       
     } catch (error) {
       console.error('[HCI SERVICE] ❌ Error al crear HC:', error.message);
@@ -119,45 +127,47 @@ class HCIService {
    * @param {Object} data - Datos a actualizar
    * @returns {Promise<Object>} Historia clínica actualizada
    */
-  async actualizar(id, data) {
+  async actualizar(id, data, auth = null) {
     try {
       console.log(`[HCI SERVICE] 📝 Actualizando HC ID: ${id}`);
       
-      const campos = Object.keys(data)
-        .filter(k => k !== 'IdHCIngreso' && data[k] !== undefined && data[k] !== null)
-        .map(k => `${k} = @${k}`)
-        .join(', ');
+      const campos = Object.keys(data).filter(
+        k => k !== 'IdHCIngreso' && data[k] !== undefined && data[k] !== null,
+      );
       
-      if (!campos) {
+      if (campos.length === 0) {
         throw new Error('No hay campos para actualizar');
       }
       
-      const query = `
-        UPDATE imHCI 
-        SET ${campos}
-        OUTPUT INSERTED.*
-        WHERE IdHCIngreso = @p0
-      `;
-      
       const params = [
         { value: id, type: 'Int' },
-        ...Object.keys(data)
-          .filter(k => k !== 'IdHCIngreso' && data[k] !== undefined && data[k] !== null)
-          .map(campo => ({
-            name: campo,
-            type: this.getTipoSQL(campo),
-            value: data[campo]
-          }))
+        ...campos.map(campo => ({
+          type: this.getTipoSQL(campo),
+          value: data[campo]
+        }))
       ];
+
+      // Sin OUTPUT: ver el comentario en crear().
+      const query = conContextoAuditoria(
+        `
+        UPDATE imHCI
+        SET ${campos.map((c, i) => `[${c}] = @param${i + 1}`).join(', ')}
+        WHERE IdHCIngreso = @param0;
+        SELECT @@ROWCOUNT AS filas;
+      `,
+        params,
+        auth,
+        data.IdProfecional,
+      );
       
       const result = await executeQuery(query, params);
       
-      if (result.length === 0) {
+      if (!result?.[0]?.filas) {
         throw new Error('Historia clínica no encontrada');
       }
       
       console.log('[HCI SERVICE] ✅ HC actualizada exitosamente');
-      return result[0];
+      return this.getById(Number(id));
       
     } catch (error) {
       console.error('[HCI SERVICE] ❌ Error al actualizar HC:', error.message);
@@ -206,19 +216,22 @@ class HCIService {
    * @param {number} id - ID de la historia clínica
    * @returns {Promise<boolean>} True si se eliminó correctamente
    */
-  async eliminar(id) {
+  async eliminar(id, auth = null) {
     try {
       console.log(`[HCI SERVICE] 🗑️ Eliminando HC ID: ${id}`);
       
-      // Verificar si existe campo Activo
-      const query = `
+      const params = [{ value: id, type: 'Int' }];
+      const query = conContextoAuditoria(
+        `
         DELETE FROM imHCI
-        WHERE IdHCIngreso = @id
-      `;
+        WHERE IdHCIngreso = @param0
+      `,
+        params,
+        auth,
+        null,
+      );
       
-      await executeQuery(query, [
-        { value: id, type: 'Int' }
-      ]);
+      await executeQuery(query, params);
       
       console.log('[HCI SERVICE] ✅ HC eliminada exitosamente');
       return true;

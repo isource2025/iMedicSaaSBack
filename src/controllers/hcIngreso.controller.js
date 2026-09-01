@@ -144,7 +144,7 @@ const eliminarHCIngreso = async (req, res) => {
             });
         }
 
-        const resultado = await hcIngresoService.eliminarHCIngreso(id);
+        const resultado = await hcIngresoService.eliminarHCIngreso(id, req.auth);
 
         res.json({
             success: true,
