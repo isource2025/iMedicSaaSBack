@@ -1,5 +1,6 @@
 /**
- * Ejecuta scripts/sql/setup_saas_tenant_delta.sql en la BD tenant (.env).
+ * Ejecuta scripts/sql/setup_saas_tenant_delta.sql y scripts/sql/auditoria_hci.sql
+ * en la BD tenant (.env).
  * Uso: node scripts/ejecutar_setup_saas_tenant.js
  */
 require('dotenv').config();
@@ -42,6 +43,12 @@ async function main() {
 		}
 	}
 	console.log(`Setup SaaS tenant OK (${ok} batches).`);
+
+	// Archivo aparte: se genera solo desde las columnas reales de imHCI.
+	const auditoria = fs.readFileSync(path.join(__dirname, 'sql', 'auditoria_hci.sql'), 'utf8');
+	await db.executeQuery(auditoria);
+	console.log('Auditoría de imHCI OK (imHCIAuditoria + TR_imHCI_Auditoria).');
+
 	console.log('MySQL (AuthSessions / turnero tokens): node scripts/apply_security_mysql.js');
 	process.exit(0);
 }
