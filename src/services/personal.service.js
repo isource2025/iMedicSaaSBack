@@ -10,6 +10,7 @@
  */
 const { executeQuery, sql, getRequestPool } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
+const { createTenantOnce } = require('../context/tenantCache');
 const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const {
@@ -337,9 +338,7 @@ async function existeMatricula(matricula, excluirValor = null, valorEspecialidad
 }
 
 /** Si existe índice único solo en Matricula, lo reemplaza por (Matricula, ValorEspecialidad). */
-let _matriculaIndexReady = false;
-async function ensureMatriculaEspecialidadUnique() {
-	if (_matriculaIndexReady) return;
+const ensureMatriculaEspecialidadUnique = createTenantOnce(async () => {
 	try {
 		const idxs = await executeQuery(`
       SELECT i.name AS IndexName, i.is_unique AS IsUnique, COL_NAME(ic.object_id, ic.column_id) AS ColName
@@ -390,8 +389,7 @@ async function ensureMatriculaEspecialidadUnique() {
 	} catch (e) {
 		console.warn('[personal] ensureMatriculaEspecialidadUnique:', e.message);
 	}
-	_matriculaIndexReady = true;
-}
+});
 
 async function crear(data) {
 	const input = normalizarInput(data);
@@ -1033,10 +1031,7 @@ async function eliminarFirmaPersonal(valor) {
 	return { ok: true };
 }
 
-let _sectoresTableReady = false;
-
-async function ensurePersonalSectoresTable() {
-	if (_sectoresTableReady) return;
+const ensurePersonalSectoresTable = createTenantOnce(async () => {
 	try {
 		await executeQuery(`
 		IF OBJECT_ID(N'dbo.imPersonalSectores', N'U') IS NULL
@@ -1048,11 +1043,10 @@ async function ensurePersonalSectoresTable() {
 			);
 		END
 		`);
-		_sectoresTableReady = true;
 	} catch (err) {
 		console.warn('[personal] ensurePersonalSectoresTable:', err?.message || err);
 	}
-}
+});
 
 async function listarSectoresPersonal(valor) {
 	try {

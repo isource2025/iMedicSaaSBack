@@ -1,18 +1,17 @@
 const { executeQuery } = require('../models/db');
+const { createTenantOnce } = require('../context/tenantCache');
 
 /**
  * Esquema de dbo.imNotificaciones.
  * Si la tabla no existe en el tenant, se crea. Si ya existe (p. ej. Aclysa),
  * se detectan las columnas por INFORMATION_SCHEMA o por NOTIFICACIONES_COL_* en .env.
+ *
+ * El esquema detectado se cachea por tenant: cada empresa tiene su propia BD y
+ * el mapeo de columnas de una no sirve para las demás.
  */
 
-let cached = null;
-let ensuredTable = false;
-
-async function ensureImNotificacionesTable() {
-	if (ensuredTable) return;
-	try {
-		await executeQuery(`
+const ensureImNotificacionesTable = createTenantOnce(async () => {
+  await executeQuery(`
 		IF OBJECT_ID(N'dbo.imNotificaciones', N'U') IS NULL
 		BEGIN
 			CREATE TABLE dbo.imNotificaciones (
@@ -33,12 +32,7 @@ async function ensureImNotificacionesTable() {
 			CREATE INDEX IX_imNotificaciones_FechaCarga ON dbo.imNotificaciones (FechaCarga);
 		END
 		`);
-		ensuredTable = true;
-		cached = null;
-	} catch (e) {
-		console.warn('[notificaciones] No se pudo asegurar imNotificaciones:', e.message);
-	}
-}
+});
 
 function bracket(name) {
   if (!name || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
@@ -74,9 +68,10 @@ async function loadColumnsFromDb() {
   }
 }
 
-async function resolveImNotificacionesColumns() {
-  if (cached !== null) return cached;
-  await ensureImNotificacionesTable();
+const resolveImNotificacionesColumns = createTenantOnce(async () => {
+  await ensureImNotificacionesTable().catch((e) => {
+    console.warn('[notificaciones] No se pudo asegurar imNotificaciones:', e.message);
+  });
 
   const envId = process.env.NOTIFICACIONES_COL_ID;
   const envVp = process.env.NOTIFICACIONES_COL_VALOR_PERSONAL;
@@ -89,7 +84,7 @@ async function resolveImNotificacionesColumns() {
   const envJson = process.env.NOTIFICACIONES_COL_DATOS_JSON;
 
   if (envVp && envLeida) {
-    cached = {
+    return {
       usable: true,
       id: envId || 'IdNotificacion',
       valorPersonal: envVp,
@@ -101,14 +96,12 @@ async function resolveImNotificacionesColumns() {
       entidadId: envEntId || 'EntidadId',
       datosJson: envJson || 'DatosJSON',
     };
-    return cached;
   }
 
   const names = await loadColumnsFromDb();
   if (!names || names.length === 0) {
     console.warn('[notificaciones] Tabla dbo.imNotificaciones no encontrada o sin columnas.');
-    cached = { usable: false };
-    return cached;
+    return { usable: false };
   }
 
   const id =
@@ -179,11 +172,10 @@ async function resolveImNotificacionesColumns() {
     console.warn(
       '[notificaciones] imNotificaciones sin columnas reconocidas para usuario/leída. Defina NOTIFICACIONES_COL_VALOR_PERSONAL y NOTIFICACIONES_COL_LEIDA en .env'
     );
-    cached = { usable: false, names };
-    return cached;
+    return { usable: false, names };
   }
 
-  cached = {
+  return {
     usable: true,
     id,
     valorPersonal,
@@ -195,8 +187,7 @@ async function resolveImNotificacionesColumns() {
     entidadId,
     datosJson,
   };
-  return cached;
-}
+});
 
 function sqlEscapeIdent(name) {
   return bracket(name);

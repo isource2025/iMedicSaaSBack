@@ -3,9 +3,7 @@
  * Idempotente: puede ejecutarse en cada arranque / primera request.
  */
 const { executeQuery } = require('../models/db');
-
-let schemaReady = false;
-let schemaPromise = null;
+const { createTenantOnce } = require('../context/tenantCache');
 
 const DDL = [
 	`IF OBJECT_ID('dbo.imAlmacenArticulo', 'U') IS NULL
@@ -254,27 +252,15 @@ const DDL = [
   ALTER TABLE dbo.imAlmacenSolicitud ADD IdDepositoDestino INT NULL`,
 ];
 
-async function ensureAlmacenSchema() {
-	if (schemaReady) return;
-	if (schemaPromise) return schemaPromise;
-
-	schemaPromise = (async () => {
-		for (const sql of DDL) {
-			await executeQuery(sql);
-		}
-		schemaReady = true;
-	})().catch((err) => {
-		schemaPromise = null;
-		throw err;
-	});
-
-	return schemaPromise;
-}
+const ensureAlmacenSchema = createTenantOnce(async () => {
+	for (const sql of DDL) {
+		await executeQuery(sql);
+	}
+});
 
 /** Reset cache (tests). */
 function resetSchemaCache() {
-	schemaReady = false;
-	schemaPromise = null;
+	ensureAlmacenSchema.resetAll();
 }
 
 module.exports = { ensureAlmacenSchema, resetSchemaCache };

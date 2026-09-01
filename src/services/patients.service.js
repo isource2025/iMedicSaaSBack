@@ -2,18 +2,14 @@
  * Servicio para gestión de pacientes (versión modernizada con FotoURL y baseUrl)
  */
 const { executeQuery } = require('../models/db');
+const { createTenantOnce } = require('../context/tenantCache');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const { v4: uuidv4 } = require('uuid');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 
-// Flags de cache para evitar repetir DDL constantemente
-let searchIndexesEnsured = false;
-let extraColumnsEnsured = false;
-
-// Crea índices básicos si no existen para acelerar búsquedas (solo primera vez)
-const ensureSearchIndexes = async () => {
-	if (searchIndexesEnsured) return;
+// Crea índices básicos si no existen para acelerar búsquedas (una vez por tenant)
+const ensureSearchIndexes = createTenantOnce(async () => {
 	try {
 		const ddl = `
 		IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_impacientes_NumeroDocumento')
@@ -26,14 +22,11 @@ const ensureSearchIndexes = async () => {
 		await executeQuery(ddl);
 	} catch (e) {
 		console.warn('No se pudieron crear/verificar índices de búsqueda:', e.message);
-	} finally {
-		searchIndexesEnsured = true;
 	}
-};
+});
 
-// Garantiza la existencia de columnas requeridas (idempotente)
-const ensureExtraColumns = async () => {
-	if (extraColumnsEnsured) return;
+// Garantiza la existencia de columnas requeridas (idempotente, una vez por tenant)
+const ensureExtraColumns = createTenantOnce(async () => {
 	try {
 		const columns = [
 			{ name: 'FotoURL', type: 'NVARCHAR(255) NULL' },
@@ -121,8 +114,6 @@ const ensureExtraColumns = async () => {
 		}
 	} catch (err) {
 		console.error('No se pudo verificar/crear columnas extra:', err.message);
-	} finally {
-		extraColumnsEnsured = true;
 	}
 
 	// Upgrades de tipos para teléfonos (evitar overflow al intentar convertir a INT en tablas antiguas)
@@ -168,7 +159,7 @@ const ensureExtraColumns = async () => {
 	} catch (e2) {
 		console.warn('Chequeo de EstadoCivil falló:', e2.message);
 	}
-};
+});
 
 // Normaliza un resultado (o lista) agregando baseUrl a FotoURL relativa
 const mapFotoURL = (rows, baseUrl) => {

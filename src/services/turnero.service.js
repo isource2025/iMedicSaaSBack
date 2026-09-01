@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { runWithTenant } = require('../context/tenantContext');
+const { createTenantCache } = require('../context/tenantCache');
 const tokenIndex = require('./turneroTokenIndex.service');
 const turneroEvents = require('./turneroEvents.service');
 const empresaService = require('./empresa.service');
@@ -58,7 +59,8 @@ const DEFAULT_CONFIG = {
 	},
 };
 
-let tablesChecked = false;
+/** Presencia de las tablas de turnero, por tenant (solo se cachea el positivo). */
+const _turneroSchema = createTenantCache(() => ({ instalado: false }));
 
 function _hhmm(horaClarion) {
 	return _hhmmClarion(horaClarion);
@@ -189,17 +191,18 @@ function parseConfigJson(str) {
 }
 
 async function ensureTables() {
-	if (tablesChecked) return true;
+	const estado = _turneroSchema();
+	if (estado.instalado) return true;
 	try {
 		const rows = await executeQuery(
 			`SELECT TOP 1 1 AS ok FROM INFORMATION_SCHEMA.TABLES
        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imTurneroPantalla'`,
 		);
-		tablesChecked = rows.length > 0;
+		estado.instalado = rows.length > 0;
 	} catch {
-		tablesChecked = false;
+		estado.instalado = false;
 	}
-	return tablesChecked;
+	return estado.instalado;
 }
 
 function _schemaMissingError() {

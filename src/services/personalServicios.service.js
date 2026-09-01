@@ -1,6 +1,5 @@
 const { executeQuery } = require('../models/db');
-
-let _tableReady = false;
+const { createTenantOnce } = require('../context/tenantCache');
 
 const ID_SERVICIO_LEN = 50;
 
@@ -8,8 +7,7 @@ function _code(v) {
 	return String(v || '').trim().slice(0, ID_SERVICIO_LEN);
 }
 
-async function ensureTable() {
-	if (_tableReady) return;
+const ensureTable = createTenantOnce(async () => {
 	try {
 		await executeQuery(`
 		IF OBJECT_ID(N'dbo.imPersonalServicios', N'U') IS NULL
@@ -104,12 +102,10 @@ async function ensureTable() {
 				ADD CONSTRAINT PK_imPersonalServicios PRIMARY KEY (idPersonal, idServicio);
 		END
 		`);
-
-		_tableReady = true;
 	} catch (err) {
 		console.warn('[personalServicios] ensureTable:', err?.message || err);
 	}
-}
+});
 
 function _mapRows(rows) {
 	return (rows || [])
@@ -264,7 +260,7 @@ async function reemplazar(valorPersonal, servicios) {
 		} catch (err) {
 			const msg = String(err?.message || '');
 			if (!/PRIMARY KEY|duplicate|UNIQUE|2627|2601|8152|truncated/i.test(msg)) throw err;
-			_tableReady = false;
+			ensureTable.reset();
 			await ensureTable();
 			await executeQuery(
 				`INSERT INTO dbo.imPersonalServicios (idPersonal, idServicio) VALUES (@p0, @p1)`,

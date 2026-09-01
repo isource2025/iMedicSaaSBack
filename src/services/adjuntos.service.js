@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { executeQuery } = require('../models/db');
+const { createTenantOnce } = require('../context/tenantCache');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
@@ -8,10 +9,7 @@ const { resolveFileServerUrl } = require('../utils/fileServerUrl');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
-let idTurnoColumnReady = false;
-
-async function ensureIdTurnoColumn() {
-  if (idTurnoColumnReady) return;
+const ensureIdTurnoColumn = createTenantOnce(async () => {
   const cols = await executeQuery(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_NAME = 'imPedidosEstudiosAdjuntos' AND COLUMN_NAME = 'IdTurno'`,
@@ -20,8 +18,7 @@ async function ensureIdTurnoColumn() {
     await executeQuery(`ALTER TABLE dbo.imPedidosEstudiosAdjuntos ADD IdTurno INT NULL`);
     console.log('[adjuntos] Columna IdTurno agregada a imPedidosEstudiosAdjuntos');
   }
-  idTurnoColumnReady = true;
-}
+});
 
 class AdjuntosService {
   /**
