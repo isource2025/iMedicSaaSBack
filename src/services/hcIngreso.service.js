@@ -3,6 +3,11 @@ const { getTenantId } = require("../context/tenantContext");
 const { jsonSafe } = require("../utils/jsonSafe");
 const { normalizarFilas } = require("../utils/codigoSector");
 const {
+    SELECT_DATOS_PACIENTE,
+    mapDatosPaciente,
+    completarLocalidades,
+} = require("./pacienteDatos");
+const {
     convertirFechaAClarion,
     convertirHoraAClarion,
     fechaCalendarioArgentina,
@@ -250,7 +255,8 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             uc.Observaciones AS CTRL_Observaciones,
             CONVERT(VARCHAR(10), DATEADD(day, NULLIF(uc.FechaControl,0) - 4, '1801-01-01'), 23) AS CTRL_FechaControl,
             CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl,
-            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
+            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS,
+            ${SELECT_DATOS_PACIENTE}
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         OUTER APPLY (
@@ -272,6 +278,10 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             WHERE cf.IdHci = hc.IdHCIngreso
             ORDER BY cf.Valor DESC
         ) uc
+        LEFT JOIN dbo.imVisita AS vis ON vis.NUMEROVISITA = hc.NumeroVisita
+        LEFT JOIN dbo.imPacientes AS pac ON pac.IDPaciente = vis.IDPACIENTE
+        LEFT JOIN dbo.imSexo AS sx ON sx.Valor = pac.Sexo
+        LEFT JOIN dbo.imClientes AS cob ON cob.Valor = pac.NumeroCuenta
         WHERE hc.NumeroVisita = @param0
         ORDER BY hc.Fecha DESC, hc.IdHCIngreso DESC
     `;
@@ -280,7 +290,8 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
 
     try {
         const resultado = normalizarFilas(await executeQuery(sql, params));
-        return jsonSafe(resultado || []);
+        const filas = (resultado || []).map((row) => ({ ...row, ...mapDatosPaciente(row) }));
+        return jsonSafe(await completarLocalidades(filas));
     } catch (error) {
         console.error("Error al obtener HC de Ingreso por visita:", error);
         throw error;
@@ -314,7 +325,8 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             uc.Observaciones AS CTRL_Observaciones,
             CONVERT(VARCHAR(10), DATEADD(day, NULLIF(uc.FechaControl,0) - 4, '1801-01-01'), 23) AS CTRL_FechaControl,
             CONVERT(VARCHAR(8), DATEADD(ms, (NULLIF(uc.HoraControl,0) - 1) * 10, 0), 108) AS CTRL_HoraControl,
-            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS
+            hc.[SN _PARESCRANEANOS] AS SN_PARESCRANEANOS,
+            ${SELECT_DATOS_PACIENTE}
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         OUTER APPLY (
@@ -336,6 +348,10 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             WHERE cf.IdHci = hc.IdHCIngreso
             ORDER BY cf.Valor DESC
         ) uc
+        LEFT JOIN dbo.imVisita AS vis ON vis.NUMEROVISITA = hc.NumeroVisita
+        LEFT JOIN dbo.imPacientes AS pac ON pac.IDPaciente = vis.IDPACIENTE
+        LEFT JOIN dbo.imSexo AS sx ON sx.Valor = pac.Sexo
+        LEFT JOIN dbo.imClientes AS cob ON cob.Valor = pac.NumeroCuenta
         WHERE hc.IdHCIngreso = @param0
     `;
 
@@ -343,7 +359,11 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
 
     try {
         const resultado = normalizarFilas(await executeQuery(sql, params));
-        return resultado.length > 0 ? resultado[0] : null;
+        if (!resultado.length) return null;
+        const [fila] = await completarLocalidades([
+            { ...resultado[0], ...mapDatosPaciente(resultado[0]) },
+        ]);
+        return fila;
     } catch (error) {
         console.error("Error al obtener HC de Ingreso por ID:", error);
         throw error;
