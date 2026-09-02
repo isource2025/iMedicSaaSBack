@@ -123,7 +123,11 @@ if (isPlatformSqlConfigured() && !isAuthCentralEnabled()) {
 // Configurar middlewares
 configureCors(app); // Configuración CORS (único middleware; evita doble cors con allow-origin *)
 
-app.use(express.json()); // Parseo JSON (webhook ya montado arriba con stream crudo)
+app.use(express.json()); // UTF-8; textos Clarion/Renaper se reparan en capa de datos
+app.use((req, res, next) => {
+	res.charset = 'utf-8';
+	next();
+});
 // Soporte para formularios multipart (lo maneja multer en las rutas específicas)
 
 // Asegurar carpetas de uploads

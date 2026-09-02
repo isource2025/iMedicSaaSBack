@@ -6,6 +6,7 @@ const { sql, connectDB } = require('../config/database');
 const { getTenantPool } = require('../config/tenantDb');
 const { getTenantId } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const { repararStringsDeep } = require('../utils/clarionText');
 
 async function resolvePool(forcePlatform = false) {
   if (forcePlatform) return connectDB();
@@ -107,7 +108,9 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
     if (process.env.NODE_ENV === 'development') {
       console.log('Resultado consulta:', resultado.recordset ? `${resultado.recordset.length} registros encontrados` : 'Sin registros');
     }
-    return resultado.recordset;
+    const rows = resultado.recordset;
+    if (!Array.isArray(rows)) return rows;
+    return repararStringsDeep(rows);
   } catch (error) {
     console.error('Error al ejecutar consulta SQL:', error.message);
     console.error('Detalles del error:', JSON.stringify(error, null, 2));

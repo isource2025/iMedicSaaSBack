@@ -1,5 +1,6 @@
 const https = require('https');
 const { getTenantId } = require('../context/tenantContext');
+const { decodeBufferPreferUtf8, repararStringsDeep } = require('../utils/clarionText');
 
 const RENAPER_BASE = 'https://federador.msal.gob.ar/masterfile-federacion-service';
 const LOGIN_URL = `${RENAPER_BASE}/api/usuarios/aplicacion/login`;
@@ -48,11 +49,13 @@ async function fetchJSON(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
 				timeout: timeoutMs,
 			},
 			(res) => {
-				let text = '';
+				const chunks = [];
 				res.on('data', (chunk) => {
-					text += chunk;
+					chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 				});
 				res.on('end', () => {
+					const buf = Buffer.concat(chunks);
+					const text = decodeBufferPreferUtf8(buf);
 					if (res.statusCode < 200 || res.statusCode >= 300) {
 						let payload = text;
 						try {
@@ -67,7 +70,7 @@ async function fetchJSON(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
 					}
 					if (!text) return resolve(null);
 					try {
-						resolve(JSON.parse(text));
+						resolve(repararStringsDeep(JSON.parse(text)));
 					} catch {
 						resolve(text);
 					}
@@ -345,7 +348,7 @@ async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 		if (!resp.ok || !body?.success || !body?.persona) {
 			return { ok: false, reason: body?.reason || 'not_found' };
 		}
-		const p = body.persona;
+		const p = repararStringsDeep(body.persona);
 		const sexoDetectado =
 			body.sexoDetectado ||
 			(p.sexo === 'F' || p.sexo === 'M' ? p.sexo : null) ||

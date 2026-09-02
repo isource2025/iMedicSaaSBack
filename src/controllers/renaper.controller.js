@@ -1,31 +1,35 @@
 const renaperService = require('../services/renaper.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const { repararTextoClarionAnsi, repararStringsDeep } = require('../utils/clarionText');
 
 /** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER. */
 function normalizePersonaForClient(raw) {
 	if (!raw || typeof raw !== 'object') return raw;
-	const apellido = String(raw.apellido ?? raw.Apellido ?? '').trim();
-	const nombres = String(
-		raw.nombres ?? raw.Nombres ?? raw.nombre ?? raw.Nombre ?? '',
-	).trim();
-	const idSexo = raw.idSexo ?? raw.IdSexo;
-	let sexo = raw.sexo ?? raw.Sexo;
+	const fixed = repararStringsDeep(raw);
+	const apellido = repararTextoClarionAnsi(String(fixed.apellido ?? fixed.Apellido ?? '').trim());
+	const nombres = repararTextoClarionAnsi(
+		String(fixed.nombres ?? fixed.Nombres ?? fixed.nombre ?? fixed.Nombre ?? '').trim(),
+	);
+	const idSexo = fixed.idSexo ?? fixed.IdSexo;
+	let sexo = fixed.sexo ?? fixed.Sexo;
 	if (!sexo && idSexo != null) {
 		const n = Number(idSexo);
 		if (n === 1) sexo = 'F';
 		else if (n === 2) sexo = 'M';
 	}
-	const calle = String(raw.calle ?? raw.Calle ?? '').trim();
-	const numero = String(raw.numero ?? raw.Numero ?? '').trim();
-	const piso = String(raw.piso ?? raw.Piso ?? '').trim();
-	const depto = String(raw.departamento ?? raw.Departamento ?? raw.depto ?? '').trim();
+	const calle = repararTextoClarionAnsi(String(fixed.calle ?? fixed.Calle ?? '').trim());
+	const numero = String(fixed.numero ?? fixed.Numero ?? '').trim();
+	const piso = String(fixed.piso ?? fixed.Piso ?? '').trim();
+	const depto = repararTextoClarionAnsi(
+		String(fixed.departamento ?? fixed.Departamento ?? fixed.depto ?? '').trim(),
+	);
 	let domicilio = `${calle} ${numero}`.trim();
 	if (piso) domicilio += domicilio ? ` Piso ${piso}` : `Piso ${piso}`;
 	if (depto) domicilio += domicilio ? ` Dpto ${depto}` : `Dpto ${depto}`;
 
 	return {
-		...raw,
-		numeroDocumento: raw.numeroDocumento ?? raw.NumeroDocumento ?? null,
+		...fixed,
+		numeroDocumento: fixed.numeroDocumento ?? fixed.NumeroDocumento ?? null,
 		apellido,
 		nombres,
 		calle,
@@ -33,14 +37,18 @@ function normalizePersonaForClient(raw) {
 		piso,
 		departamento: depto,
 		domicilio: domicilio.slice(0, 120) || null,
-		fechaNacimiento: raw.fechaNacimiento ?? raw.FechaNacimiento ?? null,
+		fechaNacimiento: fixed.fechaNacimiento ?? fixed.FechaNacimiento ?? null,
 		sexo: sexo ? String(sexo).toUpperCase().slice(0, 1) : null,
 		idSexo: idSexo ?? null,
-		ciudad: raw.ciudad ?? raw.Ciudad ?? raw.localidad ?? raw.Localidad ?? null,
-		provincia: raw.provincia ?? raw.Provincia ?? null,
-		codigoPostal: raw.codigoPostal ?? raw.CodigoPostal ?? null,
-		cuil: raw.cuil ?? raw.CUIL ?? raw.cuit ?? raw.CUIT ?? null,
-		pais: raw.pais ?? raw.Pais ?? null,
+		ciudad: repararTextoClarionAnsi(
+			String(fixed.ciudad ?? fixed.Ciudad ?? fixed.localidad ?? fixed.Localidad ?? '').trim(),
+		) || null,
+		provincia: repararTextoClarionAnsi(
+			String(fixed.provincia ?? fixed.Provincia ?? '').trim(),
+		) || null,
+		codigoPostal: fixed.codigoPostal ?? fixed.CodigoPostal ?? null,
+		cuil: fixed.cuil ?? fixed.CUIL ?? fixed.cuit ?? fixed.CUIT ?? null,
+		pais: fixed.pais ?? fixed.Pais ?? null,
 	};
 }
 
