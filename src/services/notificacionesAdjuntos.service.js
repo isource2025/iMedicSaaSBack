@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const notificacionesService = require('./notificaciones.service');
+const { sqlImPasswordSinMarcaBaja } = require('../utils/imPasswordActivo');
 
 /**
  * ValorPersonal del médico titular de un turno (para notificar adjuntos de agenda).
@@ -14,7 +15,7 @@ async function obtenerValorPersonalMedicoTurno(idTurno) {
     INNER JOIN dbo.imPersonal per ON per.Matricula = t.Profesional
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = per.Valor
     WHERE t.IdTurno = @p0
-      AND ISNULL(pw.MarcadeBaja, '0') = '0'
+      AND ${sqlImPasswordSinMarcaBaja('pw')}
     `,
     [{ value: id, type: 'Int' }],
   );

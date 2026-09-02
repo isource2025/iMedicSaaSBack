@@ -1,10 +1,11 @@
 const { executeQuery } = require('../models/db');
 const notificacionesService = require('./notificaciones.service');
+const { sqlImPasswordSinMarcaBaja } = require('../utils/imPasswordActivo');
 
 /**
  * Destinatarios de avisos WhatsApp (inbox agenda).
  * - NOTIFICACIONES_WHATSAPP_VALOR_PERSONAL_LIST=12,34
- * - Si no: todos los operadores activos (MarcadeBaja = 0).
+ * - Si no: todos los operadores activos (MarcadeBaja vacío).
  */
 async function obtenerDestinatariosWhatsApp() {
 	const raw = process.env.NOTIFICACIONES_WHATSAPP_VALOR_PERSONAL_LIST;
@@ -19,7 +20,7 @@ async function obtenerDestinatariosWhatsApp() {
 		`
 		SELECT p.ValorPersonal
 		FROM dbo.imPassword p
-		WHERE ISNULL(p.MarcadeBaja, 0) = 0
+		WHERE ${sqlImPasswordSinMarcaBaja('p')}
 		`,
 		[],
 	);

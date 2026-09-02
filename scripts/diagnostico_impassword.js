@@ -172,7 +172,8 @@ async function main() {
     - int/smallint → entero Clarion (días desde 1800-12-28), no GETDATE() directo.
 
   MarcadeBaja:
-    - Tipo: ${mb?.TipoSql ?? '?'} → si es char, usar literal N'0' en SQL, no número suelto.
+    - Tipo: ${mb?.TipoSql ?? '?'} → operador activo: vacío/NULL. NO usar 0 (Clarion lo interpreta como baja).
+    - Filtro activos: LTRIM(RTRIM(CAST(ISNULL(MarcadeBaja,'') AS VARCHAR(20)))) = ''
 
   NumeroDocumento / Legajo (revisar API):
     - En BD: ${nd?.TipoSql ?? '?'} / ${byName('Legajo')?.TipoSql ?? '?'} — si son int, el front no debería mandar texto no numérico.

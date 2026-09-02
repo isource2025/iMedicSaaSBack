@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const notificacionesService = require('./notificaciones.service');
 const { getTenantId } = require('../context/tenantContext');
+const { sqlImPasswordSinMarcaBaja } = require('../utils/imPasswordActivo');
 
 function _normSector(v) {
 	return String(v || '').trim().toUpperCase();
@@ -22,7 +23,7 @@ async function obtenerValorPersonalPorMatricula(matricula) {
     FROM dbo.imPersonal per
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = per.Valor
     WHERE per.Matricula = @p0
-      AND ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
+      AND ${sqlImPasswordSinMarcaBaja('pw')}
     `,
 		[{ value: mat, type: 'Int' }],
 	);
@@ -71,7 +72,7 @@ async function _destinatariosSqlPorSectores(codigos, excluir) {
     FROM dbo.imPersonalSectores ps
     INNER JOIN dbo.imPassword pw ON pw.ValorPersonal = ps.idPersonal
     WHERE (${ors.join(' OR ')})
-      AND ISNULL(CAST(pw.MarcadeBaja AS VARCHAR(10)), '0') IN ('0', '', 'false')
+      AND ${sqlImPasswordSinMarcaBaja('pw')}
       AND pw.ValorPersonal <> @p0
     `,
 		params,

@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { sqlLiteralMarcadeBajaAlta: sqlLiteralMarcadeBajaAltaCore } = require('../utils/imPasswordActivo');
 const authCentralSync = require('./authCentralSync.service');
 const { codigo, normalizarFilas } = require('../utils/codigoSector');
 
@@ -92,6 +93,11 @@ function bindPasswordLegajo(colMap, raw, fallbackInt) {
   const max = Number(meta?.maxlen);
   const length = Number.isFinite(max) && max > 0 && max < 8000 ? max : 20;
   return { value: truncStr(s || String(fallbackInt || ''), length) || '0', type: 'VarChar', length };
+}
+
+/** Operador activo: en Clarion un 0 en MarcadeBaja marca baja; debe quedar vacío/NULL. */
+function sqlLiteralMarcadeBajaAlta(colMap) {
+  return sqlLiteralMarcadeBajaAltaCore(colInfo(colMap, 'MarcadeBaja'));
 }
 
 async function afterUserMutation(valorPersonal) {
@@ -248,7 +254,8 @@ function mapDuplicateKeyErrorToHttp(err) {
 }
 
 /** ValorPersonal generado por la BD (IDENTITY). Sin CodOperador si es IDENTITY. */
-async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, fechaClarionHoy) {
+async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, fechaClarionHoy, colMap) {
+  const marcaBaja = sqlLiteralMarcadeBajaAlta(colMap);
   const consulta =
     fechaTipo === 'int'
       ? `
@@ -264,7 +271,7 @@ async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, 
         Grupo
       )
       OUTPUT INSERTED.ValorPersonal AS ValorPersonal
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, ${marcaBaja}, 0)
     `
       : `
       INSERT INTO imPassword (
@@ -279,7 +286,7 @@ async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, 
         Grupo
       )
       OUTPUT INSERTED.ValorPersonal AS ValorPersonal
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, GETDATE(), N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, GETDATE(), ${marcaBaja}, 0)
     `;
   const parametros =
     fechaTipo === 'int'
@@ -321,6 +328,7 @@ async function insertImPasswordManualId(
   codOperadorVal,
   fechaClarionHoy,
   valorPersonalFijo = null,
+  colMap = null,
 ) {
   let nuevoValorPersonal = valorPersonalFijo;
   if (nuevoValorPersonal == null) {
@@ -328,6 +336,7 @@ async function insertImPasswordManualId(
     nuevoValorPersonal = (maxIdResult[0].maxId || 0) + 1;
   }
 
+  const marcaBaja = sqlLiteralMarcadeBajaAlta(colMap);
   const consulta =
     fechaTipo === 'int'
       ? omitCodOperador
@@ -344,7 +353,7 @@ async function insertImPasswordManualId(
         MarcadeBaja,
         Grupo
       )
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, ${marcaBaja}, 0)
     `
         : `
       INSERT INTO imPassword (
@@ -360,7 +369,7 @@ async function insertImPasswordManualId(
         MarcadeBaja,
         Grupo
       )
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, ${marcaBaja}, 0)
     `
       : omitCodOperador
         ? `
@@ -376,7 +385,7 @@ async function insertImPasswordManualId(
         MarcadeBaja,
         Grupo
       )
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, GETDATE(), N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, GETDATE(), ${marcaBaja}, 0)
     `
         : `
       INSERT INTO imPassword (
@@ -392,7 +401,7 @@ async function insertImPasswordManualId(
         MarcadeBaja,
         Grupo
       )
-      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, GETDATE(), N'0', 0)
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, GETDATE(), ${marcaBaja}, 0)
     `;
 
   const parametros = [{ value: nuevoValorPersonal, type: 'Int' }];
@@ -565,7 +574,12 @@ const crearUsuario = async (userData) => {
     let nuevoValorPersonal;
 
     if (usarIdentity) {
-      nuevoValorPersonal = await insertImPasswordConIdentity(fechaTipo, baseParamsSinCod, fechaClarionHoy);
+      nuevoValorPersonal = await insertImPasswordConIdentity(
+        fechaTipo,
+        baseParamsSinCod,
+        fechaClarionHoy,
+        cols,
+      );
       if (!String(legajo || '').trim() && nuevoValorPersonal != null) {
         await executeQuery(
           `UPDATE imPassword SET Legajo = @p1 WHERE ValorPersonal = @p0`,
@@ -587,6 +601,7 @@ const crearUsuario = async (userData) => {
           truncStr(codOperador, 30) || String(nextId),
           fechaClarionHoy,
           nextId,
+          cols,
         );
       } catch (err) {
         if (!isSqlIdentityInsertError(err)) throw err;
@@ -597,11 +612,18 @@ const crearUsuario = async (userData) => {
             true,
             baseParamsSinCod,
             truncStr(codOperador, 30),
-            fechaClarionHoy
+            fechaClarionHoy,
+            null,
+            cols,
           );
         } else {
           getTenantSchemaCache().valorPersonalIsIdentity = true;
-          nuevoValorPersonal = await insertImPasswordConIdentity(fechaTipo, baseParamsSinCod, fechaClarionHoy);
+          nuevoValorPersonal = await insertImPasswordConIdentity(
+            fechaTipo,
+            baseParamsSinCod,
+            fechaClarionHoy,
+            cols,
+          );
         }
       }
     }
@@ -890,6 +912,7 @@ async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
       truncStr(data.CodOperador || data.codOperador, 30) || String(vp),
       fechaClarionHoy,
       vp,
+      cols,
     );
   } catch (err) {
     const dup = mapDuplicateKeyErrorToHttp(err);

@@ -9,6 +9,7 @@
 const { getAuthCentralPool } = require('../config/authCentralDb');
 const { getTenantPool } = require('../config/tenantDb');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
+const { valorMarcadeBajaAlta: valorMarcadeBajaAltaCore } = require('../utils/imPasswordActivo');
 
 const COLLATE = 'utf8mb4_unicode_ci';
 
@@ -164,6 +165,9 @@ function truncarSegunMeta(meta, s) {
 }
 
 function valorPorTipo(meta) {
+	if (meta.nombre.toLowerCase() === 'marcadebaja') {
+		return valorMarcadeBajaAltaCore(meta);
+	}
 	if (esTipoNumerico(meta.tipo)) return 0;
 	if (DATE_TYPES.has(meta.tipo)) return meta.tipo === 'date' ? '1900-01-01' : '1900-01-01 00:00:00';
 	if (meta.tipo === 'char' || meta.tipo === 'nchar') return ' '.slice(0, Math.max(1, Number(meta.maxlen) || 1));
@@ -189,6 +193,11 @@ function completarObligatorias(colMap, campos, valores) {
 
 function esNumerica(colMap, col) {
 	return esTipoNumerico(colMeta(colMap, col)?.tipo);
+}
+
+/** Operador activo: Clarion interpreta 0 como baja; debe quedar vacío/NULL. */
+function valorMarcadeBajaAlta(colMap) {
+	return valorMarcadeBajaAltaCore(colMeta(colMap, 'MarcadeBaja'));
 }
 
 /** Convierte valores para UPDATE/INSERT según el tipo real de la columna en MySQL. */
@@ -233,7 +242,7 @@ async function ensureImPasswordUsableSchema() {
 			console.warn(`[nube] widen imPassword.${meta.nombre}:`, e.message);
 		}
 	}
-	const NUMERIC_DEFAULT_FIX = new Set(['legajo', 'grupo', 'marcadebaja']);
+	const NUMERIC_DEFAULT_FIX = new Set(['legajo', 'grupo']);
 	const seen = new Set();
 	for (const meta of colMap.values()) {
 		const key = meta.nombre.toLowerCase();
@@ -1166,7 +1175,7 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	}
 	if (colMeta(colMap, 'Grupo')) pushCol('Grupo', 0);
 	if (colMeta(colMap, 'MarcadeBaja')) {
-		pushCol('MarcadeBaja', esNumerica(colMap, 'MarcadeBaja') ? 0 : '0');
+		pushCol('MarcadeBaja', valorMarcadeBajaAlta(colMap));
 	}
 	if (colMeta(colMap, 'FechaActual')) {
 		pushCol('FechaActual', esNumerica(colMap, 'FechaActual') ? fechaClarionHoy() : new Date());
@@ -1175,8 +1184,13 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	for (let i = 0; i < campos.length; i++) {
 		const meta = colMeta(colMap, campos[i]);
 		if (!meta) continue;
+		const key = String(campos[i]).toLowerCase();
 		if (esTipoNumerico(meta.tipo) && (valores[i] === '' || valores[i] == null)) {
-			valores[i] = meta.nullable ? null : campos[i].toLowerCase() === 'legajo' ? valorPersonal : 0;
+			if (key === 'marcadebaja') {
+				valores[i] = null;
+			} else {
+				valores[i] = meta.nullable ? null : key === 'legajo' ? valorPersonal : 0;
+			}
 		} else if (STRING_TYPES.has(meta.tipo) && valores[i] != null) {
 			valores[i] = truncarSegunMeta(meta, valores[i]);
 		}
