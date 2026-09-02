@@ -1,6 +1,6 @@
 /**
- * Ejecuta scripts/sql/setup_saas_tenant_delta.sql y scripts/sql/auditoria_hci.sql
- * en la BD tenant (.env).
+ * Ejecuta scripts/sql/setup_saas_tenant_delta.sql, scripts/sql/auditoria_hci.sql
+ * y scripts/sql/liquidacion_imfacdetalle.sql en la BD tenant (.env).
  * Uso: node scripts/ejecutar_setup_saas_tenant.js
  */
 require('dotenv').config();
@@ -48,6 +48,14 @@ async function main() {
 	const auditoria = fs.readFileSync(path.join(__dirname, 'sql', 'auditoria_hci.sql'), 'utf8');
 	await db.executeQuery(auditoria);
 	console.log('Auditoría de imHCI OK (imHCIAuditoria + TR_imHCI_Auditoria).');
+
+	// Archivo aparte: solo aplica si la BD tiene facturación (imFacDetalle).
+	const liquidacion = fs.readFileSync(
+		path.join(__dirname, 'sql', 'liquidacion_imfacdetalle.sql'),
+		'utf8',
+	);
+	await db.executeQuery(liquidacion);
+	console.log('Importe liquidado OK (imFacDetalle.ImporteLiquidado + historial de importaciones).');
 
 	console.log('MySQL (AuthSessions / turnero tokens): node scripts/apply_security_mysql.js');
 	process.exit(0);

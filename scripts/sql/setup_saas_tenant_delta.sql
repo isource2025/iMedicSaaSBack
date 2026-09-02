@@ -18,10 +18,13 @@
     9) Indicadores      → fn_ClarionDATE2SQL, fn_GetIndicadores, fn_OcupacionPromedioCamas
    10) Vistas pedidos   → vw_iMedic_PedidosEstudios* (si existen tablas base)
 
-  Va en archivo aparte porque se genera solo desde el esquema real de imHCI:
+  Van en archivo aparte porque se generan desde el esquema real de la BD:
    11) Auditoría de HC  → imHCIAuditoria + TR_imHCI_Auditoria
                           scripts/sql/auditoria_hci.sql
-                          (el runner Node de más abajo ya lo aplica)
+   12) Importe liquidado → imFacDetalle.ImporteLiquidado +
+                          imFacLiquidacionImport(Detalle)
+                          scripts/sql/liquidacion_imfacdetalle.sql
+                          (el runner Node de más abajo ya los aplica)
 
   NO incluye (van en MySQL auth central / Railway):
     - AuthSessions, AuthAuditLog, AuthPaisesPermitidos, imTurneroTokens
@@ -33,6 +36,7 @@
     2. USE [NombreDeTuBD];
     3. Ejecutá este archivo completo (F5)
     4. Ejecutá también scripts/sql/auditoria_hci.sql
+       y scripts/sql/liquidacion_imfacdetalle.sql
 
   Uso Node (con .env apuntando a esa BD):
     node scripts/ejecutar_setup_saas_tenant.js
@@ -706,6 +710,19 @@ ELSE
 GO
 
 /*------------------------------------------------------------------------------
+  12) IMPORTE LIQUIDADO AL PROFESIONAL
+      La columna y el historial de importaciones se crean en
+      scripts/sql/liquidacion_imfacdetalle.sql. Acá solo se avisa si falta.
+------------------------------------------------------------------------------*/
+IF OBJECT_ID(N'dbo.imFacDetalle', N'U') IS NULL
+  PRINT 'OK: esta BD no factura, el importe liquidado no aplica';
+ELSE IF COL_LENGTH('dbo.imFacDetalle', 'ImporteLiquidado') IS NULL
+  PRINT 'FALTA el importe liquidado: ejecutá scripts/sql/liquidacion_imfacdetalle.sql en esta BD';
+ELSE
+  PRINT 'OK: imFacDetalle.ImporteLiquidado disponible';
+GO
+
+/*------------------------------------------------------------------------------
   RESUMEN
 ------------------------------------------------------------------------------*/
 PRINT '';
@@ -721,6 +738,7 @@ WHERE schema_id = SCHEMA_ID('dbo')
     'imPedidosEstudiosToma',
     'imAgendaRecursoHorarios',
     'imHCIAuditoria', 'TR_imHCI_Auditoria',
+    'imFacLiquidacionImport', 'imFacLiquidacionImportDetalle',
     'fn_ClarionDATE2SQL', 'fn_GetIndicadores', 'fn_OcupacionPromedioCamas',
     'vw_iMedic_PedidosEstudiosBase', 'vw_iMedic_PedidosEstudiosImagen', 'vw_iMedic_PedidosInterconsultas'
   )
