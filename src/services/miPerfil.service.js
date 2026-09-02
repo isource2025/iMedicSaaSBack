@@ -3,6 +3,7 @@ const personalService = require('./personal.service');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
 const { getTenantId } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const { createTenantOnce } = require('../context/tenantCache');
 const nubeTenant = require('./nubeTenant.service');
 
 const MAX_RANGE_DAYS = 800;
@@ -274,13 +275,73 @@ async function listarConveniosProduccion(valorPersonal, desdeStr, hastaStr) {
 }
 
 /**
+ * Columnas del cruce con el importe liquidado al profesional.
+ *
+ * `imFacDetalle.ImporteLiquidado` la crea
+ * scripts/sql/liquidacion_imfacdetalle.sql y no está en la vista
+ * VProduccionProfesionales (que es de la base del cliente), así que la
+ * producción la trae con un join propio: imFacProfesionales une la práctica de
+ * la vista con la prestación de imFacDetalle. Los nombres se resuelven contra
+ * INFORMATION_SCHEMA porque las bases legacy no los escriben todas igual.
+ */
+const CANDIDATOS_LIQUIDADO = Object.freeze({
+	detPrestacion: ['imFacDetalle', ['IDPRESTACION', 'ID_PRESTACION']],
+	detLiquidado: ['imFacDetalle', ['IMPORTELIQUIDADO']],
+	profPractica: ['imFacProfesionales', ['VALOR']],
+	profPrestacion: ['imFacProfesionales', ['IDFACPROFESIONAL']],
+	profMatricula: ['imFacProfesionales', ['MATRICULA']],
+});
+
+const resolverLiquidado = createTenantOnce(async () => {
+	const filas = await executeQuery(
+		`SELECT TABLE_NAME, COLUMN_NAME
+		 FROM INFORMATION_SCHEMA.COLUMNS
+		 WHERE TABLE_SCHEMA = 'dbo'
+		   AND TABLE_NAME IN ('imFacDetalle', 'imFacProfesionales')`,
+	);
+
+	const porTabla = new Map();
+	for (const f of filas || []) {
+		const tabla = String(f.TABLE_NAME || '');
+		const columna = String(f.COLUMN_NAME || '');
+		if (!tabla || !columna || columna.includes(']')) continue;
+		if (!porTabla.has(tabla)) porTabla.set(tabla, new Map());
+		porTabla.get(tabla).set(columna.toUpperCase(), columna);
+	}
+
+	const cols = {};
+	for (const [campo, [tabla, alternativas]] of Object.entries(CANDIDATOS_LIQUIDADO)) {
+		const disponibles = porTabla.get(tabla);
+		const real = disponibles && alternativas.map((a) => disponibles.get(a)).find(Boolean);
+		if (!real) return null;
+		cols[campo] = `[${real}]`;
+	}
+
+	// El tipo de prestación es opcional: sin él el join no puede descartar
+	// gastos y medicamentos, pero esos no tienen importe liquidado cargado.
+	const detalle = porTabla.get('imFacDetalle');
+	const tipo = ['TIPOPRESTACION', 'TIPO_PRESTACION'].map((a) => detalle.get(a)).find(Boolean);
+	cols.detTipo = tipo ? `[${tipo}]` : null;
+
+	return cols;
+});
+
+/** null si el tenant todavía no tiene la columna (se reintenta en la próxima). */
+async function columnasLiquidado() {
+	const cols = await resolverLiquidado();
+	if (!cols) resolverLiquidado.reset();
+	return cols;
+}
+
+/**
  * Producción del profesional para un rango de fechas.
  *
  * Toda la información (paciente, cobertura, descripción, valorización, importes,
  * porcentaje, etc.) se obtiene de la vista `dbo.VProduccionProfesionales`, que
  * resuelve por sí misma los joins con imFacpracticas + imFacDetalle +
  * imFacProfesionales + imVisita + imPacientes + imClientes + imPersonal +
- * imFunciones + VUnionModuladasNomenclador.
+ * imFunciones + VUnionModuladasNomenclador. La única excepción es el importe
+ * liquidado al profesional, que la vista no expone.
  *
  * El parámetro `idConvenio` se conserva por compatibilidad con clientes
  * antiguos pero no se aplica del lado del servidor: el filtrado por cobertura
@@ -303,6 +364,27 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 			totales: { lineas: 0, total: 0, cantidad: 0 },
 		};
 	}
+
+	const liq = await columnasLiquidado();
+	// MAX y no SUM: el GROUP BY de abajo repite la fila del join por cada
+	// profesional/detalle que la vista trae para esa misma práctica.
+	const selectLiquidado = liq
+		? `,
+      CAST(MAX(liq.liquidado) AS DECIMAL(19, 4)) AS liquidado`
+		: '';
+	const joinLiquidado = liq
+		? `
+    LEFT JOIN (
+      SELECT p.${liq.profPractica} AS practica, SUM(d.${liq.detLiquidado}) AS liquidado
+      FROM dbo.imFacProfesionales p
+      JOIN dbo.imFacDetalle d
+        ON d.${liq.detPrestacion} = p.${liq.profPrestacion}
+        ${liq.detTipo ? `AND d.${liq.detTipo} = 'H'` : ''}
+      WHERE p.${liq.profMatricula} = @p0
+        AND d.${liq.detLiquidado} IS NOT NULL
+      GROUP BY p.${liq.profPractica}
+    ) liq ON liq.practica = v.Valor`
+		: '';
 
 	const filas = await executeQuery(
 		`
@@ -328,8 +410,8 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
         ELSE 0
       END AS valorizada,
       MAX(CASE WHEN ISNULL(v.NoFacturable, 0) = 1 THEN 1 ELSE 0 END) AS noFacturable,
-      MAX(v.NroRendicion) AS nroRendicion
-    FROM dbo.VProduccionProfesionales v
+      MAX(v.NroRendicion) AS nroRendicion${selectLiquidado}
+    FROM dbo.VProduccionProfesionales v${joinLiquidado}
     WHERE v.Matricula = @p0
       AND CAST(v.FechaPractica AS DATE) BETWEEN @p1 AND @p2
     GROUP BY v.Valor, CONVERT(varchar(10), v.FechaPractica, 23)
@@ -354,6 +436,9 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 				  : 0;
 
 		const nroRendicion = r.nroRendicion != null ? Number(r.nroRendicion) : null;
+		// null = todavía no hay liquidación cargada para esa práctica; 0 sería
+		// "la obra social liquidó cero", que no es lo mismo.
+		const liquidado = r.liquidado != null ? Number(r.liquidado) : null;
 		return {
 			id: Number(r.id ?? 0),
 			fecha: r.fecha || null,
@@ -370,6 +455,7 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 			porcentajeFacturado: Number(r.porcentajeFacturado || 0),
 			importeUnitario,
 			total,
+			liquidado: Number.isFinite(liquidado) ? liquidado : null,
 			noFacturable: Number(r.noFacturable || 0) === 1,
 			nroRendicion: Number.isFinite(nroRendicion) ? nroRendicion : null,
 		};
