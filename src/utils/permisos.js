@@ -347,6 +347,10 @@ const PLANTILLAS = Object.freeze({
 		'TURNOS.AGENDA.ELIMINAR',
 		'TURNOS.TABLA.EXPORTAR',
 
+		// Importar el Excel de liquidación de la obra social: es tarea
+		// administrativa, aunque el resto de Facturación sea solo lectura.
+		'FACTURACION.LIQUIDACIONES.GESTIONAR',
+
 		'USUARIO.PERFIL.VER',
 		'USUARIO.PERFIL.EDITAR',
 	]),
