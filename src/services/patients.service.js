@@ -6,7 +6,15 @@ const { createTenantOnce } = require('../context/tenantCache');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const { v4: uuidv4 } = require('uuid');
-const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const { normalizarTextoParaClarionAnsi, repararTextoClarionAnsi } = require('../utils/clarionText');
+
+function mapNombrePacienteFilas(rows) {
+	if (!Array.isArray(rows)) return rows;
+	return rows.map((r) => {
+		if (!r || r.ApellidoyNombre == null) return r;
+		return { ...r, ApellidoyNombre: repararTextoClarionAnsi(r.ApellidoyNombre) };
+	});
+}
 
 // Crea índices básicos si no existen para acelerar búsquedas (una vez por tenant)
 const ensureSearchIndexes = createTenantOnce(async () => {
@@ -368,7 +376,7 @@ const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') =
 		const totalPages = Math.ceil(totalCount / limit);
 
 		return {
-			data: data || [],
+			data: mapNombrePacienteFilas(data || []),
 			totalCount,
 			totalPages,
 			currentPage: page,
@@ -511,7 +519,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 			if (digitsPrefix) params.push({ value: `${digitsPrefix[1]}%` });
 		}
 		let rows = await executeQuery(query, params);
-		rows = mapFotoURL(rows, baseUrl);
+		rows = mapFotoURL(mapNombrePacienteFilas(rows), baseUrl);
 		return rows;
 	} catch (error) {
 		console.error('Error al buscar pacientes:', error);

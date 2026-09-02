@@ -4,6 +4,7 @@
  * - Caracteres no representables en CP1252 se sustituyen al codificar (p. ej. emoji → '?').
  */
 const iconv = require('iconv-lite');
+const { decodeMultipartFilename } = require('./fileNameEncoding');
 
 /**
  * @param {unknown} texto
@@ -38,6 +39,15 @@ function normalizarTextoParaClarionAnsi(texto, options = {}) {
 	return s;
 }
 
+/** Repara mojibake al leer VARCHAR legacy (ej. NU?EZ → NUÑEZ). */
+function repararTextoClarionAnsi(texto) {
+	if (texto == null) return texto;
+	const s = String(texto);
+	if (!s.trim()) return s;
+	return decodeMultipartFilename(s);
+}
+
 module.exports = {
 	normalizarTextoParaClarionAnsi,
+	repararTextoClarionAnsi,
 };

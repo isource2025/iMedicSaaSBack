@@ -2,6 +2,7 @@ const service = require('../services/agenda.service');
 const feriadosService = require('../services/feriados.service');
 const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { idSectorSesion } = require('../utils/sectoresSesion');
+const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
@@ -9,8 +10,14 @@ function _codOperadorSesion(req) {
 }
 
 function _err(res, e) {
-	const code = e?.statusCode || 500;
-	return res.status(code).json({ success: false, mensaje: e?.message || 'Error interno' });
+	const code = statusDeError(e);
+	const mensaje = mensajeDeError(e, 'No se pudo completar la operación. Intentá de nuevo.');
+	const body = { success: false, mensaje };
+	if (code >= 500) {
+		const detalle = String(e?.message || '').trim();
+		if (detalle && detalle !== mensaje) body.error = detalle;
+	}
+	return res.status(code).json(body);
 }
 
 async function obtenerSlots(req, res) {

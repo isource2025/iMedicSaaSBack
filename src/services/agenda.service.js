@@ -27,6 +27,7 @@ const {
 	horaClaveTurno,
 	horasTurnoEquivalentes,
 } = require('../utils/agendaCatalogos');
+const { repararTextoClarionAnsi } = require('../utils/clarionText');
 const agendaConfig = require('./agendaConfig.service');
 const feriadosService = require('./feriados.service');
 
@@ -292,7 +293,9 @@ function _slotDesdeTurno(turno, sectorDefault) {
 		esSobreturno: tt === TIPO_TURNO_SOBRETURNO,
 		idTurno: turno?.IdTurno ?? null,
 		idPaciente: Number(turno.IDPaciente) || null,
-		pacienteNombre: turno.PacienteNombre ? String(turno.PacienteNombre).trim() : null,
+		pacienteNombre: turno.PacienteNombre
+			? repararTextoClarionAnsi(String(turno.PacienteNombre).trim())
+			: null,
 		numeroDocumento: turno.NumeroDocumento ?? null,
 		observaciones: turno.Observaciones ?? null,
 		motivoCancelacion: turno.MotivoCancelacion ?? null,
@@ -311,6 +314,187 @@ function _mapSetTurnoPreferPaciente(map, key, turno) {
 /** Condición SQL (@p2): misma hora (±tolerancia migración o misma clave /100). */
 const SQL_HORA_TURNO_EQUIV_P2 = `(ABS(HoraAsignada - @p2) <= ${HORA_TURNO_TOLERANCIA}
 	OR (HoraAsignada / 100) = (@p2 / 100))`;
+
+function _normSectorTurno(sector) {
+	return String(sector || '')
+		.trim()
+		.slice(0, 4)
+		.toUpperCase();
+}
+
+function _isDuplicateTurnoPkError(err) {
+	const n = err?.number ?? err?.originalError?.info?.number;
+	return n === 2627 || n === 2601;
+}
+
+function _filtroTipoTurnoSql(esSobreturno, alias = '') {
+	const p = alias ? `${alias}.` : '';
+	return esSobreturno
+		? `${p}TipoTurno = ${TIPO_TURNO_SOBRETURNO}`
+		: `(${p}TipoTurno IS NULL OR ${p}TipoTurno <> ${TIPO_TURNO_SOBRETURNO})`;
+}
+
+/**
+ * Localiza fila existente en imTurnos antes de INSERT (PK: fecha, hora, profesional, sector).
+ * Evita violar PK_imTurnos cuando hay cupo cancelado/placeholder no detectado por filtros viejos.
+ */
+async function _buscarFilaTurnoParaAsignar(
+	fechaClarion,
+	matricula,
+	horaPersistir,
+	sector,
+	esSobreturno,
+) {
+	const sec = _normSectorTurno(sector);
+	const tipoFilter = _filtroTipoTurnoSql(esSobreturno);
+	const cols =
+		'IdTurno, IDPaciente, Sector, HoraAsignada, Especialidad, TipoTurno, Status';
+
+	let rows = await executeQuery(
+		`SELECT TOP 1 ${cols}
+		 FROM dbo.imTurnos
+		 WHERE FechaAsignada = @p0 AND Profesional = @p1 AND HoraAsignada = @p2
+		   AND UPPER(LTRIM(RTRIM(ISNULL(Sector, '')))) = @p3
+		   AND ${tipoFilter}`,
+		[
+			{ value: fechaClarion, type: 'Int' },
+			{ value: matricula, type: 'Int' },
+			{ value: horaPersistir, type: 'Int' },
+			{ value: sec, type: 'VarChar', length: 4 },
+		],
+	);
+	if (rows.length) return rows[0];
+
+	rows = await executeQuery(
+		`SELECT TOP 1 ${cols}
+		 FROM dbo.imTurnos
+		 WHERE FechaAsignada = @p0 AND Profesional = @p1
+		   AND UPPER(LTRIM(RTRIM(ISNULL(Sector, '')))) = @p3
+		   AND ${SQL_HORA_TURNO_EQUIV_P2}
+		   AND ${tipoFilter}
+		 ORDER BY ABS(HoraAsignada - @p2), IdTurno`,
+		[
+			{ value: fechaClarion, type: 'Int' },
+			{ value: matricula, type: 'Int' },
+			{ value: horaPersistir, type: 'Int' },
+			{ value: sec, type: 'VarChar', length: 4 },
+		],
+	);
+	if (rows.length) return rows[0];
+
+	rows = await executeQuery(
+		`SELECT TOP 1 ${cols}
+		 FROM dbo.imTurnos
+		 WHERE FechaAsignada = @p0 AND Profesional = @p1
+		   AND ${SQL_HORA_TURNO_EQUIV_P2}
+		   AND ${tipoFilter}
+		 ORDER BY CASE WHEN IDPaciente IS NOT NULL AND IDPaciente > 0
+		               AND (Status IS NULL OR Status <> ${STATUS_CANCELADO}) THEN 0 ELSE 1 END,
+		          ABS(HoraAsignada - @p2),
+		          IdTurno`,
+		[
+			{ value: fechaClarion, type: 'Int' },
+			{ value: matricula, type: 'Int' },
+			{ value: horaPersistir, type: 'Int' },
+		],
+	);
+	return rows[0] || null;
+}
+
+async function _actualizarTurnoAsignado(idTurno, payload) {
+	const {
+		idPac,
+		numDoc,
+		obs,
+		tt,
+		esp,
+		diaNombre,
+		secFinal,
+		fechaCargaClarion,
+		horaCargaClarion,
+		cod,
+	} = payload;
+	await executeQuery(
+		`UPDATE dbo.imTurnos
+		 SET IDPaciente = @p0,
+		     NumeroDocumento = @p1,
+		     Observaciones = @p2,
+		     TipoTurno = @p3,
+		     Especialidad = @p4,
+		     Status = 0,
+		     MotivoCancelacion = NULL,
+		     Dia = @p5,
+		     Sector = @p6,
+		     Horallegada = 0,
+		     HoraIngreso = 0,
+		     HoraSalida = 0,
+		     FechaCarga = @p7,
+		     HoraCarga = @p8,
+		     CodOperador = @p9
+		 WHERE IdTurno = @p10`,
+		[
+			{ value: idPac, type: 'Int' },
+			{ value: numDoc, type: 'Int' },
+			{ value: obs, type: 'VarChar' },
+			{ value: tt, type: 'TinyInt' },
+			{ value: esp, type: 'Int' },
+			{ value: diaNombre, type: 'VarChar' },
+			{ value: secFinal, type: 'VarChar', length: 4 },
+			{ value: fechaCargaClarion, type: 'Int' },
+			{ value: horaCargaClarion, type: 'Int' },
+			{ value: cod, type: 'Int' },
+			{ value: idTurno, type: 'Int' },
+		],
+	);
+	return { idTurno, accion: 'updated' };
+}
+
+async function _insertarTurnoAsignado(payload) {
+	const {
+		diaNombre,
+		fechaClarion,
+		horaPersistir,
+		idPac,
+		m,
+		secFinal,
+		esp,
+		obs,
+		fechaCargaClarion,
+		horaCargaClarion,
+		cod,
+		tt,
+		numDoc,
+	} = payload;
+	const ins = await executeQuery(
+		`INSERT INTO dbo.imTurnos
+		   (Dia, FechaAsignada, HoraAsignada, IDPaciente, Profesional, Sector,
+		    Horallegada, HoraIngreso, HoraSalida, Especialidad, Observaciones,
+		    FechaCarga, HoraCarga, CodOperador, Status, TipoTurno, NumeroVisita,
+		    NumeroDocumento, MotivoCancelacion)
+		 VALUES (@p0, @p1, @p2, @p3, @p4, @p5,
+		         0, 0, 0, @p6, @p7,
+		         @p8, @p9, @p10, 0, @p11, 0,
+		         @p12, NULL);
+		 SELECT CAST(SCOPE_IDENTITY() AS INT) AS IdTurno;`,
+		[
+			{ value: diaNombre, type: 'VarChar' },
+			{ value: fechaClarion, type: 'Int' },
+			{ value: horaPersistir, type: 'Int' },
+			{ value: idPac, type: 'Int' },
+			{ value: m, type: 'Int' },
+			{ value: secFinal, type: 'VarChar', length: 4 },
+			{ value: esp, type: 'Int' },
+			{ value: obs, type: 'VarChar' },
+			{ value: fechaCargaClarion, type: 'Int' },
+			{ value: horaCargaClarion, type: 'Int' },
+			{ value: cod, type: 'Int' },
+			{ value: tt, type: 'TinyInt' },
+			{ value: numDoc, type: 'Int' },
+		],
+	);
+	const idTurno = ins?.[0]?.IdTurno || null;
+	return { idTurno, accion: 'created' };
+}
 
 /** ¿La fecha cae en un no-horario de día completo? */
 function _diaBloqueado(fechaClarion, noHorarios) {
@@ -732,7 +916,7 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 						idTurno: turno?.IdTurno ?? null,
 						idPaciente: turno?.IDPaciente ?? null,
 						pacienteNombre: turno?.PacienteNombre
-							? String(turno.PacienteNombre).trim()
+							? repararTextoClarionAnsi(String(turno.PacienteNombre).trim())
 							: null,
 						numeroDocumento: turno?.NumeroDocumento ?? null,
 						observaciones: turno?.Observaciones ?? null,
@@ -849,7 +1033,9 @@ async function listarTurnos(matricula, desdeIso, hastaIso) {
 		fecha: _isoDate(convertirFechaClarionADate(t.FechaAsignada)),
 		hora: _hhmm(t.HoraAsignada),
 		idPaciente: t.IDPaciente,
-		pacienteNombre: t.PacienteNombre ? String(t.PacienteNombre).trim() : null,
+		pacienteNombre: t.PacienteNombre
+			? repararTextoClarionAnsi(String(t.PacienteNombre).trim())
+			: null,
 		profesional: t.Profesional,
 		sector: String(t.Sector || '').trim(),
 		observaciones: t.Observaciones,
@@ -1260,101 +1446,63 @@ async function asignarTurno({
 		return { idTurno: insSt?.[0]?.IdTurno || null, accion: 'created', tipoTurno: tt };
 	}
 
-	// Fila existente en el mismo horario (cualquier sector: migración DPI vs grilla ECO, etc.)
-	const existente = await executeQuery(
-		`SELECT TOP 1 IdTurno, IDPaciente, Sector, HoraAsignada, Especialidad, TipoTurno, Status
-		 FROM dbo.imTurnos
-		 WHERE FechaAsignada = @p0 AND Profesional = @p1
-		   AND ${SQL_HORA_TURNO_EQUIV_P2}
-		   AND (TipoTurno IS NULL OR TipoTurno = @p3)
-		 ORDER BY CASE WHEN IDPaciente IS NOT NULL AND IDPaciente > 0
-		               AND (Status IS NULL OR Status <> ${STATUS_CANCELADO}) THEN 0 ELSE 1 END,
-		          ABS(HoraAsignada - @p2),
-		          IdTurno`,
-		[
-			{ value: fechaClarion, type: 'Int' },
-			{ value: m, type: 'Int' },
-			{ value: horaPersistir, type: 'Int' },
-			{ value: TIPO_TURNO_GRILLA, type: 'TinyInt' },
-		],
+	const asignPayload = {
+		idPac,
+		numDoc,
+		obs,
+		tt,
+		esp,
+		diaNombre,
+		secFinal,
+		fechaCargaClarion,
+		horaCargaClarion,
+		cod,
+		fechaClarion,
+		horaPersistir,
+		m,
+	};
+
+	const existente = await _buscarFilaTurnoParaAsignar(
+		fechaClarion,
+		m,
+		horaPersistir,
+		secFinal,
+		false,
 	);
 
-	if (existente.length) {
-		const idP = Number(existente[0].IDPaciente) || 0;
+	if (existente) {
+		const idP = Number(existente.IDPaciente) || 0;
 		const stEx =
-			existente[0].Status != null ? Number(existente[0].Status) : STATUS_OCUPADO;
+			existente.Status != null ? Number(existente.Status) : STATUS_OCUPADO;
 		if (idP > 0 && stEx !== STATUS_CANCELADO) {
 			const e = new Error('El turno ya está ocupado');
 			e.statusCode = 409;
 			throw e;
 		}
-		const idTurno = existente[0].IdTurno;
-		const horaPersistida = Number(existente[0].HoraAsignada) || horaPersistir;
-		await executeQuery(
-			`UPDATE dbo.imTurnos
-			 SET IDPaciente = @p0,
-			     NumeroDocumento = @p1,
-			     Observaciones = @p2,
-			     TipoTurno = @p3,
-			     Especialidad = @p4,
-			     Status = 0,
-			     MotivoCancelacion = NULL,
-			     Dia = @p5,
-			     Sector = @p6,
-			     Horallegada = 0,
-			     HoraIngreso = 0,
-			     HoraSalida = 0,
-			     FechaCarga = @p7,
-			     HoraCarga = @p8,
-			     CodOperador = @p9
-			 WHERE IdTurno = @p10`,
-			[
-				{ value: idPac, type: 'Int' },
-				{ value: numDoc, type: 'Int' },
-				{ value: obs, type: 'VarChar' },
-				{ value: tt, type: 'TinyInt' },
-				{ value: esp, type: 'Int' },
-				{ value: diaNombre, type: 'VarChar' },
-				{ value: secFinal, type: 'VarChar' },
-				{ value: fechaCargaClarion, type: 'Int' },
-				{ value: horaCargaClarion, type: 'Int' },
-				{ value: cod, type: 'Int' },
-				{ value: idTurno, type: 'Int' },
-			],
-		);
-		return { idTurno, accion: 'updated' };
+		return _actualizarTurnoAsignado(existente.IdTurno, asignPayload);
 	}
 
-	// INSERT (IdTurno es IDENTITY) — Horallegada/HoraIngreso se marcan al llegar/ingresar
-	const ins = await executeQuery(
-		`INSERT INTO dbo.imTurnos
-		   (Dia, FechaAsignada, HoraAsignada, IDPaciente, Profesional, Sector,
-		    Horallegada, HoraIngreso, HoraSalida, Especialidad, Observaciones,
-		    FechaCarga, HoraCarga, CodOperador, Status, TipoTurno, NumeroVisita,
-		    NumeroDocumento, MotivoCancelacion)
-		 VALUES (@p0, @p1, @p2, @p3, @p4, @p5,
-		         0, 0, 0, @p6, @p7,
-		         @p8, @p9, @p10, 0, @p11, 0,
-		         @p12, NULL);
-		 SELECT CAST(SCOPE_IDENTITY() AS INT) AS IdTurno;`,
-		[
-			{ value: diaNombre, type: 'VarChar' },
-			{ value: fechaClarion, type: 'Int' },
-			{ value: horaPersistir, type: 'Int' },
-			{ value: idPac, type: 'Int' },
-			{ value: m, type: 'Int' },
-			{ value: secFinal, type: 'VarChar' },
-			{ value: esp, type: 'Int' },
-			{ value: obs, type: 'VarChar' },
-			{ value: fechaCargaClarion, type: 'Int' },
-			{ value: horaCargaClarion, type: 'Int' },
-			{ value: cod, type: 'Int' },
-			{ value: tt, type: 'TinyInt' },
-			{ value: numDoc, type: 'Int' },
-		],
-	);
-	const idTurno = ins?.[0]?.IdTurno || null;
-	return { idTurno, accion: 'created' };
+	try {
+		return await _insertarTurnoAsignado(asignPayload);
+	} catch (err) {
+		if (!_isDuplicateTurnoPkError(err)) throw err;
+		const pkRow = await _buscarFilaTurnoParaAsignar(
+			fechaClarion,
+			m,
+			horaPersistir,
+			secFinal,
+			false,
+		);
+		if (!pkRow) throw err;
+		const idP = Number(pkRow.IDPaciente) || 0;
+		const stEx = pkRow.Status != null ? Number(pkRow.Status) : STATUS_OCUPADO;
+		if (idP > 0 && stEx !== STATUS_CANCELADO) {
+			const e = new Error('El turno ya está ocupado');
+			e.statusCode = 409;
+			throw e;
+		}
+		return _actualizarTurnoAsignado(pkRow.IdTurno, asignPayload);
+	}
 }
 
 async function _obtenerTurnoProfesional(matricula, idTurno) {
@@ -2490,7 +2638,9 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 		fecha: _isoDate(convertirFechaClarionADate(t.FechaAsignada)),
 		hora: _hhmm(t.HoraAsignada),
 		idPaciente: t.IDPaciente,
-		pacienteNombre: t.PacienteNombre ? String(t.PacienteNombre).trim() : null,
+		pacienteNombre: t.PacienteNombre
+			? repararTextoClarionAnsi(String(t.PacienteNombre).trim())
+			: null,
 		profesional: t.Profesional,
 		profesionalNombre: t.ProfesionalNombre
 			? String(t.ProfesionalNombre).trim()
@@ -2850,7 +3000,9 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 			especialidad: Number(r.Especialidad) || 0,
 		},
 		paciente: {
-			nombre: r.PacienteNombre ? String(r.PacienteNombre).trim() : null,
+			nombre: r.PacienteNombre
+				? repararTextoClarionAnsi(String(r.PacienteNombre).trim())
+				: null,
 			numeroDocumento: r.NumeroDocumento ?? null,
 			numeroHC: r.NumeroHC ? String(r.NumeroHC).trim() : null,
 			sexo: extras.sexo,
