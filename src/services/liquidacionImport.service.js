@@ -68,6 +68,7 @@ const CANDIDATOS = Object.freeze({
 	numeroVisita: ['NUMEROVISITA', 'NUMERO_VISITA'],
 	importeFinal: ['IMPORTE_FINAL', 'IMPORTEFINAL'],
 	importeLiquidado: ['IMPORTELIQUIDADO'],
+	idPractica: ['IDPRACTICA', 'ID_PRACTICA'],
 });
 
 /** Solo columnas obligatorias para poder cruzar y escribir. */
@@ -205,6 +206,13 @@ function nombreArchivoVisible(valor, fallback = 'liquidacion.xlsx') {
 	return aTexto(sinRuta, 260) || fallback;
 }
 
+function codigoDePractica(valor) {
+	if (valor == null || valor === '') return null;
+	const texto = String(valor).trim();
+	if (!texto || texto === '0') return null;
+	return aTexto(texto, 50);
+}
+
 /**
  * Ubica el encabezado en una hoja: los Excel de liquidación arrancan con
  * títulos y subtotales, así que la fila de nombres no es la primera.
@@ -331,6 +339,7 @@ async function buscarCandidatas(cols, ids) {
 				${cols.matricula ? `${cols.matricula} AS matricula,` : ''}
 				${cols.numeroVisita ? `${cols.numeroVisita} AS numeroVisita,` : ''}
 				${cols.importeFinal ? `${cols.importeFinal} AS importeFinal,` : ''}
+				${cols.idPractica ? `${cols.idPractica} AS idPractica,` : ''}
 				${cols.importeLiquidado} AS importeLiquidado
 			 FROM ${TABLA}
 			 WHERE ${cols.idPrestacion} IN (${marcadores})`,
@@ -346,6 +355,7 @@ async function buscarCandidatas(cols, ids) {
 				matricula: f.matricula != null ? Number(f.matricula) : null,
 				numeroVisita: f.numeroVisita != null ? Number(f.numeroVisita) : null,
 				importeFinal: f.importeFinal != null ? Number(f.importeFinal) : null,
+				idPractica: f.idPractica != null ? f.idPractica : null,
 				importeLiquidado: f.importeLiquidado != null ? Number(f.importeLiquidado) : null,
 			});
 		}
@@ -439,6 +449,45 @@ async function nombresPorMatricula(matriculas) {
 	return porMatricula;
 }
 
+/** Código de práctica e importe facturado de imFacDetalle, para el historial. */
+async function datosDeImFacDetalle(cols, idsDetalle) {
+	const ids = [
+		...new Set(
+			(idsDetalle || [])
+				.filter((id) => Number.isFinite(Number(id)) && Number(id) > 0)
+				.map(Number),
+		),
+	];
+	const porId = new Map();
+	if (!ids.length) return porId;
+
+	const extra = [
+		cols.idPractica ? `${cols.idPractica} AS idPractica` : null,
+		cols.importeFinal ? `${cols.importeFinal} AS importeFinal` : null,
+	].filter(Boolean);
+	if (!extra.length) return porId;
+
+	for (let i = 0; i < ids.length; i += IDS_POR_CONSULTA) {
+		const lote = ids.slice(i, i + IDS_POR_CONSULTA);
+		const marcadores = lote.map((_, j) => `@p${j}`).join(', ');
+		const filas = await executeQuery(
+			`SELECT ${cols.idDetalle} AS idDetalle, ${extra.join(', ')}
+			 FROM ${TABLA}
+			 WHERE ${cols.idDetalle} IN (${marcadores})`,
+			lote.map((value) => ({ value, type: 'Int' })),
+		);
+		for (const f of filas || []) {
+			const id = Number(f.idDetalle);
+			if (!Number.isFinite(id) || porId.has(id)) continue;
+			porId.set(id, {
+				codigo: codigoDePractica(f.idPractica),
+				importeFinal: f.importeFinal != null ? Number(f.importeFinal) : null,
+			});
+		}
+	}
+	return porId;
+}
+
 /**
  * Cruza el Excel con imFacDetalle y devuelve, sin escribir nada, qué pasaría
  * con cada renglón.
@@ -500,6 +549,7 @@ async function evaluar(buffer, nombreArchivo) {
 
 		const comparada = {
 			...base,
+			codigo: f.codigo || codigoDePractica(destino.idPractica),
 			matricula: destino.matricula ?? f.matricula,
 			numeroVisita: destino.numeroVisita ?? f.numeroVisita,
 			idDetalle: destino.idDetalle,
@@ -760,7 +810,7 @@ async function listarImportaciones(opts = {}) {
 }
 
 async function obtenerImportacion(idImport) {
-	await esquema();
+	const cols = await esquema();
 	const id = Number(idImport);
 	if (!Number.isFinite(id) || id <= 0) throw httpError('Importación inválida', 400);
 
@@ -784,12 +834,21 @@ async function obtenerImportacion(idImport) {
 	);
 
 	const nombres = await nombresPorMatricula((detalle || []).map((f) => f.Matricula));
+	const extra = await datosDeImFacDetalle(
+		cols,
+		(detalle || []).map((f) => f.IdDetalle),
+	);
 	return {
 		...cabecera,
-		detalle: (detalle || []).map((f) => ({
-			...f,
-			profesional: nombres.get(Number(f.Matricula)) || null,
-		})),
+		detalle: (detalle || []).map((f) => {
+			const fact = extra.get(Number(f.IdDetalle)) || {};
+			return {
+				...f,
+				profesional: nombres.get(Number(f.Matricula)) || null,
+				codigo: fact.codigo || null,
+				importeFinal: fact.importeFinal ?? null,
+			};
+		}),
 	};
 }
 
