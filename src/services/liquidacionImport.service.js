@@ -363,12 +363,7 @@ function elegirDestino(candidatas) {
 
 
 	const honorarios = candidatas.filter(esHonorario);
-	if (honorarios.length === 1) {
-		return {
-			destino: honorarios[0],
-			detalle: `${candidatas.length} filas con ese IdPrestacion: se toma la de honorarios`,
-		};
-	}
+	if (honorarios.length === 1) return { destino: honorarios[0] };
 
 	return {
 		detalle:
@@ -402,6 +397,40 @@ function detectarDuplicados(filas) {
 	return duplicadas;
 }
 
+/** Apellido y nombre de imPersonal por matrícula, para mostrar en el preview. */
+async function nombresPorMatricula(matriculas) {
+	const ids = [
+		...new Set(
+			(matriculas || []).filter((m) => Number.isFinite(Number(m)) && Number(m) > 0).map(Number),
+		),
+	];
+	const porMatricula = new Map();
+	if (!ids.length) return porMatricula;
+
+	for (let i = 0; i < ids.length; i += IDS_POR_CONSULTA) {
+		const lote = ids.slice(i, i + IDS_POR_CONSULTA);
+		const marcadores = lote.map((_, j) => `@p${j}`).join(', ');
+		let filas;
+		try {
+			filas = await executeQuery(
+				`SELECT p.Matricula AS matricula, p.ApellidoNombre AS nombre
+				 FROM dbo.imPersonal p
+				 WHERE p.Matricula IN (${marcadores})`,
+				lote.map((value) => ({ value, type: 'Int' })),
+			);
+		} catch {
+			return porMatricula;
+		}
+		for (const f of filas || []) {
+			const mat = Number(f.matricula);
+			const nombre = aTexto(f.nombre, 120);
+			if (Number.isFinite(mat) && mat > 0 && nombre && !porMatricula.has(mat)) {
+				porMatricula.set(mat, nombre);
+			}
+		}
+	}
+	return porMatricula;
+}
 
 /**
  * Cruza el Excel con imFacDetalle y devuelve, sin escribir nada, qué pasaría
@@ -464,6 +493,8 @@ async function evaluar(buffer, nombreArchivo) {
 
 		const comparada = {
 			...base,
+			matricula: destino.matricula ?? f.matricula,
+			numeroVisita: destino.numeroVisita ?? f.numeroVisita,
 			idDetalle: destino.idDetalle,
 			tipoPrestacion: destino.tipoPrestacion,
 			importeFinal: destino.importeFinal,
@@ -482,10 +513,17 @@ async function evaluar(buffer, nombreArchivo) {
 		};
 
 		if (mismoImporte(destino.importeLiquidado, f.importeExcel)) {
-			return { ...comparada, estado: ESTADOS.SIN_CAMBIO, detalle: 'ya tenía este importe' };
+			return { ...comparada, estado: ESTADOS.SIN_CAMBIO };
 		}
 		return { ...comparada, estado: ESTADOS.APLICADO };
 	});
+
+	const nombres = await nombresPorMatricula(filas.map((f) => f.matricula));
+	for (const f of filas) {
+		if (f.matricula != null && nombres.has(f.matricula)) {
+			f.profesional = nombres.get(f.matricula);
+		}
+	}
 
 	const cuenta = (estado) => filas.filter((f) => f.estado === estado).length;
 	const aplicables = filas.filter((f) => f.estado === ESTADOS.APLICADO);
