@@ -198,6 +198,13 @@ function aTexto(valor, max = 300) {
 	return texto ? texto.slice(0, max) : null;
 }
 
+function nombreArchivoVisible(valor, fallback = 'liquidacion.xlsx') {
+	const sinRuta = String(valor ?? '')
+		.replace(/^.*[\\/]/, '')
+		.trim();
+	return aTexto(sinRuta, 260) || fallback;
+}
+
 /**
  * Ubica el encabezado en una hoja: los Excel de liquidación arrancan con
  * títulos y subtotales, así que la fila de nombres no es la primera.
@@ -595,7 +602,7 @@ async function previsualizar(buffer, nombreArchivo) {
  * rechazados hace falta `confirmarParcial`, que es la confirmación explícita del
  * operador de aplicar nada más que la parte que cruzó.
  */
-async function aplicar(buffer, nombreArchivo, auth, { confirmarParcial = false } = {}) {
+async function aplicar(buffer, nombreArchivo, auth, { confirmarParcial = false, nombreArchivo: alias } = {}) {
 	const cols = await esquema();
 	const evaluacion = await evaluar(buffer, nombreArchivo);
 	const { resumen, filas } = evaluacion;
@@ -622,6 +629,7 @@ async function aplicar(buffer, nombreArchivo, auth, { confirmarParcial = false }
 	const hash = hashArchivo(buffer);
 	const aplicables = filas.filter((f) => f.estado === ESTADOS.APLICADO);
 	const importeAplicado = aplicables.reduce((acc, f) => acc + Number(f.importeNuevo), 0);
+	const archivoGuardar = nombreArchivoVisible(alias || nombreArchivo, evaluacion.archivo);
 
 	const pool = await getRequestPool();
 	const tx = new sql.Transaction(pool);
@@ -629,7 +637,7 @@ async function aplicar(buffer, nombreArchivo, auth, { confirmarParcial = false }
 
 	try {
 		const reqCabecera = new sql.Request(tx);
-		reqCabecera.input('archivo', sql.NVarChar(260), evaluacion.archivo);
+		reqCabecera.input('archivo', sql.NVarChar(260), archivoGuardar);
 		reqCabecera.input('hash', sql.Char(64), hash);
 		reqCabecera.input('hoja', sql.NVarChar(128), evaluacion.hoja);
 		reqCabecera.input('usuario', sql.VarChar(115), usuario);
@@ -723,16 +731,30 @@ async function aplicar(buffer, nombreArchivo, auth, { confirmarParcial = false }
 // Historial
 // ============================================================================
 
-async function listarImportaciones(limite = 20) {
+async function listarImportaciones(opts = {}) {
 	await esquema();
-	const top = Math.min(Math.max(Number(limite) || 20, 1), 200);
+	const raw = typeof opts === 'number' || typeof opts === 'string' ? { limite: opts } : opts || {};
+	const top = Math.min(Math.max(Number(raw.limite) || 200, 1), 500);
+	const desde = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.desde || '').trim())
+		? String(raw.desde).trim()
+		: null;
+	const hasta = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.hasta || '').trim())
+		? String(raw.hasta).trim()
+		: null;
+
 	const filas = await executeQuery(
 		`SELECT TOP (@p0)
 			IdImport, Archivo, Hoja, FechaHora, Usuario, IdOperador,
 			FilasArchivo, FilasAplicadas, FilasRechazadas, ImporteAplicado, Estado
 		 FROM ${TABLA_IMPORT}
+		 WHERE (@p1 IS NULL OR CAST(FechaHora AS DATE) >= @p1)
+		   AND (@p2 IS NULL OR CAST(FechaHora AS DATE) <= @p2)
 		 ORDER BY IdImport DESC`,
-		[{ value: top, type: 'Int' }],
+		[
+			{ value: top, type: 'Int' },
+			{ value: desde, type: 'VarChar', length: 10 },
+			{ value: hasta, type: 'VarChar', length: 10 },
+		],
 	);
 	return filas || [];
 }
@@ -761,7 +783,14 @@ async function obtenerImportacion(idImport) {
 		[{ value: id, type: 'Int' }],
 	);
 
-	return { ...cabecera, detalle: detalle || [] };
+	const nombres = await nombresPorMatricula((detalle || []).map((f) => f.Matricula));
+	return {
+		...cabecera,
+		detalle: (detalle || []).map((f) => ({
+			...f,
+			profesional: nombres.get(Number(f.Matricula)) || null,
+		})),
+	};
 }
 
 /**
@@ -833,6 +862,26 @@ async function revertir(idImport) {
 	}
 }
 
+async function renombrar(idImport, archivo) {
+	await esquema();
+	const id = Number(idImport);
+	if (!Number.isFinite(id) || id <= 0) throw httpError('Importación inválida', 400);
+	const nombre = nombreArchivoVisible(archivo, '');
+	if (!nombre) throw httpError('El nombre no puede quedar vacío', 400);
+
+	const actualizado = await executeQuery(
+		`UPDATE ${TABLA_IMPORT}
+		 SET Archivo = @p0
+		 OUTPUT INSERTED.IdImport, INSERTED.Archivo
+		 WHERE IdImport = @p1`,
+		[
+			{ value: nombre, type: 'NVarChar', length: 260 },
+			{ value: id, type: 'Int' },
+		],
+	);
+	if (!actualizado?.[0]) throw httpError('No encontré esa importación', 404);
+	return actualizado[0];
+}
 
 module.exports = {
 	previsualizar,
@@ -840,5 +889,6 @@ module.exports = {
 	listarImportaciones,
 	obtenerImportacion,
 	revertir,
+	renombrar,
 	ESTADOS,
 };

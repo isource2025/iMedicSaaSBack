@@ -49,7 +49,10 @@ const aplicar = async (req, res) => {
 			archivo.buffer,
 			archivo.originalname,
 			req.auth,
-			{ confirmarParcial },
+			{
+				confirmarParcial,
+				nombreArchivo: req.body?.nombreArchivo,
+			},
 		);
 		return res.json({ success: true, data });
 	} catch (error) {
@@ -60,7 +63,11 @@ const aplicar = async (req, res) => {
 /** GET /api/liquidaciones/importaciones */
 const listarImportaciones = async (req, res) => {
 	try {
-		const data = await liquidacionImportService.listarImportaciones(req.query?.limite);
+		const data = await liquidacionImportService.listarImportaciones({
+			limite: req.query?.limite,
+			desde: req.query?.desde,
+			hasta: req.query?.hasta,
+		});
 		return res.json({ success: true, data });
 	} catch (error) {
 		return respuestaDeError(res, error, 'Error al listar las importaciones');
@@ -87,10 +94,21 @@ const revertir = async (req, res) => {
 	}
 };
 
+/** PATCH /api/liquidaciones/importaciones/:id */
+const renombrar = async (req, res) => {
+	try {
+		const data = await liquidacionImportService.renombrar(req.params.id, req.body?.archivo);
+		return res.json({ success: true, data });
+	} catch (error) {
+		return respuestaDeError(res, error, 'Error al renombrar la importación');
+	}
+};
+
 module.exports = {
 	previsualizar,
 	aplicar,
 	listarImportaciones,
 	obtenerImportacion,
 	revertir,
+	renombrar,
 };

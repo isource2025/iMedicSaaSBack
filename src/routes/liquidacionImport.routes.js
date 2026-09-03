@@ -46,6 +46,7 @@ router.post(
 
 router.get('/importaciones', puedeVer, liquidacionImportController.listarImportaciones);
 router.get('/importaciones/:id', puedeVer, liquidacionImportController.obtenerImportacion);
+router.patch('/importaciones/:id', soloLiquidaciones, liquidacionImportController.renombrar);
 router.post(
 	'/importaciones/:id/revertir',
 	soloLiquidaciones,
