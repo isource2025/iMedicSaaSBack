@@ -111,7 +111,12 @@ function errorSinCuenta() {
 		[
 			'La credencial es valida pero no ve ninguna cuenta.',
 			'',
-			'  Lo mas rapido es usar la Global API Key, que sirve para todo sin',
+			'  Salida rapida: el id de cuenta esta en la URL del dashboard',
+			'  (dash.cloudflare.com/<ID>). Ponelo en .env y alcanza para los tuneles:',
+			'',
+			'      CF_ACCOUNT_ID=...',
+			'',
+			'  Lo mas completo es usar la Global API Key, que sirve para todo sin',
 			'  configurar permisos. En https://dash.cloudflare.com/profile/api-tokens,',
 			'  abajo en "Global API Key" > View, y en .env:',
 			'',
@@ -131,22 +136,40 @@ function errorSinCuenta() {
 	);
 }
 
+/**
+ * Listar cuentas necesita "Account Settings: Read", que un token scopeado
+ * solo a tuneles no tiene. Con CF_ACCOUNT_ID alcanza: el id se lee de la URL
+ * del dashboard y las operaciones de tunel funcionan igual.
+ */
 async function getCuenta() {
-	const cuentas = await cf('/accounts');
-	if (!cuentas.length) throw errorSinCuenta();
-	if (cuentas.length > 1 && !process.env.CF_ACCOUNT_ID) {
-		aviso(`hay ${cuentas.length} cuentas; uso la primera. Fija CF_ACCOUNT_ID para elegir otra.`);
+	const forzada = (process.env.CF_ACCOUNT_ID || '').trim();
+
+	let cuentas = [];
+	try {
+		cuentas = await cf('/accounts');
+	} catch {
+		/* sin permiso para listar: seguimos si nos dieron el id */
 	}
-	if (process.env.CF_ACCOUNT_ID) {
-		const elegida = cuentas.find((a) => a.id === process.env.CF_ACCOUNT_ID.trim());
-		if (elegida) return elegida;
+
+	if (forzada) {
+		return cuentas.find((a) => a.id === forzada) || { id: forzada, name: '(segun CF_ACCOUNT_ID)' };
+	}
+
+	if (!cuentas.length) throw errorSinCuenta();
+	if (cuentas.length > 1) {
+		aviso(`hay ${cuentas.length} cuentas; uso la primera. Fija CF_ACCOUNT_ID para elegir otra.`);
 	}
 	return cuentas[0];
 }
 
+/** Devuelve null tanto si la zona no existe como si el token no puede verla. */
 async function getZona() {
-	const zonas = await cf(`/zones?name=${encodeURIComponent(DOMINIO)}`);
-	return zonas[0] || null;
+	try {
+		const zonas = await cf(`/zones?name=${encodeURIComponent(DOMINIO)}`);
+		return zonas[0] || null;
+	} catch {
+		return null;
+	}
 }
 
 async function getRegistros(zonaId) {
@@ -312,8 +335,9 @@ async function cmdClinica() {
 	const hostname = `files-${slug}.${DOMINIO}`;
 
 	const cuenta = await getCuenta();
+	// Sin la zona el tunel se crea igual; lo unico que queda pendiente es el
+	// CNAME, que se puede agregar despues sin tocar la PC de la clinica.
 	const zona = await getZona();
-	if (!zona) throw new Error(`La zona ${DOMINIO} no existe todavia. Corre primero: cf-setup.js zona --aplicar`);
 
 	titulo(`Clinica ${slug}`);
 	dato(`tunel     ${nombreTunel}`);
@@ -370,6 +394,11 @@ async function cmdClinica() {
 	titulo('DNS');
 	if (!tunel) {
 		console.log(`  ${c.dim}~ se crea junto con el tunel${c.reset}`);
+	} else if (!zona) {
+		aviso(`no puedo ver la zona ${DOMINIO}: falta crearla o el token no tiene permiso de DNS`);
+		dato('El tunel ya quedo creado. Cuando la zona exista, corre de nuevo este');
+		dato('mismo comando y solo agrega el CNAME que falta:');
+		dato(`    files-${slug}  CNAME  ${tunel.id}.cfargotunnel.com  (proxied)`);
 	} else {
 		const existentes = await getRegistros(zona.id);
 		const r = await upsertRegistro(zona.id, existentes, {
