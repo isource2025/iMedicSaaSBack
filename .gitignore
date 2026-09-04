@@ -9,6 +9,10 @@ requests.http
 # Directorio de archivos subidos (no versionar)
 uploads/
 
+# Config y temporales del file server en la PC de una clínica (tiene el token)
+scripts/tunnel/clinica.env
+.tmp-uploads/
+
 # Backups SQL locales
 backups/
 scripts/_schema_diff_*.json

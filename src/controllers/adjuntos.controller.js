@@ -18,6 +18,7 @@ const {
 } = require('../context/tenantContext');
 const {
   resolveFileServerUrl,
+  fileServerHeaders,
   pickUploadedFilePath,
   fileServerUploadOk,
   isFileServerUnreachable,
@@ -216,9 +217,7 @@ router.post(
 
       const fileServerUrl = await resolveFileServerUrl();
       const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
-        headers: {
-          ...formData.getHeaders()
-        },
+        headers: fileServerHeaders(formData.getHeaders()),
         timeout: FILE_SERVER_TIMEOUT_MS
       });
 
@@ -349,9 +348,7 @@ router.post(
 
         const fileServerUrl = await resolveFileServerUrl();
         const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
-          headers: {
-            ...formData.getHeaders()
-          },
+          headers: fileServerHeaders(formData.getHeaders()),
           timeout: FILE_SERVER_TIMEOUT_MS
         });
 
@@ -562,6 +559,7 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
         try {
           response = await axios.get(fileUrl, {
             responseType: 'stream',
+            headers: fileServerHeaders(),
             timeout: FILE_SERVER_TIMEOUT_MS,
             validateStatus: (s) => s >= 200 && s < 300,
           });

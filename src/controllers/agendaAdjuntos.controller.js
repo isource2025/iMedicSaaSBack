@@ -12,6 +12,7 @@ const racService = require('../services/agendaRac.service');
 const { notificarNuevoAdjunto } = require('../services/notificacionesAdjuntos.service');
 const {
   resolveFileServerUrl,
+  fileServerHeaders,
   pickUploadedFilePath,
   fileServerUploadOk,
   isFileServerUnreachable,
@@ -125,7 +126,7 @@ async function subirAdjuntoTurno(req, res) {
 
       const fileServerUrl = await resolveFileServerUrl();
       const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
-        headers: formData.getHeaders(),
+        headers: fileServerHeaders(formData.getHeaders()),
         timeout: FILE_SERVER_TIMEOUT_MS,
       });
 

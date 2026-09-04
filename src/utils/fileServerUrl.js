@@ -1,16 +1,33 @@
 /**
  * URL pública del file server de adjuntos por empresa.
  *
- * Producción (Railway): SIEMPRE Empresas.FileServerUrl (túnel trycloudflare).
- * El front NUNCA habla con la IP ni con 127.0.0.1:9012 — eso solo existe en la PC de la clínica.
- * cloudflared en esa PC publica 127.0.0.1:9012 como https://xxxx.trycloudflare.com
+ * Es un hostname fijo por clínica (https://files-<clinica>.imedic.com.ar) que
+ * apunta a un túnel con nombre de Cloudflare. Se carga una sola vez en
+ * Empresas.FileServerUrl y no vuelve a cambiar: no hay URLs dinámicas ni
+ * nada que refrescar cuando la PC de la clínica se reinicia.
  *
- * Vidal (empresa 1) es la excepción histórica: IP http://181.4.71.230:3002 si no hay túnel.
+ * El hostname se crea con scripts/tunnel/Instalar-Clinica.ps1.
+ *
+ * Vidal (empresa 1) es la excepción histórica: IP http://181.4.71.230:3002
+ * mientras no esté migrada al túnel.
  */
 const { getTenantId } = require('../context/tenantContext');
 
 const DEFAULT_VIDAL_FILE_SERVER_URL = 'http://181.4.71.230:3002';
 const VIDAL_EMPRESA_ID = Number(process.env.VIDAL_EMPRESA_ID || 1);
+
+/** Secreto compartido con el file server de las clínicas. Vacío = sin auth. */
+const FILE_SERVER_TOKEN = String(process.env.FILE_SERVER_TOKEN || '').trim();
+
+/**
+ * Headers para hablar con el file server de una clínica.
+ * @param {Record<string, string>} [extra]
+ */
+function fileServerHeaders(extra) {
+	const headers = { ...(extra || {}) };
+	if (FILE_SERVER_TOKEN) headers['x-imedic-token'] = FILE_SERVER_TOKEN;
+	return headers;
+}
 
 function normalizeBaseUrl(url) {
 	return String(url || '')
@@ -53,7 +70,7 @@ function pickUsableUrl(url) {
 
 function missingUrlError(id) {
 	const err = new Error(
-		`La empresa ${id} no tiene FileServerUrl de túnel. En la PC de la clínica hay que correr Start-QuickTunnel.ps1 (no sirve la IP local ni 127.0.0.1).`,
+		`La empresa ${id} no tiene FileServerUrl. Cargue https://files-<clinica>.imedic.com.ar en Super Admin (no sirve la IP local ni 127.0.0.1); el hostname lo crea Instalar-Clinica.ps1 en la PC de la clínica.`,
 	);
 	err.code = 'FILE_SERVER_URL_MISSING';
 	return err;
@@ -135,13 +152,13 @@ function describeFileServerError(err) {
 		/errorCode:\s*1033/i.test(body) ||
 		/Cloudflare Tunnel error/i.test(body)
 	) {
-		return 'El túnel de adjuntos está caído (Cloudflare 530). En la PC de la clínica hay que volver a correr Start-QuickTunnel.ps1; si cambia la URL de trycloudflare, se actualiza sola en Super Admin.';
+		return 'El túnel de adjuntos está caído (Cloudflare 530). La PC de la clínica está apagada o sin internet: cuando vuelva, el servicio cloudflared reconecta solo con el mismo hostname.';
 	}
 	if (err && (err.code === 'FILE_SERVER_BAD_UPLOAD' || err.code === 'FILE_SERVER_URL_MISSING')) {
 		return err.message;
 	}
 	if (isFileServerUnreachable(err)) {
-		return 'No se pudo contactar el servidor de archivos (timeout o red). En la PC de la clínica tiene que estar corriendo el túnel y el file server (Start-QuickTunnel.ps1). Revise FileServerUrl de la empresa.';
+		return 'No se pudo contactar el servidor de archivos (timeout o red). En la PC de la clínica revise el servicio cloudflared y la tarea "iMedic File Server" con scripts/tunnel/Estado.ps1.';
 	}
 	return (err && err.message) || 'Error al subir archivo';
 }
@@ -152,7 +169,7 @@ function pickUploadedFilePath(data) {
 	const p = raw != null ? String(raw).trim() : '';
 	if (!p) {
 		const err = new Error(
-			'El servidor de archivos no guardó el adjunto. En la PC de la clínica hay que usar start-file-server.bat (no el proceso que deja upload.bin).',
+			'El servidor de archivos no guardó el adjunto: respondió sin la ruta del archivo. Verifique la versión del file server en la PC de la clínica.',
 		);
 		err.code = 'FILE_SERVER_BAD_UPLOAD';
 		throw err;
@@ -160,7 +177,7 @@ function pickUploadedFilePath(data) {
 	return p;
 }
 
-/** El file server de Sarmiento a veces manda ok:true en vez de success:true. */
+/** Los file servers viejos mandan ok:true en vez de success:true. */
 function fileServerUploadOk(data) {
 	if (!data || typeof data !== 'object') return false;
 	if (data.success === true || data.ok === true) return true;
@@ -177,6 +194,7 @@ module.exports = {
 	DEFAULT_FILE_SERVER_URL: DEFAULT_VIDAL_FILE_SERVER_URL,
 	normalizeBaseUrl,
 	resolveFileServerUrl,
+	fileServerHeaders,
 	pickUploadedFilePath,
 	fileServerUploadOk,
 	isFileServerUnreachable,

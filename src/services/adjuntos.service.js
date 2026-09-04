@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
-const { resolveFileServerUrl } = require('../utils/fileServerUrl');
+const { resolveFileServerUrl, fileServerHeaders } = require('../utils/fileServerUrl');
 const { decodeMultipartFilename, sanitizeWindowsFileName, pathLookupCandidates, normalizeAdjuntoFilePath } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
@@ -139,6 +139,7 @@ class AdjuntosService {
       try {
         const res = await axios.get(url, {
           responseType: 'arraybuffer',
+          headers: fileServerHeaders(),
           timeout: FILE_SERVER_TIMEOUT_MS,
           maxContentLength: 50 * 1024 * 1024,
           maxBodyLength: 50 * 1024 * 1024,
@@ -160,7 +161,10 @@ class AdjuntosService {
     for (const ruta of candidates) {
       const deleteUrl = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
       try {
-        const response = await axios.delete(deleteUrl, { timeout: 30000 });
+        const response = await axios.delete(deleteUrl, {
+          headers: fileServerHeaders(),
+          timeout: 30000,
+        });
         if (response.data?.success) return { deleted: true, rutaUsada: ruta };
       } catch (e) {
         lastErr = e;
