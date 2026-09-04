@@ -27,8 +27,24 @@ try {
 }
 
 const API = 'https://api.cloudflare.com/client/v4';
-const TOKEN = (process.env.CF_API_TOKEN || '').trim();
 const DOMINIO = (process.env.IMEDIC_DOMINIO || 'imedic.com.ar').trim();
+
+const TOKEN = (process.env.CF_API_TOKEN || '').trim();
+const EMAIL = (process.env.CF_API_EMAIL || '').trim();
+const GLOBAL_KEY = (process.env.CF_GLOBAL_API_KEY || '').trim();
+
+/**
+ * La Global API Key usa X-Auth-Email + X-Auth-Key y sirve para todo, sin
+ * configurar permisos. Un API token usa Bearer y hay que scopearlo bien.
+ * Si estan las dos cosas, gana la Global Key.
+ */
+function authHeaders() {
+	if (EMAIL && GLOBAL_KEY) return { 'X-Auth-Email': EMAIL, 'X-Auth-Key': GLOBAL_KEY };
+	if (TOKEN) return { Authorization: `Bearer ${TOKEN}` };
+	return null;
+}
+
+const MODO_AUTH = EMAIL && GLOBAL_KEY ? `Global API Key (${EMAIL})` : TOKEN ? 'API token' : 'sin credenciales';
 
 /** Destino de un proyecto de Vercel con dominio propio. */
 const VERCEL_CNAME = (process.env.VERCEL_CNAME || 'cname.vercel-dns.com').trim();
@@ -66,7 +82,7 @@ async function cf(ruta, opciones = {}) {
 	const res = await fetch(`${API}${ruta}`, {
 		...opciones,
 		headers: {
-			Authorization: `Bearer ${TOKEN}`,
+			...authHeaders(),
 			'Content-Type': 'application/json',
 			...(opciones.headers || {}),
 		},
@@ -85,9 +101,39 @@ async function cf(ruta, opciones = {}) {
 	return body.result;
 }
 
+/**
+ * Un token sin permisos suficientes no da 403 en /accounts: devuelve 200 con
+ * la lista vacia. Sin el id de cuenta no se puede hacer nada, asi que
+ * explicamos que fila falta en el token en vez de fallar mas adelante.
+ */
+function errorSinCuenta() {
+	return new Error(
+		[
+			'La credencial es valida pero no ve ninguna cuenta.',
+			'',
+			'  Lo mas rapido es usar la Global API Key, que sirve para todo sin',
+			'  configurar permisos. En https://dash.cloudflare.com/profile/api-tokens,',
+			'  abajo en "Global API Key" > View, y en .env:',
+			'',
+			'      CF_API_EMAIL=tu-mail-de-cloudflare',
+			'      CF_GLOBAL_API_KEY=la-clave',
+			'',
+			'  Con un API token en cambio hacen falta estas cuatro filas:',
+			'',
+			'      Account   Cloudflare Tunnel   Edit',
+			'      Account   Account Settings    Read',
+			'      Zone      Zone                Edit',
+			'      Zone      DNS                 Edit',
+			'',
+			'  con Account Resources: Include > All accounts',
+			'  y   Zone Resources:    Include > All zones',
+		].join('\n'),
+	);
+}
+
 async function getCuenta() {
 	const cuentas = await cf('/accounts');
-	if (!cuentas.length) throw new Error('El token no ve ninguna cuenta de Cloudflare.');
+	if (!cuentas.length) throw errorSinCuenta();
 	if (cuentas.length > 1 && !process.env.CF_ACCOUNT_ID) {
 		aviso(`hay ${cuentas.length} cuentas; uso la primera. Fija CF_ACCOUNT_ID para elegir otra.`);
 	}
@@ -147,6 +193,9 @@ function mostrarRegistro(r) {
 // -------------------------------------------------------------------- estado
 
 async function cmdEstado() {
+	titulo('Credencial');
+	ok(MODO_AUTH);
+
 	const cuenta = await getCuenta();
 	titulo('Cuenta');
 	ok(`${cuenta.name}`);
@@ -366,14 +415,18 @@ async function cmdClinica() {
 const COMANDOS = { estado: cmdEstado, zona: cmdZona, clinica: cmdClinica };
 
 async function main() {
-	if (!TOKEN) {
-		console.error(`${c.red}Falta CF_API_TOKEN.${c.reset}`);
-		console.error('  Crealo en https://dash.cloudflare.com/profile/api-tokens (Create Custom Token) con:');
-		console.error('      Account > Cloudflare Tunnel > Edit');
-		console.error('      Account > Account Settings > Read');
-		console.error('      Zone > Zone > Edit');
-		console.error('      Zone > DNS > Edit');
-		console.error('  y ponelo en iMedicSaaSBack/.env como  CF_API_TOKEN=...');
+	if (!authHeaders()) {
+		console.error(`${c.red}Faltan las credenciales de Cloudflare en .env.${c.reset}`);
+		console.error('');
+		console.error('  Opcion simple (sirve para todo, sin configurar permisos):');
+		console.error('      CF_API_EMAIL=tu-mail-de-cloudflare');
+		console.error('      CF_GLOBAL_API_KEY=la-clave');
+		console.error('  Se saca de https://dash.cloudflare.com/profile/api-tokens > Global API Key > View');
+		console.error('');
+		console.error('  Opcion con token scopeado:');
+		console.error('      CF_API_TOKEN=...');
+		console.error('  con permisos Account>Cloudflare Tunnel>Edit, Account>Account Settings>Read,');
+		console.error('  Zone>Zone>Edit y Zone>DNS>Edit.');
 		process.exit(1);
 	}
 
