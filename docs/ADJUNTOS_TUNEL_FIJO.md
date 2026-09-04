@@ -40,10 +40,29 @@ usuario). El archivo nunca se almacena ni se copia en Vercel ni en Railway.
 
 ---
 
-## La herramienta de Cloudflare
+## Los dos caminos
 
-Todo se hace por CLI con `scripts/cloudflare/cf-setup.js`. Necesita un API
-token en `.env` como `CF_API_TOKEN`, creado en
+El alta se puede hacer de dos formas. Ninguna necesita tocar la base ni
+generar URLs dinámicas; cambia solo cómo se autentica contra Cloudflare.
+
+**Camino A — solo `cloudflared`, sin ningún API token.** Es el más simple si
+no querés pelear con permisos. `cloudflared tunnel login` abre el navegador
+una vez, deja un `cert.pem`, y con eso `Instalar-Clinica.ps1` crea el túnel,
+apunta el DNS y escribe la config, todo por comando. Es el modo por defecto.
+
+**Camino B — por API.** Los túneles se crean desde el repo con
+`cf-setup.js`, quedan administrados por Cloudflare y en la PC de la clínica
+no hay login ni config local. Requiere un API token bien scopeado.
+
+Lo único que **ninguno** de los dos puede hacer es dar de alta el dominio en
+Cloudflare por primera vez sin credenciales: eso son tres clics en el
+dashboard (*Add domain* → `imedic.com.ar` → Free), o `cf-setup.js zona` si
+tenés el token del camino B.
+
+## La herramienta de Cloudflare (camino B)
+
+`scripts/cloudflare/cf-setup.js` necesita un API token en `.env` como
+`CF_API_TOKEN`, creado en
 [profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) →
 *Create Custom Token* con estos permisos:
 
@@ -53,6 +72,11 @@ token en `.env` como `CF_API_TOKEN`, creado en
 | Account | Account Settings   | Read  |
 | Zone    | Zone               | Edit  |
 | Zone    | DNS                | Edit  |
+
+Listar cuentas necesita *Account Settings → Read*; sin eso la API devuelve la
+lista vacía en lugar de un 403. Si el token solo tiene permiso de túneles,
+alcanza con poner `CF_ACCOUNT_ID` en `.env` (el id está en la URL del
+dashboard cuando abrís un dominio: `dash.cloudflare.com/<id>/<dominio>`).
 
 Los tres subcomandos son idempotentes y, sin `--aplicar`, solo simulan:
 
@@ -86,7 +110,30 @@ Con `cf-setup.js estado` se verifica cuándo la zona pasó a `active`.
 
 ---
 
-## Alta de una clínica
+## Alta de una clínica — camino A (sin API token)
+
+En la PC de la clínica, con el repo clonado y Node instalado, **como
+Administrador**:
+
+```powershell
+cd C:\iMedic\iMedicSaaSBack
+.\scripts\tunnel\Instalar-Clinica.ps1 -Clinica vidal -Root "E:\adjuntos"
+```
+
+Abre el navegador una vez para que autorices `imedic.com.ar`; de ahí en
+adelante no vuelve a pedir nada. Crea el túnel `imedic-vidal`, apunta
+`files-vidal.imedic.com.ar`, escribe la config y deja los dos servicios
+corriendo.
+
+Las credenciales del túnel van a `C:\ProgramData\Cloudflare\cloudflared\` y
+se referencian por ruta absoluta, porque el servicio corre como `LocalSystem`
+y no ve `%USERPROFILE%`. Ese detalle es el que hacía fallar la instalación
+después de reiniciar.
+
+Si el dominio no aparece en la lista del navegador, todavía no está dado de
+alta en Cloudflare.
+
+## Alta de una clínica — camino B (por API)
 
 ### 1. Crear el túnel (desde acá, por API)
 

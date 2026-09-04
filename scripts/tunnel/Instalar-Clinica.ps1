@@ -3,31 +3,32 @@
 	Deja la PC de una clinica publicando sus adjuntos en un hostname fijo.
 
 .DESCRIPTION
-	Se corre UNA vez por clinica, como Administrador, y no es interactivo.
-	Instala dos cosas como servicios de Windows:
+	Se corre UNA vez por clinica, como Administrador. Instala dos cosas como
+	servicios de Windows:
 
-	  1. cloudflared, conectado al tunel de esa clinica. El tunel y su hostname
-	     (files-<clinica>.imedic.com.ar) ya fueron creados por API desde el
-	     repo, con:  node scripts/cloudflare/cf-setup.js clinica <slug> --aplicar
-	     Ese comando imprime el -TunnelToken que hay que pasar aca.
+	  1. cloudflared, conectado a un tunel con nombre permanente que publica
+	     files-<clinica>.imedic.com.ar
 	  2. El file server de adjuntos, escuchando solo en 127.0.0.1.
-
-	El tunel es "administrado por Cloudflare": la configuracion del ingress
-	vive en Cloudflare, no en esta PC. Por eso aca no hay login por navegador,
-	ni cert.pem, ni config.yml que se desincronice.
 
 	No hay Quick Tunnels ni URLs de trycloudflare.com. Si la PC se reinicia,
 	los dos servicios vuelven solos y el hostname es el mismo de siempre.
-
 	Es idempotente: se puede volver a correr para reparar la instalacion.
 
-.PARAMETER Clinica
-	Slug de la clinica en minusculas (vidal, sarmiento). Tiene que ser el
-	mismo que se uso en cf-setup.js.
+	Tiene dos modos segun como se autentique contra Cloudflare:
 
-.PARAMETER TunnelToken
-	Token del tunel que imprimio cf-setup.js. Es una credencial: no lo
-	commitees ni lo pegues en un chat.
+	  Sin -TunnelToken (todo por CLI, no hace falta ningun API token)
+	      Usa "cloudflared tunnel login": abre el navegador una vez para
+	      autorizar el dominio y deja un cert.pem. Con eso el script crea el
+	      tunel, apunta el DNS y escribe la config, todo por comando.
+
+	  Con -TunnelToken (tunel administrado por Cloudflare)
+	      El tunel, su ingress y su DNS ya fueron creados por API con
+	      scripts/cloudflare/cf-setup.js, que imprime ese token. Aca no hay
+	      login ni config local.
+
+.PARAMETER Clinica
+	Slug de la clinica en minusculas (vidal, sarmiento). Define el hostname
+	y el nombre del tunel.
 
 .PARAMETER Root
 	Carpeta donde se guardan los adjuntos en el disco de la clinica.
@@ -39,6 +40,17 @@
 	Opcional. Secreto compartido que el file server exige en el header
 	x-imedic-token. Tiene que coincidir con FILE_SERVER_TOKEN del backend.
 
+.PARAMETER TunnelToken
+	Opcional. Token que imprime cf-setup.js. Es una credencial: no lo
+	commitees ni lo pegues en un chat.
+
+.PARAMETER Recrear
+	Borra y vuelve a crear el tunel. Solo en modo CLI, y solo si se perdieron
+	las credenciales locales.
+
+.EXAMPLE
+	.\Instalar-Clinica.ps1 -Clinica vidal -Root "E:\adjuntos"
+
 .EXAMPLE
 	.\Instalar-Clinica.ps1 -Clinica vidal -Root "E:\adjuntos" -TunnelToken "eyJhIjoi..."
 #>
@@ -48,26 +60,30 @@ param(
 	[ValidatePattern('^[a-z0-9][a-z0-9-]*$')]
 	[string]$Clinica,
 
-	[Parameter(Mandatory = $true)]
-	[string]$TunnelToken,
-
 	[string]$Root = 'E:\adjuntos',
 
 	[int]$Port = 9012,
 
 	[string]$Token = '',
 
-	[string]$Dominio = 'imedic.com.ar'
+	[string]$TunnelToken = '',
+
+	[string]$Dominio = 'imedic.com.ar',
+
+	[switch]$Recrear
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Hostname     = "files-$Clinica.$Dominio"
+$TunnelName   = "imedic-$Clinica"
 $RepoRoot     = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $FileServerJs = Join-Path $RepoRoot 'file-server.js'
 $EnvFile      = Join-Path $PSScriptRoot 'clinica.env'
+$CfDir        = 'C:\ProgramData\Cloudflare\cloudflared'
 $TaskName     = 'iMedic File Server'
+$ModoApi      = [bool]$TunnelToken
 
 function Write-Paso { param([string]$m) Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    OK  $m" -ForegroundColor Green }
@@ -141,6 +157,7 @@ Write-Host "  hostname:  https://$Hostname"
 Write-Host "  carpeta:   $Root"
 Write-Host "  puerto:    127.0.0.1:$Port"
 Write-Host "  auth:      $(if ($Token) { 'token compartido' } else { 'solo tunel' })"
+Write-Host "  modo:      $(if ($ModoApi) { 'tunel administrado por Cloudflare' } else { 'CLI con cloudflared login' })"
 
 if (-not (Test-Path $FileServerJs)) {
 	throw "No encuentro file-server.js en $RepoRoot. Corre el script desde el repo iMedicSaaSBack."
@@ -159,24 +176,142 @@ if (-not (Test-Path (Join-Path $RepoRoot 'node_modules\express'))) {
 }
 Write-Ok 'dependencias de node listas'
 
-New-Item -ItemType Directory -Force -Path $Root | Out-Null
+New-Item -ItemType Directory -Force -Path $Root  | Out-Null
+New-Item -ItemType Directory -Force -Path $CfDir | Out-Null
 Write-Ok "carpeta de adjuntos: $Root"
+
+# --------------------------------------------------- modo CLI: login y tunel
+
+$ConfigPath = $null
+
+if (-not $ModoApi) {
+	Write-Paso 'Autenticacion de Cloudflare'
+	$CertUser = Join-Path $env:USERPROFILE '.cloudflared\cert.pem'
+	$CertProg = Join-Path $CfDir 'cert.pem'
+
+	if ((Test-Path $CertProg) -and -not (Test-Path $CertUser)) {
+		New-Item -ItemType Directory -Force -Path (Split-Path $CertUser) | Out-Null
+		Copy-Item $CertProg $CertUser -Force
+	}
+
+	if (Test-Path $CertUser) {
+		Write-Ok 'esta PC ya esta autenticada contra Cloudflare'
+	} else {
+		Write-Warn "Se va a abrir el navegador. Elegi el dominio $Dominio y autorizalo."
+		& $Cloudflared tunnel login
+		if (-not (Test-Path $CertUser)) {
+			throw "No se completo el login. Si $Dominio no aparece en la lista, primero hay que agregarlo en Cloudflare."
+		}
+		Write-Ok 'autenticado'
+	}
+	Copy-Item $CertUser $CertProg -Force
+
+	Write-Paso 'Tunel permanente'
+	$lista = (& $Cloudflared tunnel list --output json 2>$null) | Out-String
+	$tuneles = @()
+	if ($lista.Trim()) { try { $tuneles = $lista | ConvertFrom-Json } catch { $tuneles = @() } }
+	$existente = $tuneles | Where-Object { $_.name -eq $TunnelName -and -not $_.deleted_at } | Select-Object -First 1
+
+	if ($existente -and $Recrear) {
+		Write-Warn "Borrando el tunel $TunnelName para recrearlo..."
+		& $Cloudflared tunnel cleanup $TunnelName 2>$null | Out-Null
+		& $Cloudflared tunnel delete -f $TunnelName | Out-Host
+		$existente = $null
+	}
+
+	if ($existente) {
+		$TunnelId = $existente.id
+		Write-Ok "el tunel $TunnelName ya existe ($TunnelId)"
+	} else {
+		& $Cloudflared tunnel create $TunnelName | Out-Host
+		$lista = (& $Cloudflared tunnel list --output json 2>$null) | Out-String
+		$tuneles = $lista | ConvertFrom-Json
+		$creado = $tuneles | Where-Object { $_.name -eq $TunnelName -and -not $_.deleted_at } | Select-Object -First 1
+		if (-not $creado) { throw "No se pudo crear el tunel $TunnelName." }
+		$TunnelId = $creado.id
+		Write-Ok "tunel creado ($TunnelId)"
+	}
+
+	# Las credenciales quedan en el perfil del usuario, pero el servicio corre
+	# como LocalSystem y no ve %USERPROFILE%: van a ProgramData y se
+	# referencian por ruta absoluta desde config.yml.
+	$CredsUser = Join-Path $env:USERPROFILE ".cloudflared\$TunnelId.json"
+	$CredsProg = Join-Path $CfDir "$TunnelId.json"
+
+	if (Test-Path $CredsUser) {
+		Copy-Item $CredsUser $CredsProg -Force
+	} elseif (-not (Test-Path $CredsProg)) {
+		throw @"
+El tunel $TunnelName existe en Cloudflare pero en esta PC no estan sus
+credenciales ($TunnelId.json). Eso pasa si se creo desde otra maquina.
+Volve a correr con -Recrear para borrarlo y crearlo de nuevo.
+"@
+	}
+	Write-Ok "credenciales en $CredsProg"
+
+	Write-Paso 'Configuracion del tunel'
+	$configYml = @"
+# Generado por Instalar-Clinica.ps1 - clinica: $Clinica
+# No editar a mano: volve a correr el script.
+tunnel: $TunnelId
+credentials-file: $CredsProg
+metrics: 127.0.0.1:20241
+loglevel: info
+
+ingress:
+  - hostname: $Hostname
+    service: http://127.0.0.1:$Port
+    originRequest:
+      connectTimeout: 30s
+  - service: http_status:404
+"@
+
+	$ConfigPath = Join-Path $CfDir 'config.yml'
+	Set-Content -Path $ConfigPath -Value $configYml -Encoding UTF8
+	Write-Ok "config.yml en $ConfigPath"
+
+	# Distintas versiones de cloudflared buscan el config en distintos lugares.
+	foreach ($dir in @(
+		(Join-Path $env:USERPROFILE '.cloudflared'),
+		'C:\Windows\System32\config\systemprofile\.cloudflared'
+	)) {
+		try {
+			New-Item -ItemType Directory -Force -Path $dir | Out-Null
+			Copy-Item $ConfigPath (Join-Path $dir 'config.yml') -Force
+			Copy-Item $CredsProg (Join-Path $dir "$TunnelId.json") -Force
+			Copy-Item $CertProg  (Join-Path $dir 'cert.pem') -Force
+		} catch {
+			Write-Warn "no pude copiar la config a $dir ($($_.Exception.Message))"
+		}
+	}
+
+	Write-Paso 'DNS'
+	& $Cloudflared tunnel route dns --overwrite-dns $TunnelName $Hostname 2>&1 | Out-Host
+	if ($LASTEXITCODE -ne 0) {
+		throw "No se pudo apuntar $Hostname al tunel. Verifica que $Dominio este activo en Cloudflare."
+	}
+	Write-Ok "$Hostname -> $TunnelName"
+}
 
 # --------------------------------------------------------- servicio del tunel
 
 Write-Paso 'Servicio de cloudflared'
 $svc = Get-Service -Name 'cloudflared' -ErrorAction SilentlyContinue
 if ($svc) {
-	Write-Warn 'ya existia el servicio, reinstalandolo con el token nuevo...'
+	Write-Warn 'ya existia el servicio, reinstalandolo...'
 	& $Cloudflared service uninstall 2>&1 | Out-Null
 	Start-Sleep -Seconds 2
 }
 
-# Con el token, cloudflared se registra como servicio y baja la config del
-# ingress desde Cloudflare. No usa config.yml ni cert.pem.
-& $Cloudflared service install $TunnelToken 2>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) {
-	throw 'No se pudo instalar el servicio de cloudflared. Revisa que el -TunnelToken sea el que imprimio cf-setup.js.'
+if ($ModoApi) {
+	# Con el token, cloudflared baja la config del ingress desde Cloudflare.
+	& $Cloudflared service install $TunnelToken 2>&1 | Out-Host
+	if ($LASTEXITCODE -ne 0) {
+		throw 'No se pudo instalar el servicio. Revisa que el -TunnelToken sea el que imprimio cf-setup.js.'
+	}
+} else {
+	& $Cloudflared --config $ConfigPath service install 2>&1 | Out-Host
+	if ($LASTEXITCODE -ne 0) { throw 'No se pudo instalar el servicio de cloudflared.' }
 }
 Start-Sleep -Seconds 2
 
