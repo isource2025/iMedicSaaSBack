@@ -86,15 +86,23 @@ if (-not $svc) {
 	}
 }
 
-$cfgYml = 'C:\ProgramData\Cloudflare\cloudflared\config.yml'
-if (Test-Path $cfgYml) {
-	Write-Bien "config en $cfgYml"
-	$ing = (Select-String -Path $cfgYml -Pattern 'hostname:\s*(.+)$').Matches.Groups[1].Value
-	if ($ing -and $ing.Trim() -ne $Hostname) {
-		Write-Mal "el config apunta a $ing pero clinica.env dice $Hostname"
-	}
-} else {
-	Write-Mal "falta $cfgYml"
+# El tunel es administrado por Cloudflare: la config del ingress vive en
+# Cloudflare, no aca. Lo unico local es el token, dentro del comando del
+# servicio.
+$imagePath = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Cloudflared' `
+		-Name ImagePath -ErrorAction SilentlyContinue).ImagePath
+if ($imagePath -match '--token') {
+	Write-Bien 'tunel administrado por Cloudflare (token)'
+} elseif ($imagePath -match '--config') {
+	Write-Mal 'el servicio usa un config.yml local, no el token'
+	Write-Dato 'Reinstala con Instalar-Clinica.ps1 -TunnelToken (lo da cf-setup.js).'
+} elseif ($imagePath) {
+	Write-Mal "no reconozco como quedo instalado el servicio: $imagePath"
+}
+
+$legacy = 'C:\ProgramData\Cloudflare\cloudflared\config.yml'
+if (Test-Path $legacy) {
+	Write-Dato "sobro un $legacy de la instalacion vieja; ya no se usa"
 }
 
 # --------------------------------------------------------------- file server

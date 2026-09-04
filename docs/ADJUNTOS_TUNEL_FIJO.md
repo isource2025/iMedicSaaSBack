@@ -40,75 +40,97 @@ usuario). El archivo nunca se almacena ni se copia en Vercel ni en Railway.
 
 ---
 
-## Puesta en marcha del dominio (una vez, no por clínica)
+## La herramienta de Cloudflare
 
-1. En [dash.cloudflare.com](https://dash.cloudflare.com) → **Add a site** →
-   `imedic.com.ar` → plan Free. Cloudflare devuelve dos nameservers.
-2. En [nic.ar](https://nic.ar) → Mis dominios → `imedic.com.ar` →
-   **Delegaciones** → reemplazar por esos dos nameservers. Tarda entre unos
-   minutos y 24 h en propagar.
-3. Crear un API token en
-   [profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) con
-   permiso **Zone → DNS → Edit** sobre la zona.
-4. Cargar los registros de la aplicación:
+Todo se hace por CLI con `scripts/cloudflare/cf-setup.js`. Necesita un API
+token en `.env` como `CF_API_TOKEN`, creado en
+[profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) →
+*Create Custom Token* con estos permisos:
+
+| Tipo    | Permiso            | Nivel |
+| ------- | ------------------ | ----- |
+| Account | Cloudflare Tunnel  | Edit  |
+| Account | Account Settings   | Read  |
+| Zone    | Zone               | Edit  |
+| Zone    | DNS                | Edit  |
+
+Los tres subcomandos son idempotentes y, sin `--aplicar`, solo simulan:
 
 ```powershell
-$env:CF_API_TOKEN = "el-token"
-$env:API_CNAME    = "imedicsaasback-production.up.railway.app"  # el de Railway
-node scripts/cloudflare/configurar-dominio.js            # simula
-node scripts/cloudflare/configurar-dominio.js --aplicar  # escribe
+node scripts/cloudflare/cf-setup.js estado              # cuenta, zona, DNS, túneles
+node scripts/cloudflare/cf-setup.js zona --aplicar      # crea la zona y app/api/www
+node scripts/cloudflare/cf-setup.js clinica vidal --aplicar   # crea el túnel de una clínica
 ```
 
-El script es idempotente y muestra el estado de la zona, los nameservers que
-espera Cloudflare y los `files-*` que ya existen.
+## Puesta en marcha del dominio (una vez, no por clínica)
 
-5. En Vercel, agregar `imedic.com.ar`, `www` y `app` como dominios del
+1. Crear la zona y los registros de la aplicación:
+
+```powershell
+$env:API_CNAME = "imedicsaasback-production.up.railway.app"  # el de Railway
+node scripts/cloudflare/cf-setup.js zona --aplicar
+```
+
+El comando imprime los dos nameservers que asignó Cloudflare.
+
+2. **Paso manual inevitable:** en [nic.ar](https://nic.ar) → Mis dominios →
+   `imedic.com.ar` → **Delegaciones**, cargar esos dos nameservers. nic.ar no
+   tiene API de escritura, así que esto solo se puede hacer desde el navegador.
+   Tarda entre unas horas y 48 h en propagar; mientras tanto la zona figura
+   como `pending`.
+
+3. En Vercel, agregar `imedic.com.ar`, `www` y `app` como dominios del
    proyecto.
+
+Con `cf-setup.js estado` se verifica cuándo la zona pasó a `active`.
 
 ---
 
 ## Alta de una clínica
 
-En la PC de la clínica (la que tiene el disco con los adjuntos), con el repo
-`iMedicSaaSBack` clonado y Node instalado, **como Administrador**:
+### 1. Crear el túnel (desde acá, por API)
+
+```powershell
+node scripts/cloudflare/cf-setup.js clinica vidal --root "E:\adjuntos" --aplicar
+```
+
+Crea el túnel `imedic-vidal` como **administrado por Cloudflare**, le define
+el ingress (`files-vidal.imedic.com.ar` → `http://127.0.0.1:9012`), crea el
+CNAME proxeado, e imprime el comando exacto a correr en la clínica, con el
+token del túnel incluido.
+
+Que el túnel sea administrado por Cloudflare es lo que evita el login por
+navegador en cada PC: la configuración del ingress vive en Cloudflare, no en
+un `config.yml` local que se pueda desincronizar.
+
+### 2. Instalar en la PC de la clínica
+
+Con el repo `iMedicSaaSBack` clonado y Node instalado, **como Administrador**:
 
 ```powershell
 cd C:\iMedic\iMedicSaaSBack
-.\scripts\tunnel\Instalar-Clinica.ps1 -Clinica sarmiento -Root "E:\adjuntos"
+.\scripts\tunnel\Instalar-Clinica.ps1 -Clinica vidal -Root "E:\adjuntos" -TunnelToken "eyJhIjoi..."
 ```
 
-Con token compartido (recomendado en cuanto se pueda):
+No es interactivo. Instala `cloudflared` si falta, lo registra como servicio
+con el token (arranque automático y reinicio ante falla), deja el file server
+como tarea de sistema al arranque con reintento cada 5 minutos, y verifica el
+health local y el público.
 
-```powershell
-.\scripts\tunnel\Instalar-Clinica.ps1 -Clinica sarmiento -Root "E:\adjuntos" -Token "un-secreto-largo"
-```
+El `-TunnelToken` es una credencial: no se commitea.
 
-El script:
+Para exigir el secreto compartido, agregar `-Token "un-secreto-largo"` y poner
+la misma cadena en Railway como `FILE_SERVER_TOKEN`.
 
-1. Instala `cloudflared` si falta.
-2. Abre el navegador una vez para autorizar el dominio (`tunnel login`).
-3. Crea el túnel `imedic-sarmiento` y guarda sus credenciales en
-   `C:\ProgramData\Cloudflare\cloudflared\` (no en el perfil del usuario: el
-   servicio corre como `LocalSystem` y no ve `%USERPROFILE%`).
-4. Apunta `files-sarmiento.imedic.com.ar` al túnel.
-5. Instala `cloudflared` como servicio con arranque automático y reinicio ante
-   falla.
-6. Registra el file server como tarea de sistema al arranque, con un reintento
-   cada 5 minutos por si el proceso muere.
-7. Verifica el health local y el público.
-
-Es idempotente: si algo quedó mal, se vuelve a correr.
-
-### Único paso manual
+### 3. Único paso en la web
 
 Super Admin → Empresas → la clínica → **FileServerUrl**:
 
 ```
-https://files-sarmiento.imedic.com.ar
+https://files-vidal.imedic.com.ar
 ```
 
-Se carga una vez y no se toca más. Si se usó `-Token`, la misma cadena va en
-Railway como `FILE_SERVER_TOKEN`.
+Se carga una vez y no se toca más.
 
 ---
 
@@ -145,12 +167,20 @@ los archivos que las versiones viejas guardaron con la `Ñ` mal codificada.
 
 ## Diagnóstico
 
+Desde la PC de la clínica:
+
 ```powershell
 .\scripts\tunnel\Estado.ps1
 ```
 
 Chequea configuración, carpeta, servicio `cloudflared`, tarea del file server,
 puerto local y hostname público, e indica qué comando corregir en cada caso.
+
+Desde cualquier lado, para ver si el túnel tiene conexiones activas:
+
+```powershell
+node scripts/cloudflare/cf-setup.js estado
+```
 
 Errores frecuentes:
 
