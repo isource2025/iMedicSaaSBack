@@ -30,4 +30,6 @@ empresa_columns.txt
 query_result.txt
 scripts/tunnel/.vidal-tunnel-token.txt
 scripts/tunnel/*.tunnel-token.txt
+scripts/tunnel/vidal-pc/tunnel-token.txt
+
 
