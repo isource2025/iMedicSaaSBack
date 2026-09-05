@@ -5,9 +5,9 @@
 .DESCRIPTION
 	Corre en la PC de Vidal, como Administrador, UNA vez.
 
-	  1. Instala cloudflared + file server como servicios
-	  2. Usa el TunnelToken de Cloudflare (API)
-	  3. Graba https://files-vidal.imedic.com.ar en Empresas.FileServerUrl
+	1. Instala cloudflared + file server como servicios
+	2. Usa el TunnelToken de Cloudflare (API)
+	3. Graba https://files-vidal.imedic.com.ar en Empresas.FileServerUrl
 
 .EXAMPLE
 	.\Arrancar-Vidal.ps1
@@ -27,10 +27,12 @@ if (-not (Test-Path $tokenFile)) {
 }
 
 $token = (Get-Content $tokenFile -Raw).Trim()
-if (-not $token) { throw 'El archivo del TunnelToken esta vacio.' }
+if (-not $token) {
+	throw 'El archivo del TunnelToken esta vacio.'
+}
 
 Write-Host ''
-Write-Host '  Arranque unico Vidal → files-vidal.imedic.com.ar' -ForegroundColor Cyan
+Write-Host '  Arranque unico Vidal -> files-vidal.imedic.com.ar' -ForegroundColor Cyan
 Write-Host ''
 
 & (Join-Path $here 'Instalar-Clinica.ps1') `
