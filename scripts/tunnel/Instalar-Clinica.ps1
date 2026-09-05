@@ -40,6 +40,10 @@
 	Opcional. Secreto compartido que el file server exige en el header
 	x-imedic-token. Tiene que coincidir con FILE_SERVER_TOKEN del backend.
 
+.PARAMETER EmpresaId
+	Opcional. IDEMPRESA en Super Admin para grabar FileServerUrl automaticamente.
+	Si no se pasa, se intenta resolver por el slug de -Clinica.
+
 .PARAMETER TunnelToken
 	Opcional. Token que imprime cf-setup.js. Es una credencial: no lo
 	commitees ni lo pegues en un chat.
@@ -65,6 +69,8 @@ param(
 	[int]$Port = 9012,
 
 	[string]$Token = '',
+
+	[int]$EmpresaId = 0,
 
 	[string]$TunnelToken = '',
 
@@ -399,7 +405,24 @@ if ($publicOk) {
 }
 
 Write-Host ''
-Write-Host '  Ultimo paso (una sola vez, desde la web):' -ForegroundColor White
+Write-Paso 'FileServerUrl en Super Admin'
+$setFs = Join-Path $PSScriptRoot 'set-fileserver-url.js'
+if (Test-Path $setFs) {
+	$fsArgs = @($setFs, '--clinica', $Clinica, '--url', "https://$Hostname")
+	if ($EmpresaId -gt 0) { $fsArgs = @($setFs, '--empresa', "$EmpresaId", '--url', "https://$Hostname") }
+	& $Node @fsArgs
+	if ($LASTEXITCODE -eq 0) {
+		Write-Ok "FileServerUrl = https://$Hostname"
+	} else {
+		Write-Warn 'No se pudo grabar FileServerUrl automaticamente. Correr a mano:'
+		Write-Host "      node scripts/tunnel/set-fileserver-url.js --clinica $Clinica --url https://$Hostname" -ForegroundColor Yellow
+	}
+} else {
+	Write-Warn "falta set-fileserver-url.js"
+}
+
+Write-Host ''
+Write-Host '  Ultimo paso si el automatico fallo:' -ForegroundColor White
 Write-Host "  Super Admin > Empresas > $Clinica > FileServerUrl =" -ForegroundColor White
 Write-Host "      https://$Hostname" -ForegroundColor Cyan
 if ($Token) {
