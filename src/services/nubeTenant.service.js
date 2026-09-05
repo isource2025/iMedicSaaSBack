@@ -956,11 +956,14 @@ async function listarUsuariosEmpresa(idEmpresa) {
 }
 
 async function siguienteValorPersonal(idEmpresa) {
+	// IDs de tenant empiezan en 1. El rango ≥ 1_000_000 es solo plataforma (IdEmpresa=0).
 	const rows = await mysqlQuery(
-		`SELECT COALESCE(MAX(ValorPersonal), 1000000) + 1 AS v FROM \`imPassword\` WHERE IdEmpresa = ?`,
+		`SELECT COALESCE(MAX(ValorPersonal), 0) + 1 AS v FROM \`imPassword\` WHERE IdEmpresa = ?`,
 		[Number(idEmpresa)],
 	);
-	return Number(rows[0]?.v) || 1000001;
+	let v = Number(rows[0]?.v) || 1;
+	if (v < 1) v = 1;
+	return v;
 }
 
 async function asegurarFichaPersonal(idEmpresa, valorPersonal, { apellido, nombres, numeroDocumento, idRol }) {

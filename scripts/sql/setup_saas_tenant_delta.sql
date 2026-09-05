@@ -539,15 +539,22 @@ BEGIN
     ;WITH Internados AS (
         SELECT
             vm.NumeroVisita,
-            vm.ValorSector,
+            LTRIM(RTRIM(ISNULL(vm.ValorSector, ''))) AS ValorSector,
             CAST(dbo.fn_ClarionDATE2SQL(vm.FechaAdmision) AS date) AS FechaAdmision,
-            CAST(dbo.fn_ClarionDATE2SQL(vm.FechaEgreso) AS date)   AS FechaEgreso
+            CASE
+              WHEN vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0 THEN NULL
+              ELSE CAST(dbo.fn_ClarionDATE2SQL(vm.FechaEgreso) AS date)
+            END AS FechaEgreso
         FROM dbo.imVisitaMovimiento vm
+        WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
     ),
     CamasPorSector AS (
-        SELECT ValorSector, COUNT(*) AS TotalCamas
+        SELECT
+          LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
+          COUNT(*) AS TotalCamas
         FROM dbo.imHabitacionCamas
-        GROUP BY ValorSector
+        WHERE UPPER(LTRIM(RTRIM(ISNULL(Tipo, '')))) = 'CAMA'
+        GROUP BY LTRIM(RTRIM(ISNULL(ValorSector, '')))
     ),
     Meses AS (
         SELECT DATEFROMPARTS(YEAR(@FechaInicio), MONTH(@FechaInicio), 1) AS Mes
@@ -556,30 +563,42 @@ BEGIN
         FROM Meses
         WHERE Mes < DATEFROMPARTS(YEAR(@FechaFin), MONTH(@FechaFin), 1)
     ),
+    Periodos AS (
+        SELECT
+            m.Mes,
+            CASE WHEN m.Mes > @FechaInicio THEN m.Mes ELSE @FechaInicio END AS PeriodoInicio,
+            CASE WHEN EOMONTH(m.Mes) < @FechaFin THEN EOMONTH(m.Mes) ELSE @FechaFin END AS PeriodoFin
+        FROM Meses m
+    ),
     PacientesMes AS (
         SELECT
             i.ValorSector,
-            m.Mes,
+            p.Mes,
+            p.PeriodoInicio,
+            p.PeriodoFin,
             SUM(
-                DATEDIFF(
-                    DAY,
-                    CASE WHEN i.FechaAdmision < m.Mes THEN m.Mes ELSE i.FechaAdmision END,
-                    DATEADD(DAY, 1,
-                        CASE
-                            WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > EOMONTH(m.Mes)
-                            THEN EOMONTH(m.Mes)
-                            ELSE i.FechaEgreso
-                        END
-                    )
-                )
+                CASE
+                    WHEN
+                        CASE WHEN i.FechaAdmision > p.PeriodoInicio THEN i.FechaAdmision ELSE p.PeriodoInicio END
+                        <=
+                        CASE WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > p.PeriodoFin THEN p.PeriodoFin ELSE i.FechaEgreso END
+                    THEN
+                        DATEDIFF(
+                            DAY,
+                            CASE WHEN i.FechaAdmision > p.PeriodoInicio THEN i.FechaAdmision ELSE p.PeriodoInicio END,
+                            DATEADD(
+                                DAY, 1,
+                                CASE WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > p.PeriodoFin THEN p.PeriodoFin ELSE i.FechaEgreso END
+                            )
+                        )
+                    ELSE 0
+                END
             ) AS PacientesDia
         FROM Internados i
-        CROSS JOIN Meses m
-        WHERE i.FechaAdmision <= @FechaFin
-          AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= @FechaInicio)
-          AND i.FechaAdmision <= EOMONTH(m.Mes)
-          AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= m.Mes)
-        GROUP BY i.ValorSector, m.Mes
+        CROSS JOIN Periodos p
+        WHERE i.FechaAdmision <= p.PeriodoFin
+          AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= p.PeriodoInicio)
+        GROUP BY i.ValorSector, p.Mes, p.PeriodoInicio, p.PeriodoFin
     )
     INSERT INTO @Resultados
     SELECT
@@ -588,10 +607,16 @@ BEGIN
         pm.ValorSector,
         pm.PacientesDia,
         c.TotalCamas,
-        DAY(EOMONTH(pm.Mes)) AS DiasDelMes,
-        CAST(pm.PacientesDia * 1.0 / NULLIF(c.TotalCamas * DAY(EOMONTH(pm.Mes)), 0) * 100 AS DECIMAL(10,2)) AS OcupacionPromedioPct
+        DATEDIFF(DAY, pm.PeriodoInicio, pm.PeriodoFin) + 1 AS DiasDelMes,
+        CAST(
+          pm.PacientesDia * 1.0
+            / NULLIF(c.TotalCamas * (DATEDIFF(DAY, pm.PeriodoInicio, pm.PeriodoFin) + 1), 0)
+            * 100 AS DECIMAL(10,2)
+        ) AS OcupacionPromedioPct
     FROM PacientesMes pm
-    JOIN CamasPorSector c ON pm.ValorSector = c.ValorSector;
+    JOIN CamasPorSector c ON pm.ValorSector = c.ValorSector
+    WHERE pm.PacientesDia > 0
+    OPTION (MAXRECURSION 120);
 
     RETURN;
 END;

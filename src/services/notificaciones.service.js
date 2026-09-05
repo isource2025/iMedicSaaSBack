@@ -157,7 +157,7 @@ function whereListadoVisible(cols, { soloNoLeidas }) {
   const leida = sqlEscapeIdent(cols.leida);
   const esPedido = exprEsNotifPedido(cols);
   const libre = exprPedidoLibre(cols);
-  const noLeida = `ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0`;
+  const noLeida = `ISNULL(CASE WHEN ISNUMERIC(CAST(${leida} AS varchar(20))) = 1 THEN CAST(${leida} AS INT) ELSE 0 END, 0) = 0`;
 
   const pedidoOk = `(${esPedido} AND ${noLeida} AND ${libre})`;
   const otras = `(NOT ${esPedido}${soloNoLeidas ? ` AND ${noLeida}` : ''})`;
@@ -330,7 +330,7 @@ async function marcarPedidosLeidas(valorPersonal) {
       UPDATE dbo.imNotificaciones
       SET ${leida} = 1
       WHERE ${vp} = @param0
-        AND ISNULL(TRY_CONVERT(INT, ${leida}), 0) = 0
+        AND ISNULL(CASE WHEN ISNUMERIC(CAST(${leida} AS varchar(20))) = 1 THEN CAST(${leida} AS INT) ELSE 0 END, 0) = 0
         AND ${esPedido}
       `,
       [{ value: valorPersonal, type: 'Int' }],

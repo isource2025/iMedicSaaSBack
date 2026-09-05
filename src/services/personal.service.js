@@ -1554,11 +1554,50 @@ function _splitApellidoNombre(apellidoNombre) {
 
 /**
  * Estado de la cuenta de acceso (imPassword) vinculada al personal.
+ * Con AUTH central: la fuente de verdad del login es MySQL (nube).
  */
 async function obtenerCuentaPersonal(id) {
 	const personal = await obtenerPorId(id);
 	if (!personal) return null;
-	const cuenta = await usersService.obtenerCuentaPorPersonal(id);
+
+	let cuenta = await usersService.obtenerCuentaPorPersonal(id);
+	if (!cuenta && authCentralService.isAuthCentralEnabled()) {
+		const emp = resolveTenantEmpresaId();
+		if (emp != null) {
+			try {
+				const rows = await mysqlAuthQuery(
+					`
+          SELECT
+            pw.ValorPersonal, pw.NombreRed, pw.CodOperador, pw.Apellido, pw.Nombres,
+            pw.NumeroDocumento, pw.Legajo, pw.Grupo, pw.MarcadeBaja
+          FROM \`imPassword\` pw
+          WHERE pw.IdEmpresa = ? AND pw.ValorPersonal = ?
+          LIMIT 1
+          `,
+					[emp, Number(id)],
+				);
+				if (rows?.[0]) {
+					const r = rows[0];
+					cuenta = {
+						tieneCuenta: true,
+						ValorPersonal: Number(r.ValorPersonal),
+						NombreRed: r.NombreRed,
+						CodOperador: r.CodOperador,
+						Apellido: r.Apellido,
+						Nombres: r.Nombres,
+						NumeroDocumento: r.NumeroDocumento,
+						Legajo: r.Legajo,
+						Grupo: r.Grupo,
+						MarcadeBaja: r.MarcadeBaja,
+						fuente: 'nube',
+					};
+				}
+			} catch (e) {
+				console.warn('[personal.obtenerCuentaPersonal] nube:', e.message);
+			}
+		}
+	}
+
 	return {
 		tieneCuenta: !!cuenta,
 		cuenta: cuenta || null,

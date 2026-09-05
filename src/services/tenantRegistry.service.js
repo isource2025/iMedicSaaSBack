@@ -204,9 +204,11 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 		throw e;
 	}
 
+	const cloudOnly = authCentralService.isAuthCentralEnabled();
+
 	// idEmpresa 0 o vacío = autenticar en BD plataforma (Super Admin)
 	if (idEmpresaPreferida === 0 || idEmpresaPreferida === '0') {
-		if (authCentralService.isAuthCentralEnabled()) {
+		if (cloudOnly) {
 			try {
 				const usuarioCentral = await authCentralService.autenticarPlataforma(u, p);
 				if (usuarioCentral) {
@@ -215,6 +217,9 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			} catch (e) {
 				console.warn('[authCentral] login plataforma:', e.message);
 			}
+			const e = new Error(AUTH_FAIL_MESSAGE);
+			e.statusCode = 401;
+			throw e;
 		}
 
 		const usuario = await autenticarEnPlataforma(u, p);
@@ -228,7 +233,7 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 
 	if (idEmpresaPreferida != null && idEmpresaPreferida !== '') {
 		const id = Number(idEmpresaPreferida);
-		if (authCentralService.isAuthCentralEnabled()) {
+		if (cloudOnly) {
 			try {
 				const usuarioCentral = await authCentralService.autenticarTenant(id, u, p);
 				if (usuarioCentral) {
@@ -237,6 +242,9 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			} catch (e) {
 				console.warn(`[authCentral] login empresa ${id}:`, e.message);
 			}
+			const e = new Error(AUTH_FAIL_MESSAGE);
+			e.statusCode = 401;
+			throw e;
 		}
 
 		const usuario = await autenticarEnTenant(id, u, p);
@@ -248,8 +256,14 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 		return { idEmpresa: id, usuario };
 	}
 
-	if (authCentralService.isAuthCentralEnabled()) {
+	// Sin empresa preferida: SaaS = solo MySQL (nube). Sin cuenta nube → no login.
+	if (cloudOnly) {
 		try {
+			const usuarioPlataformaCentral = await authCentralService.autenticarPlataforma(u, p);
+			if (usuarioPlataformaCentral) {
+				return { idEmpresa: null, usuario: usuarioPlataformaCentral };
+			}
+
 			const matchesCentral = await authCentralService.autenticarEnTodasLasEmpresas(u, p);
 			const uniqueCentral = dedupeEmpresasPorId(matchesCentral);
 			if (uniqueCentral.length > 1) {
@@ -265,17 +279,16 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 				const { idEmpresa, usuario } = uniqueCentral[0];
 				return { idEmpresa, usuario };
 			}
-
-			const usuarioPlataformaCentral = await authCentralService.autenticarPlataforma(u, p);
-			if (usuarioPlataformaCentral) {
-				return { idEmpresa: null, usuario: usuarioPlataformaCentral };
-			}
 		} catch (e) {
 			if (e.statusCode === 409) throw e;
 			console.warn('[authCentral] resolverLogin multiempresa:', e.message);
 		}
+		const e = new Error(AUTH_FAIL_MESSAGE);
+		e.statusCode = 401;
+		throw e;
 	}
 
+	// LOCAL_DEV / AUTH_DB off: fallback SQL físico (solo desarrollo sin MySQL).
 	const usuarioPlataforma = await autenticarEnPlataforma(u, p);
 	if (usuarioPlataforma) {
 		const rolId = usuarioPlataforma.RolId ?? usuarioPlataforma.Rol;

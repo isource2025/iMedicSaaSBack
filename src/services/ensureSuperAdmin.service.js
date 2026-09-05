@@ -191,6 +191,41 @@ async function ensurePlatformSuperAdmin(pool) {
 		logs.push({ step: 'personal_err', error: e.message });
 	}
 
+	// Limpiar vínculos tenant residuales del ValorPersonal de plataforma
+	// (p.ej. pe → Vidal sin fila tenant propia). No tocar pe/personal de
+	// usuarios reales de hospital que casualmente compartan el mismo número.
+	try {
+		const [peDel] = await pool.query(
+			`DELETE pe FROM \`imPersonalEmpresas\` pe
+       WHERE pe.IdPersonal = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM \`imPassword\` pw
+           WHERE pw.ValorPersonal = pe.IdPersonal
+             AND pw.IdEmpresa = pe.IdEmpresa
+             AND COALESCE(pw.IdEmpresa, 0) > 0
+         )`,
+			[valor],
+		);
+		logs.push({ step: 'clear_pe', deleted: Number(peDel?.affectedRows) || 0 });
+	} catch (e) {
+		logs.push({ step: 'clear_pe_err', error: e.message });
+	}
+	try {
+		const [pDel] = await pool.query(
+			`DELETE p FROM \`imPersonal\` p
+       WHERE p.Valor = ?
+         AND COALESCE(p.IdEmpresa, 0) > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM \`imPassword\` pw
+           WHERE pw.ValorPersonal = p.Valor AND pw.IdEmpresa = p.IdEmpresa
+         )`,
+			[valor],
+		);
+		logs.push({ step: 'clear_tenant_personal', deleted: Number(pDel?.affectedRows) || 0 });
+	} catch (e) {
+		logs.push({ step: 'clear_tenant_personal_err', error: e.message });
+	}
+
 	const [check] = await pool.query(
 		`SELECT pw.IdEmpresa, pw.ValorPersonal, pw.NombreRed, pw.Password, pw.Grupo, p.Rol
      FROM \`imPassword\` pw

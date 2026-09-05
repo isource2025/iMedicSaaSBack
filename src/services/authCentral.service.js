@@ -315,10 +315,12 @@ async function esSuperAdmin(username) {
     FROM \`imPassword\` pw
     LEFT JOIN \`imPersonal\` p ON ${JOIN_PERSONAL}
     LEFT JOIN \`imRoles\` r ON ${ROL_JOIN} AND r.Activo = 1
-    WHERE ${USER_MATCH} = ?
+    WHERE COALESCE(pw.IdEmpresa, 0) = 0
+      AND ${USER_MATCH} = ?
       AND (
         UPPER(COALESCE(r.Nombre, '')) COLLATE ${COLLATE} = 'SUPER_ADMIN'
-        OR TRIM(COALESCE(p.Rol, '')) = '5'
+        OR TRIM(COALESCE(p.Rol, '')) COLLATE ${COLLATE} = '5'
+        OR COALESCE(pw.Grupo, 0) = 11
       )
     LIMIT 1
     `,

@@ -243,12 +243,15 @@ const nuevaIndicacion = async (req, res) => {
         });
     } catch (err) {
         console.error("Error al crear indicación:", err.message);
-        const status = err.statusCode === 400 ? 400 : 500;
+        const { statusDeError, mensajeDeError } = require("../utils/httpError");
+        const status = statusDeError(err);
+        const mensaje = mensajeDeError(err, "Error interno al intentar crear una indicación");
         res.status(status).json({
-            message: status === 400
-                ? err.message
-                : "Error interno al intentar crear una indicación",
             success: false,
+            mensaje,
+            message: mensaje,
+            code: err.code || undefined,
+            detalle: err.detalle || undefined,
             error: err.message || err,
         });
     }

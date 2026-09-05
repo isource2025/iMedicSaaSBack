@@ -326,8 +326,9 @@ async function _consultarResumen(cte, params) {
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'EN_SALA' THEN 1 ELSE 0 END) AS EnSala,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'EN_CONSULTORIO' THEN 1 ELSE 0 END) AS EnConsultorio,
-			SUM(CASE WHEN EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
+			SUM(CASE WHEN EsAgenda = 0 AND Estado <> 'CANCELADO' THEN 1 ELSE 0 END) AS TurnosDemanda,
 			SUM(CASE WHEN EsAgenda = 0 AND Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosDemanda,
+			SUM(CASE WHEN EsAgenda = 0 AND Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS CanceladosDemanda,
 			${_agregadosTiempo()},
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosParaCobertura,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'ATENDIDO' AND ISNULL(Horallegada, 0) > 0
@@ -421,7 +422,7 @@ async function _consultarSerie(cte, params) {
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
-			SUM(CASE WHEN EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
+			SUM(CASE WHEN EsAgenda = 0 AND Estado <> 'CANCELADO' THEN 1 ELSE 0 END) AS TurnosDemanda,
 			AVG(MinEspera) AS EsperaProm
 		FROM TurnosEstado
 		GROUP BY FechaTurno
@@ -719,6 +720,9 @@ function _mapResumen(row, pct, graciaMin) {
 	const pendientes = _num(row.Pendientes);
 	const enSala = _num(row.EnSala);
 	const enConsultorio = _num(row.EnConsultorio);
+	const turnosDemanda = _num(row.TurnosDemanda);
+	const atendidosDemanda = _num(row.AtendidosDemanda);
+	const atendidosTotal = atendidos + atendidosDemanda;
 
 	// El ausentismo se mide sobre los turnos que realmente debían presentarse:
 	// los cancelados avisaron y no son inasistencia.
@@ -737,8 +741,11 @@ function _mapResumen(row, pct, graciaMin) {
 		enSala,
 		enConsultorio,
 		enCurso: enSala + enConsultorio,
-		turnosDemanda: _num(row.TurnosDemanda),
-		atendidosDemanda: _num(row.AtendidosDemanda),
+		turnosDemanda,
+		atendidosDemanda,
+		/** Agenda atendida + demanda atendida (mismo criterio que Admin Turnos / Estado=Atendido). */
+		atendidosTotal,
+		canceladosDemanda: _num(row.CanceladosDemanda),
 		tasaAusentismo: _porcentaje(ausentes, base),
 		tasaCancelacion: _porcentaje(cancelados, programados),
 		tasaAtencion: _porcentaje(atendidos, base),
@@ -1028,7 +1035,9 @@ async function obtenerResumenAmbulatorioHoy(graciaMinIn) {
 		fecha: hoy,
 		graciaMin: filtrosHoy.graciaMin,
 		programados: hoyMap.programados,
-		atendidos: hoyMap.atendidos,
+		atendidos: hoyMap.atendidosTotal,
+		atendidosAgenda: hoyMap.atendidos,
+		atendidosDemanda: hoyMap.atendidosDemanda,
 		pendientes: hoyMap.pendientes,
 		ausentes: hoyMap.ausentes,
 		cancelados: hoyMap.cancelados,
@@ -1038,7 +1047,10 @@ async function obtenerResumenAmbulatorioHoy(graciaMinIn) {
 		coberturaPct: hoyMap.calidadDatos.coberturaPct,
 		ambulatoriasTotal: origen.total,
 		ambulatoriasADemanda: origen.aDemanda,
-		porcentajeCambioAtendidos: _variacion(hoyMap.atendidos, _num(rowAyer.Atendidos)),
+		porcentajeCambioAtendidos: _variacion(
+			hoyMap.atendidosTotal,
+			_num(rowAyer.Atendidos) + _num(rowAyer.AtendidosDemanda),
+		),
 	};
 }
 

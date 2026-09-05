@@ -281,26 +281,35 @@ module.exports = {
  * ============================
  *  ANALÍTICA DE CAMAS (Camas)
  * ============================
- * Basado en la función dbo.fn_OcupacionPromedioCamas(fechaInicio, fechaFin)
+ * Ocupación por rango real [fechaInicio, fechaFin]:
+ * - Días-cama solo dentro del rango (sin proyectar hasta fin de mes)
+ * - Solo camas Tipo='CAMA' (internación)
+ * - Serie diaria real (sin Math.random)
  */
 
-/** Misma lógica que dbo.fn_OcupacionPromedioCamas (sin UDF; Clarion: DATEADD(day, n-4, 1801-01-01)). */
+/** Días-cama por sector/mes acotados al rango solicitado. */
 async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
   return executeQuery(
     `
     ;WITH Internados AS (
       SELECT
         vm.NumeroVisita,
-        vm.ValorSector,
+        LTRIM(RTRIM(ISNULL(vm.ValorSector, ''))) AS ValorSector,
         CAST(DATEADD(day, vm.FechaAdmision - 4, '1801-01-01') AS date) AS FechaAdmision,
-        CAST(DATEADD(day, vm.FechaEgreso - 4, '1801-01-01') AS date) AS FechaEgreso
+        CASE
+          WHEN vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0 THEN NULL
+          ELSE CAST(DATEADD(day, vm.FechaEgreso - 4, '1801-01-01') AS date)
+        END AS FechaEgreso
       FROM dbo.imVisitaMovimiento vm
-      WHERE vm.FechaAdmision IS NOT NULL
+      WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
     ),
     CamasPorSector AS (
-      SELECT ValorSector, COUNT(*) AS TotalCamas
-      FROM dbo.imHabitacionCamas
-      GROUP BY ValorSector
+      SELECT
+        LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector,
+        COUNT(*) AS TotalCamas
+      FROM dbo.imHabitacionCamas hc
+      WHERE ${CAMA_ONLY_WHERE}
+      GROUP BY LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))
     ),
     Meses AS (
       SELECT DATEFROMPARTS(YEAR(@p0), MONTH(@p0), 1) AS Mes
@@ -309,30 +318,58 @@ async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
       FROM Meses
       WHERE Mes < DATEFROMPARTS(YEAR(@p1), MONTH(@p1), 1)
     ),
+    Periodos AS (
+      SELECT
+        m.Mes,
+        CASE WHEN m.Mes > @p0 THEN m.Mes ELSE @p0 END AS PeriodoInicio,
+        CASE
+          WHEN EOMONTH(m.Mes) < @p1 THEN EOMONTH(m.Mes)
+          ELSE @p1
+        END AS PeriodoFin
+      FROM Meses m
+    ),
     PacientesMes AS (
       SELECT
         i.ValorSector,
-        m.Mes,
+        p.Mes,
+        p.PeriodoInicio,
+        p.PeriodoFin,
         SUM(
-          DATEDIFF(
-            DAY,
-            CASE WHEN i.FechaAdmision < m.Mes THEN m.Mes ELSE i.FechaAdmision END,
-            DATEADD(DAY, 1,
+          CASE
+            WHEN
               CASE
-                WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > EOMONTH(m.Mes)
-                THEN EOMONTH(m.Mes)
+                WHEN i.FechaAdmision > p.PeriodoInicio THEN i.FechaAdmision
+                ELSE p.PeriodoInicio
+              END
+              <=
+              CASE
+                WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > p.PeriodoFin THEN p.PeriodoFin
                 ELSE i.FechaEgreso
               END
-            )
-          )
+            THEN
+              DATEDIFF(
+                DAY,
+                CASE
+                  WHEN i.FechaAdmision > p.PeriodoInicio THEN i.FechaAdmision
+                  ELSE p.PeriodoInicio
+                END,
+                DATEADD(
+                  DAY,
+                  1,
+                  CASE
+                    WHEN i.FechaEgreso IS NULL OR i.FechaEgreso > p.PeriodoFin THEN p.PeriodoFin
+                    ELSE i.FechaEgreso
+                  END
+                )
+              )
+            ELSE 0
+          END
         ) AS PacientesDia
       FROM Internados i
-      CROSS JOIN Meses m
-      WHERE i.FechaAdmision <= @p1
-        AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= @p0)
-        AND i.FechaAdmision <= EOMONTH(m.Mes)
-        AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= m.Mes)
-      GROUP BY i.ValorSector, m.Mes
+      CROSS JOIN Periodos p
+      WHERE i.FechaAdmision <= p.PeriodoFin
+        AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= p.PeriodoInicio)
+      GROUP BY i.ValorSector, p.Mes, p.PeriodoInicio, p.PeriodoFin
     )
     SELECT
       'Mensual' AS TipoIndicador,
@@ -340,10 +377,15 @@ async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
       pm.ValorSector,
       pm.PacientesDia,
       c.TotalCamas,
-      DAY(EOMONTH(pm.Mes)) AS DiasDelMes,
-      CAST(pm.PacientesDia * 1.0 / NULLIF(c.TotalCamas * DAY(EOMONTH(pm.Mes)), 0) * 100 AS DECIMAL(10,2)) AS OcupacionPromedioPct
+      DATEDIFF(DAY, pm.PeriodoInicio, pm.PeriodoFin) + 1 AS DiasDelMes,
+      CAST(
+        pm.PacientesDia * 1.0
+          / NULLIF(c.TotalCamas * (DATEDIFF(DAY, pm.PeriodoInicio, pm.PeriodoFin) + 1), 0)
+          * 100 AS DECIMAL(10,2)
+      ) AS OcupacionPromedioPct
     FROM PacientesMes pm
     JOIN CamasPorSector c ON pm.ValorSector = c.ValorSector
+    WHERE pm.PacientesDia > 0
     ORDER BY pm.ValorSector, Periodo
     OPTION (MAXRECURSION 120)
     `,
@@ -351,59 +393,106 @@ async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
   );
 }
 
+/** Ocupación real día a día en el rango (visitas presentes cada día). */
+async function obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector) {
+  const sectorTrim = sector && String(sector).trim() ? String(sector).trim().toUpperCase() : null;
+  const params = [
+    { value: fechaInicio },
+    { value: fechaFin },
+  ];
+  let sectorFilter = '';
+  if (sectorTrim) {
+    params.push({ value: sectorTrim });
+    sectorFilter = `AND UPPER(LTRIM(RTRIM(ISNULL(i.ValorSector, '')))) = @p2`;
+  }
+
+  return executeQuery(
+    `
+    ;WITH Internados AS (
+      SELECT
+        vm.NumeroVisita,
+        LTRIM(RTRIM(ISNULL(vm.ValorSector, ''))) AS ValorSector,
+        CAST(DATEADD(day, vm.FechaAdmision - 4, '1801-01-01') AS date) AS FechaAdmision,
+        CASE
+          WHEN vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0 THEN NULL
+          ELSE CAST(DATEADD(day, vm.FechaEgreso - 4, '1801-01-01') AS date)
+        END AS FechaEgreso
+      FROM dbo.imVisitaMovimiento vm
+      WHERE vm.FechaAdmision IS NOT NULL AND vm.FechaAdmision > 0
+    ),
+    SectoresValidos AS (
+      SELECT DISTINCT LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector
+      FROM dbo.imHabitacionCamas hc
+      WHERE ${CAMA_ONLY_WHERE}
+    ),
+    Dias AS (
+      SELECT CAST(@p0 AS date) AS Fecha
+      UNION ALL
+      SELECT DATEADD(DAY, 1, Fecha)
+      FROM Dias
+      WHERE Fecha < CAST(@p1 AS date)
+    ),
+    Capacidad AS (
+      SELECT COUNT(*) AS TotalCamas
+      FROM dbo.imHabitacionCamas hc
+      WHERE ${CAMA_ONLY_WHERE}
+      ${sectorTrim ? `AND UPPER(LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))) = @p2` : ''}
+    ),
+    OcupacionDia AS (
+      SELECT
+        d.Fecha,
+        COUNT(DISTINCT i.NumeroVisita) AS Ocupadas
+      FROM Dias d
+      INNER JOIN Internados i
+        ON i.FechaAdmision <= d.Fecha
+       AND (i.FechaEgreso IS NULL OR i.FechaEgreso >= d.Fecha)
+      INNER JOIN SectoresValidos s ON i.ValorSector = s.ValorSector
+      WHERE 1 = 1
+        ${sectorFilter}
+      GROUP BY d.Fecha
+    )
+    SELECT
+      d.Fecha,
+      c.TotalCamas,
+      ISNULL(o.Ocupadas, 0) AS Ocupadas,
+      CASE WHEN c.TotalCamas > ISNULL(o.Ocupadas, 0)
+        THEN c.TotalCamas - ISNULL(o.Ocupadas, 0)
+        ELSE 0
+      END AS Disponibles,
+      CAST(
+        CASE WHEN c.TotalCamas > 0
+          THEN ISNULL(o.Ocupadas, 0) * 100.0 / c.TotalCamas
+          ELSE 0
+        END AS DECIMAL(10,2)
+      ) AS PorcentajeOcupacion
+    FROM Dias d
+    CROSS JOIN Capacidad c
+    LEFT JOIN OcupacionDia o ON o.Fecha = d.Fecha
+    ORDER BY d.Fecha
+    OPTION (MAXRECURSION 4000)
+    `,
+    params,
+  );
+}
+
 /**
- * Obtiene registros de ocupación promedio de camas desde la función SQL
- * Se espera que la función devuelva al menos una columna de fecha (Fecha)
- * y métricas de ocupación como Ocupadas, Disponibles, TotalCamas o PorcentajeOcupacion.
+ * Obtiene ocupación promedio de camas por sector en el rango.
  * @param {string} fechaInicio YYYY-MM-DD
  * @param {string} fechaFin YYYY-MM-DD
  */
 const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
   const startTime = Date.now();
   console.log(`🔍 [CAMAS] Iniciando consulta - Rango: ${fechaInicio} a ${fechaFin}, Sector: ${sector || 'TODOS'}`);
-  
-  try {
-    console.log(`⏱️ [CAMAS] Conexión DB establecida en ${Date.now() - startTime}ms`);
-    
-    const query = `
-      SELECT *
-      FROM dbo.fn_OcupacionPromedioCamas(@p0, @p1)
-      ORDER BY ValorSector, Periodo
-    `;
-    
-    console.log(`📋 [CAMAS] Ejecutando query SQL con parámetros:`, {
-      fechaInicio,
-      fechaFin,
-      queryLength: query.length,
-      fechaInicioType: typeof fechaInicio,
-      fechaFinType: typeof fechaFin
-    });
-    
-    const queryStartTime = Date.now();
-    let result;
-    try {
-      result = await executeQuery(query, [
-        { value: fechaInicio },
-        { value: fechaFin }
-      ]);
-    } catch (udfErr) {
-      if (!esObjetoSqlMissing(udfErr)) throw udfErr;
-      console.warn(
-        '[CAMAS] fn_OcupacionPromedioCamas ausente — usando consulta inline. Desplegá scripts/sql/fn_indicadores_dashboard.sql en el tenant.',
-      );
-      result = await obtenerOcupacionCamasInline(fechaInicio, fechaFin);
-    }
 
-    const queryTime = Date.now() - queryStartTime;
-    console.log(`✅ [CAMAS] Query SQL completada en ${queryTime}ms`);
+  try {
+    const queryStartTime = Date.now();
+    // Consulta inline: respeta el rango (la UDF histórica proyecta hasta fin de mes).
+    const result = await obtenerOcupacionCamasInline(fechaInicio, fechaFin);
+    console.log(`✅ [CAMAS] Query SQL completada en ${Date.now() - queryStartTime}ms`);
     console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
-    
+
     let datos = normalizarFilas(result || []);
 
-
-    // Ajuste funcional: analizar solo camas de internación (Tipo='cama').
-    // La función SQL histórica incluye todo tipo de "cama", por eso
-    // recalculamos TotalCamas/Ocupación con el universo válido.
     const camasPorSector = await obtenerMapaCamasInternacionPorSector();
     datos = datos
       .map((row) => {
@@ -412,253 +501,190 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
         if (totalCamasInternacion <= 0) return null;
 
         const pacientesDia = toNumberSafe(row.PacientesDia);
+        const diasDelPeriodo = Math.max(1, toNumberSafe(row.DiasDelMes) || 1);
         const ocupacionPromedioPct =
-          totalCamasInternacion > 0 ? Number(((pacientesDia / totalCamasInternacion) * 100).toFixed(2)) : 0;
+          totalCamasInternacion > 0
+            ? Number(((pacientesDia / (totalCamasInternacion * diasDelPeriodo)) * 100).toFixed(2))
+            : 0;
 
         return {
           ...row,
+          ValorSector: String(row.ValorSector || '').trim(),
           TotalCamas: totalCamasInternacion,
+          DiasDelMes: diasDelPeriodo,
           OcupacionPromedioPct: ocupacionPromedioPct,
         };
       })
       .filter(Boolean);
-    
-    // Log de muestra de datos
+
     if (datos.length > 0) {
-      console.log(`🔍 [CAMAS] Muestra de datos (primeros 3 registros):`, 
-        datos.slice(0, 3).map(row => ({
+      console.log(
+        `🔍 [CAMAS] Muestra (primeros 3):`,
+        datos.slice(0, 3).map((row) => ({
           ValorSector: row.ValorSector,
           Periodo: row.Periodo,
           PacientesDia: row.PacientesDia,
           TotalCamas: row.TotalCamas,
-          OcupacionPromedioPct: row.OcupacionPromedioPct
-        }))
+          DiasDelMes: row.DiasDelMes,
+          OcupacionPromedioPct: row.OcupacionPromedioPct,
+        })),
       );
-      
-      // Log de sectores únicos
-      const sectoresUnicos = [...new Set(datos.map(row => row.ValorSector))];
-      console.log(`🏥 [CAMAS] Sectores encontrados (${sectoresUnicos.length}):`, sectoresUnicos);
-      
-      // Log de períodos únicos
-      const periodosUnicos = [...new Set(datos.map(row => row.Periodo))];
-      console.log(`📅 [CAMAS] Períodos encontrados (${periodosUnicos.length}):`, periodosUnicos);
     }
-    
-    // Filtrar por sector si se especifica
+
     if (sector && sector.trim()) {
       const sectorTrim = sector.trim().toUpperCase();
-      const datosSinFiltrar = datos.length;
-      datos = datos.filter(row => 
-        row.ValorSector && row.ValorSector.toString().trim().toUpperCase() === sectorTrim
+      const antes = datos.length;
+      datos = datos.filter(
+        (row) => row.ValorSector && row.ValorSector.toString().trim().toUpperCase() === sectorTrim,
       );
-      console.log(`🔽 [CAMAS] Filtrado por sector '${sector}': ${datosSinFiltrar} → ${datos.length} registros`);
+      console.log(`🔽 [CAMAS] Filtrado por sector '${sector}': ${antes} → ${datos.length}`);
     }
-    
-    const totalTime = Date.now() - startTime;
-    console.log(`🏁 [CAMAS] Proceso completado en ${totalTime}ms total`);
-    
+
+    console.log(`🏁 [CAMAS] Proceso completado en ${Date.now() - startTime}ms total`);
     return datos;
   } catch (error) {
-    const totalTime = Date.now() - startTime;
-    console.error(`❌ [CAMAS] Error después de ${totalTime}ms:`, {
+    console.error(`❌ [CAMAS] Error después de ${Date.now() - startTime}ms:`, {
       message: error.message,
       code: error.code,
       number: error.number,
-      stack: error.stack?.split('\n').slice(0, 3)
     });
     throw new Error('Error al obtener ocupación promedio de camas');
   }
 };
 
 /**
- * Construye un resumen de ocupación en el período
+ * Resumen de ocupación en el período (días-cama, tasa global, distribución por sector).
  */
 const obtenerResumenOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
   const startTime = Date.now();
   console.log(`🔍 [RESUMEN] Iniciando cálculo de resumen - Rango: ${fechaInicio} a ${fechaFin}`);
-  
+
   try {
     const filas = await obtenerOcupacionCamas(fechaInicio, fechaFin, sector);
-    console.log(`📊 [RESUMEN] Filas recibidas para resumen: ${filas.length}`);
+    console.log(`📊 [RESUMEN] Filas recibidas: ${filas.length}`);
 
     if (!filas.length) {
-      console.log(`⚠️ [RESUMEN] Sin datos para el período, retornando resumen vacío`);
       return {
+        totalGeneral: 0,
         totalCamasPromedio: 0,
         ocupadasPromedio: 0,
         disponiblesPromedio: 0,
         porcentajeOcupacionPromedio: 0,
-        periodo: { fechaInicio, fechaFin }
+        resumenPorSector: {},
+        ocupacionPorSector: {},
+        periodo: { fechaInicio, fechaFin },
       };
     }
 
-    // Log de datos para cálculo
-    console.log(`🧮 [RESUMEN] Calculando promedios de ${filas.length} registros`);
-    const totalCamasArray = filas.map(f => toNumberSafe(f.TotalCamas));
-    const ocupacionArray = filas.map(f => toNumberSafe(f.OcupacionPromedioPct));
-    
-    console.log(`📈 [RESUMEN] Arrays para cálculo:`, {
-      totalCamasRange: `${Math.min(...totalCamasArray)} - ${Math.max(...totalCamasArray)}`,
-      ocupacionRange: `${Math.min(...ocupacionArray)}% - ${Math.max(...ocupacionArray)}%`,
-      totalCamasSum: totalCamasArray.reduce((a, b) => a + b, 0),
-      ocupacionAvg: ocupacionArray.reduce((a, b) => a + b, 0) / ocupacionArray.length
-    });
-
-    // Calcular promedios basados en la nueva estructura
-    const totalCamas = average(totalCamasArray);
-    const pacientesDiaPromedio = average(filas.map(f => toNumberSafe(f.PacientesDia)));
-    const ocupacionPromedio = average(ocupacionArray);
-    
-    // Calcular ocupadas y disponibles basado en el porcentaje
-    const ocupadas = Math.round((ocupacionPromedio / 100) * totalCamas);
-    const disponibles = Math.round(totalCamas - ocupadas);
-
-    // Resumen por sector con cálculos correctos
-    const resumenPorSector = {};
-    
-    // Agrupar por sector y calcular métricas reales
-    const sectoresData = filas.reduce((acc, item) => {
-      const sectorKey = item.ValorSector.trim();
-      if (!acc[sectorKey]) {
-        acc[sectorKey] = {
-          totalCamas: 0,
-          pacientesDiaTotal: 0,
-          registros: 0
-        };
+    // Capacidad instalada = suma de camas por sector (una vez por sector)
+    const camasPorSectorUnico = new Map();
+    for (const f of filas) {
+      const key = String(f.ValorSector || '').trim();
+      if (!key) continue;
+      if (!camasPorSectorUnico.has(key)) {
+        camasPorSectorUnico.set(key, toNumberSafe(f.TotalCamas));
       }
-      
-      acc[sectorKey].totalCamas += toNumberSafe(item.TotalCamas);
-      acc[sectorKey].pacientesDiaTotal += toNumberSafe(item.PacientesDia);
-      acc[sectorKey].registros += 1;
-      
-      return acc;
-    }, {});
-    
-    // Calcular porcentaje de ocupación real por sector
-    Object.keys(sectoresData).forEach(sector => {
-      const data = sectoresData[sector];
-      const ocupacionPromedio = data.totalCamas > 0 
-        ? (data.pacientesDiaTotal / data.registros) / (data.totalCamas / data.registros) * 100
-        : 0;
-      resumenPorSector[sector] = Number(ocupacionPromedio.toFixed(1));
+    }
+    const totalCapacidad = [...camasPorSectorUnico.values()].reduce((a, b) => a + b, 0);
+
+    // Días-cama disponibles = Σ (camas × días del tramo) por fila
+    const totalDiasCamaDisponibles = filas.reduce(
+      (sum, f) => sum + toNumberSafe(f.TotalCamas) * Math.max(1, toNumberSafe(f.DiasDelMes)),
+      0,
+    );
+    const totalDiasCamaOcupados = filas.reduce((sum, f) => sum + toNumberSafe(f.PacientesDia), 0);
+    const tasaOcupacion =
+      totalDiasCamaDisponibles > 0 ? (totalDiasCamaOcupados / totalDiasCamaDisponibles) * 100 : 0;
+
+    const ocupadasPromedio = totalCapacidad > 0 ? (tasaOcupacion / 100) * totalCapacidad : 0;
+    const disponiblesPromedio = Math.max(0, totalCapacidad - ocupadasPromedio);
+
+    // Distribución: días-cama ocupados por sector (para donut)
+    const resumenPorSector = {};
+    // Tasa de ocupación % por sector (para insights)
+    const ocupacionPorSector = {};
+    const sectoresAgg = {};
+
+    for (const f of filas) {
+      const key = String(f.ValorSector || '').trim();
+      if (!key) continue;
+      if (!sectoresAgg[key]) {
+        sectoresAgg[key] = { pacientesDia: 0, diasCamaDisponibles: 0, totalCamas: toNumberSafe(f.TotalCamas) };
+      }
+      sectoresAgg[key].pacientesDia += toNumberSafe(f.PacientesDia);
+      sectoresAgg[key].diasCamaDisponibles +=
+        toNumberSafe(f.TotalCamas) * Math.max(1, toNumberSafe(f.DiasDelMes));
+    }
+
+    Object.keys(sectoresAgg).forEach((key) => {
+      const s = sectoresAgg[key];
+      resumenPorSector[key] = Number(s.pacientesDia.toFixed(2));
+      ocupacionPorSector[key] =
+        s.diasCamaDisponibles > 0
+          ? Number(((s.pacientesDia / s.diasCamaDisponibles) * 100).toFixed(2))
+          : 0;
     });
 
     const resultado = {
-      totalCamasPromedio: Math.round(totalCamas),
-      ocupadasPromedio: ocupadas,
-      disponiblesPromedio: disponibles,
-      porcentajeOcupacionPromedio: Math.round(ocupacionPromedio * 100) / 100,
+      totalGeneral: Number(totalDiasCamaOcupados.toFixed(2)),
+      totalCamasPromedio: totalCapacidad,
+      ocupadasPromedio: Number(ocupadasPromedio.toFixed(2)),
+      disponiblesPromedio: Number(disponiblesPromedio.toFixed(2)),
+      porcentajeOcupacionPromedio: Number(tasaOcupacion.toFixed(2)),
       resumenPorSector,
-      periodo: { fechaInicio, fechaFin }
+      ocupacionPorSector,
+      periodo: { fechaInicio, fechaFin },
     };
 
-    const totalTime = Date.now() - startTime;
-    console.log(`🏁 [RESUMEN] Resumen completado en ${totalTime}ms:`, resultado);
+    console.log(`🏁 [RESUMEN] Completado en ${Date.now() - startTime}ms:`, {
+      totalGeneral: resultado.totalGeneral,
+      porcentajeOcupacionPromedio: resultado.porcentajeOcupacionPromedio,
+      sectores: Object.keys(resumenPorSector).length,
+    });
 
     return resultado;
   } catch (error) {
-    const totalTime = Date.now() - startTime;
-    console.error(`❌ [RESUMEN] Error después de ${totalTime}ms:`, error.message);
+    console.error(`❌ [RESUMEN] Error después de ${Date.now() - startTime}ms:`, error.message);
     throw new Error('Error al obtener resumen de ocupación de camas');
   }
 };
 
 /**
- * Datos por fecha para gráficos temporales - DATOS DIARIOS REALES
- * Genera un punto de datos por cada día en el rango especificado
+ * Serie diaria real de ocupación en el rango (sin datos sintéticos).
  */
 const obtenerOcupacionCamasPorFecha = async (fechaInicio, fechaFin, sector) => {
   const startTime = Date.now();
-  console.log(`🔍 [POR-FECHA] Iniciando procesamiento temporal DIARIO - Rango: ${fechaInicio} a ${fechaFin}`);
-  
+  console.log(`🔍 [POR-FECHA] Serie diaria real - Rango: ${fechaInicio} a ${fechaFin}`);
+
   try {
-    const filas = await obtenerOcupacionCamas(fechaInicio, fechaFin, sector);
-    console.log(`📊 [POR-FECHA] Filas recibidas para procesamiento temporal: ${filas.length}`);
-    
-    // Generar array de fechas diarias en el rango
-    const fechas = [];
-    const inicio = new Date(fechaInicio);
-    const fin = new Date(fechaFin);
-    
-    for (let d = new Date(inicio); d <= fin; d.setDate(d.getDate() + 1)) {
-      fechas.push(new Date(d));
-    }
-    
-    console.log(`📅 [POR-FECHA] Generando datos para ${fechas.length} días`);
-    
-    // Agrupar datos por período para usar como base
-    const porPeriodo = filas.reduce((acc, f) => {
-      const periodo = f.Periodo; // formato 'yyyy-MM'
-      if (!periodo) return acc;
-      
-      if (!acc[periodo]) {
-        acc[periodo] = {
-          totalCamas: 0,
-          pacientesDiaTotal: 0,
-          ocupacionPctTotal: 0,
-          sectores: 0
-        };
-      }
-      
-      acc[periodo].totalCamas += toNumberSafe(f.TotalCamas);
-      acc[periodo].pacientesDiaTotal += toNumberSafe(f.PacientesDia);
-      acc[periodo].ocupacionPctTotal += toNumberSafe(f.OcupacionPromedioPct);
-      acc[periodo].sectores += 1;
-      
-      return acc;
-    }, {});
+    const rows = await obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector);
+    const mapped = (rows || []).map((r) => {
+      const totalCamas = toNumberSafe(r.TotalCamas);
+      const ocupadas = toNumberSafe(r.Ocupadas);
+      const disponibles = toNumberSafe(r.Disponibles);
+      const porcentajeOcupacion = toNumberSafe(r.PorcentajeOcupacion);
+      const fechaRaw = r.Fecha;
+      const fechaIso =
+        fechaRaw instanceof Date
+          ? fechaRaw.toISOString()
+          : new Date(`${String(fechaRaw).slice(0, 10)}T12:00:00.000Z`).toISOString();
 
-    console.log(`📅 [POR-FECHA] Períodos base agrupados: ${Object.keys(porPeriodo).length}`, Object.keys(porPeriodo));
-
-    // Generar datos diarios basados en los promedios mensuales
-    const mapped = fechas.map(fecha => {
-      const fechaStr = fecha.toISOString().split('T')[0];
-      const periodoMes = fechaStr.substring(0, 7); // 'yyyy-MM'
-      
-      // Buscar datos del período correspondiente
-      const datosDelMes = porPeriodo[periodoMes];
-      
-      if (!datosDelMes) {
-        // Si no hay datos para este mes, retornar valores en 0
-        return {
-          fecha: fecha.toISOString(),
-          totalCamas: 0,
-          ocupadas: 0,
-          disponibles: 0,
-          porcentajeOcupacion: 0
-        };
-      }
-      
-      // Calcular métricas basadas en los promedios del mes
-      const ocupacionPromedio = datosDelMes.sectores > 0 ? datosDelMes.ocupacionPctTotal / datosDelMes.sectores : 0;
-      const ocupadas = Math.round((ocupacionPromedio / 100) * datosDelMes.totalCamas);
-      const disponibles = datosDelMes.totalCamas - ocupadas;
-      
-      // Agregar variación diaria realista (±5% del promedio)
-      const variacion = (Math.random() - 0.5) * 0.1; // ±5%
-      const ocupadasConVariacion = Math.max(0, Math.round(ocupadas * (1 + variacion)));
-      const ocupadasFinal = Math.min(ocupadasConVariacion, datosDelMes.totalCamas);
-      const disponiblesFinal = datosDelMes.totalCamas - ocupadasFinal;
-      const porcentajeFinal = datosDelMes.totalCamas > 0 ? (ocupadasFinal / datosDelMes.totalCamas) * 100 : 0;
-      
       return {
-        fecha: fecha.toISOString(),
-        totalCamas: datosDelMes.totalCamas,
-        ocupadas: ocupadasFinal,
-        disponibles: disponiblesFinal,
-        porcentajeOcupacion: Number(porcentajeFinal.toFixed(2))
+        fecha: fechaIso,
+        totalCamas,
+        ocupadas,
+        disponibles,
+        porcentajeOcupacion,
       };
-    }).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+    });
 
-    const totalTime = Date.now() - startTime;
-    console.log(`🏁 [POR-FECHA] Procesamiento temporal DIARIO completado en ${totalTime}ms - ${mapped.length} puntos de datos`);
-    console.log(`📈 [POR-FECHA] Muestra de datos diarios:`, mapped.slice(0, 3));
-    console.log(`📊 [POR-FECHA] Rango de ocupación: ${Math.min(...mapped.map(m => m.ocupadas))} - ${Math.max(...mapped.map(m => m.ocupadas))} camas`);
-
+    console.log(
+      `🏁 [POR-FECHA] ${mapped.length} días en ${Date.now() - startTime}ms`,
+      mapped.slice(0, 3),
+    );
     return mapped;
   } catch (error) {
-    const totalTime = Date.now() - startTime;
-    console.error(`❌ [POR-FECHA] Error después de ${totalTime}ms:`, error.message);
+    console.error(`❌ [POR-FECHA] Error después de ${Date.now() - startTime}ms:`, error.message);
     throw new Error('Error al obtener ocupación de camas por fecha');
   }
 };
@@ -667,12 +693,6 @@ const obtenerOcupacionCamasPorFecha = async (fechaInicio, fechaFin, sector) => {
 function toNumberSafe(v) {
   const n = Number(v);
   return isNaN(n) ? 0 : n;
-}
-
-function average(arr) {
-  if (!arr || !arr.length) return 0;
-  const sum = arr.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
-  return sum / arr.length;
 }
 
 /**

@@ -317,6 +317,25 @@ async function completarLogin({
 		}
 	}
 
+	const rolNombreLogin = String(rol?.nombre || usuario?.RolNombre || '').trim().toUpperCase();
+	const esRolClinicoConMatricula =
+		rolNombreLogin === 'MEDICO' ||
+		rolNombreLogin === 'MÉDICO' ||
+		String(usuario?.PersonalRol || '').trim() === '2';
+	if (
+		!esSuperAdmin &&
+		esRolClinicoConMatricula &&
+		idEmpresaEfectiva != null &&
+		Number(idEmpresaEfectiva) > 0 &&
+		!(usuario?.Matricula != null && Number(usuario.Matricula) > 0)
+	) {
+		const e = new Error(
+			`Tu usuario (ValorPersonal=${usuario.ValorPersonal}) no tiene matrícula en el personal del establecimiento. No se puede indicar ni operar como médico hasta corregir la ficha/vinculación.`,
+		);
+		e.statusCode = 403;
+		throw e;
+	}
+
 	if (
 		idEmpresaEfectiva != null &&
 		Number.isFinite(Number(idEmpresaEfectiva)) &&

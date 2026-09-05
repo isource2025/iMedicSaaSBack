@@ -266,7 +266,11 @@ SELECT ${topClause}
   iim.CantidadIndicada AS Cantidad,
   iim.TipoUnidad,
   iim.ProfesionalAsiste,
-  p.Nombres + ' ' + p.Apellido AS FullName,
+  COALESCE(
+    NULLIF(LTRIM(RTRIM(ISNULL(p.Nombres, '') + ' ' + ISNULL(p.Apellido, ''))), ''),
+    per.ApellidoNombre,
+    CAST(iim.ProfesionalAsiste AS varchar(20))
+  ) AS FullName,
   per.Matricula AS MatriculaProfesional,
   iim.Frecuencia,
   fa.Intervalo,
@@ -320,17 +324,22 @@ SELECT ${topClause}
     ELSE iim.AliasMedicamento
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
-INNER JOIN dbo.imPassword AS p ON iim.ProfesionalAsiste = p.ValorPersonal
 ${vistoOk
 		? `LEFT JOIN dbo.imIndicacionesVistoEnfermeria AS visto
   ON visto.NumeroVisita = iim.NumeroVisita AND visto.NroIndicacion = iim.NroIndicacion`
 		: ''}
 OUTER APPLY (
-  SELECT TOP 1 per0.Matricula
+  SELECT TOP 1
+    per0.Valor,
+    per0.Matricula,
+    per0.ApellidoNombre
   FROM dbo.imPersonal AS per0
   WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
   ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
 ) per
+LEFT JOIN dbo.imPassword AS p
+  ON p.ValorPersonal = iim.ProfesionalAsiste
+  OR (per.Valor IS NOT NULL AND p.ValorPersonal = per.Valor)
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
@@ -646,6 +655,12 @@ const resolverFechaCargaIndicacion = (fechaSolicitada) => {
 
 const nuevaIndicacion = async (data) => {
     console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
+
+    const { assertIdentidadParaIndicacion } = require('../utils/identidadClinica');
+    await assertIdentidadParaIndicacion({
+        ProfesionalAsiste: data.ProfesionalAsiste,
+        OperadorCarga: data.OperadorCarga,
+    });
     
     // Fecha de carga: hoy por defecto, o mañana si el médico la pide
     const fechaCargaYmd = resolverFechaCargaIndicacion(data.FechaCarga);
