@@ -372,7 +372,8 @@ async function cmdClinica() {
 		{
 			hostname,
 			service: `http://127.0.0.1:${port}`,
-			originRequest: { connectTimeout: '30s' },
+			// connectTimeout es segundos (int). "30s" rompe la API (strconv.ParseInt).
+			originRequest: { connectTimeout: 30 },
 		},
 		// Cloudflare exige una regla final sin hostname.
 		{ service: 'http_status:404' },
