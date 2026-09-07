@@ -31,5 +31,6 @@ router.post('/', crear, interconsultasController.crear);
 router.post('/:idPedido/tomar', atender, interconsultasController.tomar);
 router.post('/:idPedido/liberar', atender, interconsultasController.liberar);
 router.post('/:idPedido/cumplir', atender, interconsultasController.cumplir);
+router.put('/:idPedido/respuesta', atender, interconsultasController.actualizarRespuesta);
 
 module.exports = router;

@@ -51,18 +51,26 @@ async function listarPorVisita(req, res) {
 async function listarPendientes(req, res) {
 	try {
 		const todos = await _veTodosLosServicios(req);
-		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const sector = String(req.query.sector || '').trim();
-		if (sector && !todos && sesion.length && !sectorEnSesion(sesion, sector)) {
-			return res.status(403).json({ success: false, mensaje: 'Sector no asignado en su sesión' });
-		}
 		let codigos = [];
-		if (sesion.length) {
-			codigos = codigosParaFiltro(sesion, sector);
+		if (!todos) {
+			const destinos = await estudiosService.listarSectoresReceptor({
+				valorPersonal: req.valorPersonal,
+			});
+			if (!destinos.length) {
+				return res.json({ success: true, data: [] });
+			}
+			if (sector && !sectorEnSesion(destinos, sector)) {
+				return res.status(403).json({ success: false, mensaje: 'Servicio no asignado' });
+			}
+			const base = codigosParaFiltro(destinos, sector);
+			const expanded = [];
+			for (const c of base) {
+				expanded.push(...(await estudiosService.expandCodigosReceptor(c)));
+			}
+			codigos = [...new Set(expanded)];
 		} else if (sector) {
-			codigos = null;
-		} else if (!todos) {
-			return res.json({ success: true, data: [] });
+			codigos = await estudiosService.expandCodigosReceptor(sector);
 		} else {
 			return res.status(400).json({ success: false, mensaje: 'Query sector requerido' });
 		}
@@ -205,6 +213,31 @@ async function cumplir(req, res) {
 	}
 }
 
+async function actualizarResultado(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const body = req.body || {};
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del realizador',
+			});
+		}
+		const data = await estudiosService.actualizarResultado({
+			idPedido,
+			textoInforme: body.textoInforme || body.textoRespuesta || body.Respuesta,
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[estudios] actualizarResultado:', err.message);
+		return _err(res, err);
+	}
+}
+
 async function tomar(req, res) {
 	try {
 		const idPedido = Number(req.params.idPedido);
@@ -263,10 +296,9 @@ async function contarLibres(req, res) {
 			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
 			String(req.query.soloMios || '').toLowerCase() === 'true';
 		const todosServicios = await _veTodosLosServicios(req);
-		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const data = await estudiosService.contarLibresPorServicios({
-			valorPersonal: soloMios && !todosServicios && !sesion.length ? req.valorPersonal : null,
-			sectoresSesion: soloMios && !todosServicios ? sesion : null,
+			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
+			sectoresSesion: null,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -281,10 +313,6 @@ async function listarSectores(req, res) {
 			String(req.query.soloMios || req.query.mios || '').trim() === '1' ||
 			String(req.query.soloMios || '').toLowerCase() === 'true';
 		const todosServicios = await _veTodosLosServicios(req);
-		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
-		if (soloMios && !todosServicios && sesion.length) {
-			return res.json({ success: true, data: sesion });
-		}
 		const data = await estudiosService.listarSectoresReceptor({
 			valorPersonal: soloMios && !todosServicios ? req.valorPersonal : null,
 		});
@@ -303,6 +331,7 @@ module.exports = {
 	actualizar,
 	eliminar,
 	cumplir,
+	actualizarResultado,
 	tomar,
 	liberar,
 	buscarTipos,

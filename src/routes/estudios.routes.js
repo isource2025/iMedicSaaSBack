@@ -45,5 +45,6 @@ router.delete('/:idPedido', eliminar, estudiosController.eliminar);
 router.post('/:idPedido/tomar', cumplir, estudiosController.tomar);
 router.post('/:idPedido/liberar', cumplir, estudiosController.liberar);
 router.post('/:idPedido/cumplir', cumplir, estudiosController.cumplir);
+router.put('/:idPedido/resultado', cumplir, estudiosController.actualizarResultado);
 
 module.exports = router;

@@ -138,6 +138,8 @@ function mapLegacyRow(r) {
 		NombreToma: r.NombreToma || null,
 		MatriculaRealizador: r.MatriculaRealizador ?? null,
 		RealizadorNombre: r.RealizadorNombre || null,
+		CodOperadorResultado: r.CodOperadorResultado ?? null,
+		CodOperadorToma: r.CodOperadorToma ?? null,
 		Cumplido: cumplido,
 		EstadoWorkflow: r.EstadoWorkflow || (cumplido ? 'CUMPLIDO' : r.Tomado ? 'TOMADO' : 'PENDIENTE'),
 		Origen: r.Origen || 'LEGACY',
@@ -179,6 +181,8 @@ function mapPedidoToInterconsulta(p) {
 		FechaToma: p.FechaToma || null,
 		MatriculaRealizador: p.MatriculaRealizador ?? null,
 		RealizadorNombre: p.RealizadorNombre || null,
+		CodOperadorResultado: p.CodOperadorResultado ?? null,
+		CodOperadorToma: p.CodOperadorToma ?? null,
 		Cumplido: cumplido,
 		EstadoWorkflow: p.EstadoWorkflow,
 		Origen: 'LEGACY',
@@ -327,6 +331,27 @@ async function cumplir({ idPedido, textoRespuesta, matriculaRealizador, codOpera
 	return obtenerPorId(idPedido, 'LEGACY');
 }
 
+async function actualizarRespuesta({
+	idPedido,
+	textoRespuesta,
+	matricula,
+	valorPersonal,
+	codOperador,
+}) {
+	const ped = await estudiosService.obtenerPorId(idPedido);
+	if (!ped || Number(ped.IdTipoPedido) !== ID_TIPO_INTERCONSULTA) {
+		throw _httpError('Interconsulta no encontrada', 404);
+	}
+	await estudiosService.actualizarResultado({
+		idPedido,
+		textoInforme: textoRespuesta,
+		matricula,
+		valorPersonal,
+		codOperador,
+	});
+	return obtenerPorId(idPedido, 'LEGACY');
+}
+
 /** @deprecated solo lectura de filas web antiguas; no usar para crear nuevas */
 async function crearWebLegacy(data) {
 	const fechaClarion = convertirFechaAClarion(data.FechaSolicitud);
@@ -361,5 +386,6 @@ module.exports = {
 	tomar,
 	liberar,
 	cumplir,
+	actualizarRespuesta,
 	crearWebLegacy,
 };

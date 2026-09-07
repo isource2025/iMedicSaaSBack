@@ -61,18 +61,27 @@ function _veTodos(req) {
 async function listarPendientes(req, res) {
 	try {
 		const todos = _veTodos(req);
-		const sesion = Array.isArray(req.sectores) ? req.sectores : [];
 		const sector = String(req.query.sector || '').trim();
-		if (sector && !todos && sesion.length && !sectorEnSesion(sesion, sector)) {
-			return res.status(403).json({ success: false, mensaje: 'Sector no asignado en su sesión' });
-		}
+		const estudiosService = require('../services/estudios.service');
 		let codigos;
-		if (sesion.length) {
-			codigos = codigosParaFiltro(sesion, sector);
+		if (!todos) {
+			const destinos = await estudiosService.listarSectoresReceptor({
+				valorPersonal: req.valorPersonal,
+			});
+			if (!destinos.length) {
+				return res.json({ success: true, data: [] });
+			}
+			if (sector && !sectorEnSesion(destinos, sector)) {
+				return res.status(403).json({ success: false, mensaje: 'Servicio no asignado' });
+			}
+			const base = codigosParaFiltro(destinos, sector);
+			const expanded = [];
+			for (const c of base) {
+				expanded.push(...(await estudiosService.expandCodigosReceptor(c)));
+			}
+			codigos = [...new Set(expanded)];
 		} else if (sector) {
-			codigos = undefined;
-		} else if (!todos) {
-			return res.json({ success: true, data: [] });
+			codigos = await estudiosService.expandCodigosReceptor(sector);
 		} else {
 			return res.status(400).json({ success: false, mensaje: 'Query sector requerido' });
 		}
@@ -219,6 +228,31 @@ async function cumplir(req, res) {
 	}
 }
 
+async function actualizarRespuesta(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const body = req.body || {};
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del realizador',
+			});
+		}
+		const data = await interconsultasService.actualizarRespuesta({
+			idPedido,
+			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[interconsultas] actualizarRespuesta:', err.message);
+		return _err(res, err);
+	}
+}
+
 module.exports = {
 	listarPorVisita,
 	listarSectores,
@@ -228,4 +262,5 @@ module.exports = {
 	tomar,
 	liberar,
 	cumplir,
+	actualizarRespuesta,
 };

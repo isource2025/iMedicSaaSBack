@@ -325,8 +325,11 @@ function mapPedidoRow(row) {
 				_txt(row.NombreToma) ||
 				_txt(row.OperadorResultadoNombre)
 			: null,
+		CodOperadorResultado:
+			row.CodOperadorResultado != null ? Number(row.CodOperadorResultado) : null,
+		CodOperadorToma: row.CodOperadorToma != null ? Number(row.CodOperadorToma) : null,
 		Tomado: tomado,
-		MatriculaToma: tomado ? matriculaToma : null,
+		MatriculaToma: Number.isFinite(matriculaToma) && matriculaToma > 0 ? matriculaToma : null,
 		NombreToma: row.NombreToma ? String(row.NombreToma).trim() : null,
 		FechaToma: row.FechaToma || null,
 		EstadoWorkflow: cumplido ? 'CUMPLIDO' : tomado ? 'TOMADO' : 'PENDIENTE',
@@ -389,6 +392,7 @@ const SELECT_PEDIDO = `
   pr.CodOperador AS CodOperadorResultado,
   opRes.ApellidoNombre AS OperadorResultadoNombre,
   toma.Matricula AS MatriculaToma,
+  toma.CodOperador AS CodOperadorToma,
   toma.FechaToma,
   tomaPer.ApellidoNombre AS NombreToma,
   v.IDPACIENTE AS IdPaciente,
@@ -611,6 +615,26 @@ function _mapSectoresRows(rows) {
 		.filter((s) => s.valor);
 }
 
+/** Destinos de pedidos = servicios (imServicios). valor = código de servicio. */
+function _mapServiciosReceptor(rows) {
+	return (rows || [])
+		.map((r) => {
+			const valor = String(r.valor || '').trim();
+			const descripcion = String(r.descripcion || '').trim() || valor;
+			return {
+				valor,
+				descripcion,
+				valorServicio: valor,
+				descripcionServicio: descripcion,
+				prefijos: String(r.prefijosPractica || '')
+					.split(',')
+					.map((s) => s.trim())
+					.filter(Boolean),
+			};
+		})
+		.filter((s) => s.valor);
+}
+
 function _codigosPedidoDeSector(item) {
 	const seen = new Set();
 	const out = [];
@@ -758,15 +782,17 @@ function _enrichConCatalogo(asignados, catalogo) {
 	});
 }
 
+/**
+ * Destinos a los que se SOLICITAN estudios/interconsultas = SERVICIOS (imServicios).
+ * No listar sectores: IdSectorReceptor guarda el código de servicio.
+ */
 async function listarSectoresReceptor({ valorPersonal } = {}) {
+	const personalServicios = require('./personalServicios.service');
 	const vp = Number(valorPersonal);
 	if (Number.isFinite(vp) && vp > 0) {
-		let rows = await _sectoresAsignadosSql(vp);
-		if (!rows.length) rows = await _sectoresAsignadosNube(vp);
-		const cat = await _catalogoSectoresSql();
-		return _mapSectoresRows(_enrichConCatalogo(rows, cat));
+		return _mapServiciosReceptor(await personalServicios.listarParaBandeja(vp));
 	}
-	return _mapSectoresRows(await _catalogoSectoresSql());
+	return _mapServiciosReceptor(await personalServicios.listarCatalogoPedidos());
 }
 
 async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) {
@@ -774,7 +800,17 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 	const sectores = Array.isArray(sectoresSesion) && sectoresSesion.length
 		? sectoresSesion
 		: await listarSectoresReceptor({ valorPersonal });
-	const codes = [...new Set(sectores.flatMap((s) => _codigosPedidoDeSector(s)))].filter(Boolean);
+	const baseCodes = [...new Set(sectores.flatMap((s) => _codigosPedidoDeSector(s)))].filter(Boolean);
+	const codes = [];
+	const seen = new Set();
+	for (const c of baseCodes) {
+		for (const x of await expandCodigosReceptor(c)) {
+			const k = String(x).trim().toUpperCase();
+			if (!k || seen.has(k)) continue;
+			seen.add(k);
+			codes.push(x);
+		}
+	}
 	const vacio = {
 		estudios: 0,
 		interconsultas: 0,
@@ -814,9 +850,21 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 		});
 	}
 
+	const keysByServicio = new Map();
+	for (const s of sectores) {
+		const expanded = new Set();
+		for (const c of _codigosPedidoDeSector(s)) {
+			for (const x of await expandCodigosReceptor(c)) {
+				const k = String(x || '').trim().toUpperCase();
+				if (k) expanded.add(k);
+			}
+		}
+		keysByServicio.set(s.valor, expanded);
+	}
+
 	const porServicio = sectores
 		.map((s) => {
-			const keys = new Set(_codigosPedidoDeSector(s).map((c) => c.toUpperCase()));
+			const keys = keysByServicio.get(s.valor) || new Set();
 			let estudios = 0;
 			let interconsultas = 0;
 			let urgentes = 0;
@@ -853,25 +901,49 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 }
 
 /**
- * Códigos con los que puede estar grabado el pedido: el sector (CIRA)
- * y, por legado SaaS, el ValorServicio de ese sector (CIR).
+ * Códigos con los que puede estar grabado IdSectorReceptor:
+ * - código de servicio (destino correcto)
+ * - códigos de sector ligados por ValorServicio (legado)
  */
 async function expandCodigosReceptor(sectorReceptor) {
 	const raw = String(sectorReceptor || '').trim();
 	if (!raw) return [];
-	const item = { valor: raw, valorServicio: '' };
+	const seen = new Set();
+	const out = [];
+	const add = (c) => {
+		const v = String(c || '').trim();
+		if (!v) return;
+		const k = v.toUpperCase();
+		if (seen.has(k)) return;
+		seen.add(k);
+		out.push(v);
+	};
+	add(raw);
 	try {
-		const rows = await executeQuery(
+		const asSector = await executeQuery(
 			`SELECT TOP 1 RTRIM(LTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50)))) AS valorServicio
 			 FROM dbo.imSectores
 			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = UPPER(LTRIM(RTRIM(@p0)))`,
 			[{ value: raw, type: 'VarChar' }],
 		);
-		item.valorServicio = String(rows?.[0]?.valorServicio || '').trim();
+		add(asSector?.[0]?.valorServicio);
 	} catch {
 		/* sin ValorServicio */
 	}
-	return _codigosPedidoDeSector(item);
+	try {
+		const sectoresDelServicio = await executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor
+			 FROM dbo.imSectores
+			 WHERE UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) = UPPER(LTRIM(RTRIM(@p0)))
+			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) + '    ', 4)
+			       = LEFT(UPPER(LTRIM(RTRIM(@p0))) + '    ', 4)`,
+			[{ value: raw, type: 'VarChar' }],
+		);
+		for (const r of sectoresDelServicio || []) add(r.valor);
+	} catch {
+		/* sin imSectores.ValorServicio */
+	}
+	return out;
 }
 
 async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
@@ -940,7 +1012,7 @@ async function crearPedido({
 		throw _httpError('matriculaSolicitante inválida');
 	}
 	if (!String(idSectorReceptor || '').trim()) {
-		throw _httpError('El sector receptor es obligatorio');
+		throw _httpError('El servicio destino es obligatorio');
 	}
 
 	const tipo = await resolverTipoPedidoEstudio(idTipoPedido, idPractica);
@@ -991,7 +1063,7 @@ async function crearPedido({
 		idPractica: codPractica,
 	};
 
-	// Campanita: avisar a profesionales del sector receptor (imPersonalSectores).
+	// Campanita: avisar a profesionales del servicio destino (imPersonalServicios).
 	try {
 		const notificacionesPedidos = require('./notificacionesPedidos.service');
 		void notificacionesPedidos.notificarPedidoSectorReceptor({
@@ -1004,7 +1076,7 @@ async function crearPedido({
 			matriculaSolicitante: matricula,
 		});
 	} catch (err) {
-		console.warn('[estudios] notif sector omitida:', err.message || err);
+		console.warn('[estudios] notif servicio omitida:', err.message || err);
 	}
 
 	return result;
@@ -1056,7 +1128,7 @@ async function actualizarPedido({
 	await _assertPedidoPendienteDelCreador(id, { matricula, valorPersonal, codOperador });
 
 	if (!String(idSectorReceptor || '').trim()) {
-		throw _httpError('El sector receptor es obligatorio');
+		throw _httpError('El servicio destino es obligatorio');
 	}
 	const tipo = await resolverTipoPedidoEstudio(idTipoPedido, idPractica);
 	const codPractica = Number(tipo.IdPractica) || 0;
@@ -1474,6 +1546,92 @@ async function cumplirPedido({
 	}
 }
 
+function _idsResultado(ped, toma, protoCodOperador) {
+	const ids = [];
+	const push = (v) => {
+		const n = Number(v);
+		if (Number.isFinite(n) && n > 0 && !ids.includes(n)) ids.push(n);
+	};
+	push(ped?.MatriculaRealizador);
+	push(ped?.MatriculaToma);
+	push(ped?.CodOperadorResultado);
+	push(ped?.CodOperadorToma);
+	push(toma?.Matricula);
+	push(toma?.CodOperador);
+	push(protoCodOperador);
+	return ids;
+}
+
+async function _assertResultadoDelRealizador(idPedido, sesion) {
+	const ped = await obtenerPorId(idPedido);
+	if (!ped) throw _httpError('Pedido no encontrado', 404);
+	if (!ped.Cumplido || !(Number(ped.IdProtocolo) > 0)) {
+		throw _httpError('Solo se puede editar un estudio o interconsulta ya respondido', 409);
+	}
+	const idsSesion = _idsAutorSesion(sesion || {});
+	if (!idsSesion.length) {
+		throw _httpError('No se pudo resolver la identidad del operador', 400);
+	}
+	const toma = await _obtenerToma(idPedido);
+	let protoCod = null;
+	try {
+		const proto = await executeQuery(
+			`SELECT TOP 1 CodOperador FROM dbo.imProtocolosResultados WHERE IdProtocolo = @p0`,
+			[{ value: Number(ped.IdProtocolo), type: 'Int' }],
+		);
+		protoCod = proto?.[0]?.CodOperador;
+	} catch {
+		/* columna opcional */
+	}
+	const autores = _idsResultado(ped, toma, protoCod);
+	if (!autores.some((a) => idsSesion.includes(a))) {
+		throw _httpError('Solo quien respondió el pedido puede editar el resultado', 403);
+	}
+	return ped;
+}
+
+/**
+ * Edita el texto del resultado ya cumplido. Solo quien dio la respuesta.
+ * No recrea facturación ni cambia la fecha original del informe.
+ */
+async function actualizarResultado({
+	idPedido,
+	textoInforme,
+	matricula,
+	valorPersonal,
+	codOperador,
+}) {
+	const texto = String(textoInforme || '').trim();
+	if (!texto) throw _httpError('El informe / resultado es obligatorio');
+
+	const ped = await _assertResultadoDelRealizador(idPedido, {
+		matricula,
+		valorPersonal,
+		codOperador,
+	});
+	const idProt = Number(ped.IdProtocolo);
+	if (!Number.isFinite(idProt) || idProt <= 0) {
+		throw _httpError('Pedido sin protocolo de resultado', 409);
+	}
+	const textoRtf = plainToRtf(texto);
+
+	// VarChar(MAX) explícito: executeQuery con VarChar sin length puede truncar.
+	const pool = await getRequestPool();
+	const req = pool.request();
+	req.input('idProt', sql.Int, idProt);
+	req.input('texto', sql.VarChar(sql.MAX), textoRtf);
+	const upd = await req.query(`
+		UPDATE dbo.imProtocolosResultados
+		SET TextoProtocolo = @texto
+		WHERE IdProtocolo = @idProt;
+		SELECT @@ROWCOUNT AS n;
+	`);
+	if (Number(upd.recordset?.[0]?.n) !== 1) {
+		throw _httpError('No se pudo actualizar el resultado', 409);
+	}
+	return obtenerPorId(Number(idPedido));
+}
+
 module.exports = {
 	crearPedido,
 	actualizarPedido,
@@ -1486,8 +1644,10 @@ module.exports = {
 	tomarPedido,
 	liberarPedido,
 	cumplirPedido,
+	actualizarResultado,
 	buscarTiposPedidosEstudios,
 	listarSectoresReceptor,
+	expandCodigosReceptor,
 	resolverTipoPedidoEstudio,
 	plainToRtf,
 	rtfToPlain,
