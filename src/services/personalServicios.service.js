@@ -578,6 +578,34 @@ function _pushAsignacion(bucket, seen, item) {
 	bucket.push({ idServicio: id, Descripcion: String(item.Descripcion || '').trim() });
 }
 
+function _mapFilaPedido(r) {
+	const valor = _code(_col(r, 'valor', 'Valor'));
+	if (!valor) return null;
+	return {
+		valor,
+		descripcion: String(_col(r, 'descripcion', 'Descripcion') || '').trim(),
+		prefijosPractica: String(_col(r, 'prefijosPractica', 'PrefijosPractica') || '').trim(),
+	};
+}
+
+/** Catálogo completo de destinos de pedidos = imServicios (+ PrefijosPractica). */
+async function listarCatalogoPedidos() {
+	const out = [];
+	const seen = new Set();
+	for (const r of await _filasPedidos()) {
+		const item = _mapFilaPedido(r);
+		if (!item) continue;
+		const key = item.valor.toUpperCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(item);
+	}
+	out.sort((a, b) =>
+		String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+	);
+	return out;
+}
+
 async function listarParaBandeja(valorPersonal) {
 	const vp = Number(valorPersonal);
 	if (!Number.isFinite(vp) || vp <= 0) return [];
@@ -631,6 +659,7 @@ module.exports = {
 	codigosDePersonal,
 	asignarTodos,
 	listarCatalogo,
+	listarCatalogoPedidos,
 	listarParaBandeja,
 	descripcionDe: _descripcionDe,
 	catalogoDescripciones: _catalogoDescripciones,

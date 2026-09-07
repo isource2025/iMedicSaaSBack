@@ -2469,7 +2469,7 @@ async function actualizarAtencionPostCierre({
 		: [];
 
 	if (listaPedidosEstudios.some((p) => !String(p?.idSectorReceptor || '').trim())) {
-		const e = new Error('Cada pedido de estudio requiere sector receptor');
+		const e = new Error('Cada pedido de estudio requiere servicio destino');
 		e.statusCode = 400;
 		throw e;
 	}
