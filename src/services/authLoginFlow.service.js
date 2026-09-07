@@ -177,33 +177,12 @@ async function resolverSectorSesion(username, idEmpresaSesion, usuario, esSuperA
 	throw e;
 }
 
-async function completarLogin({
-	res,
+async function resolverEmpresaSesion({
 	username,
-	usuario,
 	idEmpresaSesion,
 	idEmpresaBody,
-	idSectorBody,
-	ip,
-	userAgent,
+	esSuperAdmin,
 }) {
-	const rolPreliminar = resolverRol(usuario);
-	// Propagar al usuario para exención de sector y permisos (Grupo 11 / admin*)
-	if (rolPreliminar) {
-		if (!usuario.RolNombre) usuario.RolNombre = rolPreliminar.nombre;
-		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
-		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
-	}
-	let esSuperAdmin =
-		rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
-	if (!esSuperAdmin && idEmpresaSesion == null) {
-		try {
-			esSuperAdmin = await authService.esSuperAdminPorUsername(username);
-		} catch (e) {
-			console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
-		}
-	}
-
 	let empresaSeleccionada = null;
 	let modulosEmpresa = null;
 	let idEmpresaEfectiva = idEmpresaSesion;
@@ -279,6 +258,57 @@ async function completarLogin({
 	) {
 		idEmpresaEfectiva = Number(idEmpresaSesion);
 	}
+
+	return { idEmpresaEfectiva, empresaSeleccionada, modulosEmpresa };
+}
+
+async function completarLogin({
+	res,
+	username,
+	usuario,
+	idEmpresaSesion,
+	idEmpresaBody,
+	idSectorBody,
+	ip,
+	userAgent,
+}) {
+	let rolPreliminar = resolverRol(usuario);
+	// Propagar al usuario para exención de sector y permisos (Grupo 11 / admin*)
+	if (rolPreliminar) {
+		if (!usuario.RolNombre) usuario.RolNombre = rolPreliminar.nombre;
+		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
+		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
+	}
+	let esSuperAdmin =
+		rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
+	if (!esSuperAdmin && idEmpresaSesion == null) {
+		try {
+			esSuperAdmin = await authService.esSuperAdminPorUsername(username);
+		} catch (e) {
+			console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
+		}
+	}
+
+	// SUPER_ADMIN de plataforma: la sesión no se ata a ningún hospital. El panel
+	// de empresas opera siempre con el idEmpresa explícito de cada ruta.
+	const esPlataforma = esSuperAdmin && idEmpresaSesion == null;
+
+	// La detección por username puede llegar sin rol en la fila de imPassword.
+	if (esPlataforma && rolPreliminar?.nombre !== 'SUPER_ADMIN') {
+		rolPreliminar = { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
+		usuario.RolNombre = 'SUPER_ADMIN';
+		usuario.RolId = 5;
+		usuario.RolNivel = 200;
+	}
+
+	const { idEmpresaEfectiva, empresaSeleccionada, modulosEmpresa } = esPlataforma
+		? { idEmpresaEfectiva: null, empresaSeleccionada: null, modulosEmpresa: null }
+		: await resolverEmpresaSesion({
+				username,
+				idEmpresaSesion,
+				idEmpresaBody,
+				esSuperAdmin,
+			});
 
 	let sectorInfo;
 	try {
