@@ -372,6 +372,16 @@ BEGIN
     ALTER TABLE dbo.imTurnos ADD OperadorIngreso INT NULL;
     PRINT 'Columna: imTurnos.OperadorIngreso';
   END
+  IF COL_LENGTH('dbo.imTurnos', 'OperadorCancelacion') IS NULL
+  BEGIN
+    ALTER TABLE dbo.imTurnos ADD OperadorCancelacion INT NULL;
+    PRINT 'Columna: imTurnos.OperadorCancelacion';
+  END
+  IF COL_LENGTH('dbo.imTurnos', 'OrigenCancelacion') IS NULL
+  BEGIN
+    ALTER TABLE dbo.imTurnos ADD OrigenCancelacion VARCHAR(12) NULL;
+    PRINT 'Columna: imTurnos.OrigenCancelacion';
+  END
 END
 ELSE
   PRINT 'AVISO: dbo.imTurnos no existe — omitido OperadorLlegada/Ingreso';

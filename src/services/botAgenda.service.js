@@ -1141,16 +1141,14 @@ async function cancelarTurnoBot(body) {
 
 	if (idPaciente) await _verificarTelefonoPaciente(idPaciente, body.telefonoWhatsApp);
 
-	const motivo = body.motivo ? String(body.motivo).slice(0, 200) : 'Cancelado vía WhatsApp';
+	const motivo = body.motivo ? String(body.motivo).slice(0, 70) : 'Cancelado vía WhatsApp';
 	try {
-		const result = await agendaService.cancelarTurno({ matricula, idTurno });
-		await executeQuery(
-			`UPDATE dbo.imTurnos SET MotivoCancelacion = @p0 WHERE IdTurno = @p1`,
-			[
-				{ value: `[BOT-WA] ${motivo}`, type: 'VarChar' },
-				{ value: idTurno, type: 'Int' },
-			],
-		);
+		const result = await agendaService.cancelarTurno({
+			matricula,
+			idTurno,
+			origen: 'BOT',
+			motivo,
+		});
 		await botLogService.registrarLog({
 			accion: 'CANCELACION',
 			idTurno,

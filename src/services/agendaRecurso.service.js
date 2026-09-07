@@ -18,6 +18,7 @@ const {
 	clarionAIntervaloMin,
 } = require('../utils/agendaCatalogos');
 const feriadosService = require('./feriados.service');
+const { resolverCancelacion } = require('../utils/turnoCancelacion');
 
 const TIPOS = new Set(['SECTOR', 'SERVICIO']);
 
@@ -347,8 +348,8 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 	const [turnos, feriados] = await Promise.all([
 		executeQuery(
 		`
-		SELECT t.IdTurno, t.FechaAsignada, t.Hora, t.Sector, t.Profesional, t.IDPaciente, t.Status,
-		       t.Observaciones, t.EsSobreturno,
+		SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.Sector, t.Profesional, t.IDPaciente, t.Status,
+		       t.Observaciones, t.TipoTurno, t.MotivoCancelacion,
 		       LTRIM(RTRIM(ISNULL(p.ApellidoyNombre, ''))) AS PacienteNombre
 		FROM dbo.imTurnos t
 		LEFT JOIN dbo.imPacientes p ON p.IDPaciente = t.IDPaciente
@@ -368,7 +369,7 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 	for (const row of turnos || []) {
 		const fecha = convertirFechaClarionADate(row.FechaAsignada);
 		const fechaIso = fecha ? _isoDate(fecha) : null;
-		const hora = _hhmm(row.Hora);
+		const hora = _hhmm(row.HoraAsignada);
 		if (!fechaIso || !hora) continue;
 		const k = `${fechaIso}|${hora}`;
 		if (!turnoMap.has(k)) turnoMap.set(k, []);
@@ -421,7 +422,7 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 							pacienteNombre: ocupado.PacienteNombre || null,
 							profesional: ocupado.Profesional,
 							observaciones: ocupado.Observaciones || null,
-							esSobreturno: !!ocupado.EsSobreturno,
+							esSobreturno: Number(ocupado.TipoTurno) === 1,
 							esRecurso: true,
 							tipoRecurso: t,
 							valorRecurso: v,
@@ -432,11 +433,16 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 							horaClarion: tClarion,
 							sector: sectorKey,
 							estado: 'CANCELADO',
+							status: 1,
 							idTurno: cancelado.IdTurno,
 							idPaciente: cancelado.IDPaciente,
+							pacienteNombre: cancelado.PacienteNombre || null,
+							observaciones: cancelado.Observaciones || null,
+							esSobreturno: Number(cancelado.TipoTurno) === 1,
 							esRecurso: true,
 							tipoRecurso: t,
 							valorRecurso: v,
+							...resolverCancelacion(cancelado),
 						});
 					} else {
 						slots.push({
@@ -453,6 +459,13 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 				}
 			}
 		}
+
+		slots.sort((a, b) => {
+			const ca = a.estado === 'CANCELADO' ? 1 : 0;
+			const cb = b.estado === 'CANCELADO' ? 1 : 0;
+			if (ca !== cb) return ca - cb;
+			return (a.horaClarion || 0) - (b.horaClarion || 0);
+		});
 
 		diasOut.push({
 			fecha: fechaIso,

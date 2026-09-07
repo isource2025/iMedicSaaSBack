@@ -4,7 +4,6 @@
 const { executeQuery } = require('../models/db');
 const {
 	convertirFechaAClarion,
-	convertirHoraAClarion,
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
 } = require('../utils/dateUtils');
@@ -13,21 +12,13 @@ const {
 	STATUS_OCUPADO,
 	STATUS_CANCELADO,
 	STATUS_ATENDIDO,
-	TIPO_TURNO_GRILLA,
 	TIPO_TURNO_SOBRETURNO,
 } = require('../utils/agendaCatalogos');
-
-const SQL_FROM = `
-  FROM dbo.imTurnos t
-  LEFT JOIN dbo.imPacientes pac ON pac.IDPaciente = t.IDPaciente
-  LEFT JOIN dbo.imPersonal per ON per.Matricula = t.Profesional
-  LEFT JOIN dbo.imPassword op ON op.CodOperador = t.CodOperador
-  OUTER APPLY (
-    SELECT TOP 1 vm.Diagnostico
-    FROM dbo.imVisitaMovimiento vm
-    WHERE vm.NumeroVisita = t.NumeroVisita AND t.NumeroVisita > 0
-    ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
-  ) diag`;
+const {
+	resolverCancelacion,
+	ensureColumnasCancelacion,
+	tieneTurnosLog,
+} = require('../utils/turnoCancelacion');
 
 const SQL_SELECT = `
   SELECT
@@ -35,6 +26,7 @@ const SQL_SELECT = `
     t.Sector, t.Horallegada, t.HoraIngreso, t.HoraSalida, t.Especialidad,
     t.Observaciones, t.FechaCarga, t.HoraCarga, t.CodOperador, t.Status, t.TipoTurno,
     t.NumeroVisita, t.NumeroDocumento, t.MotivoCancelacion, t.IdClasificacionTriage,
+    t.OperadorCancelacion, t.OrigenCancelacion, t.EsLog,
     pac.ApellidoyNombre AS PacienteNombre,
     per.ApellidoNombre AS ProfesionalNombre,
     LTRIM(RTRIM(
@@ -42,7 +34,53 @@ const SQL_SELECT = `
       CASE WHEN op.Apellido IS NOT NULL AND op.Nombres IS NOT NULL THEN ' ' ELSE '' END +
       COALESCE(op.Nombres, '')
     )) AS PersonalAtendioNombre,
+    opCan.Apellido AS OpCanApellido,
+    opCan.Nombres AS OpCanNombres,
     diag.Diagnostico AS DiagnosticoCodigo`;
+
+async function _sqlFrom() {
+	const [tieneLog, tieneCols] = await Promise.all([
+		tieneTurnosLog(),
+		ensureColumnasCancelacion(),
+	]);
+	const cancelCols = tieneCols
+		? 't.OperadorCancelacion, t.OrigenCancelacion, CAST(0 AS TINYINT) AS EsLog'
+		: 'CAST(NULL AS INT) AS OperadorCancelacion, CAST(NULL AS VARCHAR(12)) AS OrigenCancelacion, CAST(0 AS TINYINT) AS EsLog';
+	const live = `SELECT t.IdTurno, t.Dia, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional,
+    t.Sector, t.Horallegada, t.HoraIngreso, t.HoraSalida, t.Especialidad,
+    t.Observaciones, t.FechaCarga, t.HoraCarga, t.CodOperador, t.Status, t.TipoTurno,
+    t.NumeroVisita, t.NumeroDocumento, t.MotivoCancelacion, t.IdClasificacionTriage,
+    ${cancelCols}
+    FROM dbo.imTurnos t`;
+	const log = tieneLog
+		? `UNION ALL
+    SELECT l.IdTurno, l.Dia, l.FechaAsignada, l.HoraAsignada, l.IDPaciente, l.Profesional,
+    l.Sector, l.Horallegada, l.HoraIngreso, l.HoraSalida, l.Especialidad,
+    l.Observaciones, l.FechaCarga, l.HoraCarga, l.CodOperador, l.Status, l.TipoTurno,
+    l.NumeroVisita, l.NumeroDocumento, l.MotivoCancelacion, l.IdClasificacionTriage,
+    CAST(NULL AS INT) AS OperadorCancelacion, CAST(NULL AS VARCHAR(12)) AS OrigenCancelacion,
+    CAST(1 AS TINYINT) AS EsLog
+    FROM dbo.imTurnosLog l
+    WHERE l.Status = ${STATUS_CANCELADO}
+      AND ISNULL(l.IDPaciente, 0) > 0
+      AND NOT EXISTS (SELECT 1 FROM dbo.imTurnos v WHERE v.IdTurno = l.IdTurno)`
+		: '';
+	return `
+  FROM (${live}
+    ${log}) t
+  LEFT JOIN dbo.imPacientes pac ON pac.IDPaciente = t.IDPaciente
+  LEFT JOIN dbo.imPersonal per ON per.Matricula = t.Profesional
+  LEFT JOIN dbo.imPassword op ON op.CodOperador = t.CodOperador
+  LEFT JOIN dbo.imPassword opCan
+    ON t.OperadorCancelacion IS NOT NULL AND t.OperadorCancelacion > 0
+   AND (opCan.CodOperador = t.OperadorCancelacion OR opCan.ValorPersonal = t.OperadorCancelacion)
+  OUTER APPLY (
+    SELECT TOP 1 vm.Diagnostico
+    FROM dbo.imVisitaMovimiento vm
+    WHERE vm.NumeroVisita = t.NumeroVisita AND t.NumeroVisita > 0
+    ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
+  ) diag`;
+}
 
 function _isoDate(d) {
 	const y = d.getFullYear();
@@ -101,12 +139,11 @@ function _mapRow(r) {
 		codOperador: r.CodOperador,
 		status: r.Status,
 		estado: _estadoLabel(r.Status),
+		esLog: Number(r.EsLog) === 1,
 		tipoTurno: r.TipoTurno,
 		tipoTurnoLabel: _tipoTurnoLabel(r.TipoTurno),
 		numeroVisita: r.NumeroVisita,
-		motivoCancelacion: r.MotivoCancelacion
-			? String(r.MotivoCancelacion).trim()
-			: null,
+		...resolverCancelacion(r),
 		idClasificacionTriage: r.IdClasificacionTriage,
 		diagnostico: r.DiagnosticoCodigo
 			? String(r.DiagnosticoCodigo).trim()
@@ -196,9 +233,10 @@ async function listar(filtros = {}, page = 1, limit = 25) {
 	const offset = (p - 1) * l;
 
 	const { whereSql, params } = _buildWhere(filtros);
+	const sqlFrom = await _sqlFrom();
 
 	const countRows = await executeQuery(
-		`SELECT COUNT(*) AS total ${SQL_FROM} ${whereSql}`,
+		`SELECT COUNT(*) AS total ${sqlFrom} ${whereSql}`,
 		params,
 	);
 	const total = Number(countRows[0]?.total) || 0;
@@ -206,7 +244,7 @@ async function listar(filtros = {}, page = 1, limit = 25) {
 	const dataParams = [...params, { value: offset, type: 'Int' }, { value: l, type: 'Int' }];
 	const rows = await executeQuery(
 		`${SQL_SELECT}
-		 ${SQL_FROM}
+		 ${sqlFrom}
 		 ${whereSql}
 		 ORDER BY t.FechaAsignada DESC, t.HoraAsignada DESC, t.IdTurno DESC
 		 OFFSET @p${params.length} ROWS FETCH NEXT @p${params.length + 1} ROWS ONLY`,

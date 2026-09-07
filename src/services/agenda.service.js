@@ -28,6 +28,17 @@ const {
 	horasTurnoEquivalentes,
 } = require('../utils/agendaCatalogos');
 const { repararTextoClarionAnsi } = require('../utils/clarionText');
+const {
+	resolverCancelacion,
+	motivoParaPersistir,
+	normalizarOrigen,
+	ensureColumnasCancelacion,
+	tieneTurnosLog,
+	SQL_CANCELACION_COLS,
+	SQL_CANCELACION_JOIN,
+	SQL_CANCELACION_COLS_NULL,
+	ORIGEN_USUARIO,
+} = require('../utils/turnoCancelacion');
 const agendaConfig = require('./agendaConfig.service');
 const feriadosService = require('./feriados.service');
 
@@ -298,9 +309,27 @@ function _slotDesdeTurno(turno, sectorDefault) {
 			: null,
 		numeroDocumento: turno.NumeroDocumento ?? null,
 		observaciones: turno.Observaciones ?? null,
-		motivoCancelacion: turno.MotivoCancelacion ?? null,
+		...resolverCancelacion(turno),
 		..._slotExtrasFromTurno(turno),
 	};
+}
+
+function _esSlotCancelado(slot) {
+	if (!slot) return false;
+	return slot.estado === 'CANCELADO' || Number(slot.status) === STATUS_CANCELADO;
+}
+
+function _ordenarSlotsAgenda(slots) {
+	slots.sort((a, b) => {
+		const ca = _esSlotCancelado(a) ? 1 : 0;
+		const cb = _esSlotCancelado(b) ? 1 : 0;
+		if (ca !== cb) return ca - cb;
+		const ha = a.horaClarion ?? 0;
+		const hb = b.horaClarion ?? 0;
+		if (ha !== hb) return ha - hb;
+		return (a.esSobreturno ? 1 : 0) - (b.esSobreturno ? 1 : 0);
+	});
+	return slots;
 }
 
 /** En el mapa de turnos, prioriza activo > cancelado > placeholder vacío. */
@@ -414,6 +443,11 @@ async function _actualizarTurnoAsignado(idTurno, payload) {
 		horaCargaClarion,
 		cod,
 	} = payload;
+	const tieneCols = await ensureColumnasCancelacion();
+	const extraCancel = tieneCols
+		? `OperadorCancelacion = NULL,
+		     OrigenCancelacion = NULL,`
+		: '';
 	await executeQuery(
 		`UPDATE dbo.imTurnos
 		 SET IDPaciente = @p0,
@@ -423,6 +457,7 @@ async function _actualizarTurnoAsignado(idTurno, payload) {
 		     Especialidad = @p4,
 		     Status = 0,
 		     MotivoCancelacion = NULL,
+		     ${extraCancel}
 		     Dia = @p5,
 		     Sector = @p6,
 		     Horallegada = 0,
@@ -639,13 +674,18 @@ async function _cargarNoHorarios(matricula, desdeClarion, hastaClarion) {
 }
 
 async function _cargarTurnos(matricula, desdeClarion, hastaClarion) {
+	const tieneCols = await ensureColumnasCancelacion();
+	const extraCols = tieneCols ? SQL_CANCELACION_COLS : SQL_CANCELACION_COLS_NULL;
+	const extraJoin = tieneCols ? SQL_CANCELACION_JOIN : '';
 	const rows = await executeQuery(
 		`SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional, t.Sector,
 		        t.Observaciones, t.Status, t.TipoTurno, t.NumeroDocumento, t.MotivoCancelacion,
 		        t.Horallegada, t.HoraIngreso, t.HoraSalida, t.IdClasificacionTriage, t.NumeroVisita,
-		        ${SQL_PACIENTE_COLS}
+		        ${SQL_PACIENTE_COLS},
+		        ${extraCols}
 		 FROM dbo.imTurnos t
 		 ${SQL_PACIENTE_JOIN}
+		 ${extraJoin}
 		 WHERE t.Profesional = @p0
 		   AND FechaAsignada >= @p1
 		   AND FechaAsignada <= @p2`,
@@ -655,6 +695,33 @@ async function _cargarTurnos(matricula, desdeClarion, hastaClarion) {
 			{ value: hastaClarion, type: 'Int' },
 		],
 	);
+
+	const idsVivos = new Set(rows.map((r) => Number(r.IdTurno)).filter((n) => n > 0));
+	if (await tieneTurnosLog()) {
+		const logRows = await executeQuery(
+			`SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional, t.Sector,
+			        t.Observaciones, t.Status, t.TipoTurno, t.NumeroDocumento, t.MotivoCancelacion,
+			        t.Horallegada, t.HoraIngreso, t.HoraSalida, t.IdClasificacionTriage, t.NumeroVisita,
+			        ${SQL_PACIENTE_COLS},
+			        ${SQL_CANCELACION_COLS_NULL}
+			 FROM dbo.imTurnosLog t
+			 ${SQL_PACIENTE_JOIN}
+			 WHERE t.Profesional = @p0
+			   AND t.FechaAsignada >= @p1
+			   AND t.FechaAsignada <= @p2
+			   AND t.Status = ${STATUS_CANCELADO}
+			   AND ISNULL(t.IDPaciente, 0) > 0`,
+			[
+				{ value: matricula, type: 'Int' },
+				{ value: desdeClarion, type: 'Int' },
+				{ value: hastaClarion, type: 'Int' },
+			],
+		).catch(() => []);
+		for (const r of logRows || []) {
+			if (!idsVivos.has(Number(r.IdTurno))) rows.push(r);
+		}
+	}
+
 	const map = new Map();
 	for (const t of rows) {
 		const fecha = _isoDate(convertirFechaClarionADate(t.FechaAsignada));
@@ -727,7 +794,7 @@ function _buildJornadasMeta(rangos) {
 	});
 }
 
-/** Agrega filas de sobreturnos (TipoTurno=1) que no están en la grilla base. */
+/** Agrega sobreturnos y cancelados archivados que no están en la grilla; cancelados van al final. */
 function _agregarSobreturnosEnSlots(slots, fechaIso, turnosRows, sectorDefault, rangos) {
 	const idsEnGrilla = new Set(slots.map((s) => s.idTurno).filter(Boolean));
 	for (const t of turnosRows) {
@@ -742,13 +809,20 @@ function _agregarSobreturnosEnSlots(slots, fechaIso, turnosRows, sectorDefault, 
 		);
 		if (base?.hora) extra.hora = `${base.hora} · ST`;
 		slots.push(extra);
+		idsEnGrilla.add(t.IdTurno);
 	}
-	slots.sort((a, b) => {
-		const ha = a.horaClarion ?? 0;
-		const hb = b.horaClarion ?? 0;
-		if (ha !== hb) return ha - hb;
-		return (a.esSobreturno ? 1 : 0) - (b.esSobreturno ? 1 : 0);
-	});
+	for (const t of turnosRows) {
+		const fecha = _isoDate(convertirFechaClarionADate(t.FechaAsignada));
+		if (fecha !== fechaIso) continue;
+		if (Number(t.Status) !== STATUS_CANCELADO) continue;
+		if ((Number(t.IDPaciente) || 0) <= 0) continue;
+		if (idsEnGrilla.has(t.IdTurno)) continue;
+		const extra = _slotDesdeTurno(t, sectorDefault);
+		extra.jornadaIndex = _jornadaIndexParaHora(rangos, extra.horaClarion);
+		slots.push(extra);
+		idsEnGrilla.add(t.IdTurno);
+	}
+	_ordenarSlotsAgenda(slots);
 }
 
 /** Hora Clarion desfasada para sobreturno (±unidades de 10 ms, sin colisión). */
@@ -920,7 +994,7 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 							: null,
 						numeroDocumento: turno?.NumeroDocumento ?? null,
 						observaciones: turno?.Observaciones ?? null,
-						motivoCancelacion: turno?.MotivoCancelacion ?? null,
+						...resolverCancelacion(turno || {}),
 						..._slotExtrasFromTurno(turno),
 					});
 				}
@@ -935,12 +1009,7 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 			);
 			_aplicarRacResumenASlots(slots, racMap);
 		}
-		slots.sort((a, b) => {
-			const ha = a.horaClarion ?? 0;
-			const hb = b.horaClarion ?? 0;
-			if (ha !== hb) return ha - hb;
-			return (a.esSobreturno ? 1 : 0) - (b.esSobreturno ? 1 : 0);
-		});
+		_ordenarSlotsAgenda(slots);
 		diasOut.push({
 			fecha: fechaIso,
 			dia: diaNombre,
@@ -1009,18 +1078,24 @@ async function listarTurnos(matricula, desdeIso, hastaIso) {
 	const m = _validarMatricula(matricula);
 	const desdeClarion = convertirFechaAClarion(desdeIso);
 	const hastaClarion = convertirFechaAClarion(hastaIso);
+	const tieneCols = await ensureColumnasCancelacion();
+	const extraCols = tieneCols ? SQL_CANCELACION_COLS : SQL_CANCELACION_COLS_NULL;
+	const extraJoin = tieneCols ? SQL_CANCELACION_JOIN : '';
 	const rows = await executeQuery(
 		`SELECT t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.IDPaciente, t.Profesional,
 		        t.Sector, t.Observaciones, t.Status, t.TipoTurno, t.NumeroDocumento,
 		        t.MotivoCancelacion, t.Horallegada, t.HoraIngreso, t.HoraSalida,
 		        t.IdClasificacionTriage, t.NumeroVisita,
-		        ${SQL_PACIENTE_COLS}
+		        ${SQL_PACIENTE_COLS},
+		        ${extraCols}
 		 FROM dbo.imTurnos t
 		 ${SQL_PACIENTE_JOIN}
+		 ${extraJoin}
 		 WHERE t.Profesional = @p0
 		   AND t.FechaAsignada >= @p1
 		   AND t.FechaAsignada <= @p2
-		 ORDER BY t.FechaAsignada, t.HoraAsignada`,
+		 ORDER BY CASE WHEN t.Status = ${STATUS_CANCELADO} THEN 1 ELSE 0 END,
+		          t.FechaAsignada, t.HoraAsignada`,
 		[
 			{ value: m, type: 'Int' },
 			{ value: desdeClarion, type: 'Int' },
@@ -1044,7 +1119,7 @@ async function listarTurnos(matricula, desdeIso, hastaIso) {
 		tipoTurno: t.TipoTurno,
 		esSobreturno: (Number(t.TipoTurno) || 0) === TIPO_TURNO_SOBRETURNO,
 		numeroDocumento: t.NumeroDocumento,
-		motivoCancelacion: t.MotivoCancelacion,
+		...resolverCancelacion(t),
 		..._slotExtrasFromTurno(t),
 	}));
 	const racMap = await _racResumenPorTurnos(mapped.map((x) => x.idTurno));
@@ -1638,8 +1713,9 @@ async function marcarIngreso({ matricula, idTurno, porIdTurno, codOperador }) {
 
 /**
  * Cancela un turno (Status = 1). No aplica a turnos ya atendidos (Status = 3).
+ * origen: USUARIO (default) | PACIENTE (portal IOSCOR) | BOT (WhatsApp).
  */
-async function cancelarTurno({ matricula, idTurno }) {
+async function cancelarTurno({ matricula, idTurno, codOperador, origen, motivo }) {
 	const m = _validarMatricula(matricula);
 	const id = Number(idTurno);
 	if (!Number.isFinite(id) || id <= 0) {
@@ -1665,14 +1741,52 @@ async function cancelarTurno({ matricula, idTurno }) {
 		e.statusCode = 409;
 		throw e;
 	}
-	await executeQuery(
-		`UPDATE dbo.imTurnos SET Status = @p0 WHERE IdTurno = @p1`,
-		[
-			{ value: STATUS_CANCELADO, type: 'TinyInt' },
-			{ value: id, type: 'Int' },
-		],
-	);
-	return { idTurno: id, status: STATUS_CANCELADO };
+
+	const origenNorm = normalizarOrigen(origen, { codOperador, motivo });
+	const tieneCols = await ensureColumnasCancelacion();
+	const motPersist =
+		motivoParaPersistir(origenNorm, motivo) ||
+		(!tieneCols && origenNorm === ORIGEN_USUARIO ? '[USUARIO]' : null);
+	const cod = Number(codOperador) || 0;
+	const opCancel = origenNorm === ORIGEN_USUARIO && cod > 0 ? cod : null;
+
+	if (tieneCols) {
+		await executeQuery(
+			`UPDATE dbo.imTurnos
+			 SET Status = @p0,
+			     MotivoCancelacion = @p1,
+			     OperadorCancelacion = @p2,
+			     OrigenCancelacion = @p3
+			 WHERE IdTurno = @p4`,
+			[
+				{ value: STATUS_CANCELADO, type: 'TinyInt' },
+				{ value: motPersist, type: 'VarChar' },
+				{ value: opCancel, type: 'Int' },
+				{ value: origenNorm, type: 'VarChar' },
+				{ value: id, type: 'Int' },
+			],
+		);
+	} else {
+		await executeQuery(
+			`UPDATE dbo.imTurnos SET Status = @p0, MotivoCancelacion = @p1 WHERE IdTurno = @p2`,
+			[
+				{ value: STATUS_CANCELADO, type: 'TinyInt' },
+				{ value: motPersist, type: 'VarChar' },
+				{ value: id, type: 'Int' },
+			],
+		);
+	}
+	return {
+		idTurno: id,
+		status: STATUS_CANCELADO,
+		origenCancelacion: origenNorm,
+		canceladoPor:
+			origenNorm === 'PACIENTE'
+				? 'Paciente (portal)'
+				: origenNorm === 'BOT'
+					? 'Paciente (WhatsApp)'
+					: null,
+	};
 }
 
 /**
@@ -1725,6 +1839,11 @@ async function actualizarTurno({ matricula, idTurno, idPaciente, observaciones }
 		    NumeroDocumento = @p1,
 		    Status = @p2,
 		    MotivoCancelacion = NULL`;
+	if (await ensureColumnasCancelacion()) {
+		sql += `,
+		    OperadorCancelacion = NULL,
+		    OrigenCancelacion = NULL`;
+	}
 	if (obs !== null) {
 		params.push({ value: obs, type: 'VarChar' });
 		sql += `, Observaciones = @p${params.length - 1}`;
@@ -2652,7 +2771,7 @@ async function buscarTurnosPorPaciente(idPaciente, opciones = {}) {
 		tipoTurno: t.TipoTurno,
 		esSobreturno: (Number(t.TipoTurno) || 0) === TIPO_TURNO_SOBRETURNO,
 		numeroDocumento: t.NumeroDocumento,
-		motivoCancelacion: t.MotivoCancelacion,
+		...resolverCancelacion(t),
 	}));
 }
 

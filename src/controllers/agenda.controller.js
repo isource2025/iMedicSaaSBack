@@ -183,7 +183,13 @@ async function cancelarTurno(req, res) {
 		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
-		const data = await service.cancelarTurno({ matricula: m, idTurno });
+		const data = await service.cancelarTurno({
+			matricula: m,
+			idTurno,
+			codOperador: _codOperadorSesion(req),
+			origen: req.body?.origen || req.query?.origen || 'USUARIO',
+			motivo: req.body?.motivo || req.query?.motivo,
+		});
 		res.json({ success: true, data });
 	} catch (e) {
 		_err(res, e);
