@@ -1091,23 +1091,26 @@ function _idsAutorSesion({ matricula, valorPersonal, codOperador }) {
 	return ids;
 }
 
-/** Pendiente = sin toma y sin resultado. Tomado/respondido: nadie edita ni borra, ni el admin. */
-async function _assertPedidoPendienteDelCreador(idPedido, sesion) {
+/** Solo el creador. Usado para editar solicitud (motivo) en cualquier estado. */
+async function _assertPedidoDelCreador(idPedido, sesion) {
 	const ped = await obtenerPorId(idPedido);
 	if (!ped) throw _httpError('Pedido no encontrado', 404);
+	const autor = Number(ped.MatriculaSolicitante);
+	const ids = _idsAutorSesion(sesion || {});
+	if (!Number.isFinite(autor) || autor <= 0 || !ids.includes(autor)) {
+		throw _httpError('Solo quien solicitó el pedido puede modificarlo.', 403);
+	}
+	return ped;
+}
+
+/** Pendiente = sin toma y sin resultado. Tomado/respondido: no se elimina. */
+async function _assertPedidoPendienteDelCreador(idPedido, sesion) {
+	const ped = await _assertPedidoDelCreador(idPedido, sesion);
 	if (ped.Cumplido || Number(ped.IdProtocolo) > 0) {
 		throw _httpError('El pedido ya fue respondido. Solo se puede visualizar.', 409);
 	}
 	if (ped.Tomado) {
 		throw _httpError('El pedido ya fue tomado. Solo se puede visualizar.', 409);
-	}
-	const autor = Number(ped.MatriculaSolicitante);
-	const ids = _idsAutorSesion(sesion || {});
-	if (!Number.isFinite(autor) || autor <= 0 || !ids.includes(autor)) {
-		throw _httpError(
-			'Solo quien creó el pedido puede modificarlo o eliminarlo mientras está pendiente.',
-			403,
-		);
 	}
 	return ped;
 }
@@ -1125,7 +1128,28 @@ async function actualizarPedido({
 }) {
 	const id = Number(idPedido);
 	if (!Number.isFinite(id) || id <= 0) throw _httpError('idPedido inválido');
-	await _assertPedidoPendienteDelCreador(id, { matricula, valorPersonal, codOperador });
+	const ped = await _assertPedidoDelCreador(id, { matricula, valorPersonal, codOperador });
+
+	const urgRaw = String(estadoUrgencia || ped.EstadoUrgencia || 'Normal').trim();
+	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
+	const notasFinal = notas != null ? _s(notas, 5000) : _s(ped.NotasObservacion, 5000);
+
+	const bloqueado = !!(ped.Cumplido || Number(ped.IdProtocolo) > 0 || ped.Tomado);
+	if (bloqueado) {
+		// Ya tomado/respondido: solo el motivo/notas y la urgencia del solicitante.
+		await executeQuery(
+			`UPDATE dbo.imPedidosEstudios
+			 SET NotasObservacion = @p1,
+			     EstadoUrgencia = @p2
+			 WHERE IdPedido = @p0`,
+			[
+				{ value: id, type: 'Int' },
+				{ value: notasFinal, type: 'VarChar' },
+				{ value: urgencia, type: 'VarChar' },
+			],
+		);
+		return obtenerPorId(id);
+	}
 
 	if (!String(idSectorReceptor || '').trim()) {
 		throw _httpError('El servicio destino es obligatorio');
@@ -1135,8 +1159,6 @@ async function actualizarPedido({
 	if (codPractica <= 0) {
 		throw _httpError(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
 	}
-	const urgRaw = String(estadoUrgencia || 'Normal').trim();
-	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
 
 	await executeQuery(
 		`UPDATE dbo.imPedidosEstudios
@@ -1149,7 +1171,7 @@ async function actualizarPedido({
 		   AND (IdProtocolo IS NULL OR IdProtocolo = 0)`,
 		[
 			{ value: id, type: 'Int' },
-			{ value: _s(notas, 5000), type: 'VarChar' },
+			{ value: notasFinal, type: 'VarChar' },
 			{ value: codPractica, type: 'Int' },
 			{ value: urgencia, type: 'VarChar' },
 			{ value: _padSector(idSectorReceptor), type: 'VarChar' },

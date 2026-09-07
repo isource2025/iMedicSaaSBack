@@ -352,6 +352,33 @@ async function actualizarRespuesta({
 	return obtenerPorId(idPedido, 'LEGACY');
 }
 
+async function actualizar({
+	idPedido,
+	matricula,
+	valorPersonal,
+	codOperador,
+	idSectorReceptor,
+	motivo,
+	estadoUrgencia,
+}) {
+	const ped = await estudiosService.obtenerPorId(idPedido);
+	if (!ped || Number(ped.IdTipoPedido) !== ID_TIPO_INTERCONSULTA) {
+		throw _httpError('Interconsulta no encontrada', 404);
+	}
+	await estudiosService.actualizarPedido({
+		idPedido,
+		matricula,
+		valorPersonal,
+		codOperador,
+		idTipoPedido: ped.IdTipoPedido,
+		idPractica: ped.CodigoPractica,
+		idSectorReceptor: idSectorReceptor || ped.SectorReceptor,
+		notas: motivo,
+		estadoUrgencia,
+	});
+	return obtenerPorId(idPedido, 'LEGACY');
+}
+
 /** @deprecated solo lectura de filas web antiguas; no usar para crear nuevas */
 async function crearWebLegacy(data) {
 	const fechaClarion = convertirFechaAClarion(data.FechaSolicitud);
@@ -387,5 +414,6 @@ module.exports = {
 	liberar,
 	cumplir,
 	actualizarRespuesta,
+	actualizar,
 	crearWebLegacy,
 };

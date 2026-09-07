@@ -253,6 +253,33 @@ async function actualizarRespuesta(req, res) {
 	}
 }
 
+async function actualizar(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const body = req.body || {};
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del solicitante',
+			});
+		}
+		const data = await interconsultasService.actualizar({
+			idPedido,
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			idSectorReceptor: body.idSectorReceptor ?? body.IdSectorReceptor,
+			motivo: body.motivo ?? body.Motivo ?? body.notas ?? body.NotasObservacion,
+			estadoUrgencia: body.estadoUrgencia ?? body.EstadoUrgencia,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[interconsultas] actualizar:', err.message);
+		return _err(res, err);
+	}
+}
+
 module.exports = {
 	listarPorVisita,
 	listarSectores,
@@ -263,4 +290,5 @@ module.exports = {
 	liberar,
 	cumplir,
 	actualizarRespuesta,
+	actualizar,
 };

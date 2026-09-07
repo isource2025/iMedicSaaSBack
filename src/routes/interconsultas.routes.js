@@ -28,6 +28,7 @@ router.get('/pendientes', ver, interconsultasController.listarPendientes);
 router.get('/detalle/:id', ver, interconsultasController.obtenerPorId);
 router.get('/:idVisita', ver, interconsultasController.listarPorVisita);
 router.post('/', crear, interconsultasController.crear);
+router.put('/:idPedido', atender, interconsultasController.actualizar);
 router.post('/:idPedido/tomar', atender, interconsultasController.tomar);
 router.post('/:idPedido/liberar', atender, interconsultasController.liberar);
 router.post('/:idPedido/cumplir', atender, interconsultasController.cumplir);
