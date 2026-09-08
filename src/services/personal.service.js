@@ -597,12 +597,21 @@ async function crear(data) {
 		}
 	}
 
-	const idRolAlta = Number(data.idRol ?? data.IdRol ?? data.Rol);
+	const idRolesAlta = [
+		...new Set(
+			(Array.isArray(data.IdRoles) ? data.IdRoles : Array.isArray(data.idRoles) ? data.idRoles : [])
+				.map((x) => Number(x))
+				.filter((n) => Number.isFinite(n) && n > 0),
+		),
+	];
+	const idRolAlta = Number(data.idRol ?? data.IdRol ?? data.Rol) || idRolesAlta[0];
 	if (!Number.isFinite(idRolAlta) || idRolAlta <= 0) {
 		const e = new Error('El rol es obligatorio');
 		e.statusCode = 400;
 		throw e;
 	}
+	if (!idRolesAlta.length) idRolesAlta.push(idRolAlta);
+	if (!idRolesAlta.includes(idRolAlta)) idRolesAlta.unshift(idRolAlta);
 
 	const rollbackAlta = async (valorAlta) => {
 		const idParam = [{ value: valorAlta, type: 'Int' }];
@@ -711,7 +720,7 @@ async function crear(data) {
 
 			try {
 				const rolesService = require('./roles.service');
-				await rolesService.asignarRolAPersonal(nuevoValor, idRolAlta, {
+				await rolesService.asignarRolesAPersonal(nuevoValor, idRolesAlta, idRolAlta, {
 					deferAuthSync,
 				});
 			} catch (roleErr) {
