@@ -1,21 +1,15 @@
 const express = require('express');
-const multer = require('multer');
 const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { restoreTenantFromRequest } = require('../context/tenantContext');
 const miPerfilController = require('../controllers/miPerfil.controller');
-const uploadFoto = multer({
-	storage: multer.memoryStorage(),
-	limits: { fileSize: 3 * 1024 * 1024 },
-});
 
 router.use(requireAuth, requireTenant);
 router.get('/', miPerfilController.obtenerPerfil);
-router.put('/', miPerfilController.actualizarPerfil);
+router.put('/', miPerfilController.rechazarCambio);
 router.get('/foto', miPerfilController.obtenerFotoPerfil);
-router.put('/foto', uploadFoto.single('archivo'), restoreTenantFromRequest, miPerfilController.actualizarFotoPerfil);
-router.delete('/foto', miPerfilController.eliminarFotoPerfil);
+router.put('/foto', miPerfilController.rechazarCambio);
+router.delete('/foto', miPerfilController.rechazarCambio);
 router.get('/produccion-mes/convenios', miPerfilController.listarConveniosProduccion);
 router.get('/produccion-mes', miPerfilController.obtenerProduccionMes);
 

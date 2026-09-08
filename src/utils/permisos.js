@@ -166,7 +166,7 @@ const MODULOS = Object.freeze([
 		id: 'USUARIO',
 		label: 'Mi Perfil',
 		submodulos: [
-			{ id: 'PERFIL',     label: 'Mi Perfil',     path: '/dashboard/profile', acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
+			{ id: 'PERFIL',     label: 'Mi Perfil',     path: '/dashboard/profile', acciones: [ACCIONES.VER] },
 			{ id: 'PRODUCCION', label: 'Mi Producción',                              acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
 		],
 	},
@@ -272,7 +272,6 @@ const PLANTILLAS = Object.freeze({
 		'REPORTES.OCUPACION.VER',
 
 		'USUARIO.PERFIL.VER',
-		'USUARIO.PERFIL.EDITAR',
 		'USUARIO.PRODUCCION.VER',
 		'USUARIO.PRODUCCION.EXPORTAR',
 	]),
@@ -314,7 +313,6 @@ const PLANTILLAS = Object.freeze({
 		'REPORTES.OCUPACION.VER',
 
 		'USUARIO.PERFIL.VER',
-		'USUARIO.PERFIL.EDITAR',
 	]),
 
 	// ──────────────────────────────────────────────────────────────────────
@@ -352,7 +350,6 @@ const PLANTILLAS = Object.freeze({
 		'FACTURACION.LIQUIDACIONES.GESTIONAR',
 
 		'USUARIO.PERFIL.VER',
-		'USUARIO.PERFIL.EDITAR',
 	]),
 
 	// ──────────────────────────────────────────────────────────────────────
@@ -376,7 +373,6 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.ADJUNTOS.ELIMINAR',
 
 		'USUARIO.PERFIL.VER',
-		'USUARIO.PERFIL.EDITAR',
 	]),
 });
 

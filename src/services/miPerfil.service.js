@@ -201,42 +201,26 @@ async function obtenerPerfilCompleto(valorPersonal) {
 	};
 }
 
-async function actualizarPerfilPersonal(valorPersonal, data = {}) {
-	const existente = await personalService.obtenerPorId(valorPersonal).catch(() => null);
-	if (existente) {
-		const payload = { ...existente, ...data };
-		await personalService.actualizar(valorPersonal, payload);
-	}
-	const idEmpresa = getTenantId();
-	if (isAuthCentralEnabled() && idEmpresa != null) {
-		try {
-			await nubeTenant.actualizarFichaPerfil(idEmpresa, valorPersonal, { ...(existente || {}), ...data });
-		} catch (e) {
-			console.warn('[miPerfil] actualizar ficha nube:', e.message);
-			if (!existente) {
-				const err = new Error(e.message || 'No se pudo guardar el perfil');
-				err.statusCode = e.statusCode || 500;
-				throw err;
-			}
-		}
-	} else if (!existente) {
-		const e = new Error('No se encontró el perfil de personal enlazado al usuario');
-		e.statusCode = 404;
-		throw e;
-	}
-	return obtenerPerfilCompleto(valorPersonal);
+async function actualizarPerfilPersonal() {
+	const e = new Error('Los datos de Mi Perfil no se pueden modificar');
+	e.statusCode = 403;
+	throw e;
 }
 
 async function obtenerFotoPerfil(valorPersonal) {
 	return personalService.obtenerFirmaPersonal(valorPersonal);
 }
 
-async function actualizarFotoPerfil(valorPersonal, buffer) {
-	return personalService.actualizarFirmaPersonal(valorPersonal, buffer);
+async function actualizarFotoPerfil() {
+	const e = new Error('Los datos de Mi Perfil no se pueden modificar');
+	e.statusCode = 403;
+	throw e;
 }
 
-async function eliminarFotoPerfil(valorPersonal) {
-	return personalService.eliminarFirmaPersonal(valorPersonal);
+async function eliminarFotoPerfil() {
+	const e = new Error('Los datos de Mi Perfil no se pueden modificar');
+	e.statusCode = 403;
+	throw e;
 }
 
 /**
