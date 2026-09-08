@@ -139,34 +139,33 @@ function _limpiarBasuraTextoResultado(texto) {
 		.trim();
 }
 
-function _fechaHoraArgentina(fechaPedido, isoFallback, horaFallback) {
-	let d = null;
-	if (fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())) {
-		d = fechaPedido;
-	} else if (fechaPedido != null && fechaPedido !== '') {
-		const t = Date.parse(String(fechaPedido));
-		if (Number.isFinite(t)) d = new Date(t);
-	}
-	if (!d && isoFallback) {
-		const raw = `${String(isoFallback).slice(0, 10)}T${String(horaFallback || '00:00').slice(0, 5)}:00Z`;
-		const t = Date.parse(raw);
-		if (Number.isFinite(t)) d = new Date(t);
-	}
-	if (!d) {
-		return {
-			FechaPedidoISO: isoFallback || null,
-			HoraPedido: horaFallback || null,
-		};
-	}
-	const tz = 'America/Argentina/Buenos_Aires';
+/**
+ * Instante para escribir en un DATETIME del HIS. tedious serializa los Date por
+ * sus campos UTC, así que la hora argentina va puesta ahí; con un offset -03:00
+ * el valor quedaría 3 horas adelantado respecto de lo que graba el escritorio.
+ */
+function _ahoraWallArgentina() {
+	const { fecha, hora } = partesFechaHoraArgentina(new Date());
+	return new Date(`${fecha}T${hora}Z`);
+}
+
+/**
+ * Los DATETIME del HIS guardan hora de pared argentina, sin zona. tedious los
+ * devuelve como Date etiquetado en UTC, así que convertirlo a Argentina resta
+ * 3 horas de más: se prefiere el valor que ya formateó SQL Server.
+ */
+function _fechaHoraArgentina(fechaPedido, isoSql, horaSql) {
+	const iso = _txt(isoSql);
+	if (iso) return { FechaPedidoISO: iso.slice(0, 10), HoraPedido: _txt(horaSql) };
+
+	const d =
+		fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())
+			? fechaPedido
+			: null;
+	if (!d) return { FechaPedidoISO: null, HoraPedido: _txt(horaSql) };
 	return {
-		FechaPedidoISO: d.toLocaleDateString('en-CA', { timeZone: tz }),
-		HoraPedido: d.toLocaleTimeString('en-GB', {
-			timeZone: tz,
-			hour: '2-digit',
-			minute: '2-digit',
-			hour12: false,
-		}),
+		FechaPedidoISO: d.toISOString().slice(0, 10),
+		HoraPedido: d.toISOString().slice(11, 16),
 	};
 }
 
@@ -273,7 +272,9 @@ function mapPedidoRow(row) {
 	return {
 		IdPedido: Number(row.IdPedido) || 0,
 		IdVisita: Number(row.IdVisita) || 0,
-		FechaPedido: row.FechaPedido,
+		FechaPedido: fh.FechaPedidoISO
+			? `${fh.FechaPedidoISO} ${fh.HoraPedido || '00:00'}`
+			: null,
 		FechaPedidoISO: fh.FechaPedidoISO,
 		HoraPedido: fh.HoraPedido,
 		IdTipoPedido: row.IdTipoPedido != null ? Number(row.IdTipoPedido) : null,
@@ -314,11 +315,18 @@ function mapPedidoRow(row) {
 		FechaResultado: row.FechaResultado || null,
 		PracticaFacturada:
 			row.PracticaFacturada != null ? Number(row.PracticaFacturada) : null,
-		// Quién respondió: profesional facturado > quien tomó el pedido > operador que cargó el resultado.
+		// Quién respondió: profesional facturado > quien tomó el pedido > operador que
+		// cargó el resultado (este último es el único dato disponible cuando la
+		// respuesta se escribió desde iMedic escritorio, que no liga facturación al
+		// protocolo).
 		MatriculaRealizador: cumplido
 			? row.MatriculaRealizador != null
 				? Number(row.MatriculaRealizador)
-				: matriculaToma
+				: matriculaToma != null
+					? matriculaToma
+					: row.ValorPersonalResultado != null
+						? Number(row.ValorPersonalResultado)
+						: null
 			: null,
 		RealizadorNombre: cumplido
 			? _txt(row.RealizadorNombre) ||
@@ -327,6 +335,8 @@ function mapPedidoRow(row) {
 			: null,
 		CodOperadorResultado:
 			row.CodOperadorResultado != null ? Number(row.CodOperadorResultado) : null,
+		ValorPersonalResultado:
+			row.ValorPersonalResultado != null ? Number(row.ValorPersonalResultado) : null,
 		CodOperadorToma: row.CodOperadorToma != null ? Number(row.CodOperadorToma) : null,
 		Tomado: tomado,
 		MatriculaToma: Number.isFinite(matriculaToma) && matriculaToma > 0 ? matriculaToma : null,
@@ -385,15 +395,16 @@ const SELECT_PEDIDO = `
   srv.Descripcion AS ServicioDescripcion,
   CASE WHEN pe.IdTipoPedido = 33 THEN 'INTERCONSULTA' ELSE 'ESTUDIO' END AS CategoriaPedido,
   pr.TextoProtocolo,
-  pr.FechaResultado,
+  CONVERT(varchar(16), pr.FechaResultado, 120) AS FechaResultado,
   realz.PracticaFacturada,
   realz.Matricula AS MatriculaRealizador,
   realz.RealizadorNombre,
   pr.CodOperador AS CodOperadorResultado,
   opRes.ApellidoNombre AS OperadorResultadoNombre,
+  opRes.ValorPersonal AS ValorPersonalResultado,
   toma.Matricula AS MatriculaToma,
   toma.CodOperador AS CodOperadorToma,
-  toma.FechaToma,
+  CONVERT(varchar(16), toma.FechaToma, 120) AS FechaToma,
   tomaPer.ApellidoNombre AS NombreToma,
   v.IDPACIENTE AS IdPaciente,
   LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) AS ClasePaciente,
@@ -497,22 +508,44 @@ const FROM_PEDIDO = `
       LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
     FROM dbo.imFacPracticas fac
     INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
-    LEFT JOIN dbo.imPersonal realiz
-      ON realiz.Matricula = fprof.Matricula OR realiz.Valor = fprof.Matricula
-    WHERE pe.IdProtocolo > 0 AND (
-      fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
-    )
-    ORDER BY CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END
+    LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
+    WHERE pe.IdProtocolo > 0 AND fac.IdProtocolo = pe.IdProtocolo
+    ORDER BY
+      CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
+      fprof.IDFacProfesional
   ) realz
   OUTER APPLY (
-    SELECT TOP 1 LTRIM(RTRIM(ISNULL(op.ApellidoNombre, ''))) AS ApellidoNombre, op.Matricula
-    FROM dbo.imPersonal op
+    SELECT TOP 1 op.ApellidoNombre, op.ValorPersonal
+    FROM (
+      SELECT
+        LTRIM(RTRIM(ISNULL(per.ApellidoNombre, ''))) AS ApellidoNombre,
+        per.Valor AS ValorPersonal,
+        0 AS Ord
+      FROM dbo.imPassword pw
+      INNER JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
+      WHERE pw.CodOperador = pr.CodOperador
+      UNION ALL
+      SELECT
+        LTRIM(RTRIM(
+          LTRIM(RTRIM(ISNULL(pw2.Apellido, ''))) +
+          CASE
+            WHEN LTRIM(RTRIM(ISNULL(pw2.Nombres, ''))) = '' THEN ''
+            ELSE ' ' + LTRIM(RTRIM(pw2.Nombres))
+          END
+        )),
+        pw2.ValorPersonal,
+        1
+      FROM dbo.imPassword pw2
+      WHERE pw2.CodOperador = pr.CodOperador
+      UNION ALL
+      SELECT LTRIM(RTRIM(ISNULL(per3.ApellidoNombre, ''))), per3.Valor, 2
+      FROM dbo.imPersonal per3
+      WHERE per3.Valor = pr.CodOperador
+    ) op
     WHERE pe.IdProtocolo > 0
       AND ISNULL(pr.CodOperador, 0) <> 0
-      AND (op.Valor = pr.CodOperador OR op.Matricula = pr.CodOperador)
-    ORDER BY
-      CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(op.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
-      CASE WHEN op.Valor = pr.CodOperador THEN 0 ELSE 1 END
+      AND NULLIF(op.ApellidoNombre, '') IS NOT NULL
+    ORDER BY op.Ord
   ) opRes
   LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
   LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
@@ -563,7 +596,7 @@ async function _obtenerToma(idPedido) {
 	await ensureTomaTable();
 	const rows = await executeQuery(
 		`SELECT TOP 1 t.IdPedido, t.Matricula, t.CodOperador, t.FechaToma,
-		        p.ApellidoNombre AS Nombre
+		        p.ApellidoNombre AS Nombre, p.Valor AS ValorPersonal
 		 FROM dbo.imPedidosEstudiosToma t
 		 LEFT JOIN dbo.imPersonal p ON p.Matricula = t.Matricula
 		 WHERE t.IdPedido = @p0`,
@@ -1023,14 +1056,10 @@ async function crearPedido({
 
 	const urgRaw = String(estadoUrgencia || 'Normal').trim();
 	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
-	// Wall-clock Argentina: evita que Railway (UTC) guarde/muestre 3 h corridas.
-	let now;
-	if (fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())) {
-		now = fechaPedido;
-	} else {
-		const { fecha, hora } = partesFechaHoraArgentina(new Date());
-		now = new Date(`${fecha}T${hora}-03:00`);
-	}
+	const now =
+		fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())
+			? fechaPedido
+			: _ahoraWallArgentina();
 
 	const pedRows = await executeQuery(
 		`INSERT INTO dbo.imPedidosEstudios (
@@ -1392,7 +1421,7 @@ async function liberarPedido({ idPedido, matricula }) {
 
 /**
  * Cumple un pedido: solo quien lo tomó.
- * Facturación: imFacProfesionales.Matricula = matrícula de la toma (pago al operador).
+ * Facturación: imFacProfesionales.Matricula = Valor de imPersonal de la toma.
  */
 async function cumplirPedido({
 	idPedido,
@@ -1426,8 +1455,12 @@ async function cumplirPedido({
 			403,
 		);
 	}
-	/** Matrícula que cobra en facturación = quien tomó el pedido. */
-	const matricula = Number(toma.Matricula);
+	/**
+	 * Quien cobra en facturación = quien tomó el pedido.
+	 * imFacProfesionales.Matricula guarda el Valor de imPersonal (no la matrícula):
+	 * así lo lee iMedic escritorio y así lo escribe protocolos.service.
+	 */
+	const matricula = Number(toma.ValorPersonal) || Number(toma.Matricula);
 
 	const pedRows = await executeQuery(
 		"SELECT TOP 1 pe.IdPedido, pe.IdVisita, pe.IdPractica, pe.IdProtocolo, pe.IdSectorReceptor FROM dbo.imPedidosEstudios pe WHERE pe.IdPedido = @p0",
@@ -1462,6 +1495,7 @@ async function cumplirPedido({
 	const now = new Date();
 	const fechaClarion = convertirFechaAClarion(fechaCalendarioArgentina(now));
 	const horaClarion = convertirHoraAClarion(horaWallArgentina(true, now));
+	const fechaWall = _ahoraWallArgentina();
 	const textoRtf = plainToRtf(texto);
 	const sqlId = crypto.randomUUID().toUpperCase();
 
@@ -1472,7 +1506,7 @@ async function cumplirPedido({
 	try {
 		const reqRes = new sql.Request(tx);
 		reqRes.input('visita', sql.Int, numeroVisita);
-		reqRes.input('fecha', sql.DateTime, now);
+		reqRes.input('fecha', sql.DateTime, fechaWall);
 		reqRes.input('texto', sql.VarChar(sql.MAX), textoRtf);
 		reqRes.input('codOp', sql.Int, codOp);
 		reqRes.input('servicio', sql.Char(4), sectorFac);
@@ -1576,6 +1610,7 @@ function _idsResultado(ped, toma, protoCodOperador) {
 	};
 	push(ped?.MatriculaRealizador);
 	push(ped?.MatriculaToma);
+	push(ped?.ValorPersonalResultado);
 	push(ped?.CodOperadorResultado);
 	push(ped?.CodOperadorToma);
 	push(toma?.Matricula);

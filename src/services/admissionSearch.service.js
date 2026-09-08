@@ -3,7 +3,6 @@ const { getTenantId } = require('../context/tenantContext');
 const {
 	convertirFechaClarionADate,
 	convertirHoraClarionAString,
-	partesFechaHoraArgentina,
 } = require('../utils/dateUtils');
 
 /** Matrícula genérica de sistema/admin en legacy (no es médico de turno). */
@@ -817,7 +816,7 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
       `
         SELECT
           pe.IdPedido,
-          pe.FechaPedido,
+          CONVERT(varchar(16), pe.FechaPedido, 120) AS FechaPedido,
           pe.NotasObservacion AS PedidoEstudio,
           pe.IdProtocolo,
           pe.EstadoUrgencia,
@@ -830,8 +829,8 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
             nom.Descripcion
           ))) AS PracticaDescripcion,
           pr.IdProtocolo AS ProtocoloResultadoId,
-          pr.FechaResultado,
-          pr.FechaCarga,
+          CONVERT(varchar(16), pr.FechaResultado, 120) AS FechaResultado,
+          CONVERT(varchar(16), pr.FechaCarga, 120) AS FechaCarga,
           pr.TextoProtocolo AS ResultadoEstudio,
           pr.NroProtocolo,
           pr.Estado AS EstadoResultado,
@@ -843,7 +842,8 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           CAST(NULL AS VARCHAR(200)) AS NombreToma
         FROM dbo.imPedidosEstudios pe
         LEFT JOIN dbo.imProtocolosResultados pr ON pe.IdProtocolo = pr.IdProtocolo AND pe.IdProtocolo > 0
-        LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pr.CodOperador
+        LEFT JOIN dbo.imPassword pwRes ON pwRes.CodOperador = pr.CodOperador
+        LEFT JOIN dbo.imPersonal opRes ON opRes.Valor = pwRes.ValorPersonal
         OUTER APPLY (
           SELECT TOP 1 LTRIM(RTRIM(ISNULL(p.ApellidoNombre, ''))) AS ApellidoNombre
           FROM dbo.imPersonal p
@@ -869,10 +869,9 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           SELECT TOP 1 fprof.Matricula, LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
           FROM dbo.imFacPracticas fac
           INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
-          LEFT JOIN dbo.imPersonal realiz ON realiz.Matricula = fprof.Matricula OR realiz.Valor = fprof.Matricula
-          WHERE pe.IdProtocolo > 0 AND (
-            fac.IdProtocolo = pe.IdProtocolo OR fac.Valor = pe.IdProtocolo
-          )
+          LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
+          WHERE pe.IdProtocolo > 0 AND fac.IdProtocolo = pe.IdProtocolo
+          ORDER BY fprof.IDFacProfesional
         ) realz
         WHERE pe.IdVisita = @param0
         ORDER BY pe.FechaPedido DESC, pe.IdPedido DESC
@@ -903,18 +902,7 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
       if (idProt > 0) return Number(adj.IdProtocolo) === idProt;
       return !adj.IdProtocolo || Number(adj.IdProtocolo) === 0;
     });
-    const fechaPedido = (() => {
-      let d = null;
-      if (e.FechaPedido instanceof Date && !Number.isNaN(e.FechaPedido.getTime())) {
-        d = e.FechaPedido;
-      } else if (e.FechaPedido) {
-        const t = Date.parse(String(e.FechaPedido));
-        if (Number.isFinite(t)) d = new Date(t);
-      }
-      if (!d) return e.FechaPedido ? String(e.FechaPedido) : null;
-      const p = partesFechaHoraArgentina(d);
-      return `${p.fecha} ${p.horaCorta}`;
-    })();
+    const fechaPedido = e.FechaPedido ? String(e.FechaPedido) : null;
     const matriculaSol =
       e.MatriculaSolicitante != null && Number(e.MatriculaSolicitante) > 0
         ? Number(e.MatriculaSolicitante)
