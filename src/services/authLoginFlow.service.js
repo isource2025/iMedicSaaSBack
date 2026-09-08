@@ -12,19 +12,33 @@ const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, ACCESS_TOKEN_EXPIRATION } = require('../config/jwt');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const { isPlatformSuperAdminIdentity } = require('../config/tenantIdentity');
+const matrizPermisos = require('../utils/permisos');
+
+const ROL_SUPER_ADMIN = Object.freeze({ id: 5, nombre: 'SUPER_ADMIN', nivel: 200 });
+
+function esCuentaPlataforma(userData, username) {
+	return isPlatformSuperAdminIdentity({
+		username:
+			username ||
+			userData?.NombreRed ||
+			userData?.Nombrered ||
+			userData?.nombrered,
+		idEmpresa: userData?.IdEmpresa,
+		valorPersonal: userData?.ValorPersonal,
+	});
+}
 
 function resolverRol(userData) {
-	const { isReservedUsername, PLATFORM_EMPRESA_ID } = require('../config/tenantIdentity');
 	const u = String(
 		userData.NombreRed || userData.Nombrered || userData.nombrered || '',
 	)
 		.trim()
 		.toLowerCase();
-	const idEmp = Number(userData.IdEmpresa);
-	const esPlataforma =
-		idEmp === PLATFORM_EMPRESA_ID || isReservedUsername(u);
+	if (esCuentaPlataforma(userData, u)) {
+		return { ...ROL_SUPER_ADMIN };
+	}
 
-	// Plataforma: Rol SUPER_ADMIN desde join o Grupo 11 con usuario de plataforma
 	const rolNombre = String(userData.RolNombre || '').trim().toUpperCase();
 	if (userData.RolId != null || rolNombre) {
 		const id =
@@ -59,14 +73,11 @@ function resolverRol(userData) {
 	}
 
 	if (Number(userData.Grupo) === 11) {
-		if (esPlataforma) {
-			return { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
-		}
 		return { id: 1, nombre: 'ADMIN', nivel: 100 };
 	}
 
 	// Cuentas hospital “admin*” de provisión (adminvidal, etc.) → ADMIN
-	if (/^admin[a-z0-9._-]*$/i.test(u) && !esPlataforma) {
+	if (/^admin[a-z0-9._-]*$/i.test(u)) {
 		return { id: 1, nombre: 'ADMIN', nivel: 100 };
 	}
 
@@ -177,12 +188,151 @@ async function resolverSectorSesion(username, idEmpresaSesion, usuario, esSuperA
 	throw e;
 }
 
-async function resolverEmpresaSesion({
+async function emitirTokenSesion({ res, username, usuario, rol, idEmpresa, sectorInfo, ip, userAgent }) {
+	const jwtPayload = buildJwtPayload(
+		usuario,
+		idEmpresa,
+		rol,
+		sectorInfo.idSector,
+		sectorInfo.sectores,
+	);
+	if (isAuthCentralEnabled()) {
+		const { accessToken, refreshToken } = await sessionService.createSession({
+			valorPersonal: usuario.ValorPersonal,
+			username,
+			idEmpresa,
+			ip,
+			userAgent,
+			jwtPayload,
+		});
+		sessionService.setAuthCookies(res, accessToken, refreshToken);
+		return accessToken;
+	}
+	return jwt.sign({ ...jwtPayload, sessionId: null }, JWT_SECRET, {
+		expiresIn: ACCESS_TOKEN_EXPIRATION,
+	});
+}
+
+function payloadUsuarioLogin(usuario, username) {
+	const display = buildDisplayName(usuario, username);
+	return {
+		idCodOperador: usuario.CodOperador,
+		idValorpersonal: usuario.ValorPersonal,
+		matricula:
+			usuario.Matricula != null && Number(usuario.Matricula) > 0
+				? Number(usuario.Matricula)
+				: null,
+		nombre: display.nombre,
+		apellido: display.apellido,
+		nombreRed:
+			usuario.Nombrered ||
+			usuario.nombrered ||
+			usuario.NombreRed ||
+			String(username || '').trim() ||
+			null,
+	};
+}
+
+/** Login de plataforma: SUPER_ADMIN, sin tenant, pantalla /dashboard/super-admin. */
+async function completarLoginPlataforma({ res, username, usuario, ip, userAgent }) {
+	const rol = { ...ROL_SUPER_ADMIN };
+	usuario.RolNombre = rol.nombre;
+	usuario.RolId = rol.id;
+	usuario.RolNivel = rol.nivel;
+	const sectorInfo = {
+		idPersonal: usuario.ValorPersonal,
+		idSector: '',
+		descripcion: 'Plataforma',
+		sectores: [],
+	};
+	const token = await emitirTokenSesion({
+		res,
+		username,
+		usuario,
+		rol,
+		idEmpresa: null,
+		sectorInfo,
+		ip,
+		userAgent,
+	});
+	const permisos = [...matrizPermisos.permisosDeRol('SUPER_ADMIN')];
+	return {
+		success: true,
+		step: 'COMPLETE',
+		mensaje: 'Inicio de sesión exitoso',
+		usuario: payloadUsuarioLogin(usuario, username),
+		rol,
+		roles: [{ ...rol, esPrincipal: true }],
+		permisos,
+		idEmpresa: null,
+		sectorSeleccionado: {
+			idPersonal: sectorInfo.idPersonal,
+			idSector: '',
+			descripcion: 'Plataforma',
+		},
+		sectoresAsignados: [],
+		empresaSeleccionada: null,
+		modulosEmpresa: null,
+		token,
+		fuente: 'db',
+	};
+}
+
+async function completarLogin({
+	res,
 	username,
+	usuario,
 	idEmpresaSesion,
 	idEmpresaBody,
-	esSuperAdmin,
+	idSectorBody,
+	ip,
+	userAgent,
 }) {
+	let rolPreliminar = resolverRol(usuario);
+	// SUPER_ADMIN solo existe en la plataforma. Dentro de un hospital el rol
+	// llega de un imPersonal.Rol='5' desalineado, y el JWT se firma con este rol
+	// preliminar: dejarlo pasar le daría los permisos PLATAFORMA.* (credenciales
+	// SQL de todos los tenants) a una cuenta de un solo hospital.
+	if (
+		rolPreliminar?.nombre === 'SUPER_ADMIN' &&
+		idEmpresaSesion != null &&
+		!esCuentaPlataforma(usuario, username)
+	) {
+		console.warn(
+			`[auth.login] ${username} (empresa ${idEmpresaSesion}) tiene rol 5 en el tenant: se degrada a ADMIN`,
+		);
+		rolPreliminar = { id: 1, nombre: 'ADMIN', nivel: 100 };
+		usuario.RolId = 1;
+		usuario.RolNombre = 'ADMIN';
+		usuario.RolNivel = 100;
+	}
+	// Propagar al usuario para exención de sector y permisos (Grupo 11 / admin*)
+	if (rolPreliminar) {
+		if (!usuario.RolNombre) usuario.RolNombre = rolPreliminar.nombre;
+		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
+		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
+	}
+	// La cuenta de plataforma va siempre al panel SaaS, sin tenant.
+	if (esCuentaPlataforma(usuario, username)) {
+		return completarLoginPlataforma({ res, username, usuario, ip, userAgent });
+	}
+
+	let esSuperAdmin =
+		rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
+	if (!esSuperAdmin && idEmpresaSesion == null) {
+		try {
+			esSuperAdmin = await authService.esSuperAdminPorUsername(username);
+		} catch (e) {
+			console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
+		}
+	}
+
+	// Rol SUPER_ADMIN de un hospital: conserva su empresa, no es cuenta de
+	// plataforma. Solo sin empresa autenticada la sesión queda sin tenant.
+	if (esSuperAdmin && idEmpresaSesion == null) {
+		return completarLoginPlataforma({ res, username, usuario, ip, userAgent });
+	}
+
 	let empresaSeleccionada = null;
 	let modulosEmpresa = null;
 	let idEmpresaEfectiva = idEmpresaSesion;
@@ -258,57 +408,6 @@ async function resolverEmpresaSesion({
 	) {
 		idEmpresaEfectiva = Number(idEmpresaSesion);
 	}
-
-	return { idEmpresaEfectiva, empresaSeleccionada, modulosEmpresa };
-}
-
-async function completarLogin({
-	res,
-	username,
-	usuario,
-	idEmpresaSesion,
-	idEmpresaBody,
-	idSectorBody,
-	ip,
-	userAgent,
-}) {
-	let rolPreliminar = resolverRol(usuario);
-	// Propagar al usuario para exención de sector y permisos (Grupo 11 / admin*)
-	if (rolPreliminar) {
-		if (!usuario.RolNombre) usuario.RolNombre = rolPreliminar.nombre;
-		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
-		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
-	}
-	let esSuperAdmin =
-		rolPreliminar?.nombre === 'SUPER_ADMIN' || Number(rolPreliminar?.id) === 5;
-	if (!esSuperAdmin && idEmpresaSesion == null) {
-		try {
-			esSuperAdmin = await authService.esSuperAdminPorUsername(username);
-		} catch (e) {
-			console.warn('[auth.login] esSuperAdminPorUsername:', e.message);
-		}
-	}
-
-	// SUPER_ADMIN de plataforma: la sesión no se ata a ningún hospital. El panel
-	// de empresas opera siempre con el idEmpresa explícito de cada ruta.
-	const esPlataforma = esSuperAdmin && idEmpresaSesion == null;
-
-	// La detección por username puede llegar sin rol en la fila de imPassword.
-	if (esPlataforma && rolPreliminar?.nombre !== 'SUPER_ADMIN') {
-		rolPreliminar = { id: 5, nombre: 'SUPER_ADMIN', nivel: 200 };
-		usuario.RolNombre = 'SUPER_ADMIN';
-		usuario.RolId = 5;
-		usuario.RolNivel = 200;
-	}
-
-	const { idEmpresaEfectiva, empresaSeleccionada, modulosEmpresa } = esPlataforma
-		? { idEmpresaEfectiva: null, empresaSeleccionada: null, modulosEmpresa: null }
-		: await resolverEmpresaSesion({
-				username,
-				idEmpresaSesion,
-				idEmpresaBody,
-				esSuperAdmin,
-			});
 
 	let sectorInfo;
 	try {

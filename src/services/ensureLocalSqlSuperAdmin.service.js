@@ -2,11 +2,49 @@
  * Superadmin local (SQL Server) cuando AUTH MySQL está off (LOCAL_DEV_ONLY).
  */
 const passwordService = require('./password.service');
-const { SA_USER, SA_PASS } = require('../config/tenantIdentity');
+const {
+	SA_USER,
+	SA_PASS,
+	PLATFORM_VALOR_MIN,
+} = require('../config/tenantIdentity');
 const { isLocalDevOnly } = require('../config/authCentralDb');
+const { isLocalSqlHost } = require('../config/database');
+
+async function asegurarRolSuperAdminPersonal(executeQuery, valorPersonal) {
+	await executeQuery(
+		`
+    IF NOT EXISTS (SELECT 1 FROM dbo.imPersonal WHERE Valor = @p0)
+      INSERT INTO dbo.imPersonal (Valor, Rol, ApellidoNombre, Matricula)
+      VALUES (@p0, '5', 'Super, Admin Plataforma', @p0)
+    ELSE
+      UPDATE dbo.imPersonal SET Rol = '5' WHERE Valor = @p0
+    `,
+		[{ value: valorPersonal }],
+	).catch(() => {});
+}
+
+async function nextPlatformValor(executeQuery) {
+	let vp = Math.max(PLATFORM_VALOR_MIN + 1, 1000001);
+	const maxR = await executeQuery(
+		`SELECT ISNULL(MAX(ValorPersonal), 0) AS m FROM dbo.imPassword WHERE ValorPersonal >= @p0`,
+		[{ value: PLATFORM_VALOR_MIN }],
+	).catch(() => [{ m: 0 }]);
+	const m = Number(maxR[0]?.m) || 0;
+	if (m >= vp) vp = m + 1;
+	return vp;
+}
 
 async function ensureLocalSqlSuperAdmin() {
 	if (!isLocalDevOnly()) return { skipped: true };
+	// LOCAL_DEV_ONLY admite apuntar al SQL de un hospital por VPN. Crear ahí la
+	// cuenta de plataforma la mete dentro de los datos del tenant (y el sync la
+	// sube a MySQL como usuario del hospital): solo escribir en SQL local.
+	if (!isLocalSqlHost(process.env.DB_SERVER)) {
+		console.warn(
+			`[ensureLocalSqlSuperAdmin] omitido: DB_SERVER="${process.env.DB_SERVER}" no es local`,
+		);
+		return { skipped: true, reason: 'sql-remoto' };
+	}
 	const { executeQuery } = require('../models/db');
 
 	const existing = await executeQuery(
@@ -18,35 +56,42 @@ async function ensureLocalSqlSuperAdmin() {
 		[{ value: SA_USER, type: 'VarChar' }],
 	).catch(() => []);
 
-	const passOk =
-		existing[0] &&
-		(await passwordService.verifyPassword(SA_PASS, existing[0]));
+	const row = existing[0];
+	const vpExistente = row ? Number(row.ValorPersonal) : null;
+	const esCuentaHospital =
+		Number.isFinite(vpExistente) && vpExistente < PLATFORM_VALOR_MIN;
 
-	if (passOk) {
-		return { ok: true, repaired: false, source: 'sql' };
-	}
-
-	if (existing[0]) {
+	// Username "superadmin" usurpado por un personal de hospital (p.ej. Vidal).
+	if (row && esCuentaHospital) {
 		await executeQuery(
 			`
       UPDATE dbo.imPassword
-      SET Password = @p1, Grupo = 11, Nombres = 'Admin', Apellido = 'Super'
+      SET NombreRed = CONCAT('u', CAST(ValorPersonal AS VARCHAR(20)))
       WHERE ValorPersonal = @p0
+        AND LOWER(LTRIM(RTRIM(CAST(NombreRed AS VARCHAR(100))))) = LOWER(@p1)
       `,
 			[
-				{ value: existing[0].ValorPersonal },
-				{ value: SA_PASS, type: 'VarChar' },
+				{ value: vpExistente },
+				{ value: SA_USER, type: 'VarChar' },
 			],
+		).catch(() => {});
+		console.warn(
+			`[ensureLocalSqlSuperAdmin] liberó username ${SA_USER} del personal ${vpExistente}`,
 		);
-	} else {
-		// Usar id alto que no choque con Clarion típico (<1e6)
-		let vp = 1000001;
-		const maxR = await executeQuery(
-			`SELECT ISNULL(MAX(ValorPersonal), 0) AS m FROM dbo.imPassword WHERE ValorPersonal >= 1000000`,
-		).catch(() => [{ m: 0 }]);
-		const m = Number(maxR[0]?.m) || 0;
-		if (m >= vp) vp = m + 1;
+	}
 
+	const plataforma = await executeQuery(
+		`
+    SELECT TOP 1 ValorPersonal, NombreRed, Password, Grupo
+    FROM dbo.imPassword
+    WHERE LOWER(LTRIM(RTRIM(CAST(NombreRed AS VARCHAR(100))))) = LOWER(@p0)
+    `,
+		[{ value: SA_USER, type: 'VarChar' }],
+	).catch(() => []);
+
+	let vp = plataforma[0] ? Number(plataforma[0].ValorPersonal) : null;
+	if (!Number.isFinite(vp) || vp < PLATFORM_VALOR_MIN) {
+		vp = await nextPlatformValor(executeQuery);
 		await executeQuery(
 			`
       INSERT INTO dbo.imPassword (ValorPersonal, NombreRed, Password, Grupo, Nombres, Apellido, CodOperador)
@@ -58,7 +103,6 @@ async function ensureLocalSqlSuperAdmin() {
 				{ value: SA_PASS, type: 'VarChar' },
 			],
 		).catch(async (e) => {
-			// Esquema mínimo
 			console.warn('[ensureLocalSqlSuperAdmin] insert full failed, retry min:', e.message);
 			await executeQuery(
 				`
@@ -72,20 +116,23 @@ async function ensureLocalSqlSuperAdmin() {
 				],
 			);
 		});
-
+	} else {
 		await executeQuery(
 			`
-      IF NOT EXISTS (SELECT 1 FROM dbo.imPersonal WHERE Valor = @p0)
-        INSERT INTO dbo.imPersonal (Valor, Rol, ApellidoNombre, Matricula)
-        VALUES (@p0, '5', 'Super, Admin Plataforma', @p0)
-      ELSE
-        UPDATE dbo.imPersonal SET Rol = '5' WHERE Valor = @p0
+      UPDATE dbo.imPassword
+      SET Password = @p1, Grupo = 11, Nombres = 'Admin', Apellido = 'Super', NombreRed = @p2
+      WHERE ValorPersonal = @p0
       `,
-			[{ value: vp }],
-		).catch(() => {});
+			[
+				{ value: vp },
+				{ value: SA_PASS, type: 'VarChar' },
+				{ value: SA_USER, type: 'VarChar' },
+			],
+		);
 	}
 
-	// Asegurar roles de catálogo en imRoles si existe
+	await asegurarRolSuperAdminPersonal(executeQuery, vp);
+
 	await executeQuery(
 		`
     IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'imRoles')
@@ -133,7 +180,7 @@ async function ensureLocalSqlSuperAdmin() {
 	const ok =
 		check[0] && (await passwordService.verifyPassword(SA_PASS, check[0]));
 	console.log(
-		`[ensureLocalSqlSuperAdmin] ${ok ? 'OK' : 'FAIL'} user=${SA_USER} (LOCAL SQL)`,
+		`[ensureLocalSqlSuperAdmin] ${ok ? 'OK' : 'FAIL'} user=${SA_USER} vp=${check[0]?.ValorPersonal} (LOCAL SQL)`,
 	);
 	return { ok, repaired: true, source: 'sql', valor: check[0]?.ValorPersonal };
 }

@@ -210,4 +210,5 @@ module.exports = {
   logPlatformDbEnvStatus,
   getPlatformDbName,
   isPlatformSqlConfigured,
+  isLocalSqlHost,
 };

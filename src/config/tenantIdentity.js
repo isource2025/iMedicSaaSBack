@@ -57,6 +57,22 @@ function isReservedUsername(nombreRed) {
 }
 
 /**
+ * Cuenta de plataforma SaaS: nunca debe operar como usuario de un hospital.
+ *
+ * IdEmpresa=0 NO alcanza por sí solo: la migración dejó ahí cuentas viejas de
+ * hospital (ADMISION, LABORATORIO, etc.) que no son de plataforma. Y un
+ * IdEmpresa ausente tampoco vale como 0, porque las filas del SQL físico no
+ * traen la columna y cualquier ValorPersonal alto del tenant escalaría.
+ */
+function isPlatformSuperAdminIdentity({ username, idEmpresa, valorPersonal } = {}) {
+	if (isReservedUsername(username)) return true;
+	return (
+		toIdEmpresa(idEmpresa) === PLATFORM_EMPRESA_ID &&
+		isPlatformValorPersonal(valorPersonal)
+	);
+}
+
+/**
  * Un id de personal en tenant es válido si es > 0 (igual al SQL físico).
  * ValorPersonal=0 es basura / incompleto y no se sincroniza a MySQL.
  * El rango ≥ PLATFORM_VALOR_MIN solo restringe a la plataforma (IdEmpresa=0);
@@ -98,6 +114,7 @@ module.exports = {
 	isTenantEmpresa,
 	isPlatformValorPersonal,
 	isReservedUsername,
+	isPlatformSuperAdminIdentity,
 	isValidTenantPersonalId,
 	canSyncPasswordRowToTenant,
 	canSyncPersonalRowToTenant,

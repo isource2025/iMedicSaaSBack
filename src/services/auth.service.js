@@ -219,15 +219,19 @@ const resolverIdEmpresaLogin = async ({
 	empresasUsuario,
 	esSuperAdmin = false,
 }) => {
-	// Usuario de clínica: la empresa autenticada es la del JWT (no reemplazar por defaults).
+	// Usuario de clínica: la empresa autenticada es la del JWT (no reemplazar por
+	// defaults). Vale también para un rol SUPER_ADMIN del propio hospital: solo la
+	// cuenta de plataforma opera sin tenant, y esa nunca llega con empresa.
 	if (
-		!esSuperAdmin &&
 		idEmpresaSesion != null &&
 		Number.isFinite(Number(idEmpresaSesion)) &&
 		Number(idEmpresaSesion) > 0
 	) {
 		return Number(idEmpresaSesion);
 	}
+
+	// Sin empresa autenticada: el superadmin de plataforma no se ata a un hospital.
+	if (esSuperAdmin) return null;
 
 	let id =
 		idEmpresaSesion != null && Number.isFinite(Number(idEmpresaSesion)) && Number(idEmpresaSesion) > 0

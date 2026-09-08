@@ -14,6 +14,7 @@ const authCentralService = require('./authCentral.service');
 const passwordService = require('./password.service');
 const { AUTH_FAIL_MESSAGE } = require('../config/security');
 const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
+const { isReservedUsername } = require('../config/tenantIdentity');
 
 const DISCOVER_MAX = Number(process.env.TENANT_DISCOVER_MAX) || 25;
 
@@ -232,6 +233,11 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	}
 
 	if (idEmpresaPreferida != null && idEmpresaPreferida !== '') {
+		if (isReservedUsername(u)) {
+			const e = new Error(AUTH_FAIL_MESSAGE);
+			e.statusCode = 401;
+			throw e;
+		}
 		const id = Number(idEmpresaPreferida);
 		if (cloudOnly) {
 			try {
@@ -263,6 +269,11 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 			if (usuarioPlataformaCentral) {
 				return { idEmpresa: null, usuario: usuarioPlataformaCentral };
 			}
+			if (isReservedUsername(u)) {
+				const e = new Error(AUTH_FAIL_MESSAGE);
+				e.statusCode = 401;
+				throw e;
+			}
 
 			const matchesCentral = await authCentralService.autenticarEnTodasLasEmpresas(u, p);
 			const uniqueCentral = dedupeEmpresasPorId(matchesCentral);
@@ -293,9 +304,18 @@ async function resolverLogin(username, password, idEmpresaPreferida = null) {
 	if (usuarioPlataforma) {
 		const rolId = usuarioPlataforma.RolId ?? usuarioPlataforma.Rol;
 		const rolNombre = String(usuarioPlataforma.RolNombre || '').toUpperCase();
-		if (rolNombre === 'SUPER_ADMIN' || String(rolId) === '5') {
+		if (
+			isReservedUsername(u) ||
+			rolNombre === 'SUPER_ADMIN' ||
+			String(rolId) === '5'
+		) {
 			return { idEmpresa: null, usuario: usuarioPlataforma };
 		}
+	}
+	if (isReservedUsername(u)) {
+		const e = new Error(AUTH_FAIL_MESSAGE);
+		e.statusCode = 401;
+		throw e;
 	}
 
 	const candidatos = await descubrirEmpresasPorUsuario(u);

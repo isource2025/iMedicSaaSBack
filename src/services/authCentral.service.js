@@ -131,7 +131,12 @@ async function autenticarPlataforma(username, password) {
 			row.ValorPersonal,
 			password,
 		);
-		return mapUsuario(row);
+		const usuario = mapUsuario(row);
+		usuario.RolId = 5;
+		usuario.RolNombre = 'SUPER_ADMIN';
+		usuario.RolNivel = 200;
+		usuario.PersonalRol = '5';
+		return usuario;
 	}
 	return null;
 }
@@ -162,6 +167,8 @@ async function autenticarTenant(idEmpresa, username, password) {
 
 async function autenticarEnTodasLasEmpresas(username, password) {
 	if (!isAuthCentralEnabled()) return [];
+	const { isReservedUsername } = require('../config/tenantIdentity');
+	if (isReservedUsername(username)) return [];
 	const rows = await query(
 		`
     SELECT
