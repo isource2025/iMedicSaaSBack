@@ -53,6 +53,8 @@ const MODULOS = Object.freeze([
 		id: 'DASHBOARD',
 		label: 'Dashboard',
 		path: '/dashboard',
+		// Panel de control con métricas de la clínica. Solo está en la plantilla
+		// ADMIN: para habilitárselo a otro rol, agregarle 'DASHBOARD.INICIO.VER'.
 		submodulos: [
 			{ id: 'INICIO', label: 'Inicio', path: '/dashboard', acciones: [ACCIONES.VER] },
 		],
@@ -213,8 +215,6 @@ const PLANTILLAS = Object.freeze({
 	// MEDICO — atención clínica completa. Sólo lee secciones de enfermería.
 	// ──────────────────────────────────────────────────────────────────────
 	MEDICO: Object.freeze([
-		'DASHBOARD.INICIO.VER',
-
 		// Agenda propia (el back fuerza matricula = req.auth.matricula)
 		'TURNOS.AGENDA.VER',
 		'TURNOS.AGENDA.CREAR',
@@ -280,8 +280,6 @@ const PLANTILLAS = Object.freeze({
 	// ENFERMERO — control asistencial. Lee lo médico y CRUD lo de enfermería.
 	// ──────────────────────────────────────────────────────────────────────
 	ENFERMERO: Object.freeze([
-		'DASHBOARD.INICIO.VER',
-
 		'ADMISION.PACIENTES.VER',
 		'ADMISION.BUSQUEDA.VER',
 
@@ -320,7 +318,6 @@ const PLANTILLAS = Object.freeze({
 	// camas/agenda. Sin escritura médica ni de enfermería. ≠ ADMIN.
 	// ──────────────────────────────────────────────────────────────────────
 	ADMINISTRATIVO: Object.freeze([
-		..._soloVer('DASHBOARD'),
 		..._soloVer('TURNOS'),
 		..._soloVer('ADMISION'),
 		..._soloVer('INTERNACION', ['AUDITORIA_HC']),
@@ -357,8 +354,6 @@ const PLANTILLAS = Object.freeze({
 	// CRUD de adjuntos propios. Ven estudios para cumplir/adjuntar. Sin clínica.
 	// ──────────────────────────────────────────────────────────────────────
 	CARGA_HC: Object.freeze([
-		'DASHBOARD.INICIO.VER',
-
 		'ADMISION.PACIENTES.VER',
 		'ADMISION.BUSQUEDA.VER',
 		'ADMISION.TABLA.VER',
