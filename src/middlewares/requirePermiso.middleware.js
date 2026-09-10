@@ -4,41 +4,41 @@
  *
  * Debe usarse SIEMPRE después de `requireAuth`.
  *
- * Resolución de permisos:
- *   1) Lee permisos efectivos desde `permisos.service.permisosDeUsuario(valorPersonal)`
- *      (que consulta `imPersonal.Rol` → `imRolPermisos` y cachea por rol).
- *   2) Si la BD no devuelve permisos (sin sembrar), cae a la matriz hardcoded
- *      en `utils/permisos.js` usando el rol del JWT.
+ * Resolución de permisos (unión multi-rol):
+ *   1) `permisos.service.permisosDeUsuario` — une las plantillas de TODOS los
+ *      roles del personal (p. ej. MEDICO + PANEL_DATOS).
+ *   2) Si eso falla o viene vacío, cae a la plantilla del rol principal del JWT.
  */
 const permisosService = require('../services/permisos.service');
 const matriz = require('../utils/permisos');
 
-async function _resolverPermisosReq(req) {
-	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
-	if (
-		rn === 'ADMIN' ||
-		rn === 'SUPER_ADMIN' ||
-		rn === 'MEDICO' ||
-		rn === 'ADMINISTRATIVO' ||
-		rn === 'ENFERMERO' ||
-		rn === 'CARGA_HC' ||
-		rn === 'PANEL_DATOS'
-	) {
-		return matriz.permisosDeRol(rn);
-	}
+const ROLES_MATRIZ = new Set([
+	'ADMIN',
+	'SUPER_ADMIN',
+	'MEDICO',
+	'ADMINISTRATIVO',
+	'ENFERMERO',
+	'CARGA_HC',
+	'PANEL_DATOS',
+]);
 
-	let permisos = [];
+async function _resolverPermisosReq(req) {
 	try {
 		const r = await permisosService.permisosDeUsuario(req.valorPersonal);
-		permisos = Array.isArray(r) ? r : r?.permisos || [];
+		const permisos = Array.isArray(r) ? r : r?.permisos || [];
+		if (permisos.length) return permisos;
 	} catch (e) {
 		console.warn('[requirePermiso] permisosDeUsuario falló:', e.message);
 	}
 
-	if (!permisos.length && req.rolNombre) {
-		permisos = matriz.permisosDeRol(req.rolNombre);
+	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
+	if (ROLES_MATRIZ.has(rn)) {
+		return matriz.permisosDeRol(rn);
 	}
-	return permisos;
+	if (rn) {
+		return matriz.permisosDeRol(rn);
+	}
+	return [];
 }
 
 function requirePermiso(codigo) {
