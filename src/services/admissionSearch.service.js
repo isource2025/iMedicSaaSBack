@@ -1188,7 +1188,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         v.IdLugarEpisodio,
         le.Descripcion AS LugarEpisodioDescripcion,
         v.ORIGENADMISION AS OrigenAdmision,
-        oa.Descripcion AS OrigenAdmisionDescripcion,
+        oa.RazonSocial AS OrigenAdmisionDescripcion,
         LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) AS Diagnostico,
         LTRIM(RTRIM(ISNULL(d.Descripcion, ''))) AS DiagnosticoDescripcion,
         LTRIM(RTRIM(ISNULL(v.ESTADOAMBULATORIO, ''))) AS EstadoAmbulatorio,
@@ -1251,7 +1251,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
       LEFT JOIN dbo.imClasePaciente cp ON LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(cp.Valor, '')))
       LEFT JOIN dbo.imTipoAdmision ta ON LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) = LTRIM(RTRIM(ISNULL(ta.Valor, '')))
       LEFT JOIN dbo.imLugarEpisodio le ON v.IdLugarEpisodio = le.IdLugarEpisodio
-      LEFT JOIN dbo.imOrigenAdmision oa ON v.ORIGENADMISION = oa.Valor
+      LEFT JOIN dbo.imCentroAsistencial oa ON v.ORIGENADMISION = oa.Valor
       LEFT JOIN dbo.imDiagnosticos d ON LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
       LEFT JOIN dbo.imDiagnosticos dEgr ON LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) = LTRIM(RTRIM(ISNULL(dEgr.CodigoOMS, '')))
       LEFT JOIN dbo.imDisposicionEgreso de ON TRY_CAST(v.DISPOSICIONEGRESO AS int) = TRY_CAST(de.Valor AS int)
@@ -1308,7 +1308,12 @@ async function obtenerCatalogosAdmision(clienteId) {
     executeQuery(`SELECT Valor, Descripcion FROM dbo.imTipoPaciente ORDER BY Descripcion`).catch(() => []),
     executeQuery(`SELECT Valor, Descripcion FROM dbo.imEstadoAmbulatorio ORDER BY Descripcion`).catch(() => []),
     executeQuery(`SELECT IdLugarEpisodio AS Valor, Descripcion FROM dbo.imLugarEpisodio ORDER BY Descripcion`).catch(() => []),
-    executeQuery(`SELECT Valor, Descripcion FROM dbo.imOrigenAdmision ORDER BY Descripcion`).catch(() => []),
+    // imVisita.ORIGENADMISION referencia imCentroAsistencial (el centro derivante),
+    // no imOrigenAdmision: en la base hay miles de visitas con valores fuera del
+    // rango de ese catálogo que coinciden con los hospitales y CAPS de la lista.
+    executeQuery(
+      `SELECT Valor, RazonSocial AS Descripcion FROM dbo.imCentroAsistencial ORDER BY RazonSocial`,
+    ).catch(() => []),
     cli != null && cli > 0
       ? executeQuery(
           `
