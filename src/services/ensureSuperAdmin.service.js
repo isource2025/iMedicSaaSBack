@@ -148,6 +148,7 @@ async function ensurePlatformSuperAdmin(pool) {
 			[4, 'ADMINISTRATIVO', 'Personal administrativo', 20],
 			[5, 'SUPER_ADMIN', 'Administrador de plataforma', 200],
 			[6, 'CARGA_HC', 'Carga de adjuntos', 25],
+			[7, 'PANEL_DATOS', 'Panel de datos', 15],
 		];
 		for (const [id, nombre, desc, nivel] of rolesCatalogo) {
 			await pool.query(

@@ -164,6 +164,16 @@ async function ensureLocalSqlSuperAdmin() {
             Nivel = 25,
             Activo = 1
         WHERE IdRol = 6;
+      IF NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 7)
+        INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel, Activo)
+        VALUES (7, 'PANEL_DATOS', 'Panel de datos', 15, 1)
+      ELSE
+        UPDATE dbo.imRoles
+        SET Nombre = 'PANEL_DATOS',
+            Descripcion = 'Panel de datos',
+            Nivel = 15,
+            Activo = 1
+        WHERE IdRol = 7;
     END
     `,
 	).catch(() => {});

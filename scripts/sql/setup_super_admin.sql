@@ -20,6 +20,14 @@ AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 6)
     INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
     VALUES (6, 'CARGA_HC', 'Carga de adjuntos', 25);
 
+IF EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imRoles'
+)
+AND NOT EXISTS (SELECT 1 FROM dbo.imRoles WHERE IdRol = 7)
+    INSERT INTO dbo.imRoles (IdRol, Nombre, Descripcion, Nivel)
+    VALUES (7, 'PANEL_DATOS', 'Panel de datos', 15);
+
 -- 2) Packs modulares por empresa (AGENDA, INTERNACION, FACTURACION)
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.TABLES

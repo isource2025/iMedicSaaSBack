@@ -23,7 +23,7 @@
  *   1 = ADMIN (administrador del sistema),
  *   2 = MEDICO, 3 = ENFERMERO,
  *   4 = ADMINISTRATIVO (ver todo; gestiona pacientes; sin escritura clínica),
- *   5 = SUPER_ADMIN, 6 = CARGA_HC
+ *   5 = SUPER_ADMIN, 6 = CARGA_HC, 7 = PANEL_DATOS
  *
  * Un usuario puede tener varios roles: los permisos efectivos son la unión
  * de las plantillas (imPersonalRoles + imPersonal.Rol como principal).
@@ -367,6 +367,15 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.ADJUNTOS.EDITAR',
 		'INTERNACION.ADJUNTOS.ELIMINAR',
 
+		'USUARIO.PERFIL.VER',
+	]),
+
+	// ──────────────────────────────────────────────────────────────────────
+	// PANEL_DATOS — solo el panel de control (/dashboard) y el perfil.
+	// Pensado para sumarse a otro rol (multi-rol) desde Personal.
+	// ──────────────────────────────────────────────────────────────────────
+	PANEL_DATOS: Object.freeze([
+		'DASHBOARD.INICIO.VER',
 		'USUARIO.PERFIL.VER',
 	]),
 });

@@ -1308,6 +1308,7 @@ const ROL_INFORME_LABEL = {
 		etiqueta: 'Administrativo',
 	},
 	6: { uno: 'carga HC', muchos: 'carga HC', nombre: 'CARGA_HC', etiqueta: 'Carga de adjuntos' },
+	7: { uno: 'panel de datos', muchos: 'panel de datos', nombre: 'PANEL_DATOS', etiqueta: 'Panel de datos' },
 };
 
 function resumenPermisosRol(idRol) {

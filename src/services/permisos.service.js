@@ -79,6 +79,9 @@ async function permisosDeRol(idRol, nombreRol) {
 	if (nombre === 'CARGA_HC') {
 		return [...matriz.permisosDeRol('CARGA_HC')];
 	}
+	if (nombre === 'PANEL_DATOS') {
+		return [...matriz.permisosDeRol('PANEL_DATOS')];
+	}
 	if (idRol == null || !Number.isFinite(Number(idRol))) {
 		return matriz.permisosDeRol(nombreRol || null);
 	}

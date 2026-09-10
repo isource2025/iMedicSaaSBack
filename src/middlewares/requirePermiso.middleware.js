@@ -21,7 +21,8 @@ async function _resolverPermisosReq(req) {
 		rn === 'MEDICO' ||
 		rn === 'ADMINISTRATIVO' ||
 		rn === 'ENFERMERO' ||
-		rn === 'CARGA_HC'
+		rn === 'CARGA_HC' ||
+		rn === 'PANEL_DATOS'
 	) {
 		return matriz.permisosDeRol(rn);
 	}
