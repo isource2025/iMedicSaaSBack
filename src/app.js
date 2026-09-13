@@ -35,6 +35,14 @@ const religionRoutes = require('./routes/religion.routes');
 const feriadosTablaRoutes = require('./routes/feriadosTabla.routes');
 const grupoEtnicoRoutes = require('./routes/grupoEtnico.routes');
 const estadoMilitarRoutes = require('./routes/estadoMilitar.routes');
+const nacionalidadRoutes = require('./routes/nacionalidad.routes');
+const parentescoRoutes = require('./routes/parentesco.routes');
+const requisitoRoutes = require('./routes/requisito.routes');
+const rolContactoRoutes = require('./routes/rolContacto.routes');
+const tipoAdmisionRoutes = require('./routes/tipoAdmision.routes');
+const tipoPacienteRoutes = require('./routes/tipoPaciente.routes');
+const diagnosticoRoutes = require('./routes/diagnostico.routes');
+const provinciaCrudRoutes = require('./routes/provincia.routes');
 const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 const coberturaRoutes = require('./routes/cobertura.routes');
 const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
@@ -173,6 +181,18 @@ app.use('/api/religion', religionRoutes);
 app.use('/api/feriados-tabla', feriadosTablaRoutes);
 app.use('/api/grupo-etnico', grupoEtnicoRoutes);
 app.use('/api/estado-militar', estadoMilitarRoutes);
+// Alias en plural: los servicios de catálogos del front usan esta forma.
+app.use('/api/grupos-etnicos', grupoEtnicoRoutes);
+app.use('/api/estados-militares', estadoMilitarRoutes);
+app.use('/api/nacionalidad', nacionalidadRoutes);
+app.use('/api/parentesco', parentescoRoutes);
+app.use('/api/requisitos', requisitoRoutes);
+app.use('/api/rolcontacto', rolContactoRoutes);
+app.use('/api/tipoadmision', tipoAdmisionRoutes);
+app.use('/api/tipopaciente', tipoPacienteRoutes);
+app.use('/api/diagnosticos', diagnosticoRoutes);
+// provincias.routes es solo lectura; provincia.routes trae el CRUD.
+app.use('/api/provincia', provinciaCrudRoutes);
 app.use('/api/dador-organos', dadorOrganosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 app.use('/api/renaper', renaperRoutes);
