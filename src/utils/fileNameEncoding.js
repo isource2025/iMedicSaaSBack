@@ -152,6 +152,12 @@ function normalizeAdjuntoFilePath(rutaOriginal) {
 	return ruta;
 }
 
+function questionMarkAsEnie(s) {
+	return String(s)
+		.replace(/PE\?A/gi, (m) => (m === m.toLowerCase() ? 'peña' : 'PEÑA'))
+		.replace(/\?/g, 'Ñ');
+}
+
 function pathLookupCandidates(filePath) {
 	if (!filePath) return [];
 	const original = String(filePath);
@@ -161,12 +167,14 @@ function pathLookupCandidates(filePath) {
 	const name = path.basename(original);
 	const repairedName = sanitizeWindowsFileName(name);
 	const repairedDir = decodeMultipartFilename(dir);
+	const qmark = questionMarkAsEnie(repaired);
 
 	return uniqueNonEmpty([
 		original,
 		repaired,
 		normalized,
 		decodeMultipartFilename(normalized),
+		qmark,
 		...mapLegacyDriveRoots(original),
 		...mapLegacyDriveRoots(repaired),
 		...mapLegacyDriveRoots(normalized),
@@ -176,7 +184,37 @@ function pathLookupCandidates(filePath) {
 		legacyUnderscoreForN(original),
 		legacyUnderscoreForN(repaired),
 		path.join(legacyUnderscoreForN(repairedDir), legacyUnderscoreForN(repairedName)),
+		path.join(questionMarkAsEnie(repairedDir), repairedName),
 	]);
+}
+
+/**
+ * HttpListener (PowerShell en Sarmiento) decodifica el query como Latin-1:
+ * UTF-8 "Ñ" (%C3%91) termina como "Ã" + control o "?". Doble-encode deja el
+ * query en ASCII hasta UnescapeDataString / decodeURIComponent en la clínica.
+ */
+function fileServerFileQuery(filePath) {
+	return 'path=' + encodeURIComponent(encodeURIComponent(String(filePath || '')));
+}
+
+function fileServerFileUrl(baseUrl, filePath) {
+	const base = String(baseUrl || '').replace(/\/+$/, '');
+	return `${base}/file?${fileServerFileQuery(filePath)}`;
+}
+
+/** Express ya decodifica una vez; si queda %XX es el doble-encode del backend. */
+function decodeFileServerPathParam(raw) {
+	if (raw == null) return '';
+	let s = Array.isArray(raw) ? String(raw[0]) : String(raw);
+	for (let i = 0; i < 2; i++) {
+		if (!/%[0-9A-Fa-f]{2}/.test(s)) break;
+		try {
+			s = decodeURIComponent(s);
+		} catch {
+			break;
+		}
+	}
+	return s;
 }
 
 function fixMulterFile(file) {
@@ -216,5 +254,8 @@ module.exports = {
 	buildVidalDest,
 	normalizeAdjuntoFilePath,
 	pathLookupCandidates,
+	fileServerFileQuery,
+	fileServerFileUrl,
+	decodeFileServerPathParam,
 	fixMulterFile,
 };

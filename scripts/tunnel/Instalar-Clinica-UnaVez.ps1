@@ -114,13 +114,38 @@ function Send-Json($ctx, $code, $obj) {
 function Decode-Path([string]$p) {
 	if (-not $p) { return $p }
 	try { $p = [Uri]::UnescapeDataString($p) } catch {}
+	try {
+		if ($p -match '%[0-9A-Fa-f]{2}') { $p = [Uri]::UnescapeDataString($p) }
+	} catch {}
 	$p = $p -replace '/', '\'
+	$enie = [string][char]0x00D1
+	$enieMin = [string][char]0x00F1
+	$aTilde = [string][char]0x00C3
+	$p = $p.Replace(($aTilde + [char]0x0091), $enie)
+	$p = $p.Replace(($aTilde + [char]0x00B1), $enieMin)
+	$p = $p.Replace(($aTilde + '?'), $enie)
+	$p = $p.Replace(($aTilde + [char]0x2018), $enie)
+	$p = $p.Replace(($aTilde + [char]0x2019), $enie)
 	while ($p -match '^\\\\\\+') { $p = $p -replace '^\\\\', '\' }
 	$localDrive = [IO.Path]::GetPathRoot($LocalRoot)
 	if ($localDrive -and $p -match '^[A-Za-z]:\\' -and -not $p.StartsWith($localDrive, [StringComparison]::OrdinalIgnoreCase)) {
 		$p = $localDrive + $p.Substring(3)
 	}
 	return $p
+}
+
+function Get-RawQueryPath($req) {
+	$raw = $null
+	try { $raw = [string]$req.RawUrl } catch { $raw = $null }
+	if ($raw -and $raw.Contains('?')) {
+		$q = $raw.Substring($raw.IndexOf('?') + 1)
+		foreach ($pair in $q.Split('&')) {
+			if ($pair.Length -ge 5 -and $pair.Substring(0, 5).ToLowerInvariant() -eq 'path=') {
+				return $pair.Substring(5)
+			}
+		}
+	}
+	try { return $req.QueryString['path'] } catch { return $null }
 }
 
 function Map-Path([string]$p) {
@@ -139,6 +164,26 @@ function Map-Path([string]$p) {
 	$name = Split-Path $p -Leaf
 	$c1 = Join-Path $LocalRoot $name
 	if (Test-Path -LiteralPath $c1 -PathType Leaf) { return $c1 }
+	$enie = [string][char]0x00D1
+	$enieMin = [string][char]0x00F1
+	$under = $p.Replace($enie, '_').Replace($enieMin, '_')
+	if ($under -ne $p -and (Test-Path -LiteralPath $under -PathType Leaf)) { return $under }
+	$parentName = ''
+	try { $parentName = Split-Path (Split-Path $p -Parent) -Leaf } catch { $parentName = '' }
+	$visita = $null
+	if ($parentName -match '^(\d+)(\s|$)') { $visita = $Matches[1] }
+	if ($visita) {
+		foreach ($root in @($LocalRoot, $UncRoot)) {
+			if (-not $root) { continue }
+			if (-not (Test-Path -LiteralPath $root)) { continue }
+			$dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+				Where-Object { $_.Name -eq $visita -or $_.Name.StartsWith(($visita + ' ')) }
+			foreach ($d in $dirs) {
+				$c = Join-Path $d.FullName $name
+				if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			}
+		}
+	}
 	return $null
 }
 
@@ -217,7 +262,11 @@ while ($listener.IsListening) {
 		$ctx = $listener.GetContext()
 		$req = $ctx.Request
 		$method = $req.HttpMethod.ToUpperInvariant()
-		$path = $req.Url.AbsolutePath.TrimEnd('/')
+		$rawUrl = [string]$req.RawUrl
+		$abs = $rawUrl
+		$qi = $abs.IndexOf('?')
+		if ($qi -ge 0) { $abs = $abs.Substring(0, $qi) }
+		$path = $abs.TrimEnd('/')
 		if (-not $path) { $path = '/' }
 
 		if ($method -eq 'OPTIONS') {
@@ -230,7 +279,7 @@ while ($listener.IsListening) {
 
 		if ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/health')) {
 			Send-Json $ctx 200 @{
-				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v1'
+				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v2'
 				clinica='__CLINICA__'; unc=$UncRoot; root=$LocalRoot; port=$Port; maxMb=$MaxMb; auth='tunnel'
 				uncReachable = [bool](Test-Path -LiteralPath $UncRoot)
 			}
@@ -238,7 +287,7 @@ while ($listener.IsListening) {
 		}
 
 		if ($method -eq 'GET' -and $path -eq '/file') {
-			$pedida = $req.QueryString['path']
+			$pedida = Get-RawQueryPath $req
 			if (-not $pedida) { Send-Json $ctx 400 @{ success=$false; error='path requerido' }; continue }
 			$found = Map-Path $pedida
 			if (-not $found) { Send-Json $ctx 404 @{ success=$false; error='Archivo no encontrado'; path=(Decode-Path $pedida) }; continue }
@@ -266,7 +315,7 @@ while ($listener.IsListening) {
 		}
 
 		if ($method -eq 'DELETE' -and $path -eq '/file') {
-			$found = Map-Path $req.QueryString['path']
+			$found = Map-Path (Get-RawQueryPath $req)
 			if (-not $found) { Send-Json $ctx 404 @{ success=$false; error='Archivo no encontrado' }; continue }
 			[IO.File]::Delete($found)
 			Send-Json $ctx 200 @{ success=$true; path=$found; filePath=$found }
@@ -394,8 +443,8 @@ foreach ($i in 1..15) {
 if ($h) {
 	Write-Host (($h | ConvertTo-Json -Compress))
 	$enc = if ($h.PSObject.Properties['encoding']) { [string]$h.encoding } else { '' }
-	if ($enc -ne 'ps1-unc-v1') {
-		Write-Warn "health encoding=$enc (esperado ps1-unc-v1); matando puerto y reintento..."
+	if ($enc -ne 'ps1-unc-v2') {
+		Write-Warn "health encoding=$enc (esperado ps1-unc-v2); matando puerto y reintento..."
 		Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
 			ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 		$ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"

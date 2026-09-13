@@ -26,6 +26,7 @@ const {
 	decodeMultipartFilename,
 	pathLookupCandidates,
 	sanitizeWindowsFileName,
+	decodeFileServerPathParam,
 } = require('./src/utils/fileNameEncoding');
 
 const PORT = Number(process.env.IMEDIC_FS_PORT || process.env.FILE_SERVER_PORT || 9012);
@@ -70,10 +71,59 @@ function normalizarRuta(ruta) {
 	return r;
 }
 
-/**
- * Ubica el archivo probando las variantes de nombre que dejaron las versiones
- * anteriores (mojibake de la Ñ, guión bajo en lugar de Ñ, otra raíz de disco).
- */
+function existeArchivo(c) {
+	try {
+		return Boolean(c) && fs.existsSync(c) && fs.statSync(c).isFile();
+	} catch {
+		return false;
+	}
+}
+
+/** Si la carpeta es `{visita} {PACIENTE}` y la ñ no coincide, busca por número de visita. */
+function buscarEnCarpetaVisita(rutaPedida) {
+	const base = String(rutaPedida || '');
+	if (!base) return null;
+	const fileName = path.basename(base);
+	const parentName = path.basename(path.dirname(base));
+	const m = parentName.match(/^(\d+)(?:\s|$)/);
+	if (!m) return null;
+	const visita = m[1];
+	const roots = [];
+	const seen = new Set();
+	for (const r of [UPLOAD_ROOT, path.dirname(path.dirname(base))]) {
+		if (!r || seen.has(r.toLowerCase())) continue;
+		seen.add(r.toLowerCase());
+		roots.push(r);
+	}
+	const wanted = decodeMultipartFilename(fileName).toLowerCase();
+	for (const root of roots) {
+		if (!root || !fs.existsSync(root)) continue;
+		let dirs = [];
+		try {
+			dirs = fs.readdirSync(root, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const d of dirs) {
+			if (!d.isDirectory()) continue;
+			if (d.name !== visita && !d.name.startsWith(`${visita} `)) continue;
+			const folder = path.join(root, d.name);
+			const exact = path.join(folder, fileName);
+			if (existeArchivo(exact)) return exact;
+			try {
+				for (const f of fs.readdirSync(folder)) {
+					if (decodeMultipartFilename(f).toLowerCase() !== wanted) continue;
+					const full = path.join(folder, f);
+					if (existeArchivo(full)) return full;
+				}
+			} catch {
+				/* carpeta ilegible */
+			}
+		}
+	}
+	return null;
+}
+
 function buscarArchivo(rutaPedida) {
 	const candidatos = pathLookupCandidates(rutaPedida);
 	const nombre = sanitizeWindowsFileName(path.basename(rutaPedida || ''));
@@ -81,15 +131,12 @@ function buscarArchivo(rutaPedida) {
 	candidatos.push(path.join(UPLOAD_ROOT, path.basename(rutaPedida || '')));
 
 	for (const c of candidatos) {
-		if (!c) continue;
-		try {
-			if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
-		} catch {
-			/* siguiente candidato */
-		}
+		if (existeArchivo(c)) return c;
 	}
 
-	// Último recurso: comparar por nombre normalizado dentro de la carpeta.
+	const porVisita = buscarEnCarpetaVisita(rutaPedida);
+	if (porVisita) return porVisita;
+
 	const buscado = decodeMultipartFilename(nombre).toLowerCase();
 	for (const carpeta of [path.dirname(rutaPedida || ''), UPLOAD_ROOT]) {
 		if (!carpeta || !fs.existsSync(carpeta)) continue;
@@ -107,8 +154,9 @@ function buscarArchivo(rutaPedida) {
 }
 
 function resolverRuta(rutaCruda) {
-	const normalizada = normalizarRuta(rutaCruda);
-	return buscarArchivo(normalizada) || buscarArchivo(rutaCruda);
+	const cruda = decodeFileServerPathParam(rutaCruda);
+	const normalizada = normalizarRuta(cruda);
+	return buscarArchivo(normalizada) || buscarArchivo(cruda) || buscarArchivo(String(rutaCruda || ''));
 }
 
 /** Con IMEDIC_FS_TOKEN vacío no valida nada: la protección es el túnel. */
@@ -134,7 +182,7 @@ app.get(['/', '/health'], (req, res) => {
 });
 
 app.get('/file', exigirToken, (req, res) => {
-	const pedida = req.query.path;
+	const pedida = decodeFileServerPathParam(req.query.path);
 	if (!pedida) {
 		return res.status(400).json({ success: false, error: 'Parámetro path es requerido' });
 	}
@@ -209,7 +257,7 @@ app.post('/upload', exigirToken, upload.single('file'), (req, res) => {
 });
 
 app.delete('/file', exigirToken, (req, res) => {
-	const pedida = req.query.path;
+	const pedida = decodeFileServerPathParam(req.query.path);
 	if (!pedida) {
 		return res.status(400).json({ success: false, error: 'Parámetro path es requerido' });
 	}

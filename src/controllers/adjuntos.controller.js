@@ -31,6 +31,7 @@ const {
   sanitizeWindowsFileName,
   pathLookupCandidates,
   normalizeAdjuntoFilePath,
+  fileServerFileUrl,
 } = require('../utils/fileNameEncoding');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
@@ -554,7 +555,7 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
       let response = null;
       let lastFileErr = null;
       for (const ruta of rutasIntento) {
-        const fileUrl = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+        const fileUrl = fileServerFileUrl(fileServerUrl, ruta);
         console.log(`🌐 URL solicitada: ${fileUrl}`);
         try {
           response = await axios.get(fileUrl, {

@@ -62,40 +62,78 @@ function Send-Json($ctx, $code, $obj) {
 function Decode-Path([string]$p) {
 	if (-not $p) { return $p }
 	try { $p = [Uri]::UnescapeDataString($p) } catch {}
-	# Normalizar separadores
+	try {
+		if ($p -match '%[0-9A-Fa-f]{2}') { $p = [Uri]::UnescapeDataString($p) }
+	} catch {}
 	$p = $p -replace '/', '\'
-	# Colapsar barras de UNC mal escapadas: \\\\server -> \\server
+	$enie = [string][char]0x00D1
+	$enieMin = [string][char]0x00F1
+	$aTilde = [string][char]0x00C3
+	$p = $p.Replace(($aTilde + [char]0x0091), $enie)
+	$p = $p.Replace(($aTilde + [char]0x00B1), $enieMin)
+	$p = $p.Replace(($aTilde + '?'), $enie)
+	$p = $p.Replace(($aTilde + [char]0x2018), $enie)
+	$p = $p.Replace(($aTilde + [char]0x2019), $enie)
 	while ($p -match '^\\\\\\+') { $p = $p -replace '^\\\\', '\' }
 	if ($p -match '^[Dd]:\\') { $p = 'E:\' + $p.Substring(3) }
 	if ($p -match '^[Ff]:\\') { $p = 'E:\' + $p.Substring(3) }
 	return $p
 }
 
+function Get-RawQueryPath($req) {
+	$raw = $null
+	try { $raw = [string]$req.RawUrl } catch { $raw = $null }
+	if ($raw -and $raw.Contains('?')) {
+		$q = $raw.Substring($raw.IndexOf('?') + 1)
+		foreach ($pair in $q.Split('&')) {
+			if ($pair.Length -ge 5 -and $pair.Substring(0, 5).ToLowerInvariant() -eq 'path=') {
+				return $pair.Substring(5)
+			}
+		}
+	}
+	try { return $req.QueryString['path'] } catch { return $null }
+}
+
 function Map-Path([string]$p) {
 	$p = Decode-Path $p
 	if (-not $p) { return $null }
-	# Ya es accesible
 	if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-	# \\server\Imagenes\Vidal\... -> intentar tal cual (share)
 	if ($p -like '\\*') {
 		if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-		# Relativo al UncRoot
 		$uncNorm = $UncRoot.TrimEnd('\')
 		if ($p.StartsWith($uncNorm, [StringComparison]::OrdinalIgnoreCase)) {
 			if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
 		}
 	}
-	# Fallback: mismo relativo bajo LocalRoot
 	$uncNorm = $UncRoot.TrimEnd('\')
 	if ($p.StartsWith($uncNorm, [StringComparison]::OrdinalIgnoreCase)) {
 		$rel = $p.Substring($uncNorm.Length).TrimStart('\')
 		$local = Join-Path $LocalRoot $rel
 		if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
 	}
-	# Solo nombre de archivo en LocalRoot
 	$name = Split-Path $p -Leaf
 	$c1 = Join-Path $LocalRoot $name
 	if (Test-Path -LiteralPath $c1 -PathType Leaf) { return $c1 }
+	$enie = [string][char]0x00D1
+	$enieMin = [string][char]0x00F1
+	$under = $p.Replace($enie, '_').Replace($enieMin, '_')
+	if ($under -ne $p -and (Test-Path -LiteralPath $under -PathType Leaf)) { return $under }
+	$parentName = ''
+	try { $parentName = Split-Path (Split-Path $p -Parent) -Leaf } catch { $parentName = '' }
+	$visita = $null
+	if ($parentName -match '^(\d+)(\s|$)') { $visita = $Matches[1] }
+	if ($visita) {
+		foreach ($root in @($LocalRoot, $UncRoot)) {
+			if (-not $root) { continue }
+			if (-not (Test-Path -LiteralPath $root)) { continue }
+			$dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+				Where-Object { $_.Name -eq $visita -or $_.Name.StartsWith(($visita + ' ')) }
+			foreach ($d in $dirs) {
+				$c = Join-Path $d.FullName $name
+				if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			}
+		}
+	}
 	return $null
 }
 
@@ -174,7 +212,11 @@ while ($listener.IsListening) {
 		$ctx = $listener.GetContext()
 		$req = $ctx.Request
 		$method = $req.HttpMethod.ToUpperInvariant()
-		$path = $req.Url.AbsolutePath.TrimEnd('/')
+		$rawUrl = [string]$req.RawUrl
+		$abs = $rawUrl
+		$qi = $abs.IndexOf('?')
+		if ($qi -ge 0) { $abs = $abs.Substring(0, $qi) }
+		$path = $abs.TrimEnd('/')
 		if (-not $path) { $path = '/' }
 
 		if ($method -eq 'OPTIONS') {
@@ -187,7 +229,7 @@ while ($listener.IsListening) {
 
 		if ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/health')) {
 			Send-Json $ctx 200 @{
-				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v1'
+				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v2'
 				unc=$UncRoot; root=$LocalRoot; port=$Port; maxMb=$MaxMb; auth='tunnel'
 				uncReachable = [bool](Test-Path -LiteralPath $UncRoot)
 			}
@@ -195,7 +237,7 @@ while ($listener.IsListening) {
 		}
 
 		if ($method -eq 'GET' -and $path -eq '/file') {
-			$pedida = $req.QueryString['path']
+			$pedida = Get-RawQueryPath $req
 			if (-not $pedida) { Send-Json $ctx 400 @{ success=$false; error='path requerido' }; continue }
 			$found = Map-Path $pedida
 			if (-not $found) { Send-Json $ctx 404 @{ success=$false; error='Archivo no encontrado'; path=(Decode-Path $pedida) }; continue }
@@ -223,7 +265,7 @@ while ($listener.IsListening) {
 		}
 
 		if ($method -eq 'DELETE' -and $path -eq '/file') {
-			$found = Map-Path $req.QueryString['path']
+			$found = Map-Path (Get-RawQueryPath $req)
 			if (-not $found) { Send-Json $ctx 404 @{ success=$false; error='Archivo no encontrado' }; continue }
 			[IO.File]::Delete($found)
 			Send-Json $ctx 200 @{ success=$true; path=$found; filePath=$found }
@@ -297,7 +339,7 @@ $enc = if ($h -and $h.PSObject.Properties['encoding']) { [string]$h.encoding } e
 $uncOk = $false
 if ($h -and $h.PSObject.Properties['uncReachable']) { $uncOk = [bool]$h.uncReachable }
 
-if ($enc -ne 'ps1-unc-v1') {
+if ($enc -ne 'ps1-unc-v2') {
 	Write-Host "Todavia responde el file server viejo (encoding=$enc). Mato procesos y reintento manual..." -ForegroundColor Yellow
 	Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
 		ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
@@ -310,10 +352,10 @@ if ($enc -ne 'ps1-unc-v1') {
 	if ($h -and $h.PSObject.Properties['uncReachable']) { $uncOk = [bool]$h.uncReachable }
 }
 
-if ($enc -eq 'ps1-unc-v1' -and $uncOk) {
+if ($enc -eq 'ps1-unc-v2' -and $uncOk) {
 	Write-Host 'LISTO. Proba un adjunto en la web.' -ForegroundColor Green
-} elseif ($enc -eq 'ps1-unc-v1') {
+} elseif ($enc -eq 'ps1-unc-v2') {
 	Write-Host "uncReachable=false: abrí el Explorador en $UncRoot y volvé a correr." -ForegroundColor Yellow
 } else {
-	Write-Host "Fallo: health no es ps1-unc-v1. Revisá C:\ProgramData\iMedic\file-server.ps1" -ForegroundColor Red
+	Write-Host "Fallo: health no es ps1-unc-v2. Revisá C:\ProgramData\iMedic\file-server.ps1" -ForegroundColor Red
 }

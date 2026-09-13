@@ -30,7 +30,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Instalar-Sarmiento-UnaVez.ps1
 ```
 
-Health local esperado: `encoding=ps1-unc-v1`, `root=C:\imedic\adjuntos`.
+Health local esperado: `encoding=ps1-unc-v2`, `root=C:\imedic\adjuntos`.
 
 ## 3) FileServerUrl
 

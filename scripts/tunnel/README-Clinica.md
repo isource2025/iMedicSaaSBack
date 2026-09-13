@@ -29,6 +29,6 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Instalar-Clinica-UnaVez.ps1
 ```
 
-Health esperado: `encoding=ps1-unc-v1`, `uncReachable=true`.
+Health esperado: `encoding=ps1-unc-v2`, `uncReachable=true`.
 
 **Importante:** el file server corre como el usuario que instaló (acceso al share UNC). SYSTEM no sirve para `\\server\...`.

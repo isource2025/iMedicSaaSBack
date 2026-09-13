@@ -4,9 +4,9 @@ const { createTenantOnce } = require('../context/tenantCache');
 const path = require('path');
 const fs = require('fs').promises;
 const fsSync = require('fs');
-const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const { normalizarTextoParaClarionAnsi, repararTextoClarionAnsi } = require('../utils/clarionText');
 const { resolveFileServerUrl, fileServerHeaders } = require('../utils/fileServerUrl');
-const { decodeMultipartFilename, sanitizeWindowsFileName, pathLookupCandidates, normalizeAdjuntoFilePath } = require('../utils/fileNameEncoding');
+const { decodeMultipartFilename, sanitizeWindowsFileName, sanitizeFolderName, pathLookupCandidates, normalizeAdjuntoFilePath, fileServerFileUrl } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
@@ -135,7 +135,7 @@ class AdjuntosService {
     const candidates = pathLookupCandidates(this.normalizarRutaPatch(rutaBase));
     let lastErr = null;
     for (const ruta of candidates) {
-      const url = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+      const url = fileServerFileUrl(fileServerUrl, ruta);
       try {
         const res = await axios.get(url, {
           responseType: 'arraybuffer',
@@ -159,7 +159,7 @@ class AdjuntosService {
     const candidates = pathLookupCandidates(this.normalizarRutaPatch(rutaBase));
     let lastErr = null;
     for (const ruta of candidates) {
-      const deleteUrl = `${fileServerUrl}/file?path=${encodeURIComponent(ruta)}`;
+      const deleteUrl = fileServerFileUrl(fileServerUrl, ruta);
       try {
         const response = await axios.delete(deleteUrl, {
           headers: fileServerHeaders(),
@@ -346,7 +346,9 @@ class AdjuntosService {
       [{ value: parseInt(numeroVisita, 10) }],
     );
     const nombre = rows?.[0]?.ApellidoYNombre;
-    return nombre ? String(nombre).trim() : `PACIENTE_${numeroVisita}`;
+    if (!nombre) return `PACIENTE_${numeroVisita}`;
+    const repaired = repararTextoClarionAnsi(String(nombre).trim());
+    return sanitizeFolderName(repaired) || `PACIENTE_${numeroVisita}`;
   }
 
   async getNombrePacientePorTurno(idTurno) {
@@ -358,7 +360,9 @@ class AdjuntosService {
       [{ value: Number(idTurno), type: 'Int' }],
     );
     const nombre = rows?.[0]?.ApellidoyNombre;
-    return nombre ? String(nombre).trim() : `TURNO_${idTurno}`;
+    if (!nombre) return `TURNO_${idTurno}`;
+    const repaired = repararTextoClarionAnsi(String(nombre).trim());
+    return sanitizeFolderName(repaired) || `TURNO_${idTurno}`;
   }
 
   /**
