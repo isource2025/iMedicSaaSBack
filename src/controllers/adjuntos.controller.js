@@ -32,6 +32,7 @@ const {
   pathLookupCandidates,
   normalizeAdjuntoFilePath,
   fileServerFileUrl,
+  contentTypeForAdjuntoFileName,
 } = require('../utils/fileNameEncoding');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
@@ -82,24 +83,6 @@ function isFileServerNetworkError(err) {
  */
 function normalizarRuta(rutaOriginal) {
   return normalizeAdjuntoFilePath(rutaOriginal);
-}
-
-function contentTypeForAdjuntoFileName(fileName) {
-  const ext = path.extname(fileName).toLowerCase();
-  const mimeTypes = {
-    '.pdf': 'application/pdf',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.dcm': 'application/dicom',
-    '.dicom': 'application/dicom',
-    '.webm': 'video/webm',
-    '.mp4': 'video/mp4',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  };
-  return mimeTypes[ext] || 'application/octet-stream';
 }
 
 // Configurar multer para upload de archivos

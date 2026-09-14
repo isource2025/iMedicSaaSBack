@@ -245,7 +245,28 @@ function formDataFileOptions(originalName, contentType) {
 	};
 }
 
+const CONTENT_TYPES_ADJUNTO = {
+	'.pdf': 'application/pdf',
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.png': 'image/png',
+	'.gif': 'image/gif',
+	'.dcm': 'application/dicom',
+	'.dicom': 'application/dicom',
+	'.webm': 'video/webm',
+	'.mp4': 'video/mp4',
+	'.doc': 'application/msword',
+	'.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+/** Content-Type a partir de la extensión, para servir adjuntos inline. */
+function contentTypeForAdjuntoFileName(fileName) {
+	const ext = path.extname(String(fileName || '')).toLowerCase();
+	return CONTENT_TYPES_ADJUNTO[ext] || 'application/octet-stream';
+}
+
 module.exports = {
+	contentTypeForAdjuntoFileName,
 	decodeMultipartFilename,
 	sanitizeWindowsFileName,
 	sanitizeFolderName,

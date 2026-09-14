@@ -64,6 +64,11 @@ router.delete(
 	requirePermiso('ADMISION.NUEVA.CREAR'),
 	controller.quitarRequisito,
 );
+router.get(
+	'/:numeroVisita/requisitos/:valor/archivo',
+	requirePermiso('ADMISION.NUEVA.CREAR'),
+	controller.verArchivoRequisito,
+);
 router.post(
 	'/:numeroVisita/requisitos/:valor/archivo',
 	requirePermiso('ADMISION.NUEVA.CREAR'),

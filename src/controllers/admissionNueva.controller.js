@@ -1,6 +1,21 @@
+const fsSync = require('fs');
+const axios = require('axios');
+
 const admissionNuevaService = require('../services/admissionNueva.service');
 const { resolveCodOperador } = require('../utils/sessionIdentity');
 const { statusDeError } = require('../utils/httpError');
+const {
+	resolveFileServerUrl,
+	fileServerHeaders,
+	describeFileServerError,
+} = require('../utils/fileServerUrl');
+const {
+	pathLookupCandidates,
+	fileServerFileUrl,
+	contentTypeForAdjuntoFileName,
+} = require('../utils/fileNameEncoding');
+
+const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
 function fallar(res, error, mensajePorDefecto) {
 	const status = error?.statusCode || statusDeError(error);
@@ -27,7 +42,10 @@ async function requisitosCobertura(req, res) {
 		if (!Number.isFinite(cliente) || cliente < 0) {
 			return res.status(400).json({ success: false, message: 'cliente inválido' });
 		}
-		const data = await admissionNuevaService.requisitosPorCliente(cliente);
+		const data = await admissionNuevaService.requisitosPorCliente(
+			cliente,
+			req.query.idPaciente,
+		);
 		res.json({ success: true, data });
 	} catch (error) {
 		console.error('Error al obtener requisitos de la cobertura:', error);
@@ -126,11 +144,80 @@ async function subirArchivoRequisito(req, res) {
 	}
 }
 
+/**
+ * Sirve el archivo de un requisito para verlo desde el formulario. Se apoya en el
+ * file server de la clínica y cae al disco local si el archivo quedó ahí por el
+ * fallback de subida.
+ */
+async function verArchivoRequisito(req, res) {
+	try {
+		const archivo = await admissionNuevaService.obtenerArchivoRequisito(
+			req.params.numeroVisita,
+			req.params.valor,
+		);
+		if (!archivo) {
+			return res
+				.status(404)
+				.json({ success: false, message: 'El requisito todavía no tiene archivo' });
+		}
+
+		const candidatos = pathLookupCandidates(archivo.ruta);
+		const contentType = contentTypeForAdjuntoFileName(archivo.nombreArchivo);
+		const cabeceras = () => {
+			res.setHeader('Content-Type', contentType);
+			res.setHeader(
+				'Content-Disposition',
+				`inline; filename="${archivo.nombreArchivo}"; filename*=UTF-8''${encodeURIComponent(
+					archivo.nombreArchivo,
+				)}`,
+			);
+			res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+		};
+
+		try {
+			const fileServerUrl = await resolveFileServerUrl();
+			let respuesta = null;
+			let ultimoError = null;
+			for (const ruta of candidatos) {
+				try {
+					respuesta = await axios.get(fileServerFileUrl(fileServerUrl, ruta), {
+						responseType: 'stream',
+						headers: fileServerHeaders(),
+						timeout: FILE_SERVER_TIMEOUT_MS,
+						validateStatus: (s) => s >= 200 && s < 300,
+					});
+					break;
+				} catch (e) {
+					ultimoError = e;
+				}
+			}
+			if (!respuesta) throw ultimoError || new Error('Archivo no encontrado');
+			cabeceras();
+			return respuesta.data.pipe(res);
+		} catch (errorArchivo) {
+			const local = candidatos.find((p) => fsSync.existsSync(p));
+			if (local) {
+				cabeceras();
+				return fsSync.createReadStream(local).pipe(res);
+			}
+			console.error('No se pudo obtener el archivo del requisito:', errorArchivo.message);
+			return res.status(503).json({
+				success: false,
+				message: describeFileServerError(errorArchivo),
+			});
+		}
+	} catch (error) {
+		console.error('Error al ver el archivo del requisito:', error);
+		fallar(res, error, 'Error al ver el archivo del requisito');
+	}
+}
+
 module.exports = {
 	catalogos,
 	requisitosCobertura,
 	requisitosCatalogo,
 	ultimaVisita,
+	verArchivoRequisito,
 	crear,
 	requisitosVisita,
 	agregarRequisito,

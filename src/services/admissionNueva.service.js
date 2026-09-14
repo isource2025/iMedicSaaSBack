@@ -15,6 +15,7 @@ const { asignarPacienteACama } = require('./visitaMovimientos.service');
 const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
+	clarionAIsoCalendario,
 	fechaCalendarioArgentina,
 	horaWallArgentina,
 } = require('../utils/dateUtils');
@@ -41,6 +42,13 @@ const FILE_SERVER_FALLBACK_LOCAL =
 
 /** Requisitos que hereda toda visita, sin importar la cobertura. */
 const CLIENTE_REQUISITOS_BASE = 0;
+
+/**
+ * Valor de imRequisitos.AplicableAlPacienteOVisita para los documentos que son
+ * del paciente y no del episodio (DNI, carnet de obra social, etc.). Estos se
+ * reutilizan entre admisiones: si ya los presentó, no hay que volver a pedirlos.
+ */
+const APLICABLE_PACIENTE = 'Paciente';
 
 function errorHttp(mensaje, statusCode) {
 	const err = new Error(mensaje);
@@ -89,10 +97,54 @@ async function obtenerCatalogos(clienteId) {
 }
 
 /**
+ * Última presentación de cada requisito hecha por el paciente, en cualquier visita.
+ * Se usa para no volver a pedir documentos que ya están escaneados.
+ */
+async function presentacionesPreviasDelPaciente(idPaciente) {
+	const id = enteroOCero(idPaciente);
+	if (!id) return new Map();
+
+	const rows = await executeQuery(
+		`
+		SELECT Valor, NumeroVisita, FechaPresentacion, PatchDestino
+		FROM (
+			SELECT
+				vr.Valor,
+				vr.NumeroVisita,
+				vr.FechaPresentacion,
+				LTRIM(RTRIM(vr.PatchDestino)) AS PatchDestino,
+				ROW_NUMBER() OVER (
+					PARTITION BY vr.Valor
+					ORDER BY vr.FechaPresentacion DESC, vr.NumeroVisita DESC
+				) AS rn
+			FROM dbo.imVisitaRequisitos vr
+			WHERE vr.IdPaciente = @p0
+			  AND LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) <> ''
+		) t
+		WHERE t.rn = 1
+		`,
+		[{ value: id, type: 'Int' }],
+	).catch(() => []);
+
+	const mapa = new Map();
+	for (const r of rows || []) {
+		mapa.set(Number(r.Valor), {
+			numeroVisita: Number(r.NumeroVisita) || 0,
+			fecha: clarionAIsoCalendario(r.FechaPresentacion),
+			ruta: texto(r.PatchDestino),
+		});
+	}
+	return mapa;
+}
+
+/**
  * Requisitos documentales que corresponden a una cobertura, más los de base
  * (imClientesRequisitos con Cliente = 0), que aplican a cualquier admisión.
+ *
+ * Con idPaciente marca los requisitos del paciente que ya tienen un archivo
+ * presentado en otra visita, con la fecha para que la admisora decida si sirve.
  */
-async function requisitosPorCliente(clienteId) {
+async function requisitosPorCliente(clienteId, idPaciente) {
 	const cli = enteroOCero(clienteId);
 
 	const rows = await executeQuery(
@@ -114,12 +166,20 @@ async function requisitosPorCliente(clienteId) {
 		],
 	);
 
-	return (rows || []).map((r) => ({
-		Valor: Number(r.Valor),
-		Descripcion: r.Descripcion,
-		Aplicable: r.Aplicable,
-		DeCobertura: Number(r.DeCobertura) === 1,
-	}));
+	const previas = await presentacionesPreviasDelPaciente(idPaciente);
+
+	return (rows || []).map((r) => {
+		const valor = Number(r.Valor);
+		const aplicable = texto(r.Aplicable);
+		const previa = aplicable === APLICABLE_PACIENTE ? previas.get(valor) : null;
+		return {
+			Valor: valor,
+			Descripcion: r.Descripcion,
+			Aplicable: aplicable,
+			DeCobertura: Number(r.DeCobertura) === 1,
+			Presentado: previa || null,
+		};
+	});
 }
 
 /** Catálogo completo, para agregar un requisito que la cobertura no trae. */
@@ -326,6 +386,11 @@ async function crearAdmision(body, ctx = {}) {
 		return `@p${params.length - 1}`;
 	});
 
+	params.push({ value: APLICABLE_PACIENTE, type: 'VarChar', length: 10 });
+	const aplicablePaciente = `@p${params.length - 1}`;
+
+	// Los documentos que son del paciente (no del episodio) se heredan de la última
+	// visita donde los presentó: se copia la ruta del escaneo en vez de volver a pedirlo.
 	const insertRequisitos = requisitosPlaceholders.length
 		? `
 		INSERT INTO dbo.imVisitaRequisitos
@@ -333,6 +398,25 @@ async function crearAdmision(body, ctx = {}) {
 		SELECT @nv, r.Valor, 0, '', @p0, '', ''
 		FROM dbo.imRequisitos r
 		WHERE r.Valor IN (${requisitosPlaceholders.join(', ')});
+
+		UPDATE vr
+		SET vr.PatchOrigen = prev.PatchDestino,
+		    vr.PatchDestino = prev.PatchDestino,
+		    vr.FechaPresentacion = prev.FechaPresentacion,
+		    vr.Observaciones = prev.Observaciones
+		FROM dbo.imVisitaRequisitos vr
+		INNER JOIN dbo.imRequisitos r ON r.Valor = vr.Valor
+		CROSS APPLY (
+			SELECT TOP 1 p.PatchDestino, p.FechaPresentacion, p.Observaciones
+			FROM dbo.imVisitaRequisitos p
+			WHERE p.IdPaciente = @p0
+			  AND p.Valor = vr.Valor
+			  AND p.NumeroVisita <> @nv
+			  AND LTRIM(RTRIM(ISNULL(p.PatchDestino, ''))) <> ''
+			ORDER BY p.FechaPresentacion DESC, p.NumeroVisita DESC
+		) prev
+		WHERE vr.NumeroVisita = @nv
+		  AND LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) = ${aplicablePaciente};
 		`
 		: '';
 
@@ -443,7 +527,49 @@ async function listarRequisitosVisita(numeroVisita) {
 		Aplicable: r.Aplicable,
 		Observaciones: r.Observaciones,
 		tieneArchivo: Boolean(r.PatchDestino),
+		fechaPresentacion: clarionAIsoCalendario(r.FechaPresentacion),
+		nombreArchivo: nombreDeRuta(r.PatchDestino),
 	}));
+}
+
+/** Último tramo de una ruta de Windows o UNC, para mostrar el nombre del archivo. */
+function nombreDeRuta(ruta) {
+	const s = texto(ruta);
+	if (!s) return '';
+	const partes = s.split(/[\\/]/).filter(Boolean);
+	return partes.length ? partes[partes.length - 1] : '';
+}
+
+/**
+ * Ruta del archivo de un requisito, para que el controlador lo sirva desde el
+ * file server. Devuelve null si el requisito todavía no tiene nada adjunto.
+ */
+async function obtenerArchivoRequisito(numeroVisita, valorRequisito) {
+	const nv = enteroOCero(numeroVisita);
+	const valor = enteroOCero(valorRequisito);
+	if (!nv || !valor) throw errorHttp('Datos de requisito inválidos', 400);
+
+	const rows = await executeQuery(
+		`
+		SELECT TOP 1
+			LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) AS PatchDestino,
+			LTRIM(RTRIM(ISNULL(r.Descripcion, ''))) AS Descripcion
+		FROM dbo.imVisitaRequisitos vr
+		LEFT JOIN dbo.imRequisitos r ON r.Valor = vr.Valor
+		WHERE vr.NumeroVisita = @p0 AND vr.Valor = @p1
+		`,
+		[
+			{ value: nv, type: 'Int' },
+			{ value: valor, type: 'TinyInt' },
+		],
+	);
+
+	const ruta = texto(rows?.[0]?.PatchDestino);
+	if (!ruta) return null;
+	return {
+		ruta,
+		nombreArchivo: nombreDeRuta(ruta) || texto(rows?.[0]?.Descripcion) || 'archivo',
+	};
 }
 
 /** Agrega un requisito a una visita ya creada (idempotente por la PK). */
@@ -617,6 +743,7 @@ module.exports = {
 	requisitosPorCliente,
 	listarRequisitos,
 	obtenerUltimaVisita,
+	obtenerArchivoRequisito,
 	crearAdmision,
 	listarRequisitosVisita,
 	agregarRequisito,

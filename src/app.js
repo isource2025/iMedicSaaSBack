@@ -43,6 +43,7 @@ const tipoAdmisionRoutes = require('./routes/tipoAdmision.routes');
 const tipoPacienteRoutes = require('./routes/tipoPaciente.routes');
 const diagnosticoRoutes = require('./routes/diagnostico.routes');
 const provinciaCrudRoutes = require('./routes/provincia.routes');
+const clientesRequisitosRoutes = require('./routes/clientesRequisitos.routes');
 const dadorOrganosRoutes = require('./routes/dadorOrganos.routes');
 const coberturaRoutes = require('./routes/cobertura.routes');
 const visitaMovimientosRoutes = require('./routes/visitaMovimientos.routes');
@@ -193,6 +194,7 @@ app.use('/api/tipopaciente', tipoPacienteRoutes);
 app.use('/api/diagnosticos', diagnosticoRoutes);
 // provincias.routes es solo lectura; provincia.routes trae el CRUD.
 app.use('/api/provincia', provinciaCrudRoutes);
+app.use('/api/clientes-requisitos', clientesRequisitosRoutes);
 app.use('/api/dador-organos', dadorOrganosRoutes);
 app.use('/api/admin/opcgrd', opcGrdRoutes); // Ruta protegida para administradores
 app.use('/api/renaper', renaperRoutes);
