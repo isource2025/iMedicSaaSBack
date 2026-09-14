@@ -175,6 +175,66 @@ async function obtenerPaciente(idPaciente) {
 }
 
 /**
+ * Última admisión del paciente, para sugerir valores al dar de alta una nueva.
+ *
+ * Solo devuelve los datos que se suelen repetir entre admisiones del mismo
+ * paciente (cobertura, convenio, tipo de paciente, lugar del episodio y
+ * profesional de cabecera). El diagnóstico y la fecha no se sugieren porque son
+ * propios de cada episodio.
+ */
+async function obtenerUltimaVisita(idPaciente) {
+	const id = enteroOCero(idPaciente);
+	if (!id) throw errorHttp('Seleccioná un paciente', 400);
+
+	const rows = await executeQuery(
+		`
+		SELECT TOP 1
+			v.NUMEROVISITA AS NumeroVisita,
+			CONVERT(varchar(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
+			ISNULL(v.CLIENTE, 0) AS Cliente,
+			LTRIM(RTRIM(ISNULL(cli.RazonSocial, ''))) AS ClienteDescripcion,
+			ISNULL(v.CONTRATO, 0) AS Contrato,
+			LTRIM(RTRIM(ISNULL(conv.Descripcion, ''))) AS ContratoDescripcion,
+			LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) AS TipoPaciente,
+			LTRIM(RTRIM(ISNULL(tp.Descripcion, ''))) AS TipoPacienteDescripcion,
+			ISNULL(v.IdLugarEpisodio, 0) AS IdLugarEpisodio,
+			LTRIM(RTRIM(ISNULL(le.Descripcion, ''))) AS LugarEpisodioDescripcion,
+			ISNULL(v.DOCTORCONSULTOR, 0) AS DoctorCabecera,
+			LTRIM(RTRIM(ISNULL(docCab.ApellidoNombre, ''))) AS DoctorCabeceraDescripcion
+		FROM dbo.imVisita v
+		LEFT JOIN dbo.imClientes cli ON v.CLIENTE = cli.Valor
+		LEFT JOIN dbo.imClientesConvenios conv
+			ON conv.Valor = v.CLIENTE AND conv.Codigo = v.CONTRATO
+		LEFT JOIN dbo.imTipoPaciente tp
+			ON LTRIM(RTRIM(ISNULL(v.TIPOPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(tp.Valor, '')))
+		LEFT JOIN dbo.imLugarEpisodio le ON v.IdLugarEpisodio = le.IdLugarEpisodio
+		LEFT JOIN dbo.imPersonal docCab ON v.DOCTORCONSULTOR = docCab.Valor
+		WHERE v.IDPACIENTE = @p0
+		ORDER BY v.FECHAADMISIONS DESC, v.NUMEROVISITA DESC
+		`,
+		[{ value: id, type: 'Int' }],
+	);
+
+	const v = rows?.[0];
+	if (!v) return null;
+
+	return {
+		numeroVisita: Number(v.NumeroVisita) || 0,
+		fechaAdmision: texto(v.FechaAdmision),
+		cliente: Number(v.Cliente) || 0,
+		clienteDescripcion: texto(v.ClienteDescripcion),
+		contrato: Number(v.Contrato) || 0,
+		contratoDescripcion: texto(v.ContratoDescripcion),
+		tipoPaciente: texto(v.TipoPaciente),
+		tipoPacienteDescripcion: texto(v.TipoPacienteDescripcion),
+		idLugarEpisodio: Number(v.IdLugarEpisodio) || 0,
+		lugarEpisodioDescripcion: texto(v.LugarEpisodioDescripcion),
+		doctorCabecera: Number(v.DoctorCabecera) || 0,
+		doctorCabeceraDescripcion: texto(v.DoctorCabeceraDescripcion),
+	};
+}
+
+/**
  * Normaliza y valida el cuerpo del alta. Devuelve los valores ya recortados a los
  * anchos de imVisita (TIPOADMISION char(1), DIAGNOSTICO varchar(8), etc.).
  */
@@ -556,6 +616,7 @@ module.exports = {
 	obtenerCatalogos,
 	requisitosPorCliente,
 	listarRequisitos,
+	obtenerUltimaVisita,
 	crearAdmision,
 	listarRequisitosVisita,
 	agregarRequisito,

@@ -255,8 +255,10 @@ const obtenerPacientes = async (page = 1, limit = 30, searchTerm = '') => {
 					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
 					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento, '1800-12-28'))
 				END AS FechaNacimiento,
-    c.RazonSocial AS Cobertura,
-	p.NumeroCuenta
+    c.Valor AS Cobertura,
+    c.RazonSocial AS CoberturaDescripcion,
+	p.NumeroCuenta,
+	p.NumeroSSN AS nAfiliado
 FROM imPacientes p
 JOIN imClientes c 
     ON p.NumeroCuenta = c.Valor
@@ -335,7 +337,10 @@ const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') =
 					WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
 					ELSE CONVERT(DATETIME, DATEADD(DAY, p.FechaNacimiento, '1800-12-28'))
 				END AS FechaNacimiento,
-				c.RazonSocial as Cobertura
+				c.Valor AS Cobertura,
+				c.RazonSocial AS CoberturaDescripcion,
+				p.NumeroCuenta,
+				p.NumeroSSN AS nAfiliado
 			FROM imPacientes p
 			LEFT JOIN imClientes c ON p.NumeroCuenta = c.Valor
 			${whereClause}
@@ -420,6 +425,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.NumeroSSN,
 				p.NumeroSSN AS nAfiliado,
 				c.Valor AS Cobertura,
+				c.RazonSocial AS CoberturaDescripcion,
 				p.FotoURL,
 				p.LicenciaConducir,
 				p.DadorOrganos,
@@ -478,7 +484,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
           			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
         		END AS FechaNacimiento,
 				p.FechaNacimiento AS FechaNacimientoClarion,
-				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
+				p.EstadoCivil, c.Valor AS Cobertura, c.RazonSocial AS CoberturaDescripcion, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
 				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,
@@ -503,7 +509,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
           			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
         		END AS FechaNacimiento,
 				p.FechaNacimiento AS FechaNacimientoClarion,
-				p.EstadoCivil, c.RazonSocial AS Cobertura, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
+				p.EstadoCivil, c.Valor AS Cobertura, c.RazonSocial AS CoberturaDescripcion, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
 				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
 				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,

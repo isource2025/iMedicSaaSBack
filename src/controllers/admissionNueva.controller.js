@@ -45,6 +45,20 @@ async function requisitosCatalogo(req, res) {
 	}
 }
 
+async function ultimaVisita(req, res) {
+	try {
+		const idPaciente = Number(req.params.idPaciente);
+		if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
+			return res.status(400).json({ success: false, message: 'idPaciente inválido' });
+		}
+		const data = await admissionNuevaService.obtenerUltimaVisita(idPaciente);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('Error al obtener la última visita del paciente:', error);
+		fallar(res, error, 'Error al obtener la última visita del paciente');
+	}
+}
+
 async function crear(req, res) {
 	try {
 		const data = await admissionNuevaService.crearAdmision(req.body || {}, {
@@ -116,6 +130,7 @@ module.exports = {
 	catalogos,
 	requisitosCobertura,
 	requisitosCatalogo,
+	ultimaVisita,
 	crear,
 	requisitosVisita,
 	agregarRequisito,

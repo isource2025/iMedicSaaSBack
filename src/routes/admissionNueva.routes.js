@@ -43,6 +43,11 @@ router.get(
 	requirePermiso('ADMISION.NUEVA.CREAR'),
 	controller.requisitosCobertura,
 );
+router.get(
+	'/paciente/:idPaciente/ultima-visita',
+	requirePermiso('ADMISION.NUEVA.CREAR'),
+	controller.ultimaVisita,
+);
 router.post('/', requirePermiso('ADMISION.NUEVA.CREAR'), controller.crear);
 router.get(
 	'/:numeroVisita/requisitos',
