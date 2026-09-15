@@ -40,8 +40,8 @@ const FILE_SERVER_FALLBACK_LOCAL =
 	process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
 	process.env.NODE_ENV !== 'production';
 
-/** Requisitos que hereda toda visita, sin importar la cobertura. */
-const CLIENTE_REQUISITOS_BASE = 0;
+/** @deprecated reservado; el alta ya no usa set base de requisitos */
+const _CLIENTE_REQUISITOS_BASE_UNUSED = 0;
 
 /**
  * Valor de imRequisitos.AplicableAlPacienteOVisita para los documentos que son
@@ -81,10 +81,11 @@ function enteroOCero(valor) {
 async function obtenerCatalogos(clienteId) {
 	const [catalogosBase, coberturas] = await Promise.all([
 		obtenerCatalogosAdmision(clienteId),
+		// Incluye NoFacturable (p. ej. SUMAR): son coberturas válidas al admitir,
+		// aunque no se facturen.
 		executeQuery(
-			`SELECT Valor, RazonSocial AS Descripcion
+			`SELECT Valor, LTRIM(RTRIM(ISNULL(RazonSocial, ''))) AS Descripcion
 			 FROM dbo.imClientes
-			 WHERE ISNULL(NoFacturable, 0) = 0
 			 ORDER BY RazonSocial`,
 		).catch(() => []),
 	]);
@@ -139,15 +140,16 @@ async function presentacionesPreviasDelPaciente(idPaciente) {
 
 /**
  * Requisitos documentales de la cobertura elegida (imClientesRequisitos).
- * Si la cobertura no tiene ninguno configurado, se usan los de base (Cliente = 0).
- * No se mezclan ambos: eso traía documentos de más (p. ej. DNI genérico + Frente/Reverso).
+ * Sin cobertura (cliente 0) → lista vacía. No hay set "base".
  *
  * Con idPaciente marca los requisitos del paciente que ya tienen un archivo
  * presentado en otra visita, con la fecha para que la admisora decida si sirve.
  */
-async function requisitosDeCliente(clienteId) {
+async function requisitosPorCliente(clienteId, idPaciente) {
 	const cli = enteroOCero(clienteId);
-	return executeQuery(
+	if (cli <= 0) return [];
+
+	const rows = await executeQuery(
 		`
 		SELECT
 			r.Valor,
@@ -160,19 +162,6 @@ async function requisitosDeCliente(clienteId) {
 		`,
 		[{ value: cli, type: 'Int' }],
 	);
-}
-
-async function requisitosPorCliente(clienteId, idPaciente) {
-	const cli = enteroOCero(clienteId);
-
-	let rows = await requisitosDeCliente(cli);
-	let deBase = cli === CLIENTE_REQUISITOS_BASE;
-
-	// Cobertura sin requisitos propios: cae al set base (Cliente 0).
-	if (cli > 0 && (!rows || rows.length === 0)) {
-		rows = await requisitosDeCliente(CLIENTE_REQUISITOS_BASE);
-		deBase = true;
-	}
 
 	const previas = await presentacionesPreviasDelPaciente(idPaciente);
 
@@ -184,8 +173,8 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 			Valor: valor,
 			Descripcion: r.Descripcion,
 			Aplicable: aplicable,
-			DeCobertura: !deBase,
-			DeBase: deBase,
+			DeCobertura: true,
+			DeBase: false,
 			Presentado: previa || null,
 		};
 	});
