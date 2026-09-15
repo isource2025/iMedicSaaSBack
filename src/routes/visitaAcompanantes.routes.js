@@ -2,15 +2,16 @@ const express = require('express');
 
 const controller = require('../controllers/visitaAcompanantes.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 
 const router = express.Router();
 
 router.use(requireTenant);
 
-// Misma puerta que el resto de la gestión de visita (modal de admisión).
-const permiso = requirePermiso('ADMISION.BUSQUEDA.VER');
+// Quien crea la admisión también puede cargar acompañantes en el mismo flujo.
+const permiso = requireAnyPermiso('ADMISION.BUSQUEDA.VER', 'ADMISION.NUEVA.CREAR');
 
+router.get('/catalogos', permiso, controller.catalogos);
 router.get('/:numeroVisita', permiso, controller.panel);
 router.post('/:numeroVisita/acompanantes', permiso, controller.agregarAcompanante);
 router.delete('/:numeroVisita/acompanantes', permiso, controller.quitarAcompanante);

@@ -10,6 +10,16 @@ function fallar(res, error, mensajePorDefecto) {
 	});
 }
 
+async function catalogos(req, res) {
+	try {
+		const data = await service.obtenerCatalogos();
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('Error al cargar catálogos de acompañantes:', error);
+		fallar(res, error, 'Error al cargar catálogos de acompañantes');
+	}
+}
+
 async function panel(req, res) {
 	try {
 		const data = await service.obtenerPanel(req.params.numeroVisita);
@@ -82,6 +92,7 @@ async function quitarNovedad(req, res) {
 }
 
 module.exports = {
+	catalogos,
 	panel,
 	agregarAcompanante,
 	quitarAcompanante,

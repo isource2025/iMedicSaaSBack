@@ -151,10 +151,10 @@ const localidadService = {
       
       const query = `
         INSERT INTO imLocalidades (valor, descripcion)
-        VALUES (?, ?)
+        VALUES (@p0, @p1)
       `;
       
-      await executeQuery(query, [data.valor, data.descripcion]);
+      await executeQuery(query, [{ value: data.valor }, { value: data.descripcion }]);
       return true;
     } catch (error) {
       console.error('Error al crear localidad:', error);

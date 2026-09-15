@@ -23,7 +23,7 @@ function responder(res, resultado) {
 		success: true,
 		data: resultado.rows,
 		columns: servicio.columnasUi(resultado.def),
-		keyField: resultado.def.columns.find((c) => c.name === resultado.def.key)?.as || 'Valor',
+		keyField: servicio.keyFieldDe(resultado.def),
 		title: resultado.def.title,
 		id: resultado.def.id,
 	});

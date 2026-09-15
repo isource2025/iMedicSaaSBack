@@ -21,6 +21,15 @@ function entero(valor) {
 
 /** Coberturas con la cantidad de requisitos que tienen configurados. */
 async function listarCoberturas() {
+	const baseCount = await executeQuery(
+		`
+		SELECT COUNT(*) AS Cantidad
+		FROM dbo.imClientesRequisitos
+		WHERE Cliente = @p0
+		`,
+		[{ value: CLIENTE_BASE, type: 'Int' }],
+	);
+
 	const rows = await executeQuery(`
 		SELECT
 			c.Valor,
@@ -36,11 +45,18 @@ async function listarCoberturas() {
 		ORDER BY c.RazonSocial
 	`);
 
-	return (rows || []).map((r) => ({
-		Valor: Number(r.Valor),
-		Descripcion: r.Descripcion,
-		Requisitos: Number(r.Requisitos) || 0,
-	}));
+	return [
+		{
+			Valor: CLIENTE_BASE,
+			Descripcion: 'Base (toda admisión sin cobertura propia)',
+			Requisitos: Number(baseCount?.[0]?.Cantidad) || 0,
+		},
+		...(rows || []).map((r) => ({
+			Valor: Number(r.Valor),
+			Descripcion: r.Descripcion,
+			Requisitos: Number(r.Requisitos) || 0,
+		})),
+	];
 }
 
 /**

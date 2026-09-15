@@ -68,8 +68,8 @@ const religionService = {
       }
       
       // Insertar la nueva religión
-      const query = 'INSERT INTO imReligion (Valor, Descripcion) VALUES (?, ?)';
-      await executeQuery(query, [religion.Valor, religion.Descripcion]);
+      const query = 'INSERT INTO imReligion (Valor, Descripcion) VALUES (@p0, @p1)';
+      await executeQuery(query, [{ value: religion.Valor }, { value: religion.Descripcion }]);
       
       // Devolver la religión recién creada
       return await religionService.getReligion(religion.Valor);
@@ -99,8 +99,8 @@ const religionService = {
       }
       
       // Actualizar la religión
-      const query = 'UPDATE imReligion SET Descripcion = ? WHERE Valor = ?';
-      await executeQuery(query, [descripcion, valor]);
+      const query = 'UPDATE imReligion SET Descripcion = @p0 WHERE Valor = @p1';
+      await executeQuery(query, [{ value: descripcion }, { value: valor }]);
       
       // Devolver la religión actualizada
       return await religionService.getReligion(valor);
@@ -124,8 +124,8 @@ const religionService = {
       }
       
       // Eliminar la religión
-      const query = 'DELETE FROM imReligion WHERE Valor = ?';
-      await executeQuery(query, [valor]);
+      const query = 'DELETE FROM imReligion WHERE Valor = @p0';
+      await executeQuery(query, [{ value: valor }]);
     } catch (error) {
       console.error(`Error al eliminar religión con valor ${valor}:`, error);
       throw error;

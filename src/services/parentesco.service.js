@@ -41,10 +41,10 @@ const parentescoService = {
       const query = `
         SELECT Valor, Descripcion
         FROM imParentesco
-        WHERE Valor = ?
+        WHERE Valor = @p0
       `;
 
-      const results = await executeQuery(query, [valor]);
+      const results = await executeQuery(query, [{ value: valor }]);
 
       // Si no hay resultados, retorna null
       if (!results || results.length === 0) {
@@ -89,10 +89,10 @@ const parentescoService = {
       // Inserta el nuevo parentesco
       const query = `
         INSERT INTO imParentesco (Valor, Descripcion)
-        VALUES (?, ?)
+        VALUES (@p0, @p1)
       `;
 
-      await executeQuery(query, [parentesco.Valor, parentesco.Descripcion]);
+      await executeQuery(query, [{ value: parentesco.Valor }, { value: parentesco.Descripcion }]);
 
       return parentesco;
     } catch (error) {
@@ -127,11 +127,11 @@ const parentescoService = {
       // Actualiza el parentesco
       const query = `
         UPDATE imParentesco
-        SET Descripcion = ?
-        WHERE Valor = ?
+        SET Descripcion = @p0
+        WHERE Valor = @p1
       `;
 
-      await executeQuery(query, [descripcion, valor]);
+      await executeQuery(query, [{ value: descripcion }, { value: valor }]);
 
       return {
         Valor: valor,
@@ -159,10 +159,10 @@ const parentescoService = {
       // Elimina el parentesco
       const query = `
         DELETE FROM imParentesco
-        WHERE Valor = ?
+        WHERE Valor = @p0
       `;
 
-      await executeQuery(query, [valor]);
+      await executeQuery(query, [{ value: valor }]);
 
       return true;
     } catch (error) {

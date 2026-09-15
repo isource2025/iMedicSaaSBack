@@ -134,14 +134,14 @@ const provinciaService = {
       // Inserta la nueva provincia
       const query = `
         INSERT INTO imProvincia (Valor, LetraProvincia, Descripcion, ValorNacionalidad)
-        VALUES (?, ?, ?, ?)
+        VALUES (@p0, @p1, @p2, @p3)
       `;
 
       await executeQuery(query, [
-        data.Valor, 
-        data.LetraProvincia, 
-        data.Descripcion, 
-        data.ValorNacionalidad
+        { value: data.Valor },
+        { value: data.LetraProvincia },
+        { value: data.Descripcion },
+        { value: data.ValorNacionalidad },
       ]);
 
       return data;
@@ -190,33 +190,30 @@ const provinciaService = {
       let queryParams = [];
 
       if (data.LetraProvincia !== undefined) {
-        updateFields.push('LetraProvincia = ?');
-        queryParams.push(data.LetraProvincia);
+        updateFields.push(`LetraProvincia = @p${queryParams.length}`);
+        queryParams.push({ value: data.LetraProvincia });
       }
 
       if (data.Descripcion !== undefined) {
-        updateFields.push('Descripcion = ?');
-        queryParams.push(data.Descripcion);
+        updateFields.push(`Descripcion = @p${queryParams.length}`);
+        queryParams.push({ value: data.Descripcion });
       }
 
       if (data.ValorNacionalidad !== undefined) {
-        updateFields.push('ValorNacionalidad = ?');
-        queryParams.push(data.ValorNacionalidad);
+        updateFields.push(`ValorNacionalidad = @p${queryParams.length}`);
+        queryParams.push({ value: data.ValorNacionalidad });
       }
 
-      // Si no hay campos para actualizar
       if (updateFields.length === 0) {
         throw new Error('No se proporcionaron campos para actualizar');
       }
 
-      // Construye la consulta
+      queryParams.push({ value: valor });
       const query = `
         UPDATE imProvincia
         SET ${updateFields.join(', ')}
-        WHERE Valor = ?
+        WHERE Valor = @p${queryParams.length - 1}
       `;
-
-      queryParams.push(valor); // Añade el valor al final para el WHERE
 
       await executeQuery(query, queryParams);
 
@@ -246,10 +243,10 @@ const provinciaService = {
       // Elimina la provincia
       const query = `
         DELETE FROM imProvincia
-        WHERE Valor = ?
+        WHERE Valor = @p0
       `;
 
-      await executeQuery(query, [valor]);
+      await executeQuery(query, [{ value: valor }]);
 
       return true;
     } catch (error) {

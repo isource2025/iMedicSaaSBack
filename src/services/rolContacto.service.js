@@ -32,8 +32,8 @@ const rolContactoService = {
    */
   getRolContacto: async (valor) => {
     try {
-      const query = 'SELECT Valor, Descripcion FROM imRolContacto WHERE Valor = ?';
-      const result = await executeQuery(query, [valor]);
+      const query = 'SELECT Valor, Descripcion FROM imRolContacto WHERE Valor = @p0';
+      const result = await executeQuery(query, [{ value: valor }]);
       
       return result.length > 0 ? result[0] : null;
     } catch (error) {
@@ -73,8 +73,8 @@ const rolContactoService = {
       }
       
       // Insertar el nuevo rol de contacto
-      const query = 'INSERT INTO imRolContacto (Valor, Descripcion) VALUES (?, ?)';
-      await executeQuery(query, [rolContacto.Valor, rolContacto.Descripcion]);
+      const query = 'INSERT INTO imRolContacto (Valor, Descripcion) VALUES (@p0, @p1)';
+      await executeQuery(query, [{ value: rolContacto.Valor }, { value: rolContacto.Descripcion }]);
       
       // Devolver el rol de contacto recién creado
       return await rolContactoService.getRolContacto(rolContacto.Valor);
@@ -109,8 +109,8 @@ const rolContactoService = {
       }
       
       // Actualizar el rol de contacto
-      const query = 'UPDATE imRolContacto SET Descripcion = ? WHERE Valor = ?';
-      await executeQuery(query, [descripcion, valor]);
+      const query = 'UPDATE imRolContacto SET Descripcion = @p0 WHERE Valor = @p1';
+      await executeQuery(query, [{ value: descripcion }, { value: valor }]);
       
       // Devolver el rol de contacto actualizado
       return await rolContactoService.getRolContacto(valor);
@@ -134,8 +134,8 @@ const rolContactoService = {
       }
       
       // Eliminar el rol de contacto
-      const query = 'DELETE FROM imRolContacto WHERE Valor = ?';
-      await executeQuery(query, [valor]);
+      const query = 'DELETE FROM imRolContacto WHERE Valor = @p0';
+      await executeQuery(query, [{ value: valor }]);
     } catch (error) {
       console.error(`Error al eliminar rol de contacto con valor ${valor}:`, error);
       throw error;

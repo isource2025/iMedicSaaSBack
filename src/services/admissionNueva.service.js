@@ -138,33 +138,41 @@ async function presentacionesPreviasDelPaciente(idPaciente) {
 }
 
 /**
- * Requisitos documentales que corresponden a una cobertura, más los de base
- * (imClientesRequisitos con Cliente = 0), que aplican a cualquier admisión.
+ * Requisitos documentales de la cobertura elegida (imClientesRequisitos).
+ * Si la cobertura no tiene ninguno configurado, se usan los de base (Cliente = 0).
+ * No se mezclan ambos: eso traía documentos de más (p. ej. DNI genérico + Frente/Reverso).
  *
  * Con idPaciente marca los requisitos del paciente que ya tienen un archivo
  * presentado en otra visita, con la fecha para que la admisora decida si sirve.
  */
-async function requisitosPorCliente(clienteId, idPaciente) {
+async function requisitosDeCliente(clienteId) {
 	const cli = enteroOCero(clienteId);
-
-	const rows = await executeQuery(
+	return executeQuery(
 		`
 		SELECT
 			r.Valor,
 			LTRIM(RTRIM(ISNULL(r.Descripcion, ''))) AS Descripcion,
-			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable,
-			MAX(CASE WHEN cr.Cliente = @p0 THEN 1 ELSE 0 END) AS DeCobertura
+			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable
 		FROM dbo.imClientesRequisitos cr
 		INNER JOIN dbo.imRequisitos r ON r.Valor = cr.Requisito
-		WHERE cr.Cliente IN (@p0, @p1)
-		GROUP BY r.Valor, r.Descripcion, r.AplicableAlPacienteOVisita
+		WHERE cr.Cliente = @p0
 		ORDER BY r.Descripcion
 		`,
-		[
-			{ value: cli, type: 'Int' },
-			{ value: CLIENTE_REQUISITOS_BASE, type: 'Int' },
-		],
+		[{ value: cli, type: 'Int' }],
 	);
+}
+
+async function requisitosPorCliente(clienteId, idPaciente) {
+	const cli = enteroOCero(clienteId);
+
+	let rows = await requisitosDeCliente(cli);
+	let deBase = cli === CLIENTE_REQUISITOS_BASE;
+
+	// Cobertura sin requisitos propios: cae al set base (Cliente 0).
+	if (cli > 0 && (!rows || rows.length === 0)) {
+		rows = await requisitosDeCliente(CLIENTE_REQUISITOS_BASE);
+		deBase = true;
+	}
 
 	const previas = await presentacionesPreviasDelPaciente(idPaciente);
 
@@ -176,7 +184,8 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 			Valor: valor,
 			Descripcion: r.Descripcion,
 			Aplicable: aplicable,
-			DeCobertura: Number(r.DeCobertura) === 1,
+			DeCobertura: !deBase,
+			DeBase: deBase,
 			Presentado: previa || null,
 		};
 	});

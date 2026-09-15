@@ -42,10 +42,10 @@ const nacionalidadService = {
         FROM 
           imNacionalidad 
         WHERE 
-          Valor = ?
+          Valor = @p0
       `;
       
-      const result = await executeQuery(query, [valor]);
+      const result = await executeQuery(query, [{ value: valor }]);
       return result && result.length > 0 ? result[0] : null;
     } catch (error) {
       console.error(`Error al obtener nacionalidad con valor ${valor}:`, error);
@@ -70,10 +70,10 @@ const nacionalidadService = {
       
       const query = `
         INSERT INTO imNacionalidad (Valor, Descripcion)
-        VALUES (?, ?)
+        VALUES (@p0, @p1)
       `;
       
-      await executeQuery(query, [data.Valor, data.Descripcion]);
+      await executeQuery(query, [{ value: data.Valor }, { value: data.Descripcion }]);
       return true;
     } catch (error) {
       console.error('Error al crear nacionalidad:', error);
@@ -98,11 +98,11 @@ const nacionalidadService = {
       
       const query = `
         UPDATE imNacionalidad
-        SET Descripcion = ?
-        WHERE Valor = ?
+        SET Descripcion = @p0
+        WHERE Valor = @p1
       `;
       
-      await executeQuery(query, [data.Descripcion, valor]);
+      await executeQuery(query, [{ value: data.Descripcion }, { value: valor }]);
       return true;
     } catch (error) {
       console.error(`Error al actualizar nacionalidad con valor ${valor}:`, error);
@@ -125,10 +125,10 @@ const nacionalidadService = {
       
       const query = `
         DELETE FROM imNacionalidad
-        WHERE Valor = ?
+        WHERE Valor = @p0
       `;
       
-      await executeQuery(query, [valor]);
+      await executeQuery(query, [{ value: valor }]);
       return true;
     } catch (error) {
       console.error(`Error al eliminar nacionalidad con valor ${valor}:`, error);
