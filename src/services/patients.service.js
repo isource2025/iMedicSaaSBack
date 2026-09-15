@@ -314,15 +314,20 @@ const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') =
 		let params = [];
 
 		if (searchTerm && searchTerm.length >= 3) {
+			const searchPattern = `%${searchTerm}%`;
+			const digits = String(searchTerm).replace(/\D/g, '');
+			const nv = Number(digits);
+			const porVisita = Number.isSafeInteger(nv) && nv > 0;
 			whereClause = `
 				WHERE (
-					p.ApellidoyNombre LIKE ? 
-					OR p.NumeroDocumento LIKE ? 
+					p.ApellidoyNombre LIKE ?
+					OR p.NumeroDocumento LIKE ?
 					OR p.NumeroHC LIKE ?
+					${porVisita ? 'OR EXISTS (SELECT 1 FROM dbo.imVisita v WHERE v.IDPACIENTE = p.IdPaciente AND v.NUMEROVISITA = ?)' : ''}
 				)
 			`;
-			const searchPattern = `%${searchTerm}%`;
 			params = [searchPattern, searchPattern, searchPattern];
+			if (porVisita) params.push(nv);
 		}
 
 		// Query principal con paginación
@@ -497,6 +502,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 			   OR LTRIM(RTRIM(CAST(p.NumeroDocumento AS VARCHAR(20)))) = @p1
 			   OR LTRIM(RTRIM(CAST(p.NumeroHC AS VARCHAR(20)))) = @p1
 			   OR p.ApellidoyNombre LIKE @p2
+			   OR EXISTS (SELECT 1 FROM dbo.imVisita v WHERE v.IDPACIENTE = p.IdPaciente AND v.NUMEROVISITA = @p0)
 			ORDER BY p.IDPaciente DESC`;
 			params = [{ value: Number(term) }, { value: term }, { value: `%${term}%` }];
 		} else {

@@ -42,6 +42,7 @@ function sectionsRequireDateFilter(sections) {
 async function buscar(req, res) {
   try {
     const {
+      termino = '',
       dni = '',
       nombreApellido = '',
       fechaInicio = '',
@@ -51,6 +52,7 @@ async function buscar(req, res) {
     } = req.query;
 
     const result = await admissionSearchService.buscarAdmisiones({
+      termino,
       dni,
       nombreApellido,
       fechaInicio,

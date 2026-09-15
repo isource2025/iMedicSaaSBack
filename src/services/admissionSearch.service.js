@@ -132,6 +132,7 @@ async function getPracticasNomencladorResolver() {
 }
 
 async function buscarAdmisiones({
+  termino = '',
   dni = '',
   nombreApellido = '',
   fechaInicio = '',
@@ -141,6 +142,33 @@ async function buscarAdmisiones({
 }) {
   const whereParts = [];
   const params = [];
+  let visitaExactaParam = -1;
+
+  // Buscador unificado: un solo término que se prueba contra apellido y nombre,
+  // documento y número de visita. Van con OR porque el usuario no elige el campo.
+  // Los filtros sueltos de abajo siguen existiendo para los llamadores viejos.
+  if (String(termino).trim()) {
+    const t = String(termino).trim();
+    const digits = normalizeDigits(t);
+    const alternativas = [`p.ApellidoYNombre LIKE @param${params.length}`];
+    params.push({ value: normalizeLike(t) });
+
+    if (digits) {
+      alternativas.push(
+        `REPLACE(REPLACE(REPLACE(CAST(p.NumeroDocumento AS VARCHAR(50)), '.', ''), '-', ''), ' ', '') LIKE @param${params.length}`,
+      );
+      params.push({ value: `%${digits}%` });
+
+      const nv = Number(digits);
+      if (Number.isSafeInteger(nv) && nv > 0 && t === digits) {
+        visitaExactaParam = params.length;
+        alternativas.push(`v.NUMEROVISITA = @param${params.length}`);
+        params.push({ value: nv });
+      }
+    }
+
+    whereParts.push(`(${alternativas.join(' OR ')})`);
+  }
 
   if (String(dni).trim()) {
     const digits = normalizeDigits(dni);
@@ -329,7 +357,11 @@ async function buscarAdmisiones({
     ) bed
     LEFT JOIN imSectores secBed ON LTRIM(RTRIM(ISNULL(bed.ValorSector, ''))) = LTRIM(RTRIM(ISNULL(secBed.Valor, '')))
     ${whereClause}
-    ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+    ORDER BY ${
+      visitaExactaParam >= 0
+        ? `CASE WHEN v.NUMEROVISITA = @param${visitaExactaParam} THEN 0 ELSE 1 END, `
+        : ''
+    }v.FECHAADMISIONS DESC, v.NumeroVisita DESC
     OFFSET @param${params.length} ROWS FETCH NEXT @param${params.length + 1} ROWS ONLY
   `;
 
