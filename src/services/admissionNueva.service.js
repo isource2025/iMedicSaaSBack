@@ -100,6 +100,9 @@ async function obtenerCatalogos(clienteId) {
 /**
  * Última presentación de cada requisito hecha por el paciente, en cualquier visita.
  * Se usa para no volver a pedir documentos que ya están escaneados.
+ *
+ * Clarion a menudo dejó IdPaciente vacío en imVisitaRequisitos: también se
+ * resuelve por imVisita.IDPACIENTE de la misma visita.
  */
 async function presentacionesPreviasDelPaciente(idPaciente) {
 	const id = enteroOCero(idPaciente);
@@ -119,8 +122,12 @@ async function presentacionesPreviasDelPaciente(idPaciente) {
 					ORDER BY vr.FechaPresentacion DESC, vr.NumeroVisita DESC
 				) AS rn
 			FROM dbo.imVisitaRequisitos vr
-			WHERE vr.IdPaciente = @p0
-			  AND LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) <> ''
+			LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = vr.NumeroVisita
+			WHERE LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) <> ''
+			  AND (
+					vr.IdPaciente = @p0
+					OR v.IDPACIENTE = @p0
+			  )
 		) t
 		WHERE t.rn = 1
 		`,
@@ -168,14 +175,15 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 	return (rows || []).map((r) => {
 		const valor = Number(r.Valor);
 		const aplicable = texto(r.Aplicable);
-		const previa = aplicable === APLICABLE_PACIENTE ? previas.get(valor) : null;
+		const esPaciente = aplicable.toLowerCase() === 'paciente';
+		const previa = esPaciente ? previas.get(valor) || null : null;
 		return {
 			Valor: valor,
 			Descripcion: r.Descripcion,
 			Aplicable: aplicable,
 			DeCobertura: true,
 			DeBase: false,
-			Presentado: previa || null,
+			Presentado: previa,
 		};
 	});
 }
@@ -407,10 +415,11 @@ async function crearAdmision(body, ctx = {}) {
 		CROSS APPLY (
 			SELECT TOP 1 p.PatchDestino, p.FechaPresentacion, p.Observaciones
 			FROM dbo.imVisitaRequisitos p
-			WHERE p.IdPaciente = @p0
-			  AND p.Valor = vr.Valor
+			LEFT JOIN dbo.imVisita vprev ON vprev.NUMEROVISITA = p.NumeroVisita
+			WHERE p.Valor = vr.Valor
 			  AND p.NumeroVisita <> @nv
 			  AND LTRIM(RTRIM(ISNULL(p.PatchDestino, ''))) <> ''
+			  AND (p.IdPaciente = @p0 OR vprev.IDPACIENTE = @p0)
 			ORDER BY p.FechaPresentacion DESC, p.NumeroVisita DESC
 		) prev
 		WHERE vr.NumeroVisita = @nv
@@ -609,12 +618,32 @@ async function quitarRequisito(numeroVisita, valorRequisito) {
 }
 
 /**
- * Ruta destino de la imagen de un requisito, respetando el layout que dejó el
- * sistema Clarion: <PatchDestino del requisito>\<documento apellido y nombre>\<requisito> - 0.<ext>
+ * Ruta destino de un requisito — SIEMPRE relativa al UncRoot de la clínica.
+ * El file server del túnel antepone su propio root (Vidal, Sarmiento, etc.).
+ * No se usa IP ni host de imRequisitos.PatchDestino.
+ *
+ * – Paciente: PERSONALES\<DNI APELLIDO NOMBRE>\<requisito> - 0.<ext>
+ * – Visita:   \<DNI APELLIDO NOMBRE>\<requisito> - 0.<ext>
  */
-function rutaDestinoRequisito(patchDestino, paciente, descripcionRequisito, nombreArchivo) {
-	const base = texto(patchDestino).replace(/[\\/]+$/, '');
-	if (!base) return null;
+function esRequisitoPaciente(aplicable) {
+	return String(aplicable || '').trim().toLowerCase() === 'paciente';
+}
+
+function baseDestinoRequisito(patchDestino, aplicable) {
+	const raw = texto(patchDestino).replace(/[\\/]+$/, '');
+	const pidePersonales =
+		esRequisitoPaciente(aplicable) || /\\PERSONALES$/i.test(raw) || /\\PERSONALES\\/i.test(raw);
+	return pidePersonales ? 'PERSONALES' : '';
+}
+
+function rutaDestinoRequisito(
+	patchDestino,
+	paciente,
+	descripcionRequisito,
+	nombreArchivo,
+	aplicable,
+) {
+	const base = baseDestinoRequisito(patchDestino, aplicable);
 
 	const carpeta = sanitizeFolderName(
 		`${texto(paciente.Documento)} ${texto(paciente.ApellidoyNombre)}`.trim(),
@@ -622,7 +651,8 @@ function rutaDestinoRequisito(patchDestino, paciente, descripcionRequisito, nomb
 	const ext = path.extname(nombreArchivo || '') || '.jpg';
 	const archivo = sanitizeWindowsFileName(`${texto(descripcionRequisito)} - 0${ext}`);
 
-	return carpeta ? `${base}\\${carpeta}\\${archivo}` : `${base}\\${archivo}`;
+	const partes = [base, carpeta, archivo].filter(Boolean);
+	return partes.join('\\');
 }
 
 /**
@@ -641,6 +671,7 @@ async function adjuntarArchivoRequisito(numeroVisita, valorRequisito, file, ctx 
 		SELECT TOP 1
 			LTRIM(RTRIM(ISNULL(r.Descripcion, ''))) AS Descripcion,
 			LTRIM(RTRIM(ISNULL(r.PatchDestino, ''))) AS PatchDestino,
+			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable,
 			v.IDPACIENTE AS IdPaciente
 		FROM dbo.imVisita v
 		CROSS JOIN dbo.imRequisitos r
@@ -662,6 +693,7 @@ async function adjuntarArchivoRequisito(numeroVisita, valorRequisito, file, ctx 
 		paciente,
 		meta.Descripcion,
 		file.originalname,
+		meta.Aplicable,
 	);
 
 	let rutaGuardada;

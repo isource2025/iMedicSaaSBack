@@ -1,0 +1,102 @@
+# Pegá ESTO en el file-server.ps1 que ya tenés en Vidal
+# Archivo típico: C:\ProgramData\iMedic\file-server.ps1
+# Después reiniciá la tarea "iMedic File Server" (o volvé a correr Parche-Unc-Vidal.ps1).
+#
+# NO hace falta tocar el túnel Cloudflare ni UncRoot.
+# Solo dos cambios: (1) reemplazar Map-Path entero  (2) 4 líneas en /upload
+
+# =============================================================================
+# (1) REEMPLAZÁ TODA la función Map-Path por esta:
+# =============================================================================
+
+function Map-Path([string]$p) {
+	$p = Decode-Path $p
+	if (-not $p) { return $null }
+	if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+
+	# Relativa al UncRoot/LocalRoot de ESTA clínica (sin IP ni host fijo).
+	$esAbsoluta = ($p -match '^[A-Za-z]:\\') -or ($p -like '\\*')
+	if (-not $esAbsoluta) {
+		foreach ($root in @($UncRoot, $LocalRoot)) {
+			if (-not $root) { continue }
+			$c = Join-Path $root.TrimEnd('\') $p.TrimStart('\')
+			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+		}
+	}
+
+	# UNC legacy Clarion (\\192.168…\Imagenes\Vidal\…): solo el sufijo relativo.
+	if ($p -match '(?i)^\\\\[^\\]+\\Imagenes\\[^\\]+\\(.+)$') {
+		$rel = $Matches[1]
+		foreach ($root in @($UncRoot, $LocalRoot)) {
+			if (-not $root) { continue }
+			$c = Join-Path $root.TrimEnd('\') $rel
+			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+		}
+	}
+
+	if ($p -like '\\*') {
+		if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+		$uncNorm = $UncRoot.TrimEnd('\')
+		if ($p.StartsWith($uncNorm, [StringComparison]::OrdinalIgnoreCase)) {
+			if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+		}
+	}
+	$uncNorm = $UncRoot.TrimEnd('\')
+	if ($p.StartsWith($uncNorm, [StringComparison]::OrdinalIgnoreCase)) {
+		$rel = $p.Substring($uncNorm.Length).TrimStart('\')
+		$local = Join-Path $LocalRoot $rel
+		if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
+	}
+	$name = Split-Path $p -Leaf
+	$c1 = Join-Path $LocalRoot $name
+	if (Test-Path -LiteralPath $c1 -PathType Leaf) { return $c1 }
+	$enie = [string][char]0x00D1
+	$enieMin = [string][char]0x00F1
+	$under = $p.Replace($enie, '_').Replace($enieMin, '_')
+	if ($under -ne $p -and (Test-Path -LiteralPath $under -PathType Leaf)) { return $under }
+	$parentName = ''
+	try { $parentName = Split-Path (Split-Path $p -Parent) -Leaf } catch { $parentName = '' }
+	$visita = $null
+	if ($parentName -match '^(\d+)(\s|$)') { $visita = $Matches[1] }
+	if ($visita) {
+		foreach ($root in @($LocalRoot, $UncRoot)) {
+			if (-not $root) { continue }
+			if (-not (Test-Path -LiteralPath $root)) { continue }
+			$dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+				Where-Object { $_.Name -eq $visita -or $_.Name.StartsWith(($visita + ' ')) }
+			foreach ($d in $dirs) {
+				$c = Join-Path $d.FullName $name
+				if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			}
+		}
+	}
+	return $null
+}
+
+# =============================================================================
+# (2) EN EL BLOQUE /upload, buscá estas líneas:
+#
+#	$dest = if ($mp.fields['path']) { Decode-Path $mp.fields['path'] } else {
+#		Build-Dest $mp.fields['numeroVisita'] $mp.fields['nombrePaciente'] $mp.file.filename
+#	}
+#	$dir = Split-Path $dest -Parent
+#
+# Y DEJALAS ASÍ (solo se agregan las 4 líneas del medio):
+# =============================================================================
+
+			$dest = if ($mp.fields['path']) { Decode-Path $mp.fields['path'] } else {
+				Build-Dest $mp.fields['numeroVisita'] $mp.fields['nombrePaciente'] $mp.file.filename
+			}
+			# Ruta relativa (requisitos): anteponer UncRoot de esta clínica.
+			if ($dest -and ($dest -notmatch '^[A-Za-z]:\\') -and ($dest -notlike '\\*')) {
+				$baseRoot = if (Test-Path -LiteralPath $UncRoot) { $UncRoot } else { $LocalRoot }
+				$dest = Join-Path $baseRoot.TrimEnd('\') $dest.TrimStart('\')
+			}
+			$dir = Split-Path $dest -Parent
+
+# =============================================================================
+# Reinicio rápido (Admin):
+#   Stop-ScheduledTask -TaskName 'iMedic File Server'
+#   Start-ScheduledTask -TaskName 'iMedic File Server'
+# O volvé a correr Parche-Unc-Vidal.ps1 (reescribe todo el file-server.ps1).
+# =============================================================================

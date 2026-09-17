@@ -144,11 +144,35 @@ function mapLegacyDriveRoots(filePath) {
 	return out;
 }
 
+/**
+ * Saca el sufijo relativo de UNC Clarion legacy:
+ *   \\192.168.x.x\Imagenes\Vidal\PERSONALES\…  →  PERSONALES\…
+ *   \\host\Imagenes\Vida\foo.pdf               →  foo.pdf
+ * No inventa un root de clínica: eso lo resuelve el file server local (UncRoot).
+ * Devuelve null si la ruta no es ese patrón.
+ */
+function relativeFromLegacyImagenesUnc(filePath) {
+	if (!filePath) return null;
+	const s = String(filePath).replace(/\//g, '\\');
+	const withRest = s.match(/^\\\\[^\\]+\\[Ii]magenes\\[^\\]+\\(.+)$/);
+	if (withRest) return withRest[1];
+	if (/^\\\\[^\\]+\\[Ii]magenes\\[^\\]+$/i.test(s)) return '';
+	return null;
+}
+
+/** @deprecated usar relativeFromLegacyImagenesUnc; se mantiene el nombre por imports. */
+function rewriteLegacyImagenesUnc(filePath) {
+	const rel = relativeFromLegacyImagenesUnc(filePath);
+	return rel == null ? filePath : rel;
+}
+
 function normalizeAdjuntoFilePath(rutaOriginal) {
 	if (!rutaOriginal) return rutaOriginal;
 	let ruta = decodeMultipartFilename(String(rutaOriginal));
 	if (/^D:\\/i.test(ruta)) ruta = ruta.replace(/^D:\\/, 'E:\\');
 	if (/^F:\\/i.test(ruta)) ruta = ruta.replace(/^F:\\/, 'E:\\');
+	const rel = relativeFromLegacyImagenesUnc(ruta);
+	if (rel != null && rel !== '') return rel;
 	return ruta;
 }
 
@@ -174,6 +198,8 @@ function pathLookupCandidates(filePath) {
 		repaired,
 		normalized,
 		decodeMultipartFilename(normalized),
+		relativeFromLegacyImagenesUnc(original),
+		relativeFromLegacyImagenesUnc(repaired),
 		qmark,
 		...mapLegacyDriveRoots(original),
 		...mapLegacyDriveRoots(repaired),
@@ -274,6 +300,8 @@ module.exports = {
 	formDataFileOptions,
 	buildVidalDest,
 	normalizeAdjuntoFilePath,
+	relativeFromLegacyImagenesUnc,
+	rewriteLegacyImagenesUnc,
 	pathLookupCandidates,
 	fileServerFileQuery,
 	fileServerFileUrl,

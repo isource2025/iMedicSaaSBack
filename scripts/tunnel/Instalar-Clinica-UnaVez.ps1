@@ -152,6 +152,27 @@ function Map-Path([string]$p) {
 	$p = Decode-Path $p
 	if (-not $p) { return $null }
 	if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+
+	# Relativa al UncRoot/LocalRoot de ESTA clínica (sin IP ni host fijo).
+	$esAbsoluta = ($p -match '^[A-Za-z]:\\') -or ($p -like '\\*')
+	if (-not $esAbsoluta) {
+		foreach ($root in @($UncRoot, $LocalRoot)) {
+			if (-not $root) { continue }
+			$c = Join-Path $root.TrimEnd('\') $p.TrimStart('\')
+			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+		}
+	}
+
+	# UNC legacy Clarion (\\192.168…\Imagenes\<share>\…): solo el sufijo relativo.
+	if ($p -match '(?i)^\\\\[^\\]+\\Imagenes\\[^\\]+\\(.+)$') {
+		$rel = $Matches[1]
+		foreach ($root in @($UncRoot, $LocalRoot)) {
+			if (-not $root) { continue }
+			$c = Join-Path $root.TrimEnd('\') $rel
+			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+		}
+	}
+
 	if ($p -like '\\*') {
 		if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
 	}
@@ -330,6 +351,11 @@ while ($listener.IsListening) {
 			if (-not $mp.file) { Send-Json $ctx 400 @{ success=$false; error='Archivo requerido (field: file)' }; continue }
 			$dest = if ($mp.fields['path']) { Decode-Path $mp.fields['path'] } else {
 				Build-Dest $mp.fields['numeroVisita'] $mp.fields['nombrePaciente'] $mp.file.filename
+			}
+			# Ruta relativa (requisitos): anteponer UncRoot de esta clínica.
+			if ($dest -and ($dest -notmatch '^[A-Za-z]:\\') -and ($dest -notlike '\\*')) {
+				$baseRoot = if (Test-Path -LiteralPath $UncRoot) { $UncRoot } else { $LocalRoot }
+				$dest = Join-Path $baseRoot.TrimEnd('\') $dest.TrimStart('\')
 			}
 			$dir = Split-Path $dest -Parent
 			New-Item -ItemType Directory -Force -Path $dir | Out-Null

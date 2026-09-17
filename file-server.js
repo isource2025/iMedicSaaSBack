@@ -130,6 +130,16 @@ function buscarArchivo(rutaPedida) {
 	candidatos.push(path.join(UPLOAD_ROOT, nombre));
 	candidatos.push(path.join(UPLOAD_ROOT, path.basename(rutaPedida || '')));
 
+	const pedida = String(rutaPedida || '').replace(/\//g, '\\');
+	const esAbsoluta = /^[A-Za-z]:\\/.test(pedida) || pedida.startsWith('\\\\');
+	if (pedida && !esAbsoluta) {
+		candidatos.unshift(path.join(UPLOAD_ROOT, pedida));
+	}
+	const legacyRel = pedida.match(/^\\\\[^\\]+\\[Ii]magenes\\[^\\]+\\(.+)$/);
+	if (legacyRel) {
+		candidatos.unshift(path.join(UPLOAD_ROOT, legacyRel[1]));
+	}
+
 	for (const c of candidatos) {
 		if (existeArchivo(c)) return c;
 	}
@@ -219,7 +229,7 @@ app.post('/upload', exigirToken, upload.single('file'), (req, res) => {
 		fixMulterFile(req.file);
 
 		const pedida = String(req.body?.path || '').trim();
-		const destino = pedida
+		let destino = pedida
 			? normalizarRuta(pedida)
 			: buildVidalDest(
 					UPLOAD_ROOT,
@@ -227,6 +237,13 @@ app.post('/upload', exigirToken, upload.single('file'), (req, res) => {
 					req.body?.nombrePaciente,
 					req.file.originalname,
 				);
+
+		// Ruta relativa (requisitos): anteponer el root de ESTA clínica.
+		const destNorm = String(destino || '').replace(/\//g, '\\');
+		const esAbsoluta = /^[A-Za-z]:\\/.test(destNorm) || destNorm.startsWith('\\\\');
+		if (destino && !esAbsoluta) {
+			destino = path.join(UPLOAD_ROOT, destNorm);
+		}
 
 		fs.mkdirSync(path.dirname(destino), { recursive: true });
 		// rename falla entre volúmenes distintos (tmp en C:, adjuntos en E:).
