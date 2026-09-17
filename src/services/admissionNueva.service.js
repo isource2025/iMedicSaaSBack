@@ -186,16 +186,6 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 		const esPaciente = aplicable.toLowerCase() === 'paciente';
 		let previa = esPaciente ? previas.get(valor) || null : null;
 
-		if (esPaciente && previa?.ruta) {
-			const rutaVigente = await existeEnFileServer(previa.ruta);
-			if (!rutaVigente) {
-				console.warn(
-					`[admisionNueva] ruta DB inexistente paciente=${idPac} requisito=${valor}: ${previa.ruta}`,
-				);
-				previa = null;
-			}
-		}
-
 		if (esPaciente && !previa && paciente) {
 			previa = await descubrirPresentacionEnDisco(
 				paciente,
@@ -811,16 +801,10 @@ async function obtenerArchivoRequisitoPaciente(idPaciente, valorRequisito) {
 	const previas = await presentacionesPreviasDelPaciente(idPac);
 	const previa = previas.get(valor);
 	if (previa?.ruta) {
-		const rutaVigente = await existeEnFileServer(previa.ruta);
-		if (rutaVigente) {
-			return {
-				ruta: previa.ruta,
-				nombreArchivo: nombreDeRuta(previa.ruta) || 'archivo',
-			};
-		}
-		console.warn(
-			`[admisionNueva] visor descarta ruta DB inexistente paciente=${idPac} requisito=${valor}: ${previa.ruta}`,
-		);
+		return {
+			ruta: previa.ruta,
+			nombreArchivo: nombreDeRuta(previa.ruta) || 'archivo',
+		};
 	}
 
 	const rows = await executeQuery(
