@@ -614,7 +614,7 @@ async function listarEnFileServer(rutaRelativa) {
 		return [];
 	}
 	try {
-		const url = `${String(fileServerUrl).replace(/\/+$/, '')}/list?path=${encodeURIComponent(pedida)}`;
+		const url = `${String(fileServerUrl).replace(/\/+$/, '')}/list?path=${encodeURIComponent(encodeURIComponent(pedida))}`;
 		const respuesta = await axios.get(url, {
 			headers: fileServerHeaders(),
 			timeout: 3000,
@@ -654,49 +654,6 @@ function elegirCarpetaPersonales(entradas, paciente) {
 	return porSufijo || null;
 }
 
-/** Texto comparable para nombres Clarion: ignora puntos, guiones, acentos y extensión. */
-function claveNombreRequisito(valor) {
-	return String(valor || '')
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '')
-		.replace(/\.[A-Za-z0-9]{2,5}$/i, '')
-		.toUpperCase()
-		.replace(/[^A-Z0-9]+/g, ' ')
-		.replace(/\s+0$/, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-}
-
-function elegirArchivoRequisito(entradas, descripcion) {
-	const archivos = (entradas || [])
-		.filter((e) => e && e.type === 'file')
-		.map((e) => String(e.name || '').trim())
-		.filter((name) => EXTS_REQUISITO.includes(path.extname(name).toLowerCase()));
-	if (!archivos.length) return null;
-
-	const objetivo = claveNombreRequisito(descripcion);
-	const tokensObjetivo = objetivo.split(' ').filter(Boolean);
-	const direccion = tokensObjetivo.find((t) => t === 'FRENTE' || t === 'REVERSO');
-
-	const puntuados = archivos.map((name) => {
-		const clave = claveNombreRequisito(name);
-		const tokens = new Set(clave.split(' ').filter(Boolean));
-		let score = 0;
-		if (clave === objetivo) score += 100;
-		else if (clave.startsWith(`${objetivo} `) || objetivo.startsWith(`${clave} `)) score += 70;
-		for (const token of tokensObjetivo) {
-			if (tokens.has(token)) score += token === 'DNI' ? 15 : 10;
-		}
-		if (direccion) {
-			if (tokens.has(direccion)) score += 50;
-			else if (tokens.has(direccion === 'FRENTE' ? 'REVERSO' : 'FRENTE')) score -= 100;
-		}
-		return { name, score };
-	});
-	puntuados.sort((a, b) => b.score - a.score);
-	return puntuados[0]?.score >= 15 ? puntuados[0].name : null;
-}
-
 /**
  * Si Clarion dejó el escaneo en PERSONALES\{0|n|DNI} NOMBRE\ sin fila en
  * imVisitaRequisitos, lo descubrimos contra el file server.
@@ -711,24 +668,6 @@ async function descubrirPresentacionEnDisco(paciente, descripcionRequisito, patc
 	const carpetaListada = elegirCarpetaPersonales(listado, paciente);
 	if (carpetaListada && !carpetas.includes(carpetaListada)) {
 		carpetas.unshift(carpetaListada);
-	}
-
-	// El nombre físico no siempre coincide exactamente con imRequisitos.Descripcion.
-	// Listar la carpeta permite asociar variantes como D.N.I., DNI Frente, etc.
-	for (const carpeta of carpetas) {
-		const rutaCarpeta = [base, carpeta].filter(Boolean).join('\\');
-		const entradas = await listarEnFileServer(rutaCarpeta);
-		const nombreReal = elegirArchivoRequisito(entradas, descripcionRequisito);
-		if (!nombreReal) continue;
-		const hallada = [rutaCarpeta, nombreReal].join('\\');
-		console.log(
-			`[admisionNueva] descubierto por listado paciente=${paciente.IdPaciente || paciente.Documento} ruta=${hallada}`,
-		);
-		return {
-			numeroVisita: 0,
-			fecha: null,
-			ruta: hallada,
-		};
 	}
 
 	const archivos = [];
