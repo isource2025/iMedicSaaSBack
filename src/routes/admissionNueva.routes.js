@@ -48,11 +48,6 @@ router.get(
 	requirePermiso('ADMISION.NUEVA.CREAR'),
 	controller.ultimaVisita,
 );
-router.get(
-	'/paciente/:idPaciente/requisitos/:valor/archivo',
-	requirePermiso('ADMISION.NUEVA.CREAR'),
-	controller.verArchivoRequisitoPaciente,
-);
 router.post('/', requirePermiso('ADMISION.NUEVA.CREAR'), controller.crear);
 router.get(
 	'/:numeroVisita/requisitos',
