@@ -18,10 +18,9 @@
 
   Railway usa la URL trycloudflare. 127.0.0.1:9012 es solo local.
 
-  Requisitos (Paciente / Clarion Vidal): el backend manda rutas RELATIVAS
-    PERSONALES\0 APELLIDO NOMBRE\{requisito} - 0.jpg
-  Requisitos (Visita):
-    {DNI NOMBRE}\{requisito} - 0.jpg
+  Requisitos (Paciente/Visita): el backend manda rutas RELATIVAS
+    PERSONALES\{DNI NOMBRE}\{requisito} - 0.jpg
+    \{DNI NOMBRE}\{requisito} - 0.jpg
   Este file server las antepone a -Root (por clinica). No usa IP Clarion.
 #>
 param(
@@ -521,30 +520,6 @@ try {
         $res.Close()
         continue
       }
-      if ($req.HttpMethod -eq "GET" -and $route -eq "/list") {
-        $rel = Get-QueryPath $req
-        if (-not $rel) { $rel = "PERSONALES" }
-        $rel = ([string]$rel).Replace("/","\").TrimStart("\")
-        if (-not $rel -or $rel.Contains("..")) { Send-Json $res 400 "{""success"":false,""error"":""path invalido""}"; continue }
-        $abs = Join-Path $RootDir $rel
-        $rootFull = [IO.Path]::GetFullPath($RootDir)
-        $absFull = [IO.Path]::GetFullPath($abs)
-        if (-not $absFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
-          Send-Json $res 400 "{""success"":false,""error"":""path fuera de root""}"; continue
-        }
-        $items = New-Object System.Collections.Generic.List[string]
-        if (Test-Path -LiteralPath $abs -PathType Container) {
-          Get-ChildItem -LiteralPath $abs -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            $t = if ($_.PSIsContainer) { "dir" } else { "file" }
-            $n = $_.Name.Replace("\","\\").Replace("""","\""")
-            $items.Add("{""name"":""$n"",""type"":""$t""}")
-          }
-        }
-        $joined = [string]::Join(",", $items)
-        $relEsc = $rel.Replace("\","\\").Replace("""","\""")
-        Send-Json $res 200 "{""success"":true,""path"":""$relEsc"",""entries"":[$joined]}"
-        continue
-      }
       if ($req.HttpMethod -eq "DELETE" -and $route -eq "/file") {
         $p = Normalize-Path (Get-QueryPath $req)
         if (-not $p) { Send-Json $res 400 "{""success"":false,""error"":""path requerido""}"; continue }
@@ -725,8 +700,7 @@ Write-Host ''
 Write-Host '========================================'
 Write-Host "URL: $url"
 Write-Host "Archivos: $Root\{visita} {PACIENTE}\archivo"
-Write-Host "Requisitos: $Root\PERSONALES\0 NOMBRE\…  |  $Root\{DNI NOMBRE}\…"
-Write-Host "Listado:    GET /list?path=PERSONALES"
+Write-Host "Requisitos: $Root\PERSONALES\{DNI NOMBRE}\…  |  $Root\{DNI NOMBRE}\…"
 Write-Host $apiMsg
 Write-Host 'La consola se cierra y el tunnel queda corriendo en segundo plano.'
 Write-Host '========================================'

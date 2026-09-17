@@ -273,32 +273,6 @@ app.post('/upload', exigirToken, upload.single('file'), (req, res) => {
 	}
 });
 
-app.get('/list', exigirToken, (req, res) => {
-	const pedida = decodeFileServerPathParam(req.query.path || 'PERSONALES');
-	const rel = String(pedida || 'PERSONALES').replace(/\//g, '\\').replace(/^\\+/, '');
-	if (!rel || rel.includes('..')) {
-		return res.status(400).json({ success: false, error: 'path inválido' });
-	}
-	const abs = path.join(UPLOAD_ROOT, rel);
-	const rootResolved = path.resolve(UPLOAD_ROOT);
-	if (!path.resolve(abs).toLowerCase().startsWith(rootResolved.toLowerCase())) {
-		return res.status(400).json({ success: false, error: 'path fuera de root' });
-	}
-	if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
-		return res.json({ success: true, path: rel, entries: [] });
-	}
-	try {
-		const entries = fs
-			.readdirSync(abs, { withFileTypes: true })
-			.filter((d) => d.isDirectory() || d.isFile())
-			.map((d) => ({ name: d.name, type: d.isDirectory() ? 'dir' : 'file' }));
-		return res.json({ success: true, path: rel, entries });
-	} catch (e) {
-		console.error('[list] error:', e.message);
-		return res.status(500).json({ success: false, error: e.message });
-	}
-});
-
 app.delete('/file', exigirToken, (req, res) => {
 	const pedida = decodeFileServerPathParam(req.query.path);
 	if (!pedida) {
