@@ -33,7 +33,6 @@ const {
 	sanitizeFolderName,
 	formDataFileOptions,
 	fileServerFileUrl,
-	pathLookupCandidates,
 } = require('../utils/fileNameEncoding');
 
 const EXTS_REQUISITO = ['.jpg', '.jpeg', '.png', '.pdf', '.gif'];
@@ -181,8 +180,7 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 	const previas = await presentacionesPreviasDelPaciente(idPac);
 	const paciente = idPac ? await obtenerPaciente(idPac) : null;
 
-	const out = [];
-	for (const r of rows || []) {
+	const out = await Promise.all((rows || []).map(async (r) => {
 		const valor = Number(r.Valor);
 		const aplicable = texto(r.Aplicable);
 		const esPaciente = aplicable.toLowerCase() === 'paciente';
@@ -196,15 +194,15 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 			);
 		}
 
-		out.push({
+		return {
 			Valor: valor,
 			Descripcion: r.Descripcion,
 			Aplicable: aplicable,
 			DeCobertura: true,
 			DeBase: false,
 			Presentado: previa,
-		});
-	}
+		};
+	}));
 
 	console.log(
 		`[admisionNueva] requisitos cobertura=${cli} paciente=${idPac || 0} ` +
@@ -588,31 +586,18 @@ async function existeEnFileServer(rutaRelativa) {
 		return null;
 	}
 
-	// Primero la ruta relativa exacta; después variantes de encoding/legacy.
-	const candidatos = [];
-	const vistos = new Set();
-	for (const c of [pedida, ...pathLookupCandidates(pedida)]) {
-		const key = texto(c);
-		if (!key || vistos.has(key)) continue;
-		vistos.add(key);
-		candidatos.push(key);
+	try {
+		const respuesta = await axios.get(fileServerFileUrl(fileServerUrl, pedida), {
+			responseType: 'stream',
+			headers: fileServerHeaders(),
+			timeout: 2500,
+			validateStatus: (s) => s >= 200 && s < 300,
+		});
+		respuesta.data.destroy?.();
+		return pedida;
+	} catch {
+		return null;
 	}
-
-	for (const candidato of candidatos) {
-		try {
-			const respuesta = await axios.get(fileServerFileUrl(fileServerUrl, candidato), {
-				responseType: 'stream',
-				headers: fileServerHeaders(),
-				timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
-				validateStatus: (s) => s >= 200 && s < 300,
-			});
-			respuesta.data.destroy?.();
-			return candidato;
-		} catch {
-			/* probar siguiente candidato */
-		}
-	}
-	return null;
 }
 
 /**
@@ -632,7 +617,7 @@ async function listarEnFileServer(rutaRelativa) {
 		const url = `${String(fileServerUrl).replace(/\/+$/, '')}/list?path=${encodeURIComponent(encodeURIComponent(pedida))}`;
 		const respuesta = await axios.get(url, {
 			headers: fileServerHeaders(),
-			timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 20000),
+			timeout: 3000,
 			validateStatus: (s) => s >= 200 && s < 300,
 		});
 		const entries = respuesta.data?.entries;
@@ -696,23 +681,19 @@ async function descubrirPresentacionEnDisco(paciente, descripcionRequisito, patc
 		}
 	}
 
-	const vistos = new Set();
-	for (const ruta of archivos) {
-		if (!ruta || vistos.has(ruta)) continue;
-		vistos.add(ruta);
-		const hallada = await existeEnFileServer(ruta);
-		if (hallada) {
-			console.log(
-				`[admisionNueva] descubierto en disco paciente=${paciente.IdPaciente || paciente.Documento} ruta=${hallada}`,
-			);
-			return {
-				numeroVisita: 0,
-				fecha: null,
-				ruta: hallada,
-			};
-		}
-	}
-	return null;
+	const rutas = [...new Set(archivos.filter(Boolean))];
+	const resultados = await Promise.all(rutas.map((ruta) => existeEnFileServer(ruta)));
+	const hallada = resultados.find(Boolean);
+	if (!hallada) return null;
+
+	console.log(
+		`[admisionNueva] descubierto en disco paciente=${paciente.IdPaciente || paciente.Documento} ruta=${hallada}`,
+	);
+	return {
+		numeroVisita: 0,
+		fecha: null,
+		ruta: hallada,
+	};
 }
 
 /**

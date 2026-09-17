@@ -683,9 +683,24 @@ Write-Host "File server OK  http://127.0.0.1:$Port/health  (encoding=utf8-v2)"
 if ($KeepTunnel) {
 	$url = $null
 	if (Test-Path $urlFile) { $url = (Get-Content $urlFile | Select-Object -First 1) }
-	Write-Host 'KeepTunnel: cloudflared no se toca.'
-	if ($url) { Write-Host $url }
-	exit 0
+	$publicOk = $false
+	if ($url) {
+		try {
+			$publicHealth = Invoke-WebRequest -Uri "$($url.TrimEnd('/'))/health" -UseBasicParsing -TimeoutSec 12
+			$publicOk = (
+				$publicHealth.StatusCode -eq 200 -and
+				$publicHealth.Content -match '"encoding"\s*:\s*"utf8-v2"'
+			)
+		} catch {
+			Write-Host "KeepTunnel: la URL guardada no responde ($($_.Exception.Message))." -ForegroundColor Yellow
+		}
+	}
+	if ($publicOk) {
+		Write-Host 'KeepTunnel: túnel público OK; cloudflared no se toca.'
+		Write-Host $url
+		exit 0
+	}
+	Write-Host 'KeepTunnel: el túnel público está caído; se generará y grabará una URL nueva.' -ForegroundColor Yellow
 }
 
 Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
