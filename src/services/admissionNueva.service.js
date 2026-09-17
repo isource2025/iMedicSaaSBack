@@ -32,7 +32,11 @@ const {
 	sanitizeWindowsFileName,
 	sanitizeFolderName,
 	formDataFileOptions,
+	fileServerFileUrl,
+	pathLookupCandidates,
 } = require('../utils/fileNameEncoding');
+
+const EXTS_REQUISITO = ['.jpg', '.jpeg', '.png', '.pdf', '.gif'];
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 const FILE_SERVER_FALLBACK_LOCAL =
@@ -151,6 +155,8 @@ async function presentacionesPreviasDelPaciente(idPaciente) {
  *
  * Con idPaciente marca los requisitos del paciente que ya tienen un archivo
  * presentado en otra visita, con la fecha para que la admisora decida si sirve.
+ * Si Clarion dejó el archivo en disco (PERSONALES\{DNI NOMBRE}\…) pero sin fila
+ * en imVisitaRequisitos, se descubre contra el file server de la clínica.
  */
 async function requisitosPorCliente(clienteId, idPaciente) {
 	const cli = enteroOCero(clienteId);
@@ -161,7 +167,8 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 		SELECT
 			r.Valor,
 			LTRIM(RTRIM(ISNULL(r.Descripcion, ''))) AS Descripcion,
-			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable
+			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable,
+			LTRIM(RTRIM(ISNULL(r.PatchDestino, ''))) AS PatchDestino
 		FROM dbo.imClientesRequisitos cr
 		INNER JOIN dbo.imRequisitos r ON r.Valor = cr.Requisito
 		WHERE cr.Cliente = @p0
@@ -170,22 +177,40 @@ async function requisitosPorCliente(clienteId, idPaciente) {
 		[{ value: cli, type: 'Int' }],
 	);
 
-	const previas = await presentacionesPreviasDelPaciente(idPaciente);
+	const idPac = enteroOCero(idPaciente);
+	const previas = await presentacionesPreviasDelPaciente(idPac);
+	const paciente = idPac ? await obtenerPaciente(idPac) : null;
 
-	return (rows || []).map((r) => {
+	const out = [];
+	for (const r of rows || []) {
 		const valor = Number(r.Valor);
 		const aplicable = texto(r.Aplicable);
 		const esPaciente = aplicable.toLowerCase() === 'paciente';
-		const previa = esPaciente ? previas.get(valor) || null : null;
-		return {
+		let previa = esPaciente ? previas.get(valor) || null : null;
+
+		if (esPaciente && !previa && paciente) {
+			previa = await descubrirPresentacionEnDisco(
+				paciente,
+				r.Descripcion,
+				r.PatchDestino,
+			);
+		}
+
+		out.push({
 			Valor: valor,
 			Descripcion: r.Descripcion,
 			Aplicable: aplicable,
 			DeCobertura: true,
 			DeBase: false,
 			Presentado: previa,
-		};
-	});
+		});
+	}
+
+	console.log(
+		`[admisionNueva] requisitos cobertura=${cli} paciente=${idPac || 0} ` +
+			`total=${out.length} presentados=${out.filter((x) => x.Presentado).length}`,
+	);
+	return out;
 }
 
 /** Catálogo completo, para agregar un requisito que la cobertura no trae. */
@@ -548,6 +573,88 @@ function nombreDeRuta(ruta) {
 }
 
 /**
+ * ¿Existe esta ruta relativa/absoluta en el file server de la clínica?
+ * Usa GET y corta el stream apenas responde 2xx (no descarga el archivo entero).
+ */
+async function existeEnFileServer(rutaRelativa) {
+	const pedida = texto(rutaRelativa);
+	if (!pedida) return null;
+
+	let fileServerUrl;
+	try {
+		fileServerUrl = await resolveFileServerUrl();
+	} catch (e) {
+		console.warn('[admisionNueva] file server no resuelto al sondear:', e.message);
+		return null;
+	}
+
+	// Primero la ruta relativa exacta; después variantes de encoding/legacy.
+	const candidatos = [];
+	const vistos = new Set();
+	for (const c of [pedida, ...pathLookupCandidates(pedida)]) {
+		const key = texto(c);
+		if (!key || vistos.has(key)) continue;
+		vistos.add(key);
+		candidatos.push(key);
+	}
+
+	for (const candidato of candidatos) {
+		try {
+			const respuesta = await axios.get(fileServerFileUrl(fileServerUrl, candidato), {
+				responseType: 'stream',
+				headers: fileServerHeaders(),
+				timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
+				validateStatus: (s) => s >= 200 && s < 300,
+			});
+			respuesta.data.destroy?.();
+			return candidato;
+		} catch {
+			/* probar siguiente candidato */
+		}
+	}
+	return null;
+}
+
+/**
+ * Si Clarion dejó el escaneo en PERSONALES\{DNI NOMBRE}\ pero sin fila en
+ * imVisitaRequisitos, lo descubrimos contra el file server.
+ */
+async function descubrirPresentacionEnDisco(paciente, descripcionRequisito, patchDestino) {
+	if (!paciente?.Documento) return null;
+
+	const candidatos = [];
+	for (const ext of EXTS_REQUISITO) {
+		candidatos.push(
+			rutaDestinoRequisito(
+				patchDestino,
+				paciente,
+				descripcionRequisito,
+				`x${ext}`,
+				APLICABLE_PACIENTE,
+			),
+		);
+	}
+
+	const vistos = new Set();
+	for (const ruta of candidatos) {
+		if (!ruta || vistos.has(ruta)) continue;
+		vistos.add(ruta);
+		const hallada = await existeEnFileServer(ruta);
+		if (hallada) {
+			console.log(
+				`[admisionNueva] descubierto en disco paciente=${paciente.IdPaciente || paciente.Documento} ruta=${hallada}`,
+			);
+			return {
+				numeroVisita: 0,
+				fecha: null,
+				ruta: hallada,
+			};
+		}
+	}
+	return null;
+}
+
+/**
  * Ruta del archivo de un requisito, para que el controlador lo sirva desde el
  * file server. Devuelve null si el requisito todavía no tiene nada adjunto.
  */
@@ -576,6 +683,53 @@ async function obtenerArchivoRequisito(numeroVisita, valorRequisito) {
 	return {
 		ruta,
 		nombreArchivo: nombreDeRuta(ruta) || texto(rows?.[0]?.Descripcion) || 'archivo',
+	};
+}
+
+/**
+ * Archivo de un requisito "Paciente" sin visita: presentación previa en DB o
+ * descubrimiento en PERSONALES\{DNI NOMBRE}\ vía file server.
+ */
+async function obtenerArchivoRequisitoPaciente(idPaciente, valorRequisito) {
+	const idPac = enteroOCero(idPaciente);
+	const valor = enteroOCero(valorRequisito);
+	if (!idPac || !valor) throw errorHttp('Datos de requisito inválidos', 400);
+
+	const previas = await presentacionesPreviasDelPaciente(idPac);
+	const previa = previas.get(valor);
+	if (previa?.ruta) {
+		return {
+			ruta: previa.ruta,
+			nombreArchivo: nombreDeRuta(previa.ruta) || 'archivo',
+		};
+	}
+
+	const rows = await executeQuery(
+		`
+		SELECT TOP 1
+			LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Descripcion,
+			LTRIM(RTRIM(ISNULL(PatchDestino, ''))) AS PatchDestino,
+			LTRIM(RTRIM(ISNULL(AplicableAlPacienteOVisita, ''))) AS Aplicable
+		FROM dbo.imRequisitos
+		WHERE Valor = @p0
+		`,
+		[{ value: valor, type: 'TinyInt' }],
+	);
+	const meta = rows?.[0];
+	if (!meta || !esRequisitoPaciente(meta.Aplicable)) return null;
+
+	const paciente = await obtenerPaciente(idPac);
+	if (!paciente) return null;
+
+	const descubierta = await descubrirPresentacionEnDisco(
+		paciente,
+		meta.Descripcion,
+		meta.PatchDestino,
+	);
+	if (!descubierta?.ruta) return null;
+	return {
+		ruta: descubierta.ruta,
+		nombreArchivo: nombreDeRuta(descubierta.ruta) || texto(meta.Descripcion) || 'archivo',
 	};
 }
 
@@ -774,6 +928,7 @@ module.exports = {
 	listarRequisitos,
 	obtenerUltimaVisita,
 	obtenerArchivoRequisito,
+	obtenerArchivoRequisitoPaciente,
 	crearAdmision,
 	listarRequisitosVisita,
 	agregarRequisito,
