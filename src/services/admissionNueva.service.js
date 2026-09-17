@@ -616,27 +616,88 @@ async function existeEnFileServer(rutaRelativa) {
 }
 
 /**
- * Si Clarion dejó el escaneo en PERSONALES\{DNI NOMBRE}\ pero sin fila en
+ * Lista entradas (dirs/files) bajo una ruta relativa del file server.
+ * Sirve para encontrar carpetas Clarion `0 NOMBRE` / `21 NOMBRE` en PERSONALES.
+ */
+async function listarEnFileServer(rutaRelativa) {
+	const pedida = texto(rutaRelativa) || 'PERSONALES';
+	let fileServerUrl;
+	try {
+		fileServerUrl = await resolveFileServerUrl();
+	} catch (e) {
+		console.warn('[admisionNueva] file server no resuelto al listar:', e.message);
+		return [];
+	}
+	try {
+		const url = `${String(fileServerUrl).replace(/\/+$/, '')}/list?path=${encodeURIComponent(encodeURIComponent(pedida))}`;
+		const respuesta = await axios.get(url, {
+			headers: fileServerHeaders(),
+			timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 20000),
+			validateStatus: (s) => s >= 200 && s < 300,
+		});
+		const entries = respuesta.data?.entries;
+		return Array.isArray(entries) ? entries : [];
+	} catch (e) {
+		console.warn(`[admisionNueva] /list ${pedida}:`, e.message);
+		return [];
+	}
+}
+
+/** Elige la carpeta Clarion de PERSONALES que corresponde al paciente. */
+function elegirCarpetaPersonales(entradas, paciente) {
+	const dirs = (entradas || [])
+		.filter((e) => e && (e.type === 'dir' || !e.type))
+		.map((e) => String(e.name || e).trim())
+		.filter(Boolean);
+	if (!dirs.length) return null;
+
+	const nombre = sanitizeFolderName(texto(paciente?.ApellidoyNombre)).toUpperCase();
+	if (!nombre) return null;
+
+	const preferidas = carpetasPersonalesCandidatas(paciente).map((c) => c.toUpperCase());
+	const porExacta = new Map(dirs.map((d) => [d.toUpperCase(), d]));
+	for (const p of preferidas) {
+		if (porExacta.has(p)) return porExacta.get(p);
+	}
+
+	// Clarion a veces usa otro prefijo numérico: "21 GAVILAN MABEL"
+	const sufijo = ` ${nombre}`;
+	const porSufijo = dirs.find((d) => {
+		const u = d.toUpperCase();
+		return u === nombre || u.endsWith(sufijo);
+	});
+	return porSufijo || null;
+}
+
+/**
+ * Si Clarion dejó el escaneo en PERSONALES\{0|n|DNI} NOMBRE\ sin fila en
  * imVisitaRequisitos, lo descubrimos contra el file server.
  */
 async function descubrirPresentacionEnDisco(paciente, descripcionRequisito, patchDestino) {
-	if (!paciente?.Documento) return null;
+	if (!paciente?.ApellidoyNombre) return null;
 
-	const candidatos = [];
-	for (const ext of EXTS_REQUISITO) {
-		candidatos.push(
-			rutaDestinoRequisito(
-				patchDestino,
-				paciente,
-				descripcionRequisito,
-				`x${ext}`,
-				APLICABLE_PACIENTE,
-			),
-		);
+	const base = baseDestinoRequisito(patchDestino, APLICABLE_PACIENTE) || 'PERSONALES';
+	const carpetas = carpetasPersonalesCandidatas(paciente);
+
+	const listado = await listarEnFileServer(base);
+	const carpetaListada = elegirCarpetaPersonales(listado, paciente);
+	if (carpetaListada && !carpetas.includes(carpetaListada)) {
+		carpetas.unshift(carpetaListada);
+	}
+
+	const archivos = [];
+	for (const carpeta of carpetas) {
+		for (const ext of EXTS_REQUISITO) {
+			archivos.push(
+				[base, carpeta, sanitizeWindowsFileName(`${texto(descripcionRequisito)} - 0${ext}`)]
+					.filter(Boolean)
+					.join('\\'),
+			);
+		}
 	}
 
 	const vistos = new Set();
-	for (const ruta of candidatos) {
+	for (const ruta of archivos) {
 		if (!ruta || vistos.has(ruta)) continue;
 		vistos.add(ruta);
 		const hallada = await existeEnFileServer(ruta);
@@ -776,8 +837,8 @@ async function quitarRequisito(numeroVisita, valorRequisito) {
  * El file server del túnel antepone su propio root (Vidal, Sarmiento, etc.).
  * No se usa IP ni host de imRequisitos.PatchDestino.
  *
- * – Paciente: PERSONALES\<DNI APELLIDO NOMBRE>\<requisito> - 0.<ext>
- * – Visita:   \<DNI APELLIDO NOMBRE>\<requisito> - 0.<ext>
+ * – Paciente (Clarion Vidal): PERSONALES\0 APELLIDO NOMBRE\<requisito> - 0.<ext>
+ * – Visita:                   \<DNI APELLIDO NOMBRE>\<requisito> - 0.<ext>
  */
 function esRequisitoPaciente(aplicable) {
 	return String(aplicable || '').trim().toLowerCase() === 'paciente';
@@ -790,6 +851,22 @@ function baseDestinoRequisito(patchDestino, aplicable) {
 	return pidePersonales ? 'PERSONALES' : '';
 }
 
+/** Carpetas Clarion bajo PERSONALES: casi siempre `0 NOMBRE`, a veces `{n} NOMBRE` o DNI. */
+function carpetasPersonalesCandidatas(paciente) {
+	const nombre = sanitizeFolderName(texto(paciente?.ApellidoyNombre));
+	const doc = sanitizeFolderName(texto(paciente?.Documento));
+	if (!nombre) return [];
+	const out = [];
+	const push = (s) => {
+		const v = sanitizeFolderName(s);
+		if (v && !out.includes(v)) out.push(v);
+	};
+	push(`0 ${nombre}`);
+	if (doc) push(`${doc} ${nombre}`);
+	push(nombre);
+	return out;
+}
+
 function rutaDestinoRequisito(
 	patchDestino,
 	paciente,
@@ -798,10 +875,12 @@ function rutaDestinoRequisito(
 	aplicable,
 ) {
 	const base = baseDestinoRequisito(patchDestino, aplicable);
-
-	const carpeta = sanitizeFolderName(
-		`${texto(paciente.Documento)} ${texto(paciente.ApellidoyNombre)}`.trim(),
-	);
+	const carpeta = esRequisitoPaciente(aplicable)
+		? carpetasPersonalesCandidatas(paciente)[0] ||
+			sanitizeFolderName(`0 ${texto(paciente.ApellidoyNombre)}`)
+		: sanitizeFolderName(
+				`${texto(paciente.Documento)} ${texto(paciente.ApellidoyNombre)}`.trim(),
+			);
 	const ext = path.extname(nombreArchivo || '') || '.jpg';
 	const archivo = sanitizeWindowsFileName(`${texto(descripcionRequisito)} - 0${ext}`);
 
