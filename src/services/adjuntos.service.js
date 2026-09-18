@@ -6,9 +6,25 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi, repararTextoClarionAnsi } = require('../utils/clarionText');
 const { resolveFileServerUrl, fileServerHeaders } = require('../utils/fileServerUrl');
-const { decodeMultipartFilename, sanitizeWindowsFileName, sanitizeFolderName, pathLookupCandidates, normalizeAdjuntoFilePath, fileServerFileUrl } = require('../utils/fileNameEncoding');
+const { decodeMultipartFilename, sanitizeWindowsFileName, sanitizeFolderName, pathLookupCandidates, normalizeAdjuntoFilePath, fileServerFileUrl, relativeFromLegacyImagenesUnc, toClarionStoredPath, clarionUncRootForFileServerUrl } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
+
+/** Ruta que el SaaS debe usar para leer (nunca UNC Clarion \\SERVER\Imagenes\Vidal). */
+function coercePatchServidorForClinic(ruta, fileServerUrl) {
+  const s = String(ruta || '').replace(/\//g, '\\').trim();
+  if (!s) return s;
+  if (/^[A-Za-z]:\\(?:imedic\\)?adjuntos\\/i.test(s)) return s;
+  if (/^[A-Za-z]:\\imagenes\\/i.test(s)) return s;
+
+  const rel = relativeFromLegacyImagenesUnc(s);
+  if (rel == null || rel === '') return s;
+
+  const url = String(fileServerUrl || '').toLowerCase();
+  if (url.includes('sarmiento')) return `C:\\imedic\\adjuntos\\${rel}`;
+  if (url.includes('vidal')) return `E:\\imagenes\\vidal\\${rel}`;
+  return rel;
+}
 
 const ensureIdTurnoColumn = createTenantOnce(async () => {
   const cols = await executeQuery(
@@ -30,8 +46,25 @@ class AdjuntosService {
   async subirAdjunto(data, file, cargadoPor, patchServidor, patchClarion) {
     try {
       await ensureIdTurnoColumn();
-      const rutaServidor = patchServidor || file.path;
-      const rutaClarion = patchClarion || rutaServidor;
+      let fileServerUrl = '';
+      try {
+        fileServerUrl = await resolveFileServerUrl();
+      } catch {
+        /* sin URL: no remapear */
+      }
+
+      // PatchServidor = ruta real de la clínica (consumo SaaS). Nunca UNC Clarion.
+      const rutaServidor = coercePatchServidorForClinic(
+        patchServidor || file.path,
+        fileServerUrl,
+      );
+      // Patch = cortesía Clarion (Vidal → \\SERVER\…; Sarmiento → misma ruta local).
+      const rutaClarion =
+        patchClarion ||
+        toClarionStoredPath(rutaServidor, {
+          personales: false,
+          uncRoot: clarionUncRootForFileServerUrl(fileServerUrl),
+        });
       const idTipo =
         data.idTipoImagen != null && String(data.idTipoImagen).trim() !== ''
           ? String(data.idTipoImagen).trim()
