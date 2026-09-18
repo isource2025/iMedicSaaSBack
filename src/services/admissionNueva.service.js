@@ -32,6 +32,7 @@ const {
 	sanitizeWindowsFileName,
 	sanitizeFolderName,
 	formDataFileOptions,
+	toClarionStoredPath,
 } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
@@ -469,6 +470,8 @@ async function crearAdmision(body, ctx = {}) {
 		throw new Error('No se pudo generar el número de visita');
 	}
 
+	await normalizarPatchDestinoHeredados(numeroVisita);
+
 	// La cama es un paso aparte porque toca imVisitaMovimiento e imHabitacionCamas:
 	// si falla, la admisión ya existe y el paciente se ubica después sin recargar todo.
 	let cama = null;
@@ -504,6 +507,49 @@ async function crearAdmision(body, ctx = {}) {
 		requisitos: datos.requisitos,
 		cama,
 	};
+}
+
+/**
+ * Tras heredar rutas de visitas previas, reescribe PatchDestino a \\SERVER\…
+ * (sin IP) y asegura PERSONALES en requisitos de paciente.
+ */
+async function normalizarPatchDestinoHeredados(numeroVisita) {
+	const nv = enteroOCero(numeroVisita);
+	if (!nv) return;
+
+	const rows = await executeQuery(
+		`
+		SELECT
+			vr.Valor,
+			LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) AS PatchDestino,
+			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable
+		FROM dbo.imVisitaRequisitos vr
+		LEFT JOIN dbo.imRequisitos r ON r.Valor = vr.Valor
+		WHERE vr.NumeroVisita = @p0
+		  AND LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) <> ''
+		`,
+		[{ value: nv, type: 'Int' }],
+	);
+
+	for (const row of rows || []) {
+		const actual = texto(row.PatchDestino);
+		const clarion = toClarionStoredPath(actual, {
+			personales: esRequisitoPaciente(row.Aplicable),
+		});
+		if (!clarion || clarion === actual) continue;
+		await executeQuery(
+			`
+			UPDATE dbo.imVisitaRequisitos
+			SET PatchOrigen = @p2, PatchDestino = @p2
+			WHERE NumeroVisita = @p0 AND Valor = @p1
+			`,
+			[
+				{ value: nv, type: 'Int' },
+				{ value: enteroOCero(row.Valor), type: 'TinyInt' },
+				{ value: clarion, type: 'VarChar', length: 600 },
+			],
+		);
+	}
 }
 
 /** Requisitos ya cargados en una visita, con el estado de su archivo. */
@@ -732,6 +778,11 @@ async function adjuntarArchivoRequisito(numeroVisita, valorRequisito, file, ctx 
 			throw errorHttp(describeFileServerError(e), 503);
 		}
 	}
+
+	// Clarion lee PatchDestino como UNC \\SERVER\… (nunca IP). Paciente → PERSONALES.
+	rutaGuardada = toClarionStoredPath(destino || rutaGuardada, {
+		personales: esRequisitoPaciente(meta.Aplicable),
+	});
 
 	const responsable = await nombreOperador(ctx.codOperador);
 	const observaciones = normalizarTextoParaClarionAnsi(

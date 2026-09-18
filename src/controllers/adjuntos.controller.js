@@ -33,6 +33,7 @@ const {
   normalizeAdjuntoFilePath,
   fileServerFileUrl,
   contentTypeForAdjuntoFileName,
+  toClarionStoredPath,
 } = require('../utils/fileNameEncoding');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
@@ -228,6 +229,9 @@ router.post(
       }
     }
 
+    // Internación: Clarion UNC \\SERVER\… sin PERSONALES
+    filePath = toClarionStoredPath(filePath, { personales: false });
+
     // Re-bind ALS tras axios (puede perder tenant antes del INSERT)
     const result = await ensureTenantFromReq(req, () =>
       adjuntosService.subirAdjunto(
@@ -355,6 +359,8 @@ router.post(
           continue;
         }
       }
+
+      filePath = toClarionStoredPath(filePath, { personales: false });
 
       try {
         const result = await ensureTenantFromReq(req, () =>

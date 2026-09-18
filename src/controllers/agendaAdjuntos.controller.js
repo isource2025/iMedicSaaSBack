@@ -18,7 +18,7 @@ const {
   isFileServerUnreachable,
   describeFileServerError,
 } = require('../utils/fileServerUrl');
-const { fixMulterFile, formDataFileOptions, sanitizeWindowsFileName } = require('../utils/fileNameEncoding');
+const { fixMulterFile, formDataFileOptions, sanitizeWindowsFileName, toClarionStoredPath } = require('../utils/fileNameEncoding');
 const { runWithTenant, restoreTenantFromRequest, ensureTenantFromReq } = require('../context/tenantContext');
 
 function enqueueNotificarAdjunto(req, payload) {
@@ -147,6 +147,8 @@ async function subirAdjuntoTurno(req, res) {
         });
       }
     }
+
+    filePath = toClarionStoredPath(filePath, { personales: false });
 
     const result = await ensureTenantFromReq(req, () =>
       adjuntosService.subirAdjunto(

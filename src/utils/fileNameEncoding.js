@@ -166,6 +166,79 @@ function rewriteLegacyImagenesUnc(filePath) {
 	return rel == null ? filePath : rel;
 }
 
+/** Root UNC que Clarion espera en Patch / PatchDestino (nunca IP). */
+const DEFAULT_CLARION_UNC_ROOT = '\\\\SERVER\\Imagenes\\Vidal';
+
+function clarionUncRoot() {
+	const raw = String(
+		process.env.IMEDIC_CLARION_UNC_ROOT ||
+			process.env.IMEDIC_FS_UNC_ROOT ||
+			DEFAULT_CLARION_UNC_ROOT,
+	).trim();
+	const normalized = raw.replace(/\//g, '\\').replace(/[\\/]+$/, '');
+	return normalized || DEFAULT_CLARION_UNC_ROOT;
+}
+
+/**
+ * Extrae la parte relativa bajo Imagenes\<share> o bajo el UncRoot Clarion.
+ * Acepta UNC (IP o \\SERVER), letras de unidad y rutas ya relativas.
+ */
+function relativeUnderImagenesOrRoot(filePath) {
+	if (!filePath) return '';
+	const s = String(filePath).replace(/\//g, '\\').trim();
+	if (!s) return '';
+
+	const fromUnc = relativeFromLegacyImagenesUnc(s);
+	if (fromUnc != null) return String(fromUnc).replace(/^\\+/, '');
+
+	const driveImg = s.match(/^[A-Za-z]:\\[Ii]magenes\\[^\\]+\\(.+)$/);
+	if (driveImg) return driveImg[1];
+
+	const root = clarionUncRoot();
+	if (s.toLowerCase().startsWith(root.toLowerCase() + '\\')) {
+		return s.slice(root.length).replace(/^\\+/, '');
+	}
+	if (s.toLowerCase() === root.toLowerCase()) return '';
+
+	const adjuntos = s.match(/^[A-Za-z]:\\(?:imedic\\)?adjuntos\\(.+)$/i);
+	if (adjuntos) return adjuntos[1];
+
+	if (/^[A-Za-z]:\\/.test(s)) return path.basename(s);
+
+	if (s.startsWith('\\\\')) {
+		const m = s.match(/^\\\\[^\\]+\\[^\\]+\\(.+)$/);
+		return m ? m[1] : path.basename(s);
+	}
+
+	return s.replace(/^\\+/, '');
+}
+
+/**
+ * Ruta a persistir en Clarion (imVisitaRequisitos.PatchDestino / imPedidosEstudiosAdjuntos.Patch).
+ * Siempre \\SERVER\Imagenes\Vidal\… (nunca IP).
+ *
+ * @param {string} filePath ruta física, relativa o UNC legacy
+ * @param {{ personales?: boolean|null }} [opts]
+ *   - true  → fuerza PERSONALES\… (admisión / dato paciente)
+ *   - false → quita PERSONALES\… (internación / visita)
+ *   - null  → deja el prefijo como venga
+ */
+function toClarionStoredPath(filePath, opts = {}) {
+	if (filePath == null || filePath === '') return filePath;
+	const personales = opts.personales;
+	let rel = relativeUnderImagenesOrRoot(filePath).replace(/\\+/g, '\\');
+
+	const hasPersonales = /^PERSONALES(\\|$)/i.test(rel);
+	if (personales === true && !hasPersonales) {
+		rel = rel ? `PERSONALES\\${rel}` : 'PERSONALES';
+	} else if (personales === false && hasPersonales) {
+		rel = rel.replace(/^PERSONALES\\?/i, '');
+	}
+
+	const root = clarionUncRoot();
+	return rel ? `${root}\\${rel}` : root;
+}
+
 function normalizeAdjuntoFilePath(rutaOriginal) {
 	if (!rutaOriginal) return rutaOriginal;
 	let ruta = decodeMultipartFilename(String(rutaOriginal));
@@ -302,6 +375,8 @@ module.exports = {
 	normalizeAdjuntoFilePath,
 	relativeFromLegacyImagenesUnc,
 	rewriteLegacyImagenesUnc,
+	clarionUncRoot,
+	toClarionStoredPath,
 	pathLookupCandidates,
 	fileServerFileQuery,
 	fileServerFileUrl,
