@@ -34,6 +34,7 @@ const {
   fileServerFileUrl,
   contentTypeForAdjuntoFileName,
   toClarionStoredPath,
+  clarionUncRootForFileServerUrl,
 } = require('../utils/fileNameEncoding');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
@@ -229,8 +230,11 @@ router.post(
       }
     }
 
-    // Internación: Clarion UNC \\SERVER\… sin PERSONALES
-    filePath = toClarionStoredPath(filePath, { personales: false });
+    // PatchServidor = ruta real del FS (consumo SaaS). Patch = cortesía Clarion.
+    const rutaClarion = toClarionStoredPath(filePath, {
+      personales: false,
+      uncRoot: clarionUncRootForFileServerUrl(await resolveFileServerUrl().catch(() => '')),
+    });
 
     // Re-bind ALS tras axios (puede perder tenant antes del INSERT)
     const result = await ensureTenantFromReq(req, () =>
@@ -242,6 +246,7 @@ router.post(
         req.file,
         userId,
         filePath,
+        rutaClarion,
       ),
     );
 
@@ -360,7 +365,10 @@ router.post(
         }
       }
 
-      filePath = toClarionStoredPath(filePath, { personales: false });
+      const rutaClarion = toClarionStoredPath(filePath, {
+        personales: false,
+        uncRoot: clarionUncRootForFileServerUrl(await resolveFileServerUrl().catch(() => '')),
+      });
 
       try {
         const result = await ensureTenantFromReq(req, () =>
@@ -372,6 +380,7 @@ router.post(
             file,
             userId,
             filePath,
+            rutaClarion,
           ),
         );
         resultados.push(result);

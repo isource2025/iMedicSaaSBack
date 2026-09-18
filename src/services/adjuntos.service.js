@@ -24,11 +24,14 @@ const ensureIdTurnoColumn = createTenantOnce(async () => {
 class AdjuntosService {
   /**
    * Subir archivo adjunto para una visita y/o turno de agenda (pre-cierre).
+   * @param {string} [patchServidor] ruta real del file server (la que usa el SaaS para leer)
+   * @param {string} [patchClarion] cortesía Clarion (Patch); si falta, copia patchServidor
    */
-  async subirAdjunto(data, file, cargadoPor, patchServidor) {
+  async subirAdjunto(data, file, cargadoPor, patchServidor, patchClarion) {
     try {
       await ensureIdTurnoColumn();
-      const rutaArchivo = patchServidor || file.path;
+      const rutaServidor = patchServidor || file.path;
+      const rutaClarion = patchClarion || rutaServidor;
       const idTipo =
         data.idTipoImagen != null && String(data.idTipoImagen).trim() !== ''
           ? String(data.idTipoImagen).trim()
@@ -53,8 +56,8 @@ class AdjuntosService {
             ),
             type: 'NVarChar',
           },
-          { value: rutaArchivo, type: 'NVarChar' },
-          { value: rutaArchivo, type: 'NVarChar' },
+          { value: rutaClarion, type: 'NVarChar' },
+          { value: rutaServidor, type: 'NVarChar' },
           { value: new Date(), type: 'DateTime' },
           { value: cargadoPor, type: 'Int' },
           { value: idTipo, type: 'VarChar' },
@@ -65,13 +68,16 @@ class AdjuntosService {
 
       const ref = idTurno ? `turno ${idTurno}` : `visita ${numeroVisita}`;
       console.log(`✅ Adjunto subido para ${ref}: ${idAdjunto} - ${file.originalname}`);
-      console.log(`📁 Ruta en servidor: ${rutaArchivo}`);
+      console.log(`📁 PatchServidor (SaaS): ${rutaServidor}`);
+      if (rutaClarion !== rutaServidor) {
+        console.log(`📁 Patch (Clarion): ${rutaClarion}`);
+      }
 
       return {
         success: true,
         idAdjunto,
         nombreArchivo: file.originalname,
-        rutaArchivo: rutaArchivo,
+        rutaArchivo: rutaServidor,
         tipoArchivo: file.mimetype,
         tamanioBytes: file.size,
       };

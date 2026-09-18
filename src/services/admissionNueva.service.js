@@ -33,6 +33,7 @@ const {
 	sanitizeFolderName,
 	formDataFileOptions,
 	toClarionStoredPath,
+	clarionUncRootForFileServerUrl,
 } = require('../utils/fileNameEncoding');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
@@ -779,9 +780,17 @@ async function adjuntarArchivoRequisito(numeroVisita, valorRequisito, file, ctx 
 		}
 	}
 
-	// Clarion lee PatchDestino como UNC \\SERVER\… (nunca IP). Paciente → PERSONALES.
-	rutaGuardada = toClarionStoredPath(destino || rutaGuardada, {
+	const rutaFs = rutaGuardada;
+	let fileServerUrlForClarion = '';
+	try {
+		fileServerUrlForClarion = await resolveFileServerUrl();
+	} catch {
+		/* sin URL: Clarion path queda relativa/local */
+	}
+	// PatchDestino = cortesía Clarion; el SaaS resuelve con pathLookupCandidates.
+	rutaGuardada = toClarionStoredPath(destino || rutaFs, {
 		personales: esRequisitoPaciente(meta.Aplicable),
+		uncRoot: clarionUncRootForFileServerUrl(fileServerUrlForClarion),
 	});
 
 	const responsable = await nombreOperador(ctx.codOperador);
@@ -814,7 +823,7 @@ async function adjuntarArchivoRequisito(numeroVisita, valorRequisito, file, ctx 
 		numeroVisita: nv,
 		valor,
 		descripcion: meta.Descripcion,
-		ruta: rutaGuardada,
+		ruta: rutaFs,
 		nombreArchivo: file.originalname,
 	};
 }
