@@ -29,18 +29,17 @@ const razaService = {
 
   createRaza: async (raza) => {
     try {
-      if (!raza.Valor || !raza.Descripcion) {
-        throw new Error('Todos los campos son obligatorios');
+      if (!raza.Descripcion) {
+        throw new Error('La descripción es obligatoria');
       }
-      const existingRaza = await razaService.getRaza(raza.Valor);
-      if (existingRaza) {
-        throw new Error(`Ya existe una raza con el valor ${raza.Valor}`);
-      }
-      await executeQuery('INSERT INTO imRaza (Valor, Descripcion) VALUES (@p0, @p1)', [
-        { value: raza.Valor },
-        { value: raza.Descripcion },
+      await executeQuery('INSERT INTO imRaza (Descripcion) VALUES (@p0)', [
+        { value: raza.Descripcion, type: 'VarChar', length: 50 },
       ]);
-      return await razaService.getRaza(raza.Valor);
+      const created = await executeQuery(
+        'SELECT TOP 1 Valor, Descripcion FROM imRaza WHERE Descripcion = @p0 ORDER BY Valor DESC',
+        [{ value: raza.Descripcion, type: 'VarChar', length: 50 }],
+      );
+      return created[0] || { Descripcion: raza.Descripcion };
     } catch (error) {
       console.error('Error al crear raza:', error);
       throw error;

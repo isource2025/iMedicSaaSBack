@@ -140,16 +140,8 @@ const localidadController = {
    */
   createLocalidad: async (req, res) => {
     try {
-      const { Valor, CodigoPostal, NombreLocalidad, ValorProvincia } = req.body;
-      
-      // Validar datos requeridos
-      if (Valor === undefined || Valor === null) {
-        return res.status(400).json({
-          success: false,
-          message: 'El campo Valor es obligatorio'
-        });
-      }
-      
+      const { CodigoPostal, NombreLocalidad, ValorProvincia } = req.body;
+
       if (!NombreLocalidad) {
         return res.status(400).json({
           success: false,
@@ -157,9 +149,7 @@ const localidadController = {
         });
       }
       
-      // Construir el objeto localidad
       const localidadData = {
-        Valor,
         CodigoPostal,
         NombreLocalidad,
         ValorProvincia

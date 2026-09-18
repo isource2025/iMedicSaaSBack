@@ -114,26 +114,16 @@ const provinciaController = {
    */
   createProvincia: async (req, res) => {
     try {
-      const { Valor, LetraProvincia, Descripcion, ValorNacionalidad } = req.body;
+      const { LetraProvincia, Descripcion, ValorNacionalidad } = req.body;
       
-      // Validación básica de los datos
-      if (!Valor || !LetraProvincia || !Descripcion || !ValorNacionalidad) {
+      if (!LetraProvincia || !Descripcion || !ValorNacionalidad) {
         return res.status(400).json({
           success: false,
-          message: 'Todos los campos son obligatorios'
-        });
-      }
-      
-      const valorNumerico = parseInt(Valor);
-      if (isNaN(valorNumerico)) {
-        return res.status(400).json({
-          success: false,
-          message: 'El Valor debe ser un número'
+          message: 'Código, nombre y nacionalidad son obligatorios'
         });
       }
       
       const nuevaProvincia = {
-        Valor: valorNumerico,
         LetraProvincia,
         Descripcion,
         ValorNacionalidad

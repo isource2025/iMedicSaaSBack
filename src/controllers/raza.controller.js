@@ -81,28 +81,16 @@ const razaController = {
    */
   createRaza: async (req, res) => {
     try {
-      const { Valor, Descripcion } = req.body;
+      const { Descripcion } = req.body;
       
-      // Validación básica de los datos
-      if (!Valor || !Descripcion) {
+      if (!Descripcion) {
         return res.status(400).json({
           success: false,
-          message: 'Todos los campos son obligatorios'
+          message: 'La descripción es obligatoria'
         });
       }
       
-      const valorNumerico = parseInt(Valor);
-      if (isNaN(valorNumerico)) {
-        return res.status(400).json({
-          success: false,
-          message: 'El Valor debe ser un número'
-        });
-      }
-      
-      const nuevaRaza = {
-        Valor: valorNumerico,
-        Descripcion
-      };
+      const nuevaRaza = { Descripcion };
       
       const razaCreada = await razaService.createRaza(nuevaRaza);
       

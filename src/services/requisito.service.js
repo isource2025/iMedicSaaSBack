@@ -22,27 +22,30 @@ const requisitoService = {
   },
 
   createRequisito: async (requisito) => {
-    if ((requisito.Valor == null && requisito.Valor !== 0) || !requisito.Descripcion || !requisito.AplicableAlPaciente) {
-      throw new Error('Todos los campos son obligatorios');
+    if (!requisito.Descripcion) {
+      throw new Error('La descripción es obligatoria');
     }
     if (String(requisito.Descripcion).length > 40) {
       throw new Error('La descripción no puede exceder los 40 caracteres');
     }
-    if (String(requisito.AplicableAlPaciente).length > 10) {
+    const aplicable = requisito.AplicableAlPaciente || 'No';
+    if (String(aplicable).length > 10) {
       throw new Error('El campo AplicableAlPaciente no puede exceder los 10 caracteres');
     }
-    const existing = await requisitoService.getRequisito(requisito.Valor);
-    if (existing) throw new Error(`Ya existe un requisito con el valor ${requisito.Valor}`);
 
     await executeQuery(
-      `INSERT INTO imRequisitos (Valor, Descripcion, ${COL}) VALUES (@p0, @p1, @p2)`,
+      `INSERT INTO imRequisitos (Descripcion, ${COL}) VALUES (@p0, @p1)`,
       [
-        { value: requisito.Valor },
-        { value: requisito.Descripcion },
-        { value: requisito.AplicableAlPaciente },
+        { value: requisito.Descripcion, type: 'VarChar', length: 40 },
+        { value: aplicable, type: 'VarChar', length: 10 },
       ],
     );
-    return requisitoService.getRequisito(requisito.Valor);
+    const created = await executeQuery(
+      `SELECT TOP 1 Valor, Descripcion, ${COL} AS AplicableAlPaciente
+       FROM imRequisitos WHERE Descripcion = @p0 ORDER BY Valor DESC`,
+      [{ value: requisito.Descripcion, type: 'VarChar', length: 40 }],
+    );
+    return created[0];
   },
 
   updateRequisito: async (valor, datos) => {

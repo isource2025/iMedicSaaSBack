@@ -81,26 +81,14 @@ const requisitoController = {
    */
   createRequisito: async (req, res) => {
     try {
-      const { Valor, Descripcion, AplicableAlPaciente } = req.body;
-      
-      // Validación básica de los datos
-      if (Valor === undefined || !Descripcion || !AplicableAlPaciente) {
+      const { Descripcion, AplicableAlPaciente } = req.body;
+
+      if (!Descripcion) {
         return res.status(400).json({
           success: false,
-          message: 'Todos los campos son obligatorios'
+          message: 'La descripción es obligatoria'
         });
       }
-      
-      // Validar tipo y rango del Valor
-      const valorNumero = parseInt(Valor);
-      if (isNaN(valorNumero) || valorNumero < 0 || valorNumero > 255) {
-        return res.status(400).json({
-          success: false,
-          message: 'El Valor debe ser un número entre 0 y 255'
-        });
-      }
-      
-      // Validar longitud de los campos
       if (Descripcion.length > 40) {
         return res.status(400).json({
           success: false,
@@ -116,9 +104,8 @@ const requisitoController = {
       }
       
       const nuevoRequisito = {
-        Valor: valorNumero,
         Descripcion,
-        AplicableAlPaciente
+        AplicableAlPaciente: AplicableAlPaciente || 'No'
       };
       
       const requisitoCreado = await requisitoService.createRequisito(nuevoRequisito);

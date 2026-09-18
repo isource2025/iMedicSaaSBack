@@ -37,22 +37,19 @@ const getDisposicionesEgreso = async (req, res) => {
  */
 const createDisposicionEgreso = async (req, res) => {
   try {
-    const { Valor, Descripcion } = req.body;
-    
-    // Validación básica
-    if (Valor === undefined || Valor === null || !Descripcion) {
+    const Descripcion = String(req.body.Descripcion ?? '').trim();
+    if (!Descripcion) {
       return res.status(400).json({ 
-        error: 'El valor y la descripción son obligatorios' 
+        error: 'La descripción es obligatoria' 
       });
     }
-    
-    // Convertir a número si es necesario
-    const valorNumerico = Number(Valor);
-    
-    if (isNaN(valorNumerico)) {
-      return res.status(400).json({
-        error: 'El valor debe ser un número'
-      });
+
+    let valorNumerico = Number(req.body.Valor);
+    if (!Number.isFinite(valorNumerico) || valorNumerico <= 0) {
+      const maxRows = await executeQuery(
+        'SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM imDisposicionEgreso',
+      );
+      valorNumerico = Number(maxRows[0]?.NextValor) || 1;
     }
     
     // Verificar si ya existe un registro con ese Valor

@@ -143,18 +143,28 @@ const localidadService = {
    */
   createLocalidad: async (data) => {
     try {
-      // Verificar si ya existe un registro con el mismo valor
-      const existingRecord = await localidadService.getLocalidadByValor(data.valor);
-      if (existingRecord) {
-        throw new Error(`Ya existe un registro con el valor ${data.valor}`);
-      }
-      
+      const nombre = String(data.NombreLocalidad || data.descripcion || '').trim();
+      const codigoPostal = Number(data.CodigoPostal) || 0;
+      const valorProvincia = String(data.ValorProvincia || '').trim();
+      if (!nombre) throw new Error('El nombre de la localidad es obligatorio');
+
+      const next = await executeQuery(
+        'SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM imLocalidades',
+      );
+      const valor = Number(data.Valor) > 0 ? Number(data.Valor) : Number(next[0]?.NextValor) || 1;
+
       const query = `
-        INSERT INTO imLocalidades (valor, descripcion)
-        VALUES (@p0, @p1)
+        INSERT INTO imLocalidades (Valor, CodigoPostal, NombreLocalidad, Localidad, ValorProvincia)
+        VALUES (@p0, @p1, @p2, @p3, @p4)
       `;
-      
-      await executeQuery(query, [{ value: data.valor }, { value: data.descripcion }]);
+
+      await executeQuery(query, [
+        { value: valor, type: 'Int' },
+        { value: codigoPostal, type: 'Int' },
+        { value: nombre, type: 'VarChar', length: 85 },
+        { value: nombre.slice(0, 35), type: 'VarChar', length: 35 },
+        { value: valorProvincia, type: 'VarChar', length: 3 },
+      ]);
       return true;
     } catch (error) {
       console.error('Error al crear localidad:', error);
@@ -179,11 +189,18 @@ const localidadService = {
       
       const query = `
         UPDATE imLocalidades
-        SET descripcion = ?
-        WHERE valor = ?
+        SET CodigoPostal = @p0, NombreLocalidad = @p1, Localidad = @p2, ValorProvincia = @p3
+        WHERE Valor = @p4
       `;
       
-      await executeQuery(query, [data.descripcion, valor]);
+      const nombre = String(data.NombreLocalidad || data.descripcion || '').trim();
+      await executeQuery(query, [
+        { value: Number(data.CodigoPostal) || 0, type: 'Int' },
+        { value: nombre, type: 'VarChar', length: 85 },
+        { value: nombre.slice(0, 35), type: 'VarChar', length: 35 },
+        { value: String(data.ValorProvincia || ''), type: 'VarChar', length: 3 },
+        { value: Number(valor), type: 'Int' },
+      ]);
       return true;
     } catch (error) {
       console.error(`Error al actualizar localidad con valor ${valor}:`, error);
@@ -206,10 +223,10 @@ const localidadService = {
       
       const query = `
         DELETE FROM imLocalidades
-        WHERE valor = ?
+        WHERE Valor = @p0
       `;
       
-      await executeQuery(query, [valor]);
+      await executeQuery(query, [{ value: Number(valor), type: 'Int' }]);
       return true;
     } catch (error) {
       console.error(`Error al eliminar localidad con valor ${valor}:`, error);

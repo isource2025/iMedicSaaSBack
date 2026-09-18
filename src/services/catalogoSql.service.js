@@ -17,8 +17,13 @@ function col(name, opts = {}) {
 		type: opts.type || 'VarChar',
 		length: opts.length,
 		editable: opts.editable,
-		/** Parte de la clave compuesta: editable al crear, no al editar. */
+		label: opts.label,
+		/** Parte de la clave compuesta: se pide al crear, no al editar. */
 		keyPart: Boolean(opts.keyPart),
+		/** Columna IDENTITY de SQL Server: no se pide ni se inserta. */
+		identity: Boolean(opts.identity),
+		/** Numérico secuencial sin IDENTITY: MAX+1 al crear. */
+		autoKey: Boolean(opts.autoKey),
 	};
 }
 
@@ -33,8 +38,8 @@ const CATALOGOS = [
 		match: ['lugar', 'episodio'],
 		key: 'IdLugarEpisodio',
 		keyType: 'Int',
-		identity: true,
-		columns: [col('IdLugarEpisodio', { as: 'Valor', editable: false }), col('Descripcion', { length: 150 })],
+		autoKey: true,
+		columns: [col('IdLugarEpisodio', { as: 'Valor', editable: false, autoKey: true }), col('Descripcion', { length: 150 })],
 	},
 	{
 		id: 'centro-asistencial',
@@ -72,6 +77,7 @@ const CATALOGOS = [
 		match: ['categoria'],
 		key: 'Valor',
 		keyType: 'TinyInt',
+		identity: true,
 		columns: [
 			col('Valor', { editable: false }),
 			col('Descripcion', { length: 20 }),
@@ -108,6 +114,7 @@ const CATALOGOS = [
 		match: ['funcion'],
 		key: 'Valor',
 		keyType: 'TinyInt',
+		identity: true,
 		columns: [col('Valor', { editable: false }), col('Descripcion', { length: 40 })],
 	},
 	{
@@ -149,7 +156,7 @@ const CATALOGOS = [
 		],
 		columns: [
 			col('Valor', { as: 'Cliente', type: 'Int', keyPart: true }),
-			col('Codigo', { type: 'Int', keyPart: true }),
+			col('Codigo', { type: 'Int', keyPart: true, identity: true }),
 			col('Descripcion', { length: 40 }),
 			col('TipoValor', { type: 'TinyInt' }),
 			col('CatProfesional', { type: 'TinyInt' }),
@@ -164,17 +171,19 @@ const CATALOGOS = [
 		match: ['nomenclador nacional'],
 		key: 'IDPractica',
 		keyType: 'Int',
+		autoKey: true,
 		columns: [
-			col('IDPractica', { type: 'Int' }),
+			col('IDPractica', { type: 'Int', editable: false, autoKey: true }),
 			col('Descripcion', { length: 255 }),
 			col('Tipo', { length: 1 }),
 			col('Letra', { length: 1 }),
-			col('Valor', { type: 'TinyInt' }),
-			col('SubValor', { type: 'TinyInt' }),
+			col('Valor', { type: 'TinyInt', label: 'Cód. valor' }),
+			col('SubValor', { type: 'TinyInt', label: 'Subvalor' }),
 			col('Practica', { type: 'TinyInt' }),
 			col('Complejidad', { type: 'Int' }),
 		],
 		orderBy: 'Descripcion',
+		listTop: 3000,
 	},
 	{
 		id: 'nomenclador-modulos',
@@ -184,16 +193,18 @@ const CATALOGOS = [
 		match: ['nomenclador de modulo'],
 		key: 'IDPractica',
 		keyType: 'Int',
+		autoKey: true,
 		columns: [
-			col('IDPractica', { type: 'Int' }),
+			col('IDPractica', { type: 'Int', editable: false, autoKey: true }),
 			col('Descripcion', { length: 300 }),
 			col('Tipo', { length: 1 }),
 			col('Letra', { length: 1 }),
-			col('Valor', { type: 'TinyInt' }),
-			col('SubValor', { type: 'TinyInt' }),
+			col('Valor', { type: 'TinyInt', label: 'Cód. valor' }),
+			col('SubValor', { type: 'TinyInt', label: 'Subvalor' }),
 			col('Practica', { type: 'TinyInt' }),
 		],
 		orderBy: 'Descripcion',
+		listTop: 3000,
 	},
 	{
 		id: 'vademecum',
@@ -204,7 +215,7 @@ const CATALOGOS = [
 		key: 'Troquel',
 		keyType: 'Int',
 		columns: [
-			col('Troquel', { type: 'Int' }),
+			col('Troquel', { type: 'Int', label: 'Troquel' }),
 			col('Nombre', { length: 45 }),
 			col('Descripcion', { length: 50 }),
 			col('Presentacion', { length: 45 }),
@@ -257,7 +268,7 @@ const CATALOGOS = [
 		keyType: 'VarChar',
 		keyLength: 20,
 		columns: [
-			col('Valor', { length: 20 }),
+			col('Valor', { length: 20, label: 'Frecuencia' }),
 			col('Intervalo', { type: 'Int' }),
 			col('Dias', { type: 'Int' }),
 		],
@@ -301,6 +312,7 @@ const CATALOGOS = [
 		match: ['dieta'],
 		key: 'Valor',
 		keyType: 'TinyInt',
+		identity: true,
 		columns: [col('Valor', { editable: false }), col('Descripcion', { length: 40 })],
 	},
 	{
@@ -491,6 +503,27 @@ function esColumnaClave(def, c) {
 	return c.name === def.key;
 }
 
+function esIdentityCol(def, c) {
+	if (c.identity) return true;
+	return Boolean(def.identity && c.name === def.key);
+}
+
+function esAutoKeyCol(def, c) {
+	if (esIdentityCol(def, c)) return true;
+	if (c.autoKey) return true;
+	return Boolean(def.autoKey && c.name === def.key);
+}
+
+function valorDeBody(c, body) {
+	return body[c.as] ?? body[c.name];
+}
+
+function exigirDescripcion(c, raw) {
+	const nombre = String(c.as || c.name || '').toLowerCase();
+	if (nombre !== 'descripcion' && nombre !== 'razonsocial' && nombre !== 'nombre') return;
+	if (!String(raw ?? '').trim()) throw errorHttp('La descripción es obligatoria', 400);
+}
+
 async function listar(id) {
 	const def = porId(id);
 	const order = def.orderBy || '2';
@@ -501,26 +534,48 @@ async function listar(id) {
 	return { def, rows: conClaveCompuesta(def, rows) };
 }
 
+async function insertarFila(def, names, placeholders, params) {
+	if (!names.length) throw errorHttp('Nada para insertar', 400);
+	await executeQuery(
+		`INSERT INTO dbo.[${def.table}] (${names.join(', ')}) VALUES (${placeholders.join(', ')})`,
+		params,
+	);
+}
+
 async function crear(id, body = {}) {
 	const def = porId(id);
 	const params = [];
+	const names = [];
+	const placeholders = [];
+	let autoKeyCol = null;
 
-	if (def.identity) {
-		const extraNames = def.columns.filter((c) => c.name !== def.key);
-		const extraParams = extraNames.map((c, i) => {
-			params.push(paramCampo(c, body[c.as] ?? body[c.name] ?? ''));
-			return { name: `[${c.name}]`, ph: `@p${i}` };
-		});
-		const colsSql = [`[${def.key}]`, ...extraParams.map((x) => x.name)].join(', ');
-		const valsSql = ['@nid', ...extraParams.map((x) => x.ph)].join(', ');
+	for (const c of def.columns) {
+		if (esIdentityCol(def, c)) continue;
+		if (esAutoKeyCol(def, c)) {
+			autoKeyCol = c;
+			continue;
+		}
+		const raw = valorDeBody(c, body);
+		if (esColumnaClave(def, c) && (raw == null || String(raw).trim() === '')) {
+			throw errorHttp(`El campo ${c.as} es obligatorio`, 400);
+		}
+		exigirDescripcion(c, raw);
+		names.push(`[${c.name}]`);
+		placeholders.push(`@p${params.length}`);
+		params.push(paramCampo(c, raw ?? ''));
+	}
+
+	if (autoKeyCol) {
+		const keyName = autoKeyCol.name;
 		await executeQuery(
 			`
 			SET XACT_ABORT ON;
 			BEGIN TRANSACTION;
 			DECLARE @nid int;
-			SELECT @nid = ISNULL(MAX([${def.key}]), 0) + 1
+			SELECT @nid = ISNULL(MAX([${keyName}]), 0) + 1
 			FROM dbo.[${def.table}] WITH (UPDLOCK, HOLDLOCK);
-			INSERT INTO dbo.[${def.table}] (${colsSql}) VALUES (${valsSql});
+			INSERT INTO dbo.[${def.table}] ([${keyName}]${names.length ? ', ' + names.join(', ') : ''})
+			VALUES (@nid${placeholders.length ? ', ' + placeholders.join(', ') : ''});
 			COMMIT;
 			`,
 			params,
@@ -528,23 +583,7 @@ async function crear(id, body = {}) {
 		return listar(id);
 	}
 
-	const names = [];
-	const placeholders = [];
-
-	for (const c of def.columns) {
-		const raw = body[c.as] ?? body[c.name];
-		if (esColumnaClave(def, c) && (raw == null || String(raw).trim() === '')) {
-			throw errorHttp(`El campo ${c.as} es obligatorio`, 400);
-		}
-		names.push(`[${c.name}]`);
-		placeholders.push(`@p${params.length}`);
-		params.push(paramCampo(c, raw ?? ''));
-	}
-
-	await executeQuery(
-		`INSERT INTO dbo.[${def.table}] (${names.join(', ')}) VALUES (${placeholders.join(', ')})`,
-		params,
-	);
+	await insertarFila(def, names, placeholders, params);
 	return listar(id);
 }
 
@@ -571,19 +610,40 @@ async function borrar(id, clave) {
 	return listar(id);
 }
 
+function labelColumna(c, auto, isKey) {
+	if (c.label) return c.label;
+	if (c.as === 'Descripcion' || c.name === 'Descripcion') return 'Descripción';
+	if (auto && (c.as === 'Valor' || c.name === 'Valor' || c.as === 'IDPractica')) return 'ID';
+	if (isKey && (c.as === 'Valor' || c.name === 'Valor')) return 'Código';
+	return c.as;
+}
+
+function inputTypeDe(c) {
+	if (c.type === 'Float' || c.type === 'Int' || c.type === 'TinyInt') return 'number';
+	return 'text';
+}
+
 function columnasUi(def) {
 	const cols = def.columns.map((c) => {
-		let editable = c.editable !== false;
-		if (def.identity && c.name === def.key) editable = false;
-		if (c.keyPart) editable = true;
+		const isKey = esColumnaClave(def, c);
+		const auto = esAutoKeyCol(def, c);
 		return {
 			key: c.as,
-			label: c.as === 'Descripcion' ? 'Descripción' : c.as,
-			editable,
+			label: labelColumna(c, auto, isKey),
+			editable: auto || isKey ? false : c.editable !== false,
+			autoKey: auto,
+			requiredOnCreate: isKey && !auto,
+			type: inputTypeDe(c),
 		};
 	});
 	if (def.keyParts?.length) {
-		cols.unshift({ key: def.key, label: 'Clave', editable: false });
+		cols.unshift({
+			key: def.key,
+			label: 'Clave',
+			editable: false,
+			autoKey: true,
+			requiredOnCreate: false,
+		});
 	}
 	return cols;
 }

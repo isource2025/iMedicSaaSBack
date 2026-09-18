@@ -52,10 +52,10 @@ const provinciaService = {
         FROM 
           imProvincia 
         WHERE 
-          Valor = ?
+          Valor = @p0
       `;
       
-      const result = await executeQuery(query, [valor]);
+      const result = await executeQuery(query, [{ value: valor, type: 'Int' }]);
       
       if (!result || result.length === 0) {
         return null;
@@ -84,12 +84,12 @@ const provinciaService = {
         FROM 
           imProvincia 
         WHERE 
-          ValorNacionalidad = ?
+          ValorNacionalidad = @p0
         ORDER BY 
           Descripcion
       `;
       
-      const result = await executeQuery(query, [valorNacionalidad]);
+      const result = await executeQuery(query, [{ value: valorNacionalidad, type: 'VarChar', length: 2 }]);
       return result || [];
     } catch (error) {
       console.error(`Error al obtener provincias para nacionalidad ${valorNacionalidad}:`, error);
@@ -109,8 +109,8 @@ const provinciaService = {
   createProvincia: async (data) => {
     try {
       // Validaciones básicas
-      if (!data.Valor || !data.LetraProvincia || !data.Descripcion || !data.ValorNacionalidad) {
-        throw new Error('Todos los campos son obligatorios');
+      if (!data.LetraProvincia || !data.Descripcion || !data.ValorNacionalidad) {
+        throw new Error('Código, nombre y nacionalidad son obligatorios');
       }
 
       if (data.LetraProvincia.length > 3) {
@@ -125,26 +125,27 @@ const provinciaService = {
         throw new Error('El código de nacionalidad no puede tener más de 2 caracteres');
       }
 
-      // Comprueba si ya existe una provincia con ese valor
-      const provinciaExistente = await provinciaService.getProvincia(data.Valor);
-      if (provinciaExistente) {
-        throw new Error(`Ya existe una provincia con el valor ${data.Valor}`);
-      }
-
-      // Inserta la nueva provincia
       const query = `
-        INSERT INTO imProvincia (Valor, LetraProvincia, Descripcion, ValorNacionalidad)
-        VALUES (@p0, @p1, @p2, @p3)
+        INSERT INTO imProvincia (LetraProvincia, Descripcion, ValorNacionalidad)
+        VALUES (@p0, @p1, @p2)
       `;
 
       await executeQuery(query, [
-        { value: data.Valor },
-        { value: data.LetraProvincia },
-        { value: data.Descripcion },
-        { value: data.ValorNacionalidad },
+        { value: data.LetraProvincia, type: 'VarChar', length: 3 },
+        { value: data.Descripcion, type: 'VarChar', length: 30 },
+        { value: data.ValorNacionalidad, type: 'VarChar', length: 2 },
       ]);
 
-      return data;
+      const created = await executeQuery(
+        `SELECT TOP 1 Valor, LetraProvincia, Descripcion, ValorNacionalidad
+         FROM imProvincia WHERE LetraProvincia = @p0 AND Descripcion = @p1
+         ORDER BY Valor DESC`,
+        [
+          { value: data.LetraProvincia, type: 'VarChar', length: 3 },
+          { value: data.Descripcion, type: 'VarChar', length: 30 },
+        ],
+      );
+      return created[0] || data;
     } catch (error) {
       console.error('Error en el servicio de provincias:', error);
       throw new Error(error.message || 'Error al crear la provincia');
