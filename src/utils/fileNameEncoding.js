@@ -247,6 +247,8 @@ function relativeUnderImagenesOrRoot(filePath) {
  *
  * – Vidal / Imagenes\…: \\SERVER\Imagenes\<share>\… (nunca IP)
  * – Sarmiento / C:\imedic\adjuntos\…: se deja la ruta física del file server
+ *   (si opts.uncRoot está seteado, igual se reescribe a ese UNC — caso Vidal
+ *   cuyo FS físico vive bajo …\adjuntos)
  * – Relativa: se deja relativa (el FS de cada clínica antepone su root)
  *
  * @param {string} filePath
@@ -262,11 +264,16 @@ function toClarionStoredPath(filePath, opts = {}) {
 			: null;
 	let s = String(filePath).replace(/\//g, '\\').trim();
 
-	// Sarmiento y similares: no convertir a UNC de Vidal.
+	// Sarmiento / roots locales: dejar ruta física, SALVO si el caller fuerza uncRoot
+	// (Vidal). Sin esto, adjuntos de internación quedaban como E:\adjuntos\… o
+	// C:\imedic\adjuntos\… y Clarion no los veía (admisión sí, porque manda relativa).
 	if (isLocalAdjuntosPath(s)) {
 		const m = s.match(/^([A-Za-z]:\\(?:imedic\\)?adjuntos)(?:\\(.*))?$/i);
-		const root = m[1];
 		const rest = applyPersonalesRel(m[2] || '', personales);
+		if (forcedRoot) {
+			return rest ? `${forcedRoot}\\${rest}` : forcedRoot;
+		}
+		const root = m[1];
 		return rest ? `${root}\\${rest}` : root;
 	}
 
@@ -462,6 +469,8 @@ module.exports = {
 	clarionUncRoot,
 	clarionUncRootForFileServerUrl,
 	toClarionStoredPath,
+	relativeUnderImagenesOrRoot,
+	isLocalAdjuntosPath,
 	pathLookupCandidates,
 	fileServerFileQuery,
 	fileServerFileUrl,
