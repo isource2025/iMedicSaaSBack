@@ -330,6 +330,14 @@ async function main() {
 				WHERE LTRIM(RTRIM(ISNULL(Patch, ''))) <> ''
 				  AND Patch NOT LIKE '\\\\SERVER\\Imagenes\\%'
 				  AND Patch NOT LIKE '\\\\server\\Imagenes\\%'
+				  AND (
+				    Patch LIKE '[A-Z]:\\adjuntos\\%'
+				    OR Patch LIKE '[A-Z]:\\imedic\\adjuntos\\%'
+				    OR Patch LIKE '[A-Z]:\\imagenes\\vidal\\%'
+				    OR PatchServidor LIKE '[A-Z]:\\adjuntos\\%'
+				    OR PatchServidor LIKE '[A-Z]:\\imedic\\adjuntos\\%'
+				    OR PatchServidor LIKE '[A-Z]:\\imagenes\\vidal\\%'
+				  )
 				ORDER BY IdAdjunto DESC
 			`)
 		).recordset;
