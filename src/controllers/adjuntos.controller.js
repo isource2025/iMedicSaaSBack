@@ -157,7 +157,7 @@ router.post(
   async (req, res) => {
   try {
     await ensureTenantFromReq(req, async () => {
-    const { numeroVisita, tipoImagen } = req.body;
+    const { numeroVisita, tipoImagen, idSector } = req.body;
     const userId = resolveUserId(req);
 
     // Validaciones
@@ -242,6 +242,7 @@ router.post(
         {
           numeroVisita: parseInt(numeroVisita),
           idTipoImagen: String(tipoImagen).trim(),
+          idSector: idSector != null ? String(idSector).trim() : undefined,
         },
         req.file,
         userId,
@@ -289,7 +290,7 @@ router.post(
   restoreTenantFromRequest,
   async (req, res) => {
   try {
-    const { numeroVisita, tipoImagen } = req.body;
+    const { numeroVisita, tipoImagen, idSector } = req.body;
     const userId = resolveUserId(req);
 
     // Validaciones
@@ -376,6 +377,7 @@ router.post(
             {
               numeroVisita: parseInt(numeroVisita),
               idTipoImagen: String(tipoImagen).trim(),
+              idSector: idSector != null ? String(idSector).trim() : undefined,
             },
             file,
             userId,

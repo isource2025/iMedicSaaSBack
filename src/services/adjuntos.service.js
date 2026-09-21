@@ -26,6 +26,27 @@ function coercePatchServidorForClinic(ruta, fileServerUrl) {
   return rel;
 }
 
+/** Mapeo típico Clarion: tipo de imagen → sector de carga (varchar 4). */
+function mapTipoImagenToIdSector(tipoImagen) {
+  const t = String(tipoImagen || '').trim().toUpperCase();
+  if (!t) return null;
+  if (t === 'RAD' || t.startsWith('RX')) return 'RAY';
+  if (t === 'TOM' || t.startsWith('TOMO')) return 'TOM';
+  if (t === 'LABH' || t === 'HEMA' || t.startsWith('HEMATO')) return 'HEMA';
+  if (t === 'HEMO') return 'HEMO';
+  if (t.startsWith('LAB')) return 'LAB';
+  if (t === 'GAS') return 'GAS';
+  if (t === 'NEU' || t === 'NEUM') return 'NEU';
+  if (t === 'ANE' || t === 'ANEST') return 'QUIR';
+  return null;
+}
+
+function normalizeIdSector(value) {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  return s.slice(0, 4);
+}
+
 const ensureIdTurnoColumn = createTenantOnce(async () => {
   const cols = await executeQuery(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -71,13 +92,19 @@ class AdjuntosService {
           : null;
       const numeroVisita = Number(data.numeroVisita) > 0 ? Number(data.numeroVisita) : 0;
       const idTurno = Number(data.idTurno) > 0 ? Number(data.idTurno) : null;
+      const idSector = await this.resolverIdSector({
+        idSector: data.idSector,
+        idOperador: cargadoPor,
+        numeroVisita,
+        idTipoImagen: idTipo,
+      });
 
       const rows = await executeQuery(
         `
           INSERT INTO imPedidosEstudiosAdjuntos
-            (NumeroVisita, IdTurno, Descripcion, Patch, PatchServidor, Fecha, IdOperador, idtipoimagen)
+            (NumeroVisita, IdTurno, Descripcion, Patch, PatchServidor, Fecha, IdOperador, IdTipoImagen, IdSector)
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7)
+          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)
         `,
         [
           { value: numeroVisita, type: 'Int' },
@@ -94,6 +121,7 @@ class AdjuntosService {
           { value: new Date(), type: 'DateTime' },
           { value: cargadoPor, type: 'Int' },
           { value: idTipo, type: 'VarChar' },
+          { value: idSector, type: 'VarChar' },
         ],
       );
 
@@ -105,6 +133,11 @@ class AdjuntosService {
       if (rutaClarion !== rutaServidor) {
         console.log(`📁 Patch (Clarion): ${rutaClarion}`);
       }
+      if (idSector) {
+        console.log(`📁 IdSector (Clarion): ${idSector}`);
+      } else {
+        console.warn(`⚠️ Adjunto ${idAdjunto}: IdSector vacío (Clarion no mostrará Sector)`);
+      }
 
       return {
         success: true,
@@ -113,11 +146,72 @@ class AdjuntosService {
         rutaArchivo: rutaServidor,
         tipoArchivo: file.mimetype,
         tamanioBytes: file.size,
+        idSector,
       };
     } catch (error) {
       console.error('❌ Error al subir adjunto:', error);
       throw error;
     }
+  }
+
+  /**
+   * Sector que Clarion muestra en la grilla de adjuntos (IdSector varchar 4).
+   * Prioridad: body explícito → mapeo tipo→sector → sectores del operador → visita.
+   */
+  async resolverIdSector({ idSector, idOperador, numeroVisita, idTipoImagen } = {}) {
+    const explicit = normalizeIdSector(idSector);
+    if (explicit) return explicit;
+
+    const fromTipo = mapTipoImagenToIdSector(idTipoImagen);
+    if (fromTipo) return fromTipo;
+
+    const op = Number(idOperador);
+    if (Number.isFinite(op) && op > 0) {
+      try {
+        const rows = await executeQuery(
+          `
+            SELECT DISTINCT LTRIM(RTRIM(ps.idSector)) AS idSector
+            FROM dbo.imPersonalSectores ps
+            WHERE LTRIM(RTRIM(ps.idSector)) <> ''
+              AND (
+                ps.idPersonal = @p0
+                OR ps.idPersonal IN (
+                  SELECT pw.ValorPersonal FROM dbo.imPassword pw
+                  WHERE pw.CodOperador = @p0 AND pw.ValorPersonal IS NOT NULL
+                )
+              )
+          `,
+          [{ value: op, type: 'Int' }],
+        );
+        const sectores = (rows || [])
+          .map((r) => normalizeIdSector(r.idSector))
+          .filter(Boolean);
+        if (sectores.length === 1) return sectores[0];
+        if (sectores.length > 1) return sectores[0];
+      } catch (e) {
+        console.warn('[adjuntos.resolverIdSector] personal:', e.message);
+      }
+    }
+
+    const nv = Number(numeroVisita);
+    if (Number.isFinite(nv) && nv > 0) {
+      try {
+        const rows = await executeQuery(
+          `
+            SELECT TOP 1 LTRIM(RTRIM(CAST(VALORSECTOR AS VARCHAR(20)))) AS Sector
+            FROM dbo.imVisita
+            WHERE NUMEROVISITA = @p0
+          `,
+          [{ value: nv, type: 'Int' }],
+        );
+        const fromVisita = normalizeIdSector(rows?.[0]?.Sector);
+        if (fromVisita) return fromVisita;
+      } catch (e) {
+        console.warn('[adjuntos.resolverIdSector] visita:', e.message);
+      }
+    }
+
+    return null;
   }
 
   /**

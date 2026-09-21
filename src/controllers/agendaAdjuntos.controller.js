@@ -159,6 +159,7 @@ async function subirAdjuntoTurno(req, res) {
           numeroVisita: 0,
           idTurno,
           idTipoImagen: String(tipoImagen).trim(),
+          idSector: req.body?.idSector != null ? String(req.body.idSector).trim() : undefined,
         },
         req.file,
         userId,
