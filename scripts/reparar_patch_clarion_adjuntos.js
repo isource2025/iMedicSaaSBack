@@ -74,16 +74,28 @@ function isLocalDrivePath(p) {
 	return /^[A-Za-z]:\\/.test(String(p || '').replace(/\//g, '\\'));
 }
 
+/** Path físico típico de subida SaaS (nunca Clarion F:\Descargas / \\192.168). */
+function isSaasDiskPath(p) {
+	const s = String(p || '').replace(/\//g, '\\');
+	return (
+		/^[A-Za-z]:\\(?:imedic\\)?adjuntos\\/i.test(s) ||
+		/^[A-Za-z]:\\imagenes\\vidal\\/i.test(s)
+	);
+}
+
 function needsClarionRepair(patch, uncRoot) {
 	const p = String(patch || '').replace(/\//g, '\\').trim();
 	if (!p) return { ok: false, reason: 'Patch vacío' };
 	if (isClarionServerUnc(p)) return { ok: false, reason: 'Patch ya es UNC Clarion \\SERVER\\…' };
-	if (isLocalDrivePath(p) || isIpUnc(p)) return { ok: true, reason: 'path local o UNC con IP' };
-	// Relativa sin root Clarion: Clarion Vidal no la resuelve sola
-	if (uncRoot && !p.startsWith('\\\\')) {
-		return { ok: true, reason: 'path relativa sin UNC Clarion' };
+	// SOLO candidatos SaaS: path físico de clínica (adjuntos / imagenes\vidal).
+	// Nunca tocar F:\Descargas, D:\Escritorio, \\192.168\… (Clarion legacy).
+	if (/^[A-Za-z]:\\(?:imedic\\)?adjuntos\\/i.test(p)) {
+		return { ok: true, reason: 'SaaS local adjuntos' };
 	}
-	return { ok: false, reason: 'formato no candidato' };
+	if (/^[A-Za-z]:\\imagenes\\vidal\\/i.test(p)) {
+		return { ok: true, reason: 'SaaS local imagenes\\vidal' };
+	}
+	return { ok: false, reason: 'no es path SaaS (Clarion/legacy — no tocar)' };
 }
 
 /**
@@ -100,10 +112,16 @@ function planRepair(row, uncRoot) {
 		return { action: 'skip', id, reason: need.reason, patch, patchServidor };
 	}
 
-	// Fuente de verdad del archivo en disco = PatchServidor (SaaS). Fallback Patch.
+	// Fuente de verdad del archivo en disco = PatchServidor SaaS, o Patch si ya es SaaS.
 	const source = patchServidor || patch;
-	if (!source) {
-		return { action: 'skip', id, reason: 'sin Patch ni PatchServidor', patch, patchServidor };
+	if (!isSaasDiskPath(source) && !isSaasDiskPath(patch)) {
+		return {
+			action: 'skip',
+			id,
+			reason: 'ni Patch ni PatchServidor son path SaaS de clínica',
+			patch,
+			patchServidor,
+		};
 	}
 
 	const expected = String(
@@ -303,59 +321,21 @@ async function main() {
 			await mp.end();
 			process.exit(1);
 		}
-	} else {
+	} else if (!APPLY_ALL) {
 		rows = (
 			await pool.request().query(`
 				SELECT TOP (${LIMIT})
 					IdAdjunto, NumeroVisita, Descripcion, Patch, PatchServidor, Fecha
 				FROM dbo.imPedidosEstudiosAdjuntos
-				ORDER BY Fecha DESC
+				WHERE LTRIM(RTRIM(ISNULL(Patch, ''))) <> ''
+				  AND Patch NOT LIKE '\\\\SERVER\\Imagenes\\%'
+				  AND Patch NOT LIKE '\\\\server\\Imagenes\\%'
+				ORDER BY IdAdjunto DESC
 			`)
 		).recordset;
 	}
 
-	const plans = rows.map((r) => planRepair(r, uncRoot));
-	const updates = plans.filter((p) => p.action === 'update');
-	const skips = plans.filter((p) => p.action === 'skip');
-
-	console.log(`\nFilas leídas: ${rows.length}`);
-	console.log(`Candidatas a update: ${updates.length}`);
-	console.log(`Omitidas: ${skips.length}`);
-
-	if (LIST || ID_ADJUNTO > 0 || !APPLY_ALL) {
-		for (const p of ID_ADJUNTO > 0 ? plans : updates.slice(0, 30)) {
-			printPlan(p);
-		}
-		if (!ID_ADJUNTO && updates.length > 30) {
-			console.log(`\n… ${updates.length - 30} candidatas más (subí --limit o usá --id)`);
-		}
-	}
-
-	if (!APPLY && !APPLY_ALL) {
-		console.log(
-			'\nDry-run OK. Para corregir UNO:\n' +
-				`  node scripts/reparar_patch_clarion_adjuntos.js --empresa ${EMPRESA} --id <IdAdjunto> --apply`,
-		);
-		await pool.close();
-		await mp.end();
-		return;
-	}
-
-	const toWrite = APPLY ? updates.filter((p) => p.id === ID_ADJUNTO) : updates;
-	if (APPLY && toWrite.length !== 1) {
-		console.error(
-			`\nAbortado: --apply con --id ${ID_ADJUNTO} no produjo exactamente 1 update (obtuvo ${toWrite.length}).`,
-		);
-		if (plans[0]) printPlan(plans[0]);
-		await pool.close();
-		await mp.end();
-		process.exit(1);
-	}
-
-	console.log(`\nEscribiendo ${toWrite.length} fila(s)…`);
-	let ok = 0;
-	for (const p of toWrite) {
-		// Re-leer y re-validar justo antes de UPDATE (evita race / cambio manual)
+	async function applyOne(p) {
 		const check = await pool
 			.request()
 			.input('id', sql.Int, p.id)
@@ -365,24 +345,19 @@ async function main() {
 				WHERE IdAdjunto = @id
 			`);
 		const live = check.recordset[0];
-		if (!live) {
-			console.error(`  FAIL ${p.id}: desapareció`);
-			continue;
-		}
+		if (!live) return { ok: false, msg: `FAIL ${p.id}: desapareció` };
 		const livePlan = planRepair(live, uncRoot);
 		if (livePlan.action !== 'update') {
-			console.error(`  FAIL ${p.id}: ya no es update (${livePlan.reason})`);
-			continue;
+			return { ok: false, msg: `FAIL ${p.id}: ya no es update (${livePlan.reason})` };
 		}
 		if (normRel(livePlan.expected) !== normRel(p.expected)) {
-			console.error(
-				`  FAIL ${p.id}: expected cambió (${p.expected} → ${livePlan.expected})`,
-			);
-			continue;
+			return {
+				ok: false,
+				msg: `FAIL ${p.id}: expected cambió (${p.expected} → ${livePlan.expected})`,
+			};
 		}
 		if (normRel(live.Patch) !== normRel(p.patch)) {
-			console.error(`  FAIL ${p.id}: Patch cambió desde el plan; no tocar`);
-			continue;
+			return { ok: false, msg: `FAIL ${p.id}: Patch cambió desde el plan; no tocar` };
 		}
 
 		const result = await pool
@@ -398,8 +373,7 @@ async function main() {
 			`);
 		const affected = result.rowsAffected?.[0] || 0;
 		if (affected !== 1) {
-			console.error(`  FAIL ${p.id}: UPDATE afectó ${affected} filas (esperado 1)`);
-			continue;
+			return { ok: false, msg: `FAIL ${p.id}: UPDATE afectó ${affected} filas (esperado 1)` };
 		}
 
 		const verify = await pool
@@ -412,23 +386,133 @@ async function main() {
 			`);
 		const v = verify.recordset[0];
 		if (normRel(v.Patch) !== normRel(livePlan.expected)) {
-			console.error(`  FAIL ${p.id}: verificación post-UPDATE falló`);
-			continue;
+			return { ok: false, msg: `FAIL ${p.id}: verificación post-UPDATE falló` };
 		}
 		if (normRel(v.PatchServidor || '') !== normRel(p.patchServidor || '')) {
-			console.error(`  FAIL ${p.id}: PatchServidor cambió (no debería)`);
-			continue;
+			return { ok: false, msg: `FAIL ${p.id}: PatchServidor cambió (no debería)` };
+		}
+		return { ok: true, msg: `OK ${p.id}: ${p.patch} → ${livePlan.expected}` };
+	}
+
+	if (APPLY_ALL) {
+		const BATCH = Math.min(Math.max(Number(flag('batch') || 200) || 200, 10), 500);
+		let cursor = 2147483647;
+		let totalOk = 0;
+		let totalFail = 0;
+		let totalSkip = 0;
+		let batchNo = 0;
+
+		console.log(`\nMasivo por lotes de ${BATCH} (solo Patch ≠ \\\\SERVER\\Imagenes\\…)…`);
+
+		while (true) {
+			batchNo += 1;
+			const batch = (
+				await pool
+					.request()
+					.input('cursor', sql.Int, cursor)
+					.input('batch', sql.Int, BATCH)
+					.query(`
+						SELECT TOP (@batch)
+							IdAdjunto, NumeroVisita, Descripcion, Patch, PatchServidor, Fecha
+						FROM dbo.imPedidosEstudiosAdjuntos
+						WHERE IdAdjunto < @cursor
+						  AND LTRIM(RTRIM(ISNULL(Patch, ''))) <> ''
+						  AND LTRIM(RTRIM(ISNULL(PatchServidor, ''))) <> ''
+						  AND Patch NOT LIKE '\\\\SERVER\\Imagenes\\%'
+						  AND Patch NOT LIKE '\\\\server\\Imagenes\\%'
+						  AND (
+						    Patch LIKE '[A-Z]:\\adjuntos\\%'
+						    OR Patch LIKE '[A-Z]:\\imedic\\adjuntos\\%'
+						    OR Patch LIKE '[A-Z]:\\imagenes\\vidal\\%'
+						    OR PatchServidor LIKE '[A-Z]:\\adjuntos\\%'
+						    OR PatchServidor LIKE '[A-Z]:\\imedic\\adjuntos\\%'
+						    OR PatchServidor LIKE '[A-Z]:\\imagenes\\vidal\\%'
+						  )
+						ORDER BY IdAdjunto DESC
+					`)
+			).recordset;
+
+			if (!batch.length) break;
+
+			const plans = batch.map((r) => planRepair(r, uncRoot));
+			const updates = plans.filter((p) => p.action === 'update');
+			totalSkip += plans.length - updates.length;
+			cursor = Math.min(...batch.map((r) => Number(r.IdAdjunto)));
+
+			console.log(
+				`\nLote ${batchNo}: leídas ${batch.length}, update ${updates.length}, skip ${plans.length - updates.length} (cursor→${cursor})`,
+			);
+
+			for (const p of updates) {
+				const r = await applyOne(p);
+				if (r.ok) {
+					totalOk += 1;
+					if (totalOk <= 20 || totalOk % 100 === 0) console.log(`  ${r.msg}`);
+				} else {
+					totalFail += 1;
+					console.error(`  ${r.msg}`);
+				}
+			}
 		}
 
-		ok += 1;
-		console.log(`  OK ${p.id}: ${p.patch} → ${livePlan.expected}`);
+		console.log(
+			`\nMasivo listo: OK=${totalOk} FAIL=${totalFail} SKIP=${totalSkip} lotes=${batchNo}`,
+		);
+		await pool.close();
+		await mp.end();
+		return;
+	}
+
+	const plans = rows.map((r) => planRepair(r, uncRoot));
+	const updates = plans.filter((p) => p.action === 'update');
+	const skips = plans.filter((p) => p.action === 'skip');
+
+	console.log(`\nFilas leídas: ${rows.length}`);
+	console.log(`Candidatas a update: ${updates.length}`);
+	console.log(`Omitidas: ${skips.length}`);
+
+	if (LIST || ID_ADJUNTO > 0 || !APPLY) {
+		for (const p of ID_ADJUNTO > 0 ? plans : updates.slice(0, 30)) {
+			printPlan(p);
+		}
+		if (!ID_ADJUNTO && updates.length > 30) {
+			console.log(`\n… ${updates.length - 30} candidatas más (subí --limit o usá --id)`);
+		}
+	}
+
+	if (!APPLY) {
+		console.log(
+			'\nDry-run OK. Para corregir UNO:\n' +
+				`  node scripts/reparar_patch_clarion_adjuntos.js --empresa ${EMPRESA} --id <IdAdjunto> --apply`,
+		);
+		await pool.close();
+		await mp.end();
+		return;
+	}
+
+	const toWrite = updates.filter((p) => p.id === ID_ADJUNTO);
+	if (toWrite.length !== 1) {
+		console.error(
+			`\nAbortado: --apply con --id ${ID_ADJUNTO} no produjo exactamente 1 update (obtuvo ${toWrite.length}).`,
+		);
+		if (plans[0]) printPlan(plans[0]);
+		await pool.close();
+		await mp.end();
+		process.exit(1);
+	}
+
+	console.log(`\nEscribiendo ${toWrite.length} fila(s)…`);
+	let ok = 0;
+	for (const p of toWrite) {
+		const r = await applyOne(p);
+		console.log(`  ${r.msg}`);
+		if (r.ok) ok += 1;
 	}
 
 	console.log(`\nListo: ${ok}/${toWrite.length} actualizados.`);
-	if (APPLY && ok === 1) {
+	if (ok === 1) {
 		console.log(
 			'\nVerificá en Clarion que ve el archivo. Si OK, recién ahí:\n' +
-				`  node scripts/reparar_patch_clarion_adjuntos.js --empresa ${EMPRESA} --list\n` +
 				`  node scripts/reparar_patch_clarion_adjuntos.js --empresa ${EMPRESA} --apply-all --confirm ALL`,
 		);
 	}
