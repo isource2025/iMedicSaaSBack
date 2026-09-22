@@ -902,13 +902,14 @@ async function eliminar(valor) {
 // ---------- Catálogos (dropdowns de la solapa "Datos Profesionales") ----------
 
 async function listarEspecialidades() {
-	const rows = await executeQuery(
-		`SELECT Valor, Descripcion FROM dbo.imEspecialidad ORDER BY Descripcion`,
-	);
-	return rows.map((r) => ({
-		valor: Number(r.Valor),
-		descripcion: String(r.Descripcion || '').trim(),
-	}));
+	const catalogoSql = require('./catalogoSql.service');
+	const { rows } = await catalogoSql.listar('especialidad-medica');
+	return (rows || [])
+		.map((r) => ({
+			valor: Number(r.Valor ?? r.valor),
+			descripcion: String(r.Descripcion ?? r.descripcion ?? '').trim(),
+		}))
+		.filter((r) => Number.isFinite(r.valor));
 }
 
 async function listarFunciones() {

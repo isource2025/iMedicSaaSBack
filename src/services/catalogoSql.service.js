@@ -104,7 +104,8 @@ const CATALOGOS = [
 		key: 'Valor',
 		keyType: 'Int',
 		identity: true,
-		columns: [col('Valor', { editable: false }), col('Descripcion', { length: 40 })],
+		columns: [col('Valor', { editable: false, type: 'Int' }), col('Descripcion', { length: 40 })],
+		orderBy: 'Descripcion',
 	},
 	{
 		id: 'funciones-medicas',
@@ -436,6 +437,33 @@ function selectList(def) {
 	return def.columns.map((c) => `[${c.name}] AS [${c.as}]`).join(', ');
 }
 
+function valorColumnaFila(row, c) {
+	if (!row || !c) return undefined;
+	const keys = [c.as, c.name, String(c.as || '').toLowerCase(), String(c.name || '').toLowerCase()];
+	for (const k of keys) {
+		if (k && Object.prototype.hasOwnProperty.call(row, k) && row[k] != null) return row[k];
+	}
+	const lower = {};
+	for (const [k, v] of Object.entries(row)) lower[String(k).toLowerCase()] = v;
+	for (const k of keys) {
+		if (!k) continue;
+		const v = lower[String(k).toLowerCase()];
+		if (v !== undefined && v !== null) return v;
+	}
+	return undefined;
+}
+
+function normalizarFilas(def, rows) {
+	return (rows || []).map((row) => {
+		const out = {};
+		for (const c of def.columns) {
+			const raw = valorColumnaFila(row, c);
+			out[c.as] = typeof raw === 'string' ? raw.trim() : raw;
+		}
+		return out;
+	});
+}
+
 function aliasDeColumna(def, name) {
 	const c = def.columns.find((x) => x.name === name);
 	return c?.as || name;
@@ -531,7 +559,7 @@ async function listar(id) {
 	const rows = await executeQuery(
 		`SELECT ${top}${selectList(def)} FROM dbo.[${def.table}] ORDER BY ${order}`,
 	);
-	return { def, rows: conClaveCompuesta(def, rows) };
+	return { def, rows: conClaveCompuesta(def, normalizarFilas(def, rows)) };
 }
 
 async function insertarFila(def, names, placeholders, params) {
