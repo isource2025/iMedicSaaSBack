@@ -131,6 +131,141 @@ async function getPracticasNomencladorResolver() {
   return promise;
 }
 
+const EMPTY_CLINICAL_COUNTS = Object.freeze({
+  CntHistoriaClinica: 0,
+  CntPracticas: 0,
+  CntIndicaciones: 0,
+  CntMedicacion: 0,
+  CntEstudios: 0,
+  CntLaboratorios: 0,
+  CntProtocolos: 0,
+  CntEpicrisis: 0,
+  CntAdjuntos: 0,
+  CntEvoluciones: 0,
+});
+
+/**
+ * Conteos clínicos en lote para las visitas de la página actual.
+ * Evita subqueries correlacionadas por fila en el SELECT principal.
+ */
+async function cargarConteosClinicosPorVisitas(numeroVisitas) {
+  const ids = [
+    ...new Set(
+      (numeroVisitas || [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isSafeInteger(n) && n > 0),
+    ),
+  ];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn().catch(() => null);
+  const params = ids.map((id) => ({ value: id }));
+  const inList = ids.map((_, i) => `@param${i}`).join(', ');
+  const valuesList = ids.map((_, i) => `(@param${i})`).join(', ');
+
+  const labSelect = labVisCol
+    ? 'ISNULL(lab.cnt, 0) AS CntLaboratorios'
+    : 'CAST(0 AS INT) AS CntLaboratorios';
+  const labJoin = labVisCol
+    ? `LEFT JOIN (
+         SELECT lab.${labVisCol} AS NumeroVisita, COUNT_BIG(1) AS cnt
+         FROM dbo.imHCExamenesLabCabecera lab
+         WHERE lab.${labVisCol} IN (${inList})
+         GROUP BY lab.${labVisCol}
+       ) lab ON lab.NumeroVisita = ids.NumeroVisita`
+    : '';
+
+  const query = `
+    SELECT
+      ids.NumeroVisita,
+      ISNULL(hci.cnt, 0) AS CntHistoriaClinica,
+      ISNULL(fp.cnt, 0) AS CntPracticas,
+      ISNULL(iim.cnt, 0) AS CntIndicaciones,
+      ISNULL(mc.cnt, 0) AS CntMedicacion,
+      ISNULL(pe.cnt, 0) AS CntEstudios,
+      ${labSelect},
+      ISNULL(hp.cnt, 0) AS CntProtocolos,
+      ISNULL(ep.cnt, 0) AS CntEpicrisis,
+      ISNULL(adj.cnt, 0) AS CntAdjuntos,
+      ISNULL(ev.cnt, 0) AS CntEvoluciones
+    FROM (VALUES ${valuesList}) AS ids(NumeroVisita)
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imHCI
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) hci ON hci.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imFacpracticas
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) fp ON fp.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imInterIndMedicas
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) iim ON iim.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imInterCtrlMedicamento
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) mc ON mc.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT IdVisita AS NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imPedidosEstudios
+      WHERE IdVisita IN (${inList})
+      GROUP BY IdVisita
+    ) pe ON pe.NumeroVisita = ids.NumeroVisita
+    ${labJoin}
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.HCProtocolosPtes
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) hp ON hp.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT IdVisita AS NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imHCEpicrisis
+      WHERE IdVisita IN (${inList})
+      GROUP BY IdVisita
+    ) ep ON ep.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imPedidosEstudiosAdjuntos
+      WHERE NumeroVisita IN (${inList})
+      GROUP BY NumeroVisita
+    ) adj ON adj.NumeroVisita = ids.NumeroVisita
+    LEFT JOIN (
+      SELECT IdVisita AS NumeroVisita, COUNT_BIG(1) AS cnt
+      FROM dbo.imHCEvolucion
+      WHERE IdVisita IN (${inList})
+      GROUP BY IdVisita
+    ) ev ON ev.NumeroVisita = ids.NumeroVisita
+  `;
+
+  const rows = await executeQuery(query, params);
+  for (const row of rows || []) {
+    const nv = Number(row.NumeroVisita);
+    map.set(nv, {
+      CntHistoriaClinica: Number(row.CntHistoriaClinica) || 0,
+      CntPracticas: Number(row.CntPracticas) || 0,
+      CntIndicaciones: Number(row.CntIndicaciones) || 0,
+      CntMedicacion: Number(row.CntMedicacion) || 0,
+      CntEstudios: Number(row.CntEstudios) || 0,
+      CntLaboratorios: Number(row.CntLaboratorios) || 0,
+      CntProtocolos: Number(row.CntProtocolos) || 0,
+      CntEpicrisis: Number(row.CntEpicrisis) || 0,
+      CntAdjuntos: Number(row.CntAdjuntos) || 0,
+      CntEvoluciones: Number(row.CntEvoluciones) || 0,
+    });
+  }
+  return map;
+}
+
 async function buscarAdmisiones({
   termino = '',
   dni = '',
@@ -203,11 +338,6 @@ async function buscarAdmisiones({
   const safeLimit = Math.min(250, Math.max(1, Number(limit) || 25));
   const offset = (safePage - 1) * safeLimit;
 
-  const labVisCol = await laboratoriosService.getLabCabeceraVisitSqlColumn().catch(() => null);
-  const labCntSql = labVisCol
-    ? `(SELECT COUNT(1) FROM dbo.imHCExamenesLabCabecera lab WHERE lab.${labVisCol} = v.NumeroVisita) AS CntLaboratorios`
-    : `CAST(0 AS INT) AS CntLaboratorios`;
-
   const hasIdSucursal = await visitaTieneIdSucursal();
   const centro = sqlCentroSaludParts(hasIdSucursal);
 
@@ -218,6 +348,7 @@ async function buscarAdmisiones({
     ${whereClause}
   `;
 
+  // Listado sin counts correlacionados: primero la página, después conteos en lote.
   const listQuery = `
     SELECT
       v.NumeroVisita,
@@ -315,19 +446,7 @@ async function buscarAdmisiones({
             ) + 1
           END
         ELSE NULL
-      END AS DiasInternacion,
-      (SELECT COUNT(1) FROM dbo.imHCI h WHERE h.NumeroVisita = v.NumeroVisita) AS CntHistoriaClinica,
-      (SELECT COUNT(1) FROM dbo.imFacpracticas fp WHERE fp.NumeroVisita = v.NumeroVisita) AS CntPracticas,
-      (SELECT COUNT(1) FROM dbo.imInterIndMedicas iim WHERE iim.NumeroVisita = v.NumeroVisita) AS CntIndicaciones,
-      (SELECT COUNT(1) FROM dbo.imInterCtrlMedicamento mc WHERE mc.NumeroVisita = v.NumeroVisita) AS CntMedicacion,
-      /* iMedicAD: Estudios = imPedidosEstudios.IdVisita (= NumeroVisita) */
-      (SELECT COUNT(1) FROM dbo.imPedidosEstudios pe WHERE pe.IdVisita = v.NumeroVisita) AS CntEstudios,
-      ${labCntSql},
-      /* iMedicAD: Protocolos clínicos = HCProtocolosPtes.NumeroVisita */
-      (SELECT COUNT(1) FROM dbo.HCProtocolosPtes hp WHERE hp.NumeroVisita = v.NumeroVisita) AS CntProtocolos,
-      (SELECT COUNT(1) FROM dbo.imHCEpicrisis ep WHERE ep.IdVisita = v.NumeroVisita) AS CntEpicrisis,
-      (SELECT COUNT(1) FROM dbo.imPedidosEstudiosAdjuntos adj WHERE adj.NumeroVisita = v.NumeroVisita) AS CntAdjuntos,
-      (SELECT COUNT(1) FROM dbo.imHCEvolucion ev WHERE ev.IdVisita = v.NumeroVisita) AS CntEvoluciones
+      END AS DiasInternacion
     FROM imVisita v
     INNER JOIN imPacientes p ON v.IdPaciente = p.IdPaciente
     LEFT JOIN imTipoPaciente tp ON v.TipoPaciente = tp.Valor
@@ -365,14 +484,23 @@ async function buscarAdmisiones({
     OFFSET @param${params.length} ROWS FETCH NEXT @param${params.length + 1} ROWS ONLY
   `;
 
-  const [countRows, data] = await Promise.all([
+  const [countRows, listRows] = await Promise.all([
     executeQuery(countQuery, params),
     executeQuery(listQuery, [...params, { value: offset }, { value: safeLimit }]),
   ]);
 
+  const baseRows = listRows || [];
+  const countsByVisita = await cargarConteosClinicosPorVisitas(
+    baseRows.map((r) => r.NumeroVisita),
+  );
+  const data = baseRows.map((row) => {
+    const cnt = countsByVisita.get(Number(row.NumeroVisita)) || EMPTY_CLINICAL_COUNTS;
+    return { ...row, ...cnt };
+  });
+
   const total = Number(countRows?.[0]?.total || 0);
   return {
-    data: data || [],
+    data,
     pagination: {
       page: safePage,
       limit: safeLimit,
