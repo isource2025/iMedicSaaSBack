@@ -71,7 +71,8 @@ const FILE_SERVER_FALLBACK_LOCAL =
 
 /** IdOperador en imPedidosEstudiosAdjuntos = CodOperador (join imPassword). */
 function resolveUserId(req) {
-  const cod = req.auth?.usuario?.codOperador;
+  const { resolveCodOperador } = require('../utils/sessionIdentity');
+  const cod = resolveCodOperador(req);
   if (cod != null && Number.isFinite(Number(cod))) return Number(cod);
   return req.valorPersonal || req.auth?.usuario?.id || null;
 }

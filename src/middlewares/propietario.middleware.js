@@ -86,9 +86,10 @@ function coincideAutor(autor, identificadorSesion, req) {
 	if (req.valorPersonal != null && Number(autor) === Number(req.valorPersonal)) {
 		return true;
 	}
-	const cod = req.auth?.usuario?.codOperador;
-	if (cod != null && cod !== '' && Number(autor) === Number(cod)) {
-		return true;
+	const u = req.auth?.usuario || {};
+	const codCandidates = [u.codOperador, u.idCodOperador, u.CodOperador];
+	for (const c of codCandidates) {
+		if (c != null && c !== '' && Number(autor) === Number(c)) return true;
 	}
 	return false;
 }
@@ -99,9 +100,13 @@ function resolverIdentificadorSesion(req, { autorEsMatricula }) {
 		const matNum = mat != null && mat !== '' ? Number(mat) : NaN;
 		if (Number.isFinite(matNum) && matNum > 0) return matNum;
 	}
-	const cod = req.auth?.usuario?.codOperador;
-	const codNum = cod != null && cod !== '' ? Number(cod) : NaN;
-	if (Number.isFinite(codNum)) return codNum;
+	const u = req.auth?.usuario || {};
+	const candidates = [u.codOperador, u.idCodOperador, u.CodOperador];
+	for (const c of candidates) {
+		if (c == null || c === '') continue;
+		const n = Number(c);
+		if (Number.isFinite(n)) return n;
+	}
 	return null;
 }
 
