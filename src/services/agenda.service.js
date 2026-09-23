@@ -794,7 +794,7 @@ function _buildJornadasMeta(rangos) {
 	});
 }
 
-/** Agrega sobreturnos y cancelados archivados que no están en la grilla; cancelados van al final. */
+/** Agrega turnos con paciente que no cayeron en la grilla (sobreturnos, ocupados/atendidos fuera de horario, cancelados). */
 function _agregarSobreturnosEnSlots(slots, fechaIso, turnosRows, sectorDefault, rangos) {
 	const idsEnGrilla = new Set(slots.map((s) => s.idTurno).filter(Boolean));
 	for (const t of turnosRows) {
@@ -808,6 +808,17 @@ function _agregarSobreturnosEnSlots(slots, fechaIso, turnosRows, sectorDefault, 
 			horasTurnoEquivalentes(s.horaClarion, extra.horaClarion),
 		);
 		if (base?.hora) extra.hora = `${base.hora} · ST`;
+		slots.push(extra);
+		idsEnGrilla.add(t.IdTurno);
+	}
+	for (const t of turnosRows) {
+		const fecha = _isoDate(convertirFechaClarionADate(t.FechaAsignada));
+		if (fecha !== fechaIso) continue;
+		if ((Number(t.IDPaciente) || 0) <= 0) continue;
+		if (Number(t.Status) === STATUS_CANCELADO) continue;
+		if (idsEnGrilla.has(t.IdTurno)) continue;
+		const extra = _slotDesdeTurno(t, sectorDefault);
+		extra.jornadaIndex = _jornadaIndexParaHora(rangos, extra.horaClarion);
 		slots.push(extra);
 		idsEnGrilla.add(t.IdTurno);
 	}
