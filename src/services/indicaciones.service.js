@@ -231,12 +231,6 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     const { fecha, limit, excluirSuspendidas = false } = opciones;
-    let vistoOk = false;
-    try {
-        vistoOk = await vistoEnfermeria.tablaLista();
-    } catch (e) {
-        console.warn('[indicaciones] aviso enfermería omitido:', e?.message || e);
-    }
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -312,9 +306,7 @@ SELECT ${topClause}
   tit.PromptCodigo,
   tit.Orden as OrdenTipo,
   v.TipoMedicamento,
-  ${vistoOk
-		? `CASE WHEN visto.NroIndicacion IS NULL AND ISNULL(iim.NroAdicional, 0) = 0 THEN 1 ELSE 0 END AS NuevaEnfermeria`
-		: `CAST(0 AS INT) AS NuevaEnfermeria`},
+  ${vistoEnfermeria.CASE_NUEVA_ENFERMERIA},
   
   CASE 
     WHEN tit.Tipo = 'M' THEN COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento)
@@ -324,10 +316,6 @@ SELECT ${topClause}
     ELSE iim.AliasMedicamento
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
-${vistoOk
-		? `LEFT JOIN dbo.imIndicacionesVistoEnfermeria AS visto
-  ON visto.NumeroVisita = iim.NumeroVisita AND visto.NroIndicacion = iim.NroIndicacion`
-		: ''}
 OUTER APPLY (
   SELECT TOP 1
     per0.Valor,
@@ -665,7 +653,11 @@ const nuevaIndicacion = async (data) => {
     // Fecha de carga: hoy por defecto, o mañana si el médico la pide
     const fechaCargaYmd = resolverFechaCargaIndicacion(data.FechaCarga);
     const ahora = new Date();
-    const horaActual = getLocalTimeString(ahora) + ':00';
+    const arAhora = getArgentinaDate(ahora);
+    const horaActual =
+        `${String(arAhora.getHours()).padStart(2, '0')}:` +
+        `${String(arAhora.getMinutes()).padStart(2, '0')}:` +
+        `${String(arAhora.getSeconds()).padStart(2, '0')}`;
     
     let horaCarga = convertirHoraAClarion(horaActual);
     
@@ -686,6 +678,34 @@ const nuevaIndicacion = async (data) => {
         horaCarga = horaCarga + ((cantidadExistentes + 1) * 100);
         
         console.log(`📝 Indicación adicional #${cantidadExistentes + 1} para padre ${data.NroAdicional}, HoraCarga incrementada a: ${horaCarga}`);
+    }
+
+    // Índice único Por_NroVisita: (NumeroVisita, TipoIndicacion, FechaCarga, HoraCarga).
+    // En reindicar/lote varias del mismo tipo chocan si comparten el mismo segundo.
+    {
+        const numeroVisitaHora = toNumberOrNull(data.NumeroVisita) || 0;
+        const tipoIndicacionHora = toNumberOrNull(data.TipoIndicacion) || 0;
+        const fechaCargaClarion = convertirFechaAClarion(fechaCargaYmd);
+        for (let intento = 0; intento < 300; intento++) {
+            const choque = await executeQuery(
+                `
+                SELECT TOP 1 NroIndicacion
+                FROM dbo.imInterIndMedicas
+                WHERE NumeroVisita = @param0
+                  AND TipoIndicacion = @param1
+                  AND FechaCarga = @param2
+                  AND HoraCarga = @param3
+                `,
+                [
+                    { value: numeroVisitaHora },
+                    { value: tipoIndicacionHora },
+                    { value: fechaCargaClarion },
+                    { value: horaCarga },
+                ],
+            );
+            if (!choque?.length) break;
+            horaCarga += 100; // +1 segundo Clarion
+        }
     }
     
     const nroAdicionalConvertido = toNumberOrNull(data.NroAdicional);

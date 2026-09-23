@@ -490,7 +490,7 @@ const marcarVistoEnfermeria = async (req, res) => {
 		if (rol !== 'ENFERMERO') {
 			return res.status(403).json({
 				success: false,
-				mensaje: 'Solo enfermería puede marcar indicaciones como vistas',
+				mensaje: 'Solo enfermería puede limpiar el estado Nueva de las indicaciones',
 			});
 		}
 
@@ -504,20 +504,26 @@ const marcarVistoEnfermeria = async (req, res) => {
 		}
 
 		const operador = resolveOperadorCarga(req);
-		const insertadas = await indicacionesService.marcarVistoEnfermeria(
+		// Estado 'N' → NULL (compatible con Clarion / sistema anterior)
+		const resultado = await indicacionesService.marcarVistoEnfermeria(
 			visitaNum,
 			operador,
 		);
+		const actualizadas =
+			typeof resultado === 'number'
+				? resultado
+				: Number(resultado?.actualizadas ?? 0);
+		const nros = Array.isArray(resultado?.nros) ? resultado.nros : [];
 
 		return res.json({
 			success: true,
-			data: { insertadas },
+			data: { actualizadas, nros, insertadas: actualizadas },
 		});
 	} catch (error) {
 		console.error('[IndicacionesController][marcarVistoEnfermeria] error:', error);
 		return res.status(statusDeError(error)).json({
 			success: false,
-			mensaje: mensajeDeError(error, 'Error al marcar indicaciones como vistas'),
+			mensaje: mensajeDeError(error, 'Error al limpiar estado Nueva de indicaciones'),
 		});
 	}
 };

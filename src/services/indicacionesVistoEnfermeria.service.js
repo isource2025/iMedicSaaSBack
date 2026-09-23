@@ -1,86 +1,13 @@
 const { executeQuery } = require('../models/db');
-const { getTenantId } = require('../context/tenantContext');
 
 /**
- * Estado compartido: indicaciones médicas aún no revisadas por enfermería.
- * Nunca debe romper GET /beds: DDL y joins van aislados, por tenant.
+ * "Nueva" para enfermería = Estado = 'N' en imInterIndMedicas (sistema Clarion).
+ * Al entrar al detalle de cama, enfermería limpia Estado N → NULL.
+ * No usa tabla auxiliar: unifica con el sistema anterior.
  */
 
-const ensuredByTenant = new Map();
-
-function tenantKey() {
-	const id = getTenantId();
-	return id != null && Number.isFinite(Number(id)) ? String(id) : 'default';
-}
-
-async function tablaExiste() {
-	try {
-		const rows = await executeQuery(`
-			SELECT OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') AS Id
-		`);
-		const row = rows?.[0] || {};
-		return row.Id != null || row.id != null || row.ID != null;
-	} catch (e) {
-		console.warn('[indicacionesVistoEnfermeria] No se pudo chequear la tabla:', e?.message || e);
-		return false;
-	}
-}
-
-async function ensureTable() {
-	const key = tenantKey();
-	if (ensuredByTenant.get(key)) return true;
-	if (await tablaExiste()) {
-		ensuredByTenant.set(key, true);
-		return true;
-	}
-
-	try {
-		await executeQuery(`
-		IF OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') IS NULL
-		BEGIN
-			CREATE TABLE dbo.imIndicacionesVistoEnfermeria (
-				NumeroVisita INT NOT NULL,
-				NroIndicacion INT NOT NULL,
-				FechaVista DATETIME NOT NULL CONSTRAINT DF_imIndicacionesVistoEnfermeria_Fecha DEFAULT (GETDATE()),
-				OperadorVista INT NULL,
-				CONSTRAINT PK_imIndicacionesVistoEnfermeria PRIMARY KEY (NumeroVisita, NroIndicacion)
-			);
-		END
-		`);
-	} catch (e) {
-		console.warn('[indicacionesVistoEnfermeria] No se pudo crear la tabla:', e?.message || e);
-		return false;
-	}
-
-	try {
-		await executeQuery(`
-		IF OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria', N'U') IS NOT NULL
-		AND NOT EXISTS (
-			SELECT 1 FROM sys.indexes
-			WHERE name = N'IX_imIndVistoEnf_Visita'
-			  AND object_id = OBJECT_ID(N'dbo.imIndicacionesVistoEnfermeria')
-		)
-		BEGIN
-			CREATE INDEX IX_imIndVistoEnf_Visita ON dbo.imIndicacionesVistoEnfermeria (NumeroVisita);
-		END
-		`);
-	} catch (e) {
-		console.warn('[indicacionesVistoEnfermeria] Índice omitido:', e?.message || e);
-	}
-
-	const ok = await tablaExiste();
-	if (ok) ensuredByTenant.set(key, true);
-	return ok;
-}
-
-/** true solo si la tabla ya está; no hace DDL. */
-async function tablaLista() {
-	const key = tenantKey();
-	if (ensuredByTenant.get(key)) return true;
-	const ok = await tablaExiste();
-	if (ok) ensuredByTenant.set(key, true);
-	return ok;
-}
+const SQL_ES_NUEVA =
+	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) = 'N'";
 
 const OUTER_APPLY_COUNT = `
     OUTER APPLY (
@@ -90,53 +17,47 @@ const OUTER_APPLY_COUNT = `
         AND ISNULL(hc.NumeroVisita, 0) <> 0
         AND ISNULL(iim.NroAdicional, 0) = 0
         AND iim.TipoIndicacion <> 9
-        AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM dbo.imIndicacionesVistoEnfermeria v
-          WHERE v.NumeroVisita = iim.NumeroVisita
-            AND v.NroIndicacion = iim.NroIndicacion
-        )
+        AND ${SQL_ES_NUEVA}
     ) indn
 `;
 
 const SELECT_COUNT = `ISNULL(indn.IndicacionesNuevasEnfermeria, 0) AS IndicacionesNuevasEnfermeria`;
 const SELECT_COUNT_ZERO = `CAST(0 AS INT) AS IndicacionesNuevasEnfermeria`;
 
-async function marcarVistoPorVisita(numeroVisita, operadorVista) {
-	const ok = await ensureTable();
-	if (!ok) return 0;
+/** CASE para listados de indicaciones (padre con Estado N). */
+const CASE_NUEVA_ENFERMERIA = `
+  CASE
+    WHEN ${SQL_ES_NUEVA} AND ISNULL(iim.NroAdicional, 0) = 0 THEN 1
+    ELSE 0
+  END AS NuevaEnfermeria
+`;
 
+/**
+ * Limpia el estado "nueva": Estado 'N' → NULL (padres de la visita).
+ * @returns {{ actualizadas: number, nros: number[] }}
+ */
+async function marcarVistoPorVisita(numeroVisita, _operadorVista) {
 	const sql = `
-	INSERT INTO dbo.imIndicacionesVistoEnfermeria (NumeroVisita, NroIndicacion, FechaVista, OperadorVista)
+	UPDATE dbo.imInterIndMedicas
+	SET Estado = NULL
 	OUTPUT inserted.NroIndicacion
-	SELECT iim.NumeroVisita, iim.NroIndicacion, GETDATE(), @param1
-	FROM dbo.imInterIndMedicas iim
-	WHERE iim.NumeroVisita = @param0
-	  AND ISNULL(iim.NroAdicional, 0) = 0
-	  AND iim.TipoIndicacion <> 9
-	  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
-	  AND NOT EXISTS (
-	    SELECT 1
-	    FROM dbo.imIndicacionesVistoEnfermeria v
-	    WHERE v.NumeroVisita = iim.NumeroVisita
-	      AND v.NroIndicacion = iim.NroIndicacion
-	  );
+	WHERE NumeroVisita = @param0
+	  AND ISNULL(NroAdicional, 0) = 0
+	  AND TipoIndicacion <> 9
+	  AND UPPER(LTRIM(RTRIM(ISNULL(Estado, '')))) = 'N';
 	`;
 
-	const rows = await executeQuery(sql, [
-		{ value: Number(numeroVisita) },
-		{ value: operadorVista == null ? null : Number(operadorVista) },
-	]);
-	return Array.isArray(rows) ? rows.length : 0;
+	const rows = await executeQuery(sql, [{ value: Number(numeroVisita) }]);
+	const list = Array.isArray(rows) ? rows : [];
+	const nros = list
+		.map((r) => Number(r.NroIndicacion ?? r.nroIndicacion))
+		.filter((n) => Number.isFinite(n) && n > 0);
+	return { actualizadas: nros.length, nros };
 }
 
 async function listarNuevasResumen(numeroVisita, limit = 3) {
 	const lim = Math.min(Math.max(parseInt(String(limit), 10) || 3, 1), 5);
 	try {
-		const listo = await tablaLista();
-		if (!listo) return { total: 0, items: [] };
-
 		const countRows = await executeQuery(
 			`
 			SELECT COUNT(1) AS TotalNuevas
@@ -144,13 +65,7 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 			WHERE iim.NumeroVisita = @param0
 			  AND ISNULL(iim.NroAdicional, 0) = 0
 			  AND iim.TipoIndicacion <> 9
-			  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
-			  AND NOT EXISTS (
-			    SELECT 1
-			    FROM dbo.imIndicacionesVistoEnfermeria visto
-			    WHERE visto.NumeroVisita = iim.NumeroVisita
-			      AND visto.NroIndicacion = iim.NroIndicacion
-			  )
+			  AND ${SQL_ES_NUEVA}
 			`,
 			[{ value: Number(numeroVisita) }],
 		);
@@ -182,13 +97,7 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 		WHERE iim.NumeroVisita = @param0
 		  AND ISNULL(iim.NroAdicional, 0) = 0
 		  AND iim.TipoIndicacion <> 9
-		  AND UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM dbo.imIndicacionesVistoEnfermeria visto
-		    WHERE visto.NumeroVisita = iim.NumeroVisita
-		      AND visto.NroIndicacion = iim.NroIndicacion
-		  )
+		  AND ${SQL_ES_NUEVA}
 		ORDER BY iim.NroIndicacion DESC;
 		`;
 
@@ -211,12 +120,23 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 	}
 }
 
+/** Compat: ya no hay tabla auxiliar; siempre disponible. */
+async function ensureTable() {
+	return true;
+}
+
+async function tablaLista() {
+	return true;
+}
+
 module.exports = {
 	ensureTable,
 	tablaLista,
 	OUTER_APPLY_COUNT,
 	SELECT_COUNT,
 	SELECT_COUNT_ZERO,
+	CASE_NUEVA_ENFERMERIA,
+	SQL_ES_NUEVA,
 	marcarVistoPorVisita,
 	listarNuevasResumen,
 };
