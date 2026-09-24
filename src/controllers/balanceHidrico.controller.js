@@ -34,6 +34,32 @@ const obtenerPorVisitaYFecha = async (req, res) => {
 	}
 };
 
+const obtenerPorVisita = async (req, res) => {
+	try {
+		const numeroVisitaInt = parseInt(req.params.numeroVisita, 10);
+		if (Number.isNaN(numeroVisitaInt)) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'Número de visita inválido',
+			});
+		}
+		const desde = req.query.desde || undefined;
+		const hasta = req.query.hasta || undefined;
+
+		const data = await balanceHidricoService.obtenerPorVisita(numeroVisitaInt, { desde, hasta });
+		const resumen = balanceHidricoService.resumirDia(data);
+
+		res.json({ success: true, data, resumen });
+	} catch (error) {
+		console.error('Error al obtener balance hídrico de la internación:', error);
+		res.status(statusDeError(error)).json({
+			success: false,
+			mensaje: mensajeDeError(error, 'Error al obtener el balance hídrico'),
+			error: error.message,
+		});
+	}
+};
+
 const obtenerPorId = async (req, res) => {
 	try {
 		const id = parseInt(req.params.id, 10);
@@ -123,6 +149,7 @@ const eliminar = async (req, res) => {
 
 module.exports = {
 	obtenerPorVisitaYFecha,
+	obtenerPorVisita,
 	obtenerPorId,
 	crear,
 	actualizar,

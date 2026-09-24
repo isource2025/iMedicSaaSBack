@@ -21,6 +21,11 @@ router.get(
 	balanceHidricoController.obtenerPorVisitaYFecha,
 );
 router.get(
+	'/:numeroVisita/all',
+	requirePermiso('INTERNACION.BALANCE_HIDRICO.VER'),
+	balanceHidricoController.obtenerPorVisita,
+);
+router.get(
 	'/detalle/:id',
 	requirePermiso('INTERNACION.BALANCE_HIDRICO.VER'),
 	balanceHidricoController.obtenerPorId,

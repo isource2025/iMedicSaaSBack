@@ -110,6 +110,31 @@ async function obtenerPorVisitaYFecha(numeroVisita, fecha) {
 	return rows;
 }
 
+/**
+ * Listado de toda la internación (Clarion: "Mostrar sólo el día seleccionado" destildado).
+ * Rango opcional desde/hasta en YYYY-MM-DD.
+ * @param {number} numeroVisita
+ * @param {{desde?: string, hasta?: string}} [rango]
+ */
+async function obtenerPorVisita(numeroVisita, rango = {}) {
+	const params = [{ value: numeroVisita }];
+	let where = 'WHERE b.NumeroVisita = @param0';
+	if (rango.desde) {
+		params.push({ value: String(rango.desde).slice(0, 10) });
+		where += ` AND CAST(b.Fecha AS date) >= CAST(@param${params.length - 1} AS date)`;
+	}
+	if (rango.hasta) {
+		params.push({ value: String(rango.hasta).slice(0, 10) });
+		where += ` AND CAST(b.Fecha AS date) <= CAST(@param${params.length - 1} AS date)`;
+	}
+	const consulta = `
+    ${SELECT_BALANCE}
+    ${where}
+    ORDER BY b.Fecha ASC, b.Hora ASC, b.IdBalanceHidrico ASC
+  `;
+	return normalizarFilas(await executeQuery(consulta, params));
+}
+
 async function obtenerPorId(id) {
 	const consulta = `
     ${SELECT_BALANCE}
@@ -352,6 +377,7 @@ function resumirDia(rows) {
 
 module.exports = {
 	obtenerPorVisitaYFecha,
+	obtenerPorVisita,
 	obtenerPorId,
 	crear,
 	actualizar,
