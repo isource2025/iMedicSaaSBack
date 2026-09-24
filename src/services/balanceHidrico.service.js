@@ -166,7 +166,6 @@ async function crear(data) {
       Ing_Apar_Solucion, Ing_Apar_Ingreso, Ing_Apar_paso,
       Ing_Tranf_Ingreso, Ing_Tranf_paso,
       Egr_Diuresis, Egr_Catarsis, Egr_SNG_Vomito, Egr_Drenajes,
-      TotalIngresos, TotalEgresos, Total,
       Profesional, Sector
     )
     OUTPUT INSERTED.IdBalanceHidrico
@@ -177,8 +176,7 @@ async function crear(data) {
       @param10, @param11, @param12,
       @param13, @param14,
       @param15, @param16, @param17, @param18,
-      @param19, @param20, @param21,
-      @param22, @param23
+      @param19, @param20
     )
   `;
 
@@ -202,9 +200,6 @@ async function crear(data) {
 		{ value: p.Egr_Catarsis },
 		{ value: p.Egr_SNG_Vomito },
 		{ value: p.Egr_Drenajes },
-		{ value: p.TotalIngresos },
-		{ value: p.TotalEgresos },
-		{ value: p.Total },
 		{ value: p.Profesional },
 		{ value: p.Sector },
 	];
@@ -274,10 +269,7 @@ async function actualizar(id, data) {
       Egr_Catarsis = @param16,
       Egr_SNG_Vomito = @param17,
       Egr_Drenajes = @param18,
-      TotalIngresos = @param19,
-      TotalEgresos = @param20,
-      Total = @param21,
-      Sector = @param22
+      Sector = @param19
     WHERE IdBalanceHidrico = @param0
   `;
 
@@ -301,9 +293,6 @@ async function actualizar(id, data) {
 		{ value: p.Egr_Catarsis },
 		{ value: p.Egr_SNG_Vomito },
 		{ value: p.Egr_Drenajes },
-		{ value: p.TotalIngresos },
-		{ value: p.TotalEgresos },
-		{ value: p.Total },
 		{ value: p.Sector },
 	]);
 
