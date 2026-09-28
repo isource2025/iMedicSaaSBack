@@ -116,17 +116,28 @@ const localidadService = {
 
   getLocalidadByDescripcion: async (localidad) => {
     try {
+      const nombre = String(localidad || '')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!nombre) return null;
+
+      // RENAPER a veces entrega acentos rotos (U+FFFD, su mojibake "ï¿½" o "?"): se toman como comodín de 1 carácter
+      const ROTO = /ï¿½|\uFFFD|\?/g;
+      const tieneRoto = ROTO.test(nombre);
+      const patron = nombre.replace(/[\[%]/g, '[$&]').replace(ROTO, '_');
+
       const query = `
-        SELECT 
+        SELECT TOP 1
           Valor,
           ValorProvincia
         FROM 
           imLocalidades 
         WHERE 
-          NombreLocalidad = '${localidad}'
+          LTRIM(RTRIM(NombreLocalidad)) COLLATE Latin1_General_CI_AI ${tieneRoto ? 'LIKE' : '='} @p0 COLLATE Latin1_General_CI_AI
       `;
-      
-      const result = await executeQuery(query, [localidad]);
+
+      const result = await executeQuery(query, [{ value: tieneRoto ? patron : nombre }]);
       return result && result.length > 0 ? result[0] : null;
     } catch (error) {
       console.error(`Error al obtener localidad con descripcion ${localidad}:`, error);

@@ -20,7 +20,7 @@ async function obtenerToken() {
 	const tokenUrl = `${BASE_URL}/identidad/get_token?id=${process.env.IOSCOR_API_ID}&key=${process.env.IOSCOR_API_KEY}`;
 	const response = await axios.post(tokenUrl, null, {
 		headers: { 'Content-Type': 'application/json' },
-		timeout: 12000,
+		timeout: 8000,
 	});
 
 	if (!response.data?.token) throw new Error('Token IOSCOR inválido o ausente');
@@ -57,7 +57,7 @@ async function verificarAfiliado(documento) {
 				'Content-Type': 'application/json',
 				Accept: 'application/json',
 			},
-			timeout: 12000,
+			timeout: 8000,
 		});
 
 		const afiliadoData = response.data?.resultado?.afiliado || {};
