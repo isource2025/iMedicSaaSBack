@@ -26,4 +26,17 @@ async function validarAfiliado(req, res) {
 	}
 }
 
-module.exports = { getCobertura, validarAfiliado };
+async function validarAfiliadoEnCobertura(req, res) {
+	try {
+		const { valor, nroAfiliado } = req.params;
+		const data = await afiliacionService.validarAfiliadoEnCobertura(valor, nroAfiliado);
+		res.json(data);
+	} catch (error) {
+		console.error('Error al validar afiliado en cobertura:', error);
+		res.status(statusDeError(error)).json({
+			error: mensajeDeError(error, 'Error al validar afiliado'),
+		});
+	}
+}
+
+module.exports = { getCobertura, validarAfiliado, validarAfiliadoEnCobertura };
