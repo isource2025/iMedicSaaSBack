@@ -190,6 +190,17 @@ const crearPaciente = async (req, res) => {
 			});
 		}
 
+		const docNum = numOrNull(NumeroDocumento);
+		if (docNum) {
+			const existente = await patientsService.buscarPacientePorDocumentoExacto(docNum);
+			if (existente) {
+				return res.status(409).json({
+					success: false,
+					mensaje: `Ya existe un paciente con el documento ${docNum}: ${String(existente.ApellidoyNombre || '').trim()} (ID ${existente.IDPaciente})`,
+				});
+			}
+		}
+
 		// Hora en formato HH:MM a entero HHMM
 		let horaInt = null;
 		if (Hora && /^\d{1,2}:\d{2}$/.test(Hora)) {

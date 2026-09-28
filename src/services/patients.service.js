@@ -973,9 +973,18 @@ const obtenerTablasReferencia = async () => {
 	};
 };
 
+const buscarPacientePorDocumentoExacto = async (numeroDocumento) => {
+	const rows = await executeQuery(
+		'SELECT TOP 1 IDPaciente, ApellidoyNombre FROM imPacientes WHERE NumeroDocumento = @p0 ORDER BY IDPaciente',
+		[{ value: Number(numeroDocumento) }],
+	);
+	return rows?.[0] || null;
+};
+
 module.exports = {
 	obtenerPacientes,
 	buscarPacientes,
+	buscarPacientePorDocumentoExacto,
 	buscarPacientesPaginados,
 	obtenerPacientePorId,
 	crearPaciente,

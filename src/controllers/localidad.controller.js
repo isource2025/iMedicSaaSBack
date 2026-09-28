@@ -1,10 +1,26 @@
 const localidadService = require('../services/localidad.service');
+const { resolverLocalidadRenaper } = require('../services/localidadRenaper.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
  * Controlador para gestionar la tabla imLocalidades
  */
 const localidadController = {
+  resolverLocalidadRenaper: async (req, res) => {
+    try {
+      const { ciudad, provincia, cpostal } = req.body || {};
+      const data = await resolverLocalidadRenaper({ ciudad, provincia, cpostal });
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error resolviendo localidad de RENAPER:', error);
+      res.status(statusDeError(error)).json({
+        success: false,
+        data: null,
+        message: mensajeDeError(error, 'No se pudo resolver la localidad'),
+      });
+    }
+  },
+
   /**
    * Obtiene registros de la tabla imLocalidades con paginación y búsqueda
    * @param {Object} req - Objeto de solicitud HTTP

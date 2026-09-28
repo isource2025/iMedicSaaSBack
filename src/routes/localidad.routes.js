@@ -10,6 +10,13 @@ const localidadController = require('../controllers/localidad.controller');
 router.get('/', localidadController.getLocalidades);
 
 /**
+ * Busca la localidad informada por RENAPER y la da de alta si no existe
+ * @route POST /api/localidad/resolver-renaper
+ * @param {Object} body - { ciudad, provincia, cpostal }
+ */
+router.post('/resolver-renaper', localidadController.resolverLocalidadRenaper);
+
+/**
  * Ruta para obtener un registro específico de la tabla imLocalidades por su valor
  * @route GET /api/localidad/:valor
  * @param {string} valor - Valor de la localidad (path parameter)
