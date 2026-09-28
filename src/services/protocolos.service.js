@@ -562,7 +562,158 @@ async function crearProtocolo({
 	}
 }
 
+async function _protocoloConPracticas(idProtocolo) {
+	const id = Number(idProtocolo);
+	if (!Number.isFinite(id) || id <= 0) throw _httpError('idProtocolo inválido');
+	const rows = await executeQuery(
+		`SELECT TOP 1 IdProtocolo, NumeroVisita FROM dbo.HCProtocolosPtes WHERE IdProtocolo = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+	if (!rows?.length) throw _httpError('Protocolo no encontrado', 404);
+	const practicas = await executeQuery(
+		`SELECT Valor, ISNULL(Factura, 0) AS Factura
+		 FROM dbo.imFacPracticas WHERE IdProtocolo = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+	return {
+		idProtocolo: id,
+		numeroVisita: Number(rows[0].NumeroVisita),
+		practicas: (practicas || []).map((p) => ({
+			valor: Number(p.Valor),
+			facturada: Number(p.Factura) !== 0,
+		})),
+	};
+}
+
+/**
+ * Edita datos clínicos del protocolo y, si se envía, reemplaza el equipo
+ * (imFacProfesionales) de su práctica. La práctica en sí no se cambia porque
+ * ya está registrada para facturación; si está facturada, el equipo tampoco.
+ */
+async function actualizarProtocolo(
+	idProtocolo,
+	{ texto, tecnica, diagnosticoPre, diagnosticoPos, estado, profesionales, codOperador },
+) {
+	const actual = await _protocoloConPracticas(idProtocolo);
+
+	const textoFinal = String(texto || '').trim();
+	if (!textoFinal) throw _httpError('La descripción del protocolo es obligatoria');
+
+	const cambiarEquipo = Array.isArray(profesionales);
+	if (cambiarEquipo) {
+		if (!profesionales.length) {
+			throw _httpError('Debe indicar al menos un profesional del procedimiento');
+		}
+		if (actual.practicas.some((p) => p.facturada)) {
+			throw _httpError('La práctica ya fue facturada: no se puede modificar el equipo', 409);
+		}
+	}
+
+	const now = new Date();
+	const fechaClarion = convertirFechaAClarion(fechaCalendarioArgentina(now));
+	const horaClarion = convertirHoraAClarion(horaWallArgentina(true, now));
+
+	const pool = await getRequestPool();
+	const tx = new sql.Transaction(pool);
+	await tx.begin();
+	try {
+		const reqProt = new sql.Request(tx);
+		reqProt.input('id', sql.Int, actual.idProtocolo);
+		reqProt.input('dxPre', sql.VarChar(10), _s(diagnosticoPre, 10) || null);
+		reqProt.input('tec', sql.VarChar(120), _s(tecnica, 120) || null);
+		reqProt.input('dxPos', sql.VarChar(10), _s(diagnosticoPos, 10) || null);
+		reqProt.input('texto', sql.VarChar(sql.MAX), textoFinal);
+		reqProt.input('estado', sql.Char(1), _s(estado, 1) || null);
+		await reqProt.query(`
+			UPDATE dbo.HCProtocolosPtes SET
+				DiagnosticoPreProcedimiento = @dxPre,
+				Tecnica = @tec,
+				DiagnosticoPosProcedimiento = @dxPos,
+				Texto = @texto,
+				Estado = COALESCE(@estado, Estado)
+			WHERE IdProtocolo = @id
+		`);
+
+		const valorFac = actual.practicas[0]?.valor;
+		if (cambiarEquipo && valorFac) {
+			const reqDel = new sql.Request(tx);
+			reqDel.input('valor', sql.Int, valorFac);
+			await reqDel.query(`DELETE FROM dbo.imFacProfesionales WHERE Valor = @valor`);
+
+			for (const prof of profesionales) {
+				const valorPersonal = Number(prof.valorPersonal ?? prof.matricula);
+				const funcion = normalizarFuncion(prof.funcion);
+				if (!Number.isFinite(valorPersonal) || valorPersonal <= 0) {
+					throw _httpError('Cada profesional requiere valorPersonal válido');
+				}
+				const reqP = new sql.Request(tx);
+				reqP.input('valor', sql.Int, valorFac);
+				reqP.input('mat', sql.Int, valorPersonal);
+				reqP.input('fn', sql.TinyInt, funcion);
+				reqP.input('codOp', sql.Int, Number(codOperador) || 0);
+				reqP.input('fechaC', sql.Int, fechaClarion);
+				reqP.input('horaC', sql.Int, horaClarion);
+				await reqP.query(`
+					INSERT INTO dbo.imFacProfesionales (
+						Valor, Matricula, Funcion, CodOperador,
+						FachaGraba, HoraGraba, Factura, Status
+					) VALUES (
+						@valor, @mat, @fn, @codOp,
+						@fechaC, @horaC, 0, 0
+					);
+				`);
+			}
+		}
+
+		await tx.commit();
+	} catch (err) {
+		try {
+			await tx.rollback();
+		} catch {
+			/* ignore */
+		}
+		if (err.statusCode) throw err;
+		throw _httpError(err.message || 'Error al actualizar protocolo', 500);
+	}
+
+	const lista = await listarPorVisita(actual.numeroVisita);
+	return lista.find((x) => x.idProtocolo === actual.idProtocolo) || null;
+}
+
+/** Borra protocolo + práctica + equipo. Bloqueado si la práctica ya se facturó. */
+async function eliminarProtocolo(idProtocolo) {
+	const actual = await _protocoloConPracticas(idProtocolo);
+	if (actual.practicas.some((p) => p.facturada)) {
+		throw _httpError('La práctica ya fue facturada: no se puede borrar el protocolo', 409);
+	}
+
+	const pool = await getRequestPool();
+	const tx = new sql.Transaction(pool);
+	await tx.begin();
+	try {
+		const req = new sql.Request(tx);
+		req.input('id', sql.Int, actual.idProtocolo);
+		await req.query(`
+			DELETE FROM dbo.imFacProfesionales
+			WHERE Valor IN (SELECT Valor FROM dbo.imFacPracticas WHERE IdProtocolo = @id);
+			DELETE FROM dbo.imFacPracticas WHERE IdProtocolo = @id;
+			DELETE FROM dbo.HCProtocolosPtes WHERE IdProtocolo = @id;
+		`);
+		await tx.commit();
+	} catch (err) {
+		try {
+			await tx.rollback();
+		} catch {
+			/* ignore */
+		}
+		throw _httpError(err.message || 'Error al borrar protocolo', 500);
+	}
+	return true;
+}
+
 module.exports = {
+	actualizarProtocolo,
+	eliminarProtocolo,
 	listarTiposProtocolo,
 	obtenerProForma,
 	buscarPracticas,

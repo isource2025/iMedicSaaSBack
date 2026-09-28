@@ -113,7 +113,46 @@ async function crear(req, res) {
 	}
 }
 
+async function actualizar(req, res) {
+	try {
+		const id = Number(req.params.id);
+		if (!Number.isFinite(id) || id <= 0) {
+			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+		}
+		const body = req.body || {};
+		const data = await protocolosService.actualizarProtocolo(id, {
+			texto: body.texto,
+			tecnica: body.tecnica,
+			diagnosticoPre: body.diagnosticoPre,
+			diagnosticoPos: body.diagnosticoPos,
+			estado: body.estado,
+			profesionales: body.profesionales,
+			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[protocolos] actualizar:', err.message);
+		return _err(res, err);
+	}
+}
+
+async function eliminar(req, res) {
+	try {
+		const id = Number(req.params.id);
+		if (!Number.isFinite(id) || id <= 0) {
+			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+		}
+		await protocolosService.eliminarProtocolo(id);
+		return res.json({ success: true });
+	} catch (err) {
+		console.error('[protocolos] eliminar:', err.message);
+		return _err(res, err);
+	}
+}
+
 module.exports = {
+	actualizar,
+	eliminar,
 	listarTipos,
 	proForma,
 	buscarPracticas,
