@@ -529,6 +529,14 @@ IF OBJECT_ID(N'dbo.fn_OcupacionPromedioCamas', N'TF') IS NOT NULL
   DROP FUNCTION dbo.fn_OcupacionPromedioCamas;
 GO
 
+-- Bases Clarion viejas no tienen imHabitacionCamas.Tipo: ahí toda fila cuenta como cama.
+DECLARE @filtroCama NVARCHAR(200) =
+  CASE WHEN COL_LENGTH('dbo.imHabitacionCamas', 'Tipo') IS NULL
+    THEN N'1 = 1'
+    ELSE N'UPPER(LTRIM(RTRIM(ISNULL(Tipo, '''')))) = ''CAMA'''
+  END;
+
+DECLARE @sqlFn NVARCHAR(MAX) = N'
 CREATE FUNCTION dbo.fn_OcupacionPromedioCamas
 (
     @FechaInicio DATE,
@@ -549,7 +557,7 @@ BEGIN
     ;WITH Internados AS (
         SELECT
             vm.NumeroVisita,
-            LTRIM(RTRIM(ISNULL(vm.ValorSector, ''))) AS ValorSector,
+            LTRIM(RTRIM(ISNULL(vm.ValorSector, ''''))) AS ValorSector,
             CAST(dbo.fn_ClarionDATE2SQL(vm.FechaAdmision) AS date) AS FechaAdmision,
             CASE
               WHEN vm.FechaEgreso IS NULL OR vm.FechaEgreso = 0 THEN NULL
@@ -560,11 +568,11 @@ BEGIN
     ),
     CamasPorSector AS (
         SELECT
-          LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
+          LTRIM(RTRIM(ISNULL(ValorSector, ''''))) AS ValorSector,
           COUNT(*) AS TotalCamas
         FROM dbo.imHabitacionCamas
-        WHERE UPPER(LTRIM(RTRIM(ISNULL(Tipo, '')))) = 'CAMA'
-        GROUP BY LTRIM(RTRIM(ISNULL(ValorSector, '')))
+        WHERE ' + @filtroCama + N'
+        GROUP BY LTRIM(RTRIM(ISNULL(ValorSector, '''')))
     ),
     Meses AS (
         SELECT DATEFROMPARTS(YEAR(@FechaInicio), MONTH(@FechaInicio), 1) AS Mes
@@ -612,8 +620,8 @@ BEGIN
     )
     INSERT INTO @Resultados
     SELECT
-        'Mensual' AS TipoIndicador,
-        FORMAT(pm.Mes, 'yyyy-MM') AS Periodo,
+        ''Mensual'' AS TipoIndicador,
+        FORMAT(pm.Mes, ''yyyy-MM'') AS Periodo,
         pm.ValorSector,
         pm.PacientesDia,
         c.TotalCamas,
@@ -629,7 +637,9 @@ BEGIN
     OPTION (MAXRECURSION 120);
 
     RETURN;
-END;
+END;';
+
+EXEC sys.sp_executesql @sqlFn;
 GO
 PRINT 'Creada/actualizada: dbo.fn_OcupacionPromedioCamas';
 GO

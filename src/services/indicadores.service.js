@@ -3,6 +3,14 @@ const { normalizarFilas } = require('../utils/codigoSector');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 
+/** Bases Clarion viejas no tienen imHabitacionCamas.Tipo: ahí toda fila cuenta como cama. */
+async function camaOnlyWhere() {
+  const rows = await executeQuery(
+    "SELECT COL_LENGTH('dbo.imHabitacionCamas', 'Tipo') AS Largo",
+  );
+  return rows?.[0]?.Largo == null ? '1 = 1' : CAMA_ONLY_WHERE;
+}
+
 function esObjetoSqlMissing(error) {
 	return (
 		Number(error?.number) === 208 ||
@@ -11,13 +19,14 @@ function esObjetoSqlMissing(error) {
 }
 
 async function obtenerMapaCamasInternacionPorSector() {
+  const soloCamas = await camaOnlyWhere();
   const rows = await executeQuery(
     `
       SELECT
         LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector,
         COUNT(*) AS TotalCamasInternacion
       FROM dbo.imHabitacionCamas hc
-      WHERE ${CAMA_ONLY_WHERE}
+      WHERE ${soloCamas}
       GROUP BY LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))
     `,
   );
@@ -289,6 +298,7 @@ module.exports = {
 
 /** Días-cama por sector/mes acotados al rango solicitado. */
 async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
+  const soloCamas = await camaOnlyWhere();
   return executeQuery(
     `
     ;WITH Internados AS (
@@ -308,7 +318,7 @@ async function obtenerOcupacionCamasInline(fechaInicio, fechaFin) {
         LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector,
         COUNT(*) AS TotalCamas
       FROM dbo.imHabitacionCamas hc
-      WHERE ${CAMA_ONLY_WHERE}
+      WHERE ${soloCamas}
       GROUP BY LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))
     ),
     Meses AS (
@@ -405,6 +415,7 @@ async function obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector) 
     params.push({ value: sectorTrim });
     sectorFilter = `AND UPPER(LTRIM(RTRIM(ISNULL(i.ValorSector, '')))) = @p2`;
   }
+  const soloCamas = await camaOnlyWhere();
 
   return executeQuery(
     `
@@ -423,7 +434,7 @@ async function obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector) 
     SectoresValidos AS (
       SELECT DISTINCT LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) AS ValorSector
       FROM dbo.imHabitacionCamas hc
-      WHERE ${CAMA_ONLY_WHERE}
+      WHERE ${soloCamas}
     ),
     Dias AS (
       SELECT CAST(@p0 AS date) AS Fecha
@@ -435,7 +446,7 @@ async function obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector) 
     Capacidad AS (
       SELECT COUNT(*) AS TotalCamas
       FROM dbo.imHabitacionCamas hc
-      WHERE ${CAMA_ONLY_WHERE}
+      WHERE ${soloCamas}
       ${sectorTrim ? `AND UPPER(LTRIM(RTRIM(ISNULL(hc.ValorSector, '')))) = @p2` : ''}
     ),
     OcupacionDia AS (
@@ -707,13 +718,14 @@ const obtenerEstadoActualCamas = async () => {
     
     // Query para obtener estado actual real de camas ocupadas HOY
     // Basada en la estructura real: imHabitacionCamas usa ValorHabitacionCama como ID y NumeroVisita para ocupación
+    const soloCamas = await camaOnlyWhere();
     const query = `
       SELECT 
         COUNT(*) AS TotalCamas,
         SUM(CASE WHEN hc.NumeroVisita > 0 THEN 1 ELSE 0 END) AS CamasOcupadas,
         SUM(CASE WHEN hc.NumeroVisita = 0 OR hc.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS CamasDisponibles
       FROM dbo.imHabitacionCamas hc
-      WHERE ${CAMA_ONLY_WHERE}
+      WHERE ${soloCamas}
     `;
     
     console.log(`📋 [ESTADO-ACTUAL] Ejecutando query de estado real`);
