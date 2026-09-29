@@ -10,10 +10,22 @@ const { decodeMultipartFilename, sanitizeWindowsFileName, sanitizeFolderName, pa
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
-/** Ruta que el SaaS debe usar para leer (nunca UNC Clarion \\SERVER\Imagenes\Vidal). */
+/**
+ * Ruta en PatchServidor: Clarion abre ESTA columna (no Patch).
+ * En Vidal tiene que ser UNC \\SERVER\Imagenes\Vidal\… — si queda E:\imagenes\vidal
+ * Clarion abre el mismo archivo por disco local y por share → Sharing violation.
+ * En Sarmiento se deja la ruta local C:\imedic\adjuntos\…
+ */
 function coercePatchServidorForClinic(ruta, fileServerUrl) {
   const s = String(ruta || '').replace(/\//g, '\\').trim();
   if (!s) return s;
+
+  const uncRoot = clarionUncRootForFileServerUrl(fileServerUrl);
+  if (uncRoot) {
+    const clarion = toClarionStoredPath(s, { personales: false, uncRoot });
+    if (clarion && String(clarion).startsWith('\\\\')) return clarion;
+  }
+
   if (/^[A-Za-z]:\\(?:imedic\\)?adjuntos\\/i.test(s)) return s;
   if (/^[A-Za-z]:\\imagenes\\/i.test(s)) return s;
 
@@ -22,7 +34,6 @@ function coercePatchServidorForClinic(ruta, fileServerUrl) {
 
   const url = String(fileServerUrl || '').toLowerCase();
   if (url.includes('sarmiento')) return `C:\\imedic\\adjuntos\\${rel}`;
-  if (url.includes('vidal')) return `E:\\imagenes\\vidal\\${rel}`;
   return rel;
 }
 
@@ -61,8 +72,8 @@ const ensureIdTurnoColumn = createTenantOnce(async () => {
 class AdjuntosService {
   /**
    * Subir archivo adjunto para una visita y/o turno de agenda (pre-cierre).
-   * @param {string} [patchServidor] ruta real del file server (la que usa el SaaS para leer)
-   * @param {string} [patchClarion] cortesía Clarion (Patch); si falta, copia patchServidor
+   * @param {string} [patchServidor] ruta que Clarion abre (Vidal: UNC \\SERVER\Imagenes\Vidal)
+   * @param {string} [patchClarion] Patch (grilla Clarion); si falta, copia patchServidor
    */
   async subirAdjunto(data, file, cargadoPor, patchServidor, patchClarion) {
     try {
@@ -74,7 +85,8 @@ class AdjuntosService {
         /* sin URL: no remapear */
       }
 
-      // PatchServidor = ruta real de la clínica (consumo SaaS). Nunca UNC Clarion.
+      // Vidal: ambas columnas UNC (Clarion abre PatchServidor; E:\imagenes\vidal da sharing violation).
+      // Sarmiento: PatchServidor = disco local de la clínica.
       const rutaServidor = coercePatchServidorForClinic(
         patchServidor || file.path,
         fileServerUrl,
