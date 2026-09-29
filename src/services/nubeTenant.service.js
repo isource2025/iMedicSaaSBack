@@ -862,8 +862,10 @@ async function listarServiciosDeUsuario(idEmpresa, idPersonal) {
 // ───────────────────────────── roles (NUBE) ─────────────────────────────
 
 async function listarRoles() {
+	// Catálogo de la plataforma: sólo roles del sistema (no los personalizados de una clínica).
+	const soloSistema = (await require('./rolesCustomSchema.service').esquemaListo()) ? 'AND IdEmpresa = 0' : '';
 	const rows = await mysqlQuery(
-		`SELECT IdRol, Nombre, Descripcion, Nivel FROM \`imRoles\` WHERE Activo = 1 ORDER BY Nivel DESC, Nombre`,
+		`SELECT IdRol, Nombre, Descripcion, Nivel FROM \`imRoles\` WHERE Activo = 1 ${soloSistema} ORDER BY Nivel DESC, Nombre`,
 	);
 	return rows
 		.filter((r) => String(r.Nombre) !== 'SUPER_ADMIN')

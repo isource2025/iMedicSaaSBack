@@ -135,13 +135,16 @@ async function _obtenerRolDePersonalEnFisico(valorPersonal) {
 /** Lista todos los roles activos del catálogo, ordenados por nivel descendente. */
 async function listarRoles() {
 	if (isAuthCentralEnabled()) {
-		const rows = await authCentralService.listarRolesCatalogo();
+		const rows = await authCentralService.listarRolesCatalogo(getTenantId());
 		return rows.map((r) => ({
 			IdRol: r.IdRol,
 			Nombre: r.Nombre,
 			Descripcion: r.Descripcion,
 			Nivel: r.Nivel,
 			Activo: true,
+			// Roles personalizados: distinguir de los del sistema y heredar comportamiento
+			...(r.IdEmpresa != null ? { EsSistema: Number(r.IdEmpresa) === 0 } : {}),
+			...(r.RolBase ? { RolBase: r.RolBase } : {}),
 		}));
 	}
 	const rows = await executeQuery(
@@ -171,7 +174,7 @@ async function listarRoles() {
 async function obtenerRolPorId(idRol) {
 	if (idRol == null) return null;
 	if (isAuthCentralEnabled()) {
-		const r = await authCentralService.obtenerRolPorId(idRol);
+		const r = await authCentralService.obtenerRolPorId(idRol, getTenantId());
 		if (r) {
 			return {
 				IdRol: r.IdRol,
@@ -179,6 +182,8 @@ async function obtenerRolPorId(idRol) {
 				Descripcion: r.Descripcion,
 				Nivel: r.Nivel,
 				Activo: true,
+				...(r.IdEmpresa != null ? { EsSistema: Number(r.IdEmpresa) === 0 } : {}),
+				...(r.RolBase ? { RolBase: r.RolBase } : {}),
 			};
 		}
 		return null;
@@ -385,7 +390,26 @@ async function obtenerRolesDePersonal(valorPersonal) {
 	}
 }
 
+/**
+ * Unión de permisos de una lista de roles (por id). Ignora roles inexistentes,
+ * inactivos o de otra empresa.
+ * @returns {Promise<{ permisos: Set<string>, roles: object[] }>}
+ */
+async function permisosDeRoles(ids) {
+	_permisosService = _permisosService || require('./permisos.service');
+	const permisos = new Set();
+	const roles = [];
+	for (const id of ids) {
+		const rol = await obtenerRolPorId(id);
+		if (!rol) continue;
+		roles.push(rol);
+		for (const c of await _permisosService.permisosDeRol(rol.IdRol, rol.Nombre)) permisos.add(c);
+	}
+	return { permisos, roles };
+}
+
 module.exports = {
+	permisosDeRoles,
 	listarRoles,
 	obtenerRolPorId,
 	asignarRolAPersonal,

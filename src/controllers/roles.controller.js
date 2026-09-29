@@ -4,6 +4,7 @@ const { esAdminClinico } = require('../middlewares/propietario.middleware');
 
 const ID_ROL_ADMIN = 1;
 const ID_ROL_SUPER_ADMIN = 5;
+const rolesCustom = () => require('../services/rolesCustom.service');
 
 function esSuperAdminReq(req) {
 	return (
@@ -30,8 +31,6 @@ function idsPedidos(body) {
  * @returns {Promise<string|null>} mensaje de error o null si está permitido
  */
 async function validarEscalada(req, valor, body) {
-	if (esSuperAdminReq(req)) return null;
-
 	const pedidos = idsPedidos(body);
 	let actuales = new Set();
 	try {
@@ -41,15 +40,32 @@ async function validarEscalada(req, valor, body) {
 		// Si no se pueden leer los roles actuales, se valida sólo contra lo pedido.
 		console.warn('[roles.validarEscalada] no se pudieron leer los roles actuales:', e.message);
 	}
+	if (esSuperAdminReq(req)) return { mensaje: null, actuales };
+
 	const cambia = (id) => pedidos.has(id) !== actuales.has(id);
 
 	if (cambia(ID_ROL_SUPER_ADMIN)) {
-		return 'Solo un super administrador puede otorgar o quitar el rol SUPER_ADMIN';
+		return { mensaje: 'Solo un super administrador puede otorgar o quitar el rol SUPER_ADMIN', actuales };
 	}
 	if (cambia(ID_ROL_ADMIN) && !(await esAdminClinico(req))) {
-		return 'Solo un administrador puede otorgar o quitar el rol ADMIN';
+		return { mensaje: 'Solo un administrador puede otorgar o quitar el rol ADMIN', actuales };
 	}
-	return null;
+
+	// Nadie puede otorgar un rol que incluya permisos que él mismo no tiene.
+	const agregados = [...pedidos].filter((id) => !actuales.has(id));
+	if (agregados.length && Array.isArray(req.permisos)) {
+		const propios = new Set(req.permisos);
+		const { permisos, roles } = await rolesService.permisosDeRoles(agregados);
+		const faltantes = [...permisos].filter((c) => !propios.has(c));
+		if (faltantes.length) {
+			const nombres = roles.map((r) => r.Nombre).join(', ');
+			return {
+				mensaje: `No podés asignar ${nombres || 'ese rol'} porque incluye permisos que vos no tenés`,
+				actuales,
+			};
+		}
+	}
+	return { mensaje: null, actuales };
 }
 
 const listar = async (req, res) => {
@@ -94,7 +110,7 @@ const asignarAPersonal = async (req, res) => {
 		const body = req.body || {};
 		let result;
 
-		const bloqueo = await validarEscalada(req, valor, body);
+		const { mensaje: bloqueo, actuales } = await validarEscalada(req, valor, body);
 		if (bloqueo) {
 			return res.status(403).json({ success: false, mensaje: bloqueo });
 		}
@@ -116,6 +132,16 @@ const asignarAPersonal = async (req, res) => {
 		}
 
 		const n = result.roles.length;
+		// Auditoría (sólo si ya existe el esquema de roles personalizados; nunca rompe el guardado)
+		rolesCustom()
+			.registrarAsignacion({
+				idEmpresa: req.idEmpresa,
+				actor: req.valorPersonal,
+				valorPersonal: valor,
+				antes: [...actuales],
+				despues: result.roles.map((r) => Number(r.IdRol)),
+			})
+			.catch(() => {});
 		res.json({
 			success: true,
 			mensaje:

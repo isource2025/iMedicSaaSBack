@@ -13,6 +13,11 @@ const { getTenantId } = require('../context/tenantContext');
 const matriz = require('../utils/permisos');
 const authCentralService = require('./authCentral.service');
 
+/** IdRol desde el cual los roles son personalizados (1..999 = del sistema). */
+const ID_ROL_PERSONALIZADO_MIN = 1000;
+// Carga diferida: evita ciclos de dependencias y no toca la BD si no se usa.
+const rolesCustom = () => require('./rolesCustom.service');
+
 const TTL_MS = 5 * 60 * 1000; // 5 minutos
 const _cache = new Map(); // idRol -> { permisos: string[], expira: number }
 
@@ -58,6 +63,17 @@ async function _leerDeBD(idRol) {
  * @returns {Promise<string[]>}
  */
 async function permisosDeRol(idRol, nombreRol) {
+	// Roles personalizados de una empresa (IdRol >= 1000): se resuelven SIEMPRE por
+	// id, nunca por nombre, para que un nombre no pueda suplantar a un rol del sistema.
+	if (Number.isFinite(Number(idRol)) && Number(idRol) >= ID_ROL_PERSONALIZADO_MIN) {
+		try {
+			return await rolesCustom().permisosDeRolCustom(Number(idRol));
+		} catch (e) {
+			console.warn('[permisos.service] rol personalizado', idRol, e.message);
+			return [];
+		}
+	}
+
 	// ADMIN / SUPER_ADMIN / MEDICO / ADMINISTRATIVO: matriz completa
 	// (evita imRolPermisos incompleto en auth central / BD tenant).
 	const nombre = nombreRol ? String(nombreRol).trim().toUpperCase() : '';

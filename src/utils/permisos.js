@@ -152,6 +152,10 @@ const MODULOS = Object.freeze([
 		label: 'Configuración',
 		submodulos: [
 			{ id: 'PERSONAL', label: 'Personal', path: '/dashboard/personal',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
+			// Matriz de permisos: crear roles personalizados y asignarles permisos.
+			// Sólo lo incluyen ADMIN y SUPER_ADMIN (plantillas generadas); nunca
+			// puede asignarse a un rol personalizado.
+			{ id: 'ROLES',    label: 'Matriz de permisos', path: '/dashboard/configuracion/permisos', acciones: [...CRUD] },
 		],
 	},
 	{

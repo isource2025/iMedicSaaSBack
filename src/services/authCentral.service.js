@@ -1,4 +1,5 @@
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
+const rolesCustomSchema = require('./rolesCustomSchema.service');
 const passwordService = require('./password.service');
 const { dedupeEmpresasPorId } = require('../utils/authEmpresas');
 
@@ -499,6 +500,9 @@ function mapRolDesdeFila(row) {
 		Descripcion: String(row.Descripcion || '').trim(),
 		Nivel: nivel,
 		Activo: true,
+		// Sólo presentes cuando existe el esquema de roles personalizados.
+		...(row.IdEmpresa != null ? { IdEmpresa: Number(row.IdEmpresa) } : {}),
+		...(row.RolBase ? { RolBase: String(row.RolBase) } : {}),
 	};
 }
 
@@ -716,29 +720,46 @@ async function asignarRolDeValorPersonal(idEmpresa, valorPersonal, idRol) {
 	return roles[0] || null;
 }
 
-async function obtenerRolPorId(idRol) {
+/**
+ * Rol por id. Si existen roles personalizados (esquema migrado), sólo devuelve
+ * roles del sistema o de la empresa indicada, nunca de otra clínica.
+ */
+async function obtenerRolPorId(idRol, idEmpresa = null) {
 	if (!isAuthCentralEnabled() || idRol == null) return null;
+	const conAlcance = await rolesCustomSchema.esquemaListo();
+	const alcance = conAlcance ? 'AND IdEmpresa IN (0, ?)' : '';
+	const params = conAlcance
+		? [Number(idRol), Number(idEmpresa) > 0 ? Number(idEmpresa) : 0]
+		: [Number(idRol)];
 	const rows = await query(
 		`
-    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel
+    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel${conAlcance ? ', RolBase, IdEmpresa' : ''}
     FROM \`imRoles\`
-    WHERE IdRol = ? AND Activo = 1
+    WHERE IdRol = ? AND Activo = 1 ${alcance}
     LIMIT 1
     `,
-		[Number(idRol)],
+		params,
 	);
 	return mapRolDesdeFila(rows[0] || null);
 }
 
-async function listarRolesCatalogo() {
+/**
+ * Catálogo de roles asignables. Con roles personalizados en el esquema incluye
+ * los del sistema y los de la empresa indicada.
+ */
+async function listarRolesCatalogo(idEmpresa = null) {
 	if (!isAuthCentralEnabled()) return [];
+	const conAlcance = await rolesCustomSchema.esquemaListo();
+	const alcance = conAlcance ? 'AND IdEmpresa IN (0, ?)' : '';
+	const params = conAlcance ? [Number(idEmpresa) > 0 ? Number(idEmpresa) : 0] : [];
 	const rows = await query(
 		`
-    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel
+    SELECT IdRol AS RolId, Nombre AS RolNombre, Descripcion, Nivel${conAlcance ? ', RolBase, IdEmpresa' : ''}
     FROM \`imRoles\`
-    WHERE Activo = 1 AND UPPER(TRIM(Nombre)) <> 'SUPER_ADMIN'
+    WHERE Activo = 1 AND UPPER(TRIM(Nombre)) <> 'SUPER_ADMIN' ${alcance}
     ORDER BY Nivel DESC, Nombre ASC
     `,
+		params,
 	);
 	return rows.map((r) => mapRolDesdeFila(r)).filter(Boolean);
 }

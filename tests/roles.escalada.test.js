@@ -16,7 +16,24 @@ function inyectar(ruta, exports) {
 	require.cache[resuelta] = { id: resuelta, filename: resuelta, loaded: true, exports };
 }
 
+const matriz = require(src('utils/permisos.js'));
+const NOMBRE_POR_ID = { 1: 'ADMIN', 2: 'MEDICO', 3: 'ENFERMERO', 4: 'ADMINISTRATIVO', 6: 'CARGA_HC', 7: 'PANEL_DATOS' };
+
+// Sin conexión a base: el servicio de roles personalizados se sustituye
+inyectar('services/rolesCustom.service.js', { registrarAsignacion: async () => {} });
+
 inyectar('services/roles.service.js', {
+	permisosDeRoles: async (ids) => {
+		const permisos = new Set();
+		const roles = [];
+		for (const id of ids) {
+			const nombre = NOMBRE_POR_ID[id];
+			if (!nombre) continue;
+			roles.push({ IdRol: id, Nombre: nombre });
+			for (const c of matriz.permisosDeRol(nombre)) permisos.add(c);
+		}
+		return { permisos, roles };
+	},
 	listarRoles: async () => [],
 	obtenerRolPorId: async () => null,
 	obtenerRolesDePersonal: async () => ({ roles: estado.actuales.map((id) => ({ IdRol: id })) }),
@@ -43,6 +60,9 @@ function ejecutar({ body, rol = { id: 1, nombre: 'ADMIN' }, actuales = [], esAdm
 		body,
 		auth: { rol },
 		rolNombre: rol.nombre,
+		idEmpresa: 1,
+		valorPersonal: 99,
+		permisos: matriz.permisosDeRol(rol.nombre),
 	};
 	return new Promise((resolve) => {
 		const res = {
@@ -111,6 +131,34 @@ test('un super admin sí puede otorgar SUPER_ADMIN', async () => {
 	const r = await ejecutar({
 		body: { idRoles: [5], idRolPrincipal: 5 },
 		rol: { id: 5, nombre: 'SUPER_ADMIN' },
+		esAdmin: false,
+	});
+	assert.equal(r.status, 200);
+});
+
+test('quien no tiene todos los permisos de un rol NO puede asignarlo', async () => {
+	// ADMINISTRATIVO no tiene los permisos clinicos del rol MEDICO
+	const r = await ejecutar({
+		body: { idRoles: [2], idRolPrincipal: 2 },
+		actuales: [],
+		rol: { id: 4, nombre: 'ADMINISTRATIVO' },
+		esAdmin: false,
+	});
+	assert.equal(r.status, 403);
+	assert.match(r.body.mensaje, /incluye permisos que vos no/);
+	assert.equal(estado.asignado, null);
+});
+
+test('quien tiene todos los permisos de un rol si puede asignarlo', async () => {
+	const r = await ejecutar({ body: { idRoles: [3, 6], idRolPrincipal: 3 }, actuales: [] });
+	assert.equal(r.status, 200);
+});
+
+test('un rol que ya tenia no se revalida al guardar el formulario', async () => {
+	const r = await ejecutar({
+		body: { idRoles: [2], idRolPrincipal: 2 },
+		actuales: [2],
+		rol: { id: 4, nombre: 'ADMINISTRATIVO' },
 		esAdmin: false,
 	});
 	assert.equal(r.status, 200);
