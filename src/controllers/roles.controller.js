@@ -1,5 +1,56 @@
 const rolesService = require('../services/roles.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const { esAdminClinico } = require('../middlewares/propietario.middleware');
+
+const ID_ROL_ADMIN = 1;
+const ID_ROL_SUPER_ADMIN = 5;
+
+function esSuperAdminReq(req) {
+	return (
+		Number(req.auth?.rol?.id) === ID_ROL_SUPER_ADMIN ||
+		String(req.rolNombre || '').toUpperCase() === 'SUPER_ADMIN'
+	);
+}
+
+/** Ids de rol pedidos en el body (formato nuevo `idRoles` o legacy `idRol`). */
+function idsPedidos(body) {
+	const crudo = Array.isArray(body?.idRoles)
+		? [...body.idRoles, body.idRolPrincipal]
+		: [body?.idRol];
+	return new Set(
+		crudo.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0),
+	);
+}
+
+/**
+ * Protege contra escalada de privilegios al asignar roles:
+ *  - SUPER_ADMIN sólo lo puede otorgar/quitar un SUPER_ADMIN.
+ *  - ADMIN sólo lo puede otorgar/quitar un ADMIN (o SUPER_ADMIN).
+ * Sólo se evalúan los cambios: guardar un formulario sin tocar esos roles no se bloquea.
+ * @returns {Promise<string|null>} mensaje de error o null si está permitido
+ */
+async function validarEscalada(req, valor, body) {
+	if (esSuperAdminReq(req)) return null;
+
+	const pedidos = idsPedidos(body);
+	let actuales = new Set();
+	try {
+		const pack = await rolesService.obtenerRolesDePersonal(valor);
+		actuales = new Set((pack?.roles || []).map((r) => Number(r.IdRol)));
+	} catch (e) {
+		// Si no se pueden leer los roles actuales, se valida sólo contra lo pedido.
+		console.warn('[roles.validarEscalada] no se pudieron leer los roles actuales:', e.message);
+	}
+	const cambia = (id) => pedidos.has(id) !== actuales.has(id);
+
+	if (cambia(ID_ROL_SUPER_ADMIN)) {
+		return 'Solo un super administrador puede otorgar o quitar el rol SUPER_ADMIN';
+	}
+	if (cambia(ID_ROL_ADMIN) && !(await esAdminClinico(req))) {
+		return 'Solo un administrador puede otorgar o quitar el rol ADMIN';
+	}
+	return null;
+}
 
 const listar = async (req, res) => {
 	try {
@@ -42,6 +93,11 @@ const asignarAPersonal = async (req, res) => {
 
 		const body = req.body || {};
 		let result;
+
+		const bloqueo = await validarEscalada(req, valor, body);
+		if (bloqueo) {
+			return res.status(403).json({ success: false, mensaje: bloqueo });
+		}
 
 		if (Array.isArray(body.idRoles)) {
 			const idRolPrincipal =

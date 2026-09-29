@@ -5,7 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 const storage = multer.diskStorage({
@@ -29,6 +29,11 @@ const upload = multer({
 	},
 	limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+const requireTraslado = requireAnyPermiso(
+	'INTERNACION.MOVIMIENTOS.TRASLADAR',
+	'INTERNACION.MOVIMIENTOS.GESTIONAR',
+);
 
 router.use(requireTenant);
 
@@ -59,12 +64,12 @@ router.get(
 );
 router.put(
 	'/visitas/:numeroVisita/mover-cama',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.moverPacienteACamaVacia,
 );
 router.post(
 	'/visitas/:numeroVisita/asignar-cama',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.asignarPacienteACama,
 );
 router.get(
@@ -74,7 +79,7 @@ router.get(
 );
 router.put(
 	'/visitas/:numeroVisita1/intercambiar-cama/:numeroVisita2',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.intercambiarCamasPacientes,
 );
 router.post(

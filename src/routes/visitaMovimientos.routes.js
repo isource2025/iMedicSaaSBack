@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const visitaMovimientosController = require('../controllers/visitaMovimientos.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
+
+const requireTraslado = requireAnyPermiso(
+	'INTERNACION.MOVIMIENTOS.TRASLADAR',
+	'INTERNACION.MOVIMIENTOS.GESTIONAR',
+);
 
 router.use(requireTenant);
 
@@ -33,12 +38,12 @@ router.post(
 );
 router.post(
 	'/mover/:numeroVisita',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.moverPacienteACamaVacia,
 );
 router.post(
 	'/asignar/:numeroVisita',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.asignarPacienteACama,
 );
 router.get(
@@ -48,7 +53,7 @@ router.get(
 );
 router.post(
 	'/intercambiar/:numeroVisita1/:numeroVisita2',
-	requirePermiso('INTERNACION.MOVIMIENTOS.GESTIONAR'),
+	requireTraslado,
 	visitaMovimientosController.intercambiarCamasPacientes,
 );
 router.get(

@@ -10,6 +10,7 @@
  *   VER, CREAR, EDITAR, ELIMINAR
  * Acciones especiales (donde aplica):
  *   GESTIONAR  (asignaciones, movimientos, configuración)
+ *   TRASLADAR  (mover / intercambiar / asignar cama, sin egreso)
  *   APLICAR    (firmar / aplicar indicación)
  *   EXPORTAR   (descargar reportes / tablas)
  *   IMPRIMIR
@@ -38,6 +39,7 @@ const ACCIONES = Object.freeze({
 	EDITAR: 'EDITAR',
 	ELIMINAR: 'ELIMINAR',
 	GESTIONAR: 'GESTIONAR',
+	TRASLADAR: 'TRASLADAR',
 	APLICAR: 'APLICAR',
 	EXPORTAR: 'EXPORTAR',
 	IMPRIMIR: 'IMPRIMIR',
@@ -101,7 +103,9 @@ const MODULOS = Object.freeze([
 			{ id: 'ESTUDIOS',             label: 'Pedidos de estudios (complementarios)',  acciones: [...CRUD] },
 			{ id: 'PROTOCOLOS',           label: 'Protocolos',               acciones: [...CRUD] },
 			{ id: 'PROCEDIMIENTOS',       label: 'Procedimientos',           acciones: [...CRUD] },
-			{ id: 'MOVIMIENTOS',          label: 'Movimientos / traslados',  acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
+			// TRASLADAR = cambio/intercambio/asignación de cama. GESTIONAR además
+			// incluye egreso y edición del último movimiento.
+			{ id: 'MOVIMIENTOS',          label: 'Movimientos / traslados',  acciones: [ACCIONES.VER, ACCIONES.TRASLADAR, ACCIONES.GESTIONAR] },
 			{ id: 'ADJUNTOS',             label: 'Adjuntos',                 acciones: [...CRUD] },
 			{ id: 'EPICRISIS',            label: 'Epicrisis',                acciones: [...CRUD, ACCIONES.IMPRIMIR] },
 			// Historial de cambios de la HC (quién modificó o borró qué). Solo lectura
@@ -251,6 +255,7 @@ const PLANTILLAS = Object.freeze({
 		..._todas('INTERNACION', 'PROCEDIMIENTOS'),
 		..._todas('INTERNACION', 'EPICRISIS'),
 		'INTERNACION.MOVIMIENTOS.VER',
+		'INTERNACION.MOVIMIENTOS.TRASLADAR',
 		'INTERNACION.MOVIMIENTOS.GESTIONAR',
 		// Funcionalidades de enfermería: lectura
 		'INTERNACION.EVOLUCION_ENFERMERIA.VER',
@@ -295,6 +300,7 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.PROCEDIMIENTOS.VER',
 		'INTERNACION.EPICRISIS.VER',
 		'INTERNACION.MOVIMIENTOS.VER',
+		'INTERNACION.MOVIMIENTOS.TRASLADAR', // cambio de cama (sin egreso)
 		// CRUD de enfermería
 		..._todas('INTERNACION', 'EVOLUCION_ENFERMERIA'),
 		..._todas('INTERNACION', 'SIGNOS_VITALES'),
@@ -334,6 +340,7 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.CAMAS.EDITAR',
 		'INTERNACION.CAMAS.ELIMINAR',
 		'INTERNACION.CAMAS.GESTIONAR',
+		'INTERNACION.MOVIMIENTOS.TRASLADAR',
 		'INTERNACION.MOVIMIENTOS.GESTIONAR',
 		'INTERNACION.TABLA.EXPORTAR',
 
