@@ -866,6 +866,39 @@ async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
 
   const { apellido, nombres } = splitApellidoNombre(data.ApellidoNombre || data.apellidoNombre);
   const cols = await getImPasswordColumns();
+
+  // Usuario de Clarion sin persona (ValorPersonal vacío o 0): se vincula en vez de duplicarlo.
+  const filtroHuerfano = `UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0))) AND ISNULL(ValorPersonal, 0) = 0`;
+  const huerfano = await executeQuery(
+    `SELECT TOP 1 NombreRed FROM dbo.imPassword WHERE ${filtroHuerfano}`,
+    [{ value: nombreRed, type: 'VarChar' }],
+  );
+  if (huerfano.length) {
+    const limpiarHash = colInfo(cols, 'PasswordHash') ? ', PasswordHash = NULL' : '';
+    try {
+      await executeQuery(
+        `UPDATE TOP (1) dbo.imPassword SET ValorPersonal = @p1, Password = @p2${limpiarHash} WHERE ${filtroHuerfano}`,
+        [
+          { value: nombreRed, type: 'VarChar' },
+          { value: vp, type: 'Int' },
+          bindPasswordString(cols, 'Password', password, 255),
+        ],
+      );
+    } catch (err) {
+      const dup = mapDuplicateKeyErrorToHttp(err);
+      if (dup) {
+        const e = new Error(dup.message);
+        e.statusCode = dup.statusCode;
+        throw e;
+      }
+      throw err;
+    }
+    if (!options.skipAuthSync) {
+      await afterUserMutation(vp);
+    }
+    return obtenerUsuarioPorId(vp);
+  }
+
   const fechaTipo = await getImPasswordFechaActualTipo();
   const hoy = new Date();
   const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
