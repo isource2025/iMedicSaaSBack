@@ -69,7 +69,7 @@ async function crearTabla() {
       KEY \`IX_imAuditoria_Entidad\` (\`IdEmpresa\`, \`Modulo\`, \`Entidad\`, \`IdEntidad\`, \`Fecha\`),
       KEY \`IX_imAuditoria_Fecha\` (\`IdEmpresa\`, \`Fecha\`),
       KEY \`IX_imAuditoria_Actor\` (\`IdEmpresa\`, \`Actor\`, \`Fecha\`)
-    ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+    ) ENGINE = InnoDB
   `);
 }
 

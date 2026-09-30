@@ -125,7 +125,7 @@ async function migrar() {
       \`IdRol\` INT NOT NULL,
       \`Codigo\` VARCHAR(120) NOT NULL,
       PRIMARY KEY (\`IdRol\`, \`Codigo\`)
-    ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+    ) ENGINE = InnoDB
   `);
 
 	// 4) Auditoría general del sistema (imAuditoria), compartida por todos los módulos
