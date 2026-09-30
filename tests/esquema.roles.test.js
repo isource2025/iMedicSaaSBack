@@ -18,8 +18,11 @@ function nuevaBase({ conImRoles = true } = {}) {
 		tablas: new Set(conImRoles ? ['imRoles', 'imPersonalRoles'] : ['imPersonalRoles']),
 		columnas: new Set(['imRoles.FechaCreacion']), // ya existe en produccion
 		indices: new Map([['UQ_imRoles_Nombre', ['Nombre']]]),
-		rolesPersonalizados: 0,
+		rolesPersonalizados: 0, // activos
+		rolesBaja: 0, // bajas logicas
+		asignacionesCustom: 0,
 		permisosCustom: 0,
+		dml: [],
 		flags: new Map(), // "empresa:FLAG" -> activo
 		ddl: [], // DDL ejecutado, en orden
 		fallarSi: null, // (sql) => boolean : simula un corte
@@ -45,7 +48,19 @@ async function consultar(sql, params = []) {
 	}
 	if (/information_schema\.STATISTICS/.test(s)) return db.indices.has(params[1]) ? [{ ok: 1 }] : [];
 
-	if (/^SELECT COUNT\(\*\) AS n FROM imRoles WHERE IdEmpresa <> 0/.test(s)) return [{ n: db.rolesPersonalizados }];
+	if (/^SELECT COUNT\(\*\) AS n FROM imRoles WHERE IdEmpresa <> 0 AND Activo = 1/.test(s)) return [{ n: db.rolesPersonalizados }];
+	if (/^SELECT COUNT\(\*\) AS n FROM imRoles WHERE IdEmpresa <> 0 AND Activo = 0/.test(s)) return [{ n: db.rolesBaja }];
+	if (/^SELECT COUNT\(\*\) AS n FROM imPersonalRoles pr INNER JOIN imRoles/.test(s)) return [{ n: db.asignacionesCustom }];
+	if (/^DELETE FROM `imRolPermisosCustom`/.test(s)) {
+		db.dml.push(s);
+		db.permisosCustom = 0;
+		return { affectedRows: 1 };
+	}
+	if (/^DELETE FROM `imRoles` WHERE `IdEmpresa` <> 0 AND `Activo` = 0/.test(s)) {
+		db.dml.push(s);
+		db.rolesBaja = 0;
+		return { affectedRows: 1 };
+	}
 	if (/^SELECT COUNT\(\*\) AS n FROM imRolPermisosCustom/.test(s)) return [{ n: db.permisosCustom }];
 	if (/^SELECT COUNT\(\*\) AS n FROM imRoles/.test(s)) return [{ n: 7 + db.rolesPersonalizados }];
 
@@ -213,6 +228,34 @@ test('revertir vuelve al estado original (restaura unicidad primero, conserva Fe
 	assert.equal(db.tablas.has('imFeatureFlags'), true);
 });
 
+test('revertir: roles dados de baja se conservan salvo --purgar-bajas; nunca se borran roles activos', async () => {
+	reiniciar();
+	await schema.aplicar(consultar);
+	db.rolesBaja = 3;
+	db.permisosCustom = 9;
+	const n = db.ddl.length;
+	await assert.rejects(() => schema.revertir(consultar), (e) => e.statusCode === 409 && /baja/.test(e.message) && /purgar-bajas/.test(e.message));
+	assert.equal(db.ddl.length, n);
+	assert.equal(db.dml.length, 0);
+
+	// con roles activos, ni siquiera la purga alcanza
+	db.rolesPersonalizados = 1;
+	await assert.rejects(() => schema.revertir(consultar, { purgarBajas: true }), (e) => e.statusCode === 409 && /activo/.test(e.message));
+	assert.equal(db.dml.length, 0);
+
+	db.rolesPersonalizados = 0;
+	await schema.revertir(consultar, { purgarBajas: true });
+	assert.equal(db.dml.length, 2);
+	assert.match(db.dml[1], /Activo.{1,2} = 0$/); // el DELETE de roles solo alcanza las bajas
+	assert.deepEqual([...db.indices.keys()], ['UQ_imRoles_Nombre']);
+});
+
+test('revertir: asignaciones de usuarios a roles personalizados bloquean la reversa', async () => {
+	reiniciar();
+	await schema.aplicar(consultar);
+	db.asignacionesCustom = 2;
+	await assert.rejects(() => schema.revertir(consultar, { purgarBajas: true }), (e) => e.statusCode === 409 && /asignaci/.test(e.message));
+});
 // ─── Flags por empresa ──────────────────────────────────────────────────────
 
 test('flag: falla cerrado sin tabla, sin auth central o con empresa invalida', async () => {

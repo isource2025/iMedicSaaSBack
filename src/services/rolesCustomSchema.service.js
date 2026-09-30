@@ -193,21 +193,43 @@ async function aplicar(consultar = consultarPool, { simular = false } = {}) {
  * Revierte lo específico de roles personalizados. Sólo si NO hay roles personalizados
  * ni permisos guardados. Deja imAuditoria e imFeatureFlags (son generales).
  */
-async function revertir(consultar = consultarPool, { simular = false } = {}) {
-	if (await existeColumna(consultar, 'imRoles', 'IdEmpresa')) {
-		const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM imRoles WHERE IdEmpresa <> 0');
-		if (Number(n) > 0) {
-			throw errorEstado(409, `No se puede revertir: hay ${n} rol(es) personalizado(s). Eliminalos primero.`);
+async function revertir(consultar = consultarPool, { simular = false, purgarBajas = false } = {}) {
+	const pasos = [];
+	const hayColumna = await existeColumna(consultar, 'imRoles', 'IdEmpresa');
+	const hayPermisos = await existeTabla(consultar, 'imRolPermisosCustom');
+
+	if (hayColumna) {
+		const [{ n: activos }] = await consultar('SELECT COUNT(*) AS n FROM imRoles WHERE IdEmpresa <> 0 AND Activo = 1');
+		if (Number(activos) > 0) {
+			throw errorEstado(409, `No se puede revertir: hay ${activos} rol(es) personalizado(s) activo(s). Eliminalos primero.`);
+		}
+		const [{ n: asignados }] = await consultar(
+			'SELECT COUNT(*) AS n FROM imPersonalRoles pr INNER JOIN imRoles r ON r.IdRol = pr.IdRol WHERE r.IdEmpresa <> 0',
+		);
+		if (Number(asignados) > 0) {
+			throw errorEstado(409, `No se puede revertir: ${asignados} asignación(es) de usuarios apuntan a roles personalizados.`);
+		}
+		// Los roles eliminados son bajas lógicas (se conservan por el historial): sólo se borran a pedido.
+		const [{ n: bajas }] = await consultar('SELECT COUNT(*) AS n FROM imRoles WHERE IdEmpresa <> 0 AND Activo = 0');
+		if (Number(bajas) > 0) {
+			if (!purgarBajas) {
+				throw errorEstado(
+					409,
+					`No se puede revertir: hay ${bajas} rol(es) personalizado(s) dado(s) de baja que se conservan por el historial. ` +
+						'Con --purgar-bajas se borran definitivamente (el historial en imAuditoria se conserva).',
+				);
+			}
+			if (hayPermisos) pasos.push({ id: 'purgar:imRolPermisosCustom', sql: 'DELETE FROM `imRolPermisosCustom`' });
+			pasos.push({ id: 'purgar:imRoles-baja', sql: 'DELETE FROM `imRoles` WHERE `IdEmpresa` <> 0 AND `Activo` = 0' });
 		}
 	}
-	if (await existeTabla(consultar, 'imRolPermisosCustom')) {
+	if (hayPermisos && !pasos.some((p) => p.id === 'purgar:imRolPermisosCustom')) {
 		const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM imRolPermisosCustom');
 		if (Number(n) > 0) {
 			throw errorEstado(409, 'No se puede revertir: imRolPermisosCustom tiene permisos guardados.');
 		}
 	}
 
-	const pasos = [];
 	if (!(await indiceExiste(consultar, 'imRoles', INDICE_NOMBRE_ORIGINAL))) {
 		pasos.push({
 			id: `indice:${INDICE_NOMBRE_ORIGINAL}`,

@@ -7,6 +7,8 @@
  *   node scripts/esquema_roles.js --simular                qué haría, sin ejecutar (sólo lectura)
  *   node scripts/esquema_roles.js --aplicar --confirmo-respaldo
  *   node scripts/esquema_roles.js --revertir --confirmo-respaldo
+ *       (--purgar-bajas: además borra definitivamente los roles personalizados ya dados de baja;
+ *        los roles activos o con usuarios asignados siempre bloquean la reversa)
  *   node scripts/esquema_roles.js --empresas               empresas con la función habilitada
  *   node scripts/esquema_roles.js --habilitar-empresa 102 --confirmo-respaldo
  *   node scripts/esquema_roles.js --deshabilitar-empresa 102 --confirmo-respaldo
@@ -88,7 +90,7 @@ function mostrarPasos(pasos) {
 		}
 
 		if (tiene('--revertir')) {
-			const r = await schema.revertir(consultar);
+			const r = await schema.revertir(consultar, { purgarBajas: tiene('--purgar-bajas') });
 			console.log('Reversa aplicada:');
 			r.ejecutados.forEach((id) => console.log('  - ' + id));
 			if (!r.ejecutados.length) console.log('  (no había nada que revertir)');
