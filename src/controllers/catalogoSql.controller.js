@@ -18,11 +18,11 @@ function exigirPermisoDelCatalogo(req, res) {
 	return def;
 }
 
-function responder(res, resultado) {
+async function responder(res, resultado) {
 	res.json({
 		success: true,
 		data: resultado.rows,
-		columns: servicio.columnasUi(resultado.def),
+		columns: await servicio.columnasUi(resultado.def),
 		keyField: servicio.keyFieldDe(resultado.def),
 		title: resultado.def.title,
 		id: resultado.def.id,
@@ -32,7 +32,7 @@ function responder(res, resultado) {
 async function listar(req, res) {
 	try {
 		if (!exigirPermisoDelCatalogo(req, res)) return;
-		responder(res, await servicio.listar(req.params.id));
+		await responder(res, await servicio.listar(req.params.id));
 	} catch (error) {
 		fallar(res, error, 'Error al listar el catálogo');
 	}
@@ -41,7 +41,7 @@ async function listar(req, res) {
 async function crear(req, res) {
 	try {
 		if (!exigirPermisoDelCatalogo(req, res)) return;
-		responder(res, await servicio.crear(req.params.id, req.body || {}));
+		await responder(res, await servicio.crear(req.params.id, req.body || {}));
 	} catch (error) {
 		fallar(res, error, 'Error al crear el registro');
 	}
@@ -50,7 +50,7 @@ async function crear(req, res) {
 async function actualizar(req, res) {
 	try {
 		if (!exigirPermisoDelCatalogo(req, res)) return;
-		responder(res, await servicio.actualizar(req.params.id, req.params.clave, req.body || {}));
+		await responder(res, await servicio.actualizar(req.params.id, req.params.clave, req.body || {}));
 	} catch (error) {
 		fallar(res, error, 'Error al actualizar el registro');
 	}
@@ -59,10 +59,20 @@ async function actualizar(req, res) {
 async function borrar(req, res) {
 	try {
 		if (!exigirPermisoDelCatalogo(req, res)) return;
-		responder(res, await servicio.borrar(req.params.id, req.params.clave));
+		await responder(res, await servicio.borrar(req.params.id, req.params.clave));
 	} catch (error) {
 		fallar(res, error, 'Error al eliminar el registro');
 	}
 }
 
-module.exports = { listar, crear, actualizar, borrar };
+async function buscar(req, res) {
+	try {
+		if (!exigirPermisoDelCatalogo(req, res)) return;
+		const data = await servicio.buscar(req.params.id, req.params.campo, req.query.q);
+		res.json({ success: true, data });
+	} catch (error) {
+		fallar(res, error, 'Error al buscar');
+	}
+}
+
+module.exports = { listar, crear, actualizar, borrar, buscar };

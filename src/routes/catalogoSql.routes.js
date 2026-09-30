@@ -11,6 +11,7 @@ router.use(
 );
 
 router.get('/:id', controller.listar);
+router.get('/:id/buscar/:campo', controller.buscar);
 router.post('/:id', controller.crear);
 router.put('/:id/:clave', controller.actualizar);
 router.delete('/:id/:clave', controller.borrar);

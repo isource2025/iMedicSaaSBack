@@ -69,6 +69,32 @@ const ensureIdTurnoColumn = createTenantOnce(async () => {
   }
 });
 
+/** Pantalla desde la que se subió el adjunto (columna propia del SaaS, Clarion la ignora). */
+const ORIGENES_ADJUNTO = ['INTERNACION', 'ADMISION', 'AGENDA', 'ESTUDIO', 'PROTOCOLO'];
+
+function normalizarOrigen(origen) {
+  const o = String(origen || '').trim().toUpperCase();
+  return ORIGENES_ADJUNTO.includes(o) ? o : null;
+}
+
+/** true si la columna existe; sin permiso de ALTER se sigue sin marcar el origen. */
+const ensureOrigenColumn = createTenantOnce(async () => {
+  try {
+    const cols = await executeQuery(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_NAME = 'imPedidosEstudiosAdjuntos' AND COLUMN_NAME = 'Origen'`,
+    );
+    if (!cols?.length) {
+      await executeQuery(`ALTER TABLE dbo.imPedidosEstudiosAdjuntos ADD Origen VARCHAR(20) NULL`);
+      console.log('[adjuntos] Columna Origen agregada a imPedidosEstudiosAdjuntos');
+    }
+    return true;
+  } catch (e) {
+    console.warn('[adjuntos] Sin columna Origen:', e.message);
+    return false;
+  }
+});
+
 class AdjuntosService {
   /**
    * Subir archivo adjunto para una visita y/o turno de agenda (pre-cierre).
@@ -110,13 +136,15 @@ class AdjuntosService {
         numeroVisita,
         idTipoImagen: idTipo,
       });
+      const origen = normalizarOrigen(data.origen);
+      const conOrigen = origen != null && (await ensureOrigenColumn());
 
       const rows = await executeQuery(
         `
           INSERT INTO imPedidosEstudiosAdjuntos
-            (NumeroVisita, IdTurno, Descripcion, Patch, PatchServidor, Fecha, IdOperador, IdTipoImagen, IdSector)
+            (NumeroVisita, IdTurno, Descripcion, Patch, PatchServidor, Fecha, IdOperador, IdTipoImagen, IdSector${conOrigen ? ', Origen' : ''})
           OUTPUT INSERTED.IdAdjunto
-          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)
+          VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8${conOrigen ? ', @p9' : ''})
         `,
         [
           { value: numeroVisita, type: 'Int' },
@@ -134,6 +162,7 @@ class AdjuntosService {
           { value: cargadoPor, type: 'Int' },
           { value: idTipo, type: 'VarChar' },
           { value: idSector, type: 'VarChar' },
+          ...(conOrigen ? [{ value: origen, type: 'VarChar', length: 20 }] : []),
         ],
       );
 
@@ -385,6 +414,7 @@ class AdjuntosService {
       FechaCarga: adj.Fecha,
       TipoImagen: adj.idtipoimagen ? String(adj.idtipoimagen).trim() : null,
       TipoImagenNombre: adj.TipoImagenNombre || 'Sin categoría',
+      Origen: adj.Origen ? String(adj.Origen).trim() : null,
     };
   }
 
@@ -393,6 +423,7 @@ class AdjuntosService {
    */
   async getAdjuntosPorVisita(numeroVisita) {
     try {
+      const conOrigen = await ensureOrigenColumn();
       const rows = await executeQuery(
         `
           SELECT 
@@ -401,6 +432,7 @@ class AdjuntosService {
             a.Descripcion,
             a.PatchServidor,
             a.idtipoimagen,
+            ${conOrigen ? 'a.Origen' : 'NULL AS Origen'},
             LTRIM(RTRIM(t.desctipoimagen)) AS TipoImagenNombre,
             a.Fecha,
             a.IdOperador,
@@ -427,6 +459,7 @@ class AdjuntosService {
   async getAdjuntosPorTurno(idTurno) {
     try {
       await ensureIdTurnoColumn();
+      const conOrigen = await ensureOrigenColumn();
       const id = Number(idTurno);
       const rows = await executeQuery(
         `
@@ -437,6 +470,7 @@ class AdjuntosService {
             a.Descripcion,
             a.PatchServidor,
             a.idtipoimagen,
+            ${conOrigen ? 'a.Origen' : 'NULL AS Origen'},
             LTRIM(RTRIM(t.desctipoimagen)) AS TipoImagenNombre,
             a.Fecha,
             a.IdOperador,

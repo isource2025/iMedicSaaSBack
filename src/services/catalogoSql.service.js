@@ -24,8 +24,17 @@ function col(name, opts = {}) {
 		identity: Boolean(opts.identity),
 		/** Numérico secuencial sin IDENTITY: MAX+1 al crear. */
 		autoKey: Boolean(opts.autoKey),
+		required: Boolean(opts.required),
+		/** Lista cerrada [{ value, label }]: el front muestra un selector. */
+		options: opts.options,
+		/** Clave de LOOKUPS: opciones leídas de la base en cada listado. */
+		lookup: opts.lookup,
+		/** Clave de BUSQUEDAS: el front busca con /:id/buscar/:campo?q= */
+		search: opts.search,
 	};
 }
+
+const TIPOS_CAMA = ['CAMA', 'CAMILLA', 'SILLON'].map((v) => ({ value: v, label: v }));
 
 const KEY_SEP = '::';
 
@@ -250,12 +259,22 @@ const CATALOGOS = [
 			{ name: 'ValorHabitacionCama', as: 'Cama', type: 'VarChar', length: 4 },
 		],
 		columns: [
-			col('ValorSector', { as: 'Sector', length: 4, keyPart: true }),
-			col('ValorHabitacionCama', { as: 'Cama', length: 4, keyPart: true }),
-			col('ValorEstadoCama', { as: 'Estado', length: 1 }),
-			col('Tipo', { length: 20 }),
+			col('ValorSector', {
+				as: 'Sector',
+				length: 4,
+				keyPart: true,
+				required: true,
+				lookup: 'sectores-internacion',
+			}),
+			col('ValorHabitacionCama', { as: 'Cama', length: 4, keyPart: true, required: true }),
+			col('ValorEstadoCama', { as: 'Estado', length: 1, required: true, lookup: 'estados-cama' }),
+			col('Tipo', { length: 20, required: true, options: TIPOS_CAMA }),
 			col('Observaciones', { length: 304 }),
-			col('NumeroVisita', { type: 'Int' }),
+			col('NumeroVisita', {
+				type: 'Int',
+				label: 'Número de visita',
+				search: 'visitas-sin-egreso',
+			}),
 		],
 		orderBy: 'ValorSector, ValorHabitacionCama',
 	},
@@ -409,6 +428,192 @@ const CATALOGOS = [
 		columns: [col('Valor', { editable: false }), col('Descripcion', { length: 30 })],
 	},
 ];
+
+function opcionDeFila(r) {
+	const value = String(r.value ?? '').trim();
+	const desc = String(r.label ?? '').trim();
+	return { value, label: desc && desc !== value ? `${desc} (${value})` : value };
+}
+
+const LOOKUPS = {
+	/** Sectores de internación (AmbInt = I); si la base no marca ninguno, todos. */
+	'sectores-internacion': async () => {
+		const sql = (filtro) => `
+			SELECT LTRIM(RTRIM(Valor)) AS value, LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS label
+			FROM dbo.imSectores WITH (NOLOCK)
+			WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> '' ${filtro}
+			ORDER BY Descripcion`;
+		let rows = await executeQuery(sql(`AND UPPER(LTRIM(RTRIM(ISNULL(AmbInt, '')))) = 'I'`));
+		if (!rows?.length) rows = await executeQuery(sql(''));
+		return (rows || []).map(opcionDeFila);
+	},
+	'estados-cama': async () => {
+		const rows = await executeQuery(`
+			SELECT LTRIM(RTRIM(Valor)) AS value, LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS label
+			FROM dbo.imEstadoCama WITH (NOLOCK)
+			WHERE LTRIM(RTRIM(ISNULL(Valor, ''))) <> ''
+			ORDER BY Descripcion`);
+		return (rows || []).map(opcionDeFila);
+	},
+};
+
+const SQL_VISITA_SIN_EGRESO = `
+	UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+	AND (
+		v.FECHAEGRESO IS NULL
+		OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL
+		OR TRY_CAST(v.FECHAEGRESO AS int) = 0
+	)`;
+
+const BUSQUEDAS = {
+	/** Internados vigentes (ClasePaciente = I, sin egreso), con la cama que ocupan si tienen. */
+	'visitas-sin-egreso': async (termino) => {
+		const term = String(termino || '').trim();
+		const params = [];
+		let filtro = '';
+		if (term) {
+			const like = `%${term}%`;
+			filtro = `AND (
+				p.ApellidoYNombre LIKE @p0
+				OR CAST(p.NumeroDocumento AS varchar(40)) LIKE @p0
+				OR CAST(v.NumeroVisita AS varchar(20)) LIKE @p0
+			)`;
+			params.push({ value: like, type: 'VarChar', length: 120 });
+		}
+		const rows = await executeQuery(
+			`
+			SELECT TOP 30
+				v.NumeroVisita AS numeroVisita,
+				LTRIM(RTRIM(ISNULL(p.ApellidoYNombre, ''))) AS paciente,
+				LTRIM(RTRIM(ISNULL(CAST(p.NumeroDocumento AS varchar(40)), ''))) AS documento,
+				CONVERT(varchar(10), v.FECHAADMISIONS, 103) AS fechaAdmision,
+				hc.sector,
+				hc.cama
+			FROM dbo.imVisita v WITH (NOLOCK)
+			INNER JOIN dbo.imPacientes p WITH (NOLOCK) ON p.IDPaciente = v.IDPaciente
+			OUTER APPLY (
+				SELECT TOP 1
+					LTRIM(RTRIM(h.ValorSector)) AS sector,
+					LTRIM(RTRIM(h.ValorHabitacionCama)) AS cama
+				FROM dbo.imHabitacionCamas h WITH (NOLOCK)
+				WHERE h.NumeroVisita = v.NumeroVisita
+			) hc
+			WHERE ${SQL_VISITA_SIN_EGRESO}
+			${filtro}
+			ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+			`,
+			params,
+		);
+		return (rows || []).map((r) => {
+			const detalle = [
+				r.documento ? `DNI ${r.documento}` : '',
+				r.fechaAdmision ? `Ingreso ${r.fechaAdmision}` : '',
+				r.sector || r.cama ? `En cama ${r.sector || '—'}-${r.cama || '—'}` : 'Sin cama',
+			]
+				.filter(Boolean)
+				.join(' · ');
+			return {
+				value: String(r.numeroVisita),
+				label: `${r.numeroVisita} · ${r.paciente || 'Sin nombre'}`,
+				detail: detalle,
+			};
+		});
+	},
+};
+
+async function opcionesDeColumna(c) {
+	if (Array.isArray(c.options)) return c.options;
+	if (c.lookup && LOOKUPS[c.lookup]) return LOOKUPS[c.lookup]();
+	return null;
+}
+
+function vacio(raw) {
+	return raw == null || String(raw).trim() === '';
+}
+
+function etiquetaCampo(c) {
+	return c.label || c.as || c.name;
+}
+
+async function validarVisitaSinEgreso(def, numeroVisita, claveActual) {
+	const rows = await executeQuery(
+		`
+		SELECT TOP 1
+			v.NumeroVisita,
+			CASE WHEN ${SQL_VISITA_SIN_EGRESO} THEN 1 ELSE 0 END AS vigente
+		FROM dbo.imVisita v WITH (NOLOCK)
+		WHERE v.NumeroVisita = @p0
+		`,
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+	if (!rows?.length) throw errorHttp(`La visita ${numeroVisita} no existe`, 400);
+	if (!rows[0].vigente) {
+		throw errorHttp(`La visita ${numeroVisita} no es una internación sin egreso`, 400);
+	}
+	if (def.table !== 'imHabitacionCamas') return;
+	const ocupadas = await executeQuery(
+		`
+		SELECT LTRIM(RTRIM(ValorSector)) AS sector, LTRIM(RTRIM(ValorHabitacionCama)) AS cama
+		FROM dbo.imHabitacionCamas WITH (NOLOCK)
+		WHERE NumeroVisita = @p0
+		`,
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+	const otra = (ocupadas || []).find(
+		(r) => [r.sector, r.cama].join(KEY_SEP).toUpperCase() !== String(claveActual || '').toUpperCase(),
+	);
+	if (otra) {
+		throw errorHttp(
+			`La visita ${numeroVisita} ya ocupa la cama ${otra.sector}-${otra.cama}`,
+			400,
+		);
+	}
+}
+
+/**
+ * Obligatorios, valores de listas cerradas y búsquedas. En edición, un valor
+ * igual al guardado se acepta aunque ya no esté en la lista (datos viejos).
+ */
+async function validarCampos(def, body, { actual = null, clave = '' } = {}) {
+	for (const c of def.columns) {
+		if (esAutoKeyCol(def, c)) continue;
+		if (actual && esColumnaClave(def, c)) continue;
+		const raw = valorDeBody(c, body);
+		const texto = String(raw ?? '').trim();
+		if (c.required && !texto) {
+			throw errorHttp(`El campo ${etiquetaCampo(c)} es obligatorio`, 400);
+		}
+		if (!texto) continue;
+		const previo = actual ? String(actual[c.as] ?? '').trim() : null;
+		const sinCambio = previo != null && previo.toUpperCase() === texto.toUpperCase();
+
+		const opciones = await opcionesDeColumna(c);
+		if (opciones && !sinCambio) {
+			const ok = opciones.some((o) => String(o.value).toUpperCase() === texto.toUpperCase());
+			if (!ok) throw errorHttp(`Valor no válido para ${etiquetaCampo(c)}: ${texto}`, 400);
+		}
+
+		if (c.search === 'visitas-sin-egreso' && !sinCambio) {
+			const n = Number(texto);
+			if (!Number.isFinite(n) || n < 0) {
+				throw errorHttp(`${etiquetaCampo(c)} inválido`, 400);
+			}
+			if (n > 0) await validarVisitaSinEgreso(def, Math.trunc(n), clave);
+		}
+	}
+}
+
+async function filaActual(def, clave) {
+	const params = [];
+	const where = whereClave(def, clave, params);
+	const rows = await executeQuery(
+		`SELECT TOP 1 ${selectList(def)} FROM dbo.[${def.table}] WHERE ${where}`,
+		params,
+	);
+	const [fila] = normalizarFilas(def, rows);
+	if (!fila) throw errorHttp('El registro no existe', 404);
+	return fila;
+}
 
 function normalizar(texto) {
 	return String(texto || '')
@@ -572,6 +777,7 @@ async function insertarFila(def, names, placeholders, params) {
 
 async function crear(id, body = {}) {
 	const def = porId(id);
+	await validarCampos(def, body);
 	const params = [];
 	const names = [];
 	const placeholders = [];
@@ -617,6 +823,9 @@ async function crear(id, body = {}) {
 
 async function actualizar(id, clave, body = {}) {
 	const def = porId(id);
+	if (def.columns.some((c) => c.required || c.options || c.lookup || c.search)) {
+		await validarCampos(def, body, { actual: await filaActual(def, clave), clave });
+	}
 	const sets = [];
 	const params = [];
 	for (const c of def.columns) {
@@ -651,11 +860,11 @@ function inputTypeDe(c) {
 	return 'text';
 }
 
-function columnasUi(def) {
-	const cols = def.columns.map((c) => {
+async function columnasUi(def) {
+	const cols = await Promise.all(def.columns.map(async (c) => {
 		const isKey = esColumnaClave(def, c);
 		const auto = esAutoKeyCol(def, c);
-		return {
+		const ui = {
 			key: c.as,
 			label: labelColumna(c, auto, isKey),
 			editable: auto || isKey ? false : c.editable !== false,
@@ -663,7 +872,20 @@ function columnasUi(def) {
 			requiredOnCreate: isKey && !auto,
 			type: inputTypeDe(c),
 		};
-	});
+		if (c.required) ui.required = true;
+		if (c.options || c.lookup) {
+			ui.input = 'select';
+			try {
+				ui.options = (await opcionesDeColumna(c)) || [];
+			} catch (err) {
+				console.warn(`[catalogoSql] opciones ${def.id}.${c.as}:`, err?.message || err);
+				ui.options = [];
+			}
+		} else if (c.search) {
+			ui.input = 'search';
+		}
+		return ui;
+	}));
 	if (def.keyParts?.length) {
 		cols.unshift({
 			key: def.key,
@@ -681,6 +903,15 @@ function keyFieldDe(def) {
 	return def.columns.find((c) => c.name === def.key)?.as || def.key || 'Valor';
 }
 
+async function buscar(id, campo, termino) {
+	const def = porId(id);
+	const c = def.columns.find((x) => x.as === campo || x.name === campo);
+	if (!c?.search || !BUSQUEDAS[c.search]) {
+		throw errorHttp(`El campo ${campo} no admite búsqueda`, 400);
+	}
+	return BUSQUEDAS[c.search](termino);
+}
+
 module.exports = {
 	CATALOGOS,
 	porId,
@@ -689,6 +920,7 @@ module.exports = {
 	crear,
 	actualizar,
 	borrar,
+	buscar,
 	columnasUi,
 	keyFieldDe,
 };
