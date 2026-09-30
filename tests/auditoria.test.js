@@ -106,7 +106,6 @@ test('sin autenticacion central no hay esquema ni historial', async () => {
 	habilitado = false;
 	assert.equal(await auditoria.esquemaListo(), false);
 	assert.deepEqual(await auditoria.listar({ idEmpresa: 1 }), []);
-	await assert.rejects(() => auditoria.asegurarEsquema(), /autenticaci/);
 });
 
 test('listar siempre acota por empresa y aplica los filtros pedidos', async () => {
@@ -132,12 +131,18 @@ test('listar limita el maximo de filas y parsea el detalle', async () => {
 	assert.equal(r[1].actor, null);
 });
 
-test('asegurarEsquema crea imAuditoria (una sola vez aunque se llame en paralelo)', async () => {
+test('el servidor nunca crea ni modifica tablas (la instalacion es explicita)', async () => {
 	reiniciar();
-	await Promise.all([auditoria.asegurarEsquema(), auditoria.asegurarEsquema()]);
-	await auditoria.asegurarEsquema();
-	const creaciones = consultas.filter((c) => /CREATE TABLE IF NOT EXISTS `imAuditoria`/.test(c.sql));
-	assert.equal(creaciones.length, 1);
+	assert.equal(auditoria.asegurarEsquema, undefined);
+	await auditoria.esquemaListo();
+	await auditoria.registrarSeguro({ idEmpresa: 1, modulo: 'M', entidad: 'E', accion: 'A' });
+	await auditoria.listar({ idEmpresa: 1 });
+	const ddl = consultas.filter((c) => /^\s*(CREATE|ALTER|DROP)\b/i.test(c.sql));
+	assert.equal(ddl.length, 0);
+});
+
+test('el DDL de imAuditoria esta disponible para el script de instalacion', () => {
+	assert.match(auditoria.DDL_TABLA, /CREATE TABLE IF NOT EXISTS `imAuditoria`/);
 });
 
 test('el esquema de roles ya no crea una tabla de auditoria propia', () => {

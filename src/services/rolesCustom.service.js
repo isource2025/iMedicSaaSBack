@@ -14,6 +14,7 @@ const { esPermisoRestringido } = require('../utils/permisosDescripciones');
 const v = require('../utils/rolesValidacion');
 const schema = require('./rolesCustomSchema.service');
 const auditoria = require('./auditoria.service');
+const featureFlags = require('./featureFlags.service');
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_ROLES_POR_EMPRESA = 50;
@@ -33,15 +34,30 @@ function error(statusCode, mensaje) {
 	return e;
 }
 
-function habilitado() {
+const FLAG = featureFlags.FLAG_ROLES_PERSONALIZADOS;
+
+/** Interruptor de emergencia (entorno): apaga la gestión de roles en esta instancia. */
+function habilitadoGlobal() {
 	return isAuthCentralEnabled() && String(process.env.ROLES_PERSONALIZADOS_ENABLED || '').toLowerCase() !== 'false';
 }
 
-function exigirHabilitado() {
+/**
+ * Crear/editar/duplicar/eliminar exige: autenticación central, interruptor de
+ * emergencia encendido, esquema INSTALADO (lo instala una persona con
+ * scripts/esquema_roles.js) y la función habilitada para ESA empresa.
+ * Evaluar permisos de roles ya asignados no depende de esto.
+ */
+async function exigirHabilitado(idEmpresa) {
 	if (!isAuthCentralEnabled()) {
 		throw error(409, 'Los roles personalizados requieren la autenticación central');
 	}
-	if (!habilitado()) throw error(503, 'Los roles personalizados están deshabilitados');
+	if (!habilitadoGlobal()) throw error(503, 'Los roles personalizados están deshabilitados');
+	if (!(await schema.esquemaListo())) {
+		throw error(409, 'La gestión de roles personalizados todavía no está instalada en este entorno. Pedile a soporte que la active.');
+	}
+	if (!(await featureFlags.habilitada(idEmpresa, FLAG))) {
+		throw error(403, 'Los roles personalizados no están habilitados para esta clínica. Pedile a soporte que los active.');
+	}
 }
 
 async function consultar(sql, params = []) {
@@ -201,7 +217,7 @@ async function listarMatriz(idEmpresa) {
 	}
 
 	return {
-		soportaPersonalizados: habilitado(),
+		soportaPersonalizados: habilitadoGlobal() && listo && (await featureFlags.habilitada(idEmpresa, FLAG)),
 		esquemaListo: listo,
 		sistema,
 		personalizados,
@@ -265,8 +281,8 @@ function mapearErrorSql(e) {
  * @param {object} [p.origen] datos del rol duplicado (para la auditoría)
  */
 async function crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permisos, origen }) {
-	exigirHabilitado();
 	if (!Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) <= 0) throw error(400, 'Empresa inválida');
+	await exigirHabilitado(idEmpresa);
 
 	const n = v.validarNombre(nombre);
 	if (!n.ok) throw error(400, n.error);
@@ -276,8 +292,6 @@ async function crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permis
 	if (!b.ok) throw error(400, b.error);
 	const perm = v.normalizarPermisos(permisos || [], { permisosActor: actor?.permisos });
 	if (!perm.ok) throw error(400, perm.errores.join('. '));
-
-	await schema.asegurarEsquema();
 
 	const pool = await getAuthCentralPool();
 	const conn = await pool.getConnection();
@@ -345,7 +359,7 @@ async function crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permis
 // ─── Edición ────────────────────────────────────────────────────────────────
 
 async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rolBase, permisos }) {
-	exigirHabilitado();
+	await exigirHabilitado(idEmpresa);
 	const actual = await obtenerRolPropio(idRol, idEmpresa);
 
 	const cambios = {};
@@ -438,7 +452,7 @@ async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rol
 // ─── Duplicar ───────────────────────────────────────────────────────────────
 
 async function duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion }) {
-	exigirHabilitado();
+	await exigirHabilitado(idEmpresa);
 	const id = Number(idOrigen);
 	if (!Number.isFinite(id) || id <= 0) throw error(400, 'Id de rol inválido');
 
@@ -503,7 +517,7 @@ async function contarAsignados(idEmpresa, idRol) {
 }
 
 async function eliminarRol(idRol, { idEmpresa, actor }) {
-	exigirHabilitado();
+	await exigirHabilitado(idEmpresa);
 	const actual = await obtenerRolPropio(idRol, idEmpresa);
 	const asignados = await contarAsignados(idEmpresa, idRol);
 	if (asignados > 0) {

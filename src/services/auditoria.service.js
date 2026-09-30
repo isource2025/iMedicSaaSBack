@@ -13,7 +13,7 @@
  * Para auditar un módulo nuevo alcanza con llamar a `registrar` con su `modulo`;
  * no hay que crear tablas ni migraciones.
  *
- * El esquema es aditivo e idempotente y se crea bajo demanda (`asegurarEsquema`).
+ * La tabla la instala una persona con `scripts/esquema_roles.js`; el servidor sólo la usa.
  */
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
 
@@ -22,7 +22,6 @@ const LIMITE_MAXIMO = 500;
 
 let listo = false;
 let ultimoChequeo = 0;
-let enCurso = null;
 
 async function consultar(sql, params = []) {
 	const pool = await getAuthCentralPool();
@@ -52,8 +51,11 @@ async function esquemaListo() {
 	return listo;
 }
 
-async function crearTabla() {
-	await consultar(`
+/**
+ * DDL de la tabla. Lo instala `scripts/esquema_roles.js` (o el panel de Super Admin):
+ * el servidor NUNCA crea ni modifica tablas por su cuenta.
+ */
+const DDL_TABLA = `
     CREATE TABLE IF NOT EXISTS \`imAuditoria\` (
       \`IdAuditoria\` BIGINT NOT NULL AUTO_INCREMENT,
       \`IdEmpresa\` INT NOT NULL,
@@ -70,29 +72,7 @@ async function crearTabla() {
       KEY \`IX_imAuditoria_Fecha\` (\`IdEmpresa\`, \`Fecha\`),
       KEY \`IX_imAuditoria_Actor\` (\`IdEmpresa\`, \`Actor\`, \`Fecha\`)
     ) ENGINE = InnoDB
-  `);
-}
-
-/** Crea la tabla si falta. Seguro de llamar varias veces y en paralelo. */
-async function asegurarEsquema() {
-	if (!isAuthCentralEnabled()) {
-		const e = new Error('La auditoría requiere la autenticación central');
-		e.statusCode = 409;
-		throw e;
-	}
-	if (listo) return true;
-	if (!enCurso) {
-		enCurso = crearTabla()
-			.then(() => {
-				listo = true;
-				return true;
-			})
-			.finally(() => {
-				enCurso = null;
-			});
-	}
-	return enCurso;
-}
+  `;
 
 // ─── Escritura ──────────────────────────────────────────────────────────────
 
@@ -219,7 +199,6 @@ async function listar({ idEmpresa, modulo, entidad, idEntidad, actor, limite = 1
 function _reiniciarCache() {
 	listo = false;
 	ultimoChequeo = 0;
-	enCurso = null;
 }
 
-module.exports = { esquemaListo, asegurarEsquema, registrar, registrarSeguro, listar, _reiniciarCache };
+module.exports = { DDL_TABLA, esquemaListo, registrar, registrarSeguro, listar, _reiniciarCache };
