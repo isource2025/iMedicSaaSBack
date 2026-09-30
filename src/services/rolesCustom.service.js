@@ -4,7 +4,7 @@
  * - Los roles del sistema (IdRol 1..999, IdEmpresa = 0) son de solo lectura.
  * - Los roles personalizados (IdRol >= 1000) pertenecen a UNA empresa y guardan
  *   sus permisos como códigos en `imRolPermisosCustom`.
- * - Toda modificación queda en `imRolesAuditoria`.
+ * - Toda modificación queda en la auditoría general (`imAuditoria`, Modulo = ROLES).
  *
  * Los errores esperables llevan `statusCode` (400/403/404/409/503).
  */
@@ -13,6 +13,7 @@ const matriz = require('../utils/permisos');
 const { esPermisoRestringido } = require('../utils/permisosDescripciones');
 const v = require('../utils/rolesValidacion');
 const schema = require('./rolesCustomSchema.service');
+const auditoria = require('./auditoria.service');
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_ROLES_POR_EMPRESA = 50;
@@ -85,34 +86,34 @@ async function permisosDeRolCustom(idRol) {
 
 // ─── Auditoría ──────────────────────────────────────────────────────────────
 
+// El historial vive en la auditoría general (`imAuditoria`); acá sólo se marca
+// con las banderas del módulo.
+const MODULO_AUDITORIA = 'ROLES';
+
+/** Evento sobre un rol, dentro de la transacción del cambio. */
 async function registrarAuditoria(conn, { idEmpresa, idRol, accion, actor, detalle }) {
-	const sql = `INSERT INTO imRolesAuditoria (IdEmpresa, IdRol, Accion, Actor, Fecha, Detalle)
-               VALUES (?, ?, ?, ?, NOW(), ?)`;
-	const params = [
-		Number(idEmpresa),
-		idRol == null ? null : Number(idRol),
+	await auditoria.registrar(conn, {
+		idEmpresa,
+		modulo: MODULO_AUDITORIA,
+		entidad: 'ROL',
+		idEntidad: idRol,
 		accion,
-		actor == null ? null : Number(actor),
-		detalle == null ? null : JSON.stringify(detalle),
-	];
-	if (conn) await conn.query(sql, params);
-	else await consultar(sql, params);
+		actor,
+		detalle,
+	});
 }
 
 /** Auditoría de una asignación de roles a una persona (no falla si no hay esquema). */
 async function registrarAsignacion({ idEmpresa, actor, valorPersonal, antes, despues }) {
-	try {
-		if (!(await schema.esquemaListo())) return;
-		await registrarAuditoria(null, {
-			idEmpresa,
-			idRol: null,
-			accion: 'ASIGNAR_ROLES',
-			actor,
-			detalle: { valorPersonal: Number(valorPersonal), antes, despues },
-		});
-	} catch (e) {
-		console.warn('[rolesCustom] auditoría de asignación:', e.message);
-	}
+	await auditoria.registrarSeguro({
+		idEmpresa,
+		modulo: MODULO_AUDITORIA,
+		entidad: 'PERSONAL',
+		idEntidad: valorPersonal,
+		accion: 'ASIGNAR_ROLES',
+		actor,
+		detalle: { valorPersonal: Number(valorPersonal), antes, despues },
+	});
 }
 
 // ─── Consultas ──────────────────────────────────────────────────────────────
@@ -572,27 +573,12 @@ async function auditoriaDeRol(idRol, idEmpresa, limite = 100) {
 	if (!(await schema.esquemaListo())) return [];
 	const id = Number(idRol);
 	if (id >= v.ID_ROL_PERSONALIZADO_MIN) await obtenerRolPropio(id, idEmpresa);
-	const rows = await consultar(
-		`SELECT a.IdAuditoria AS id, a.Accion AS accion, a.Actor AS actor, a.Fecha AS fecha, a.Detalle AS detalle,
-            p.ApellidoNombre AS actorNombre
-     FROM imRolesAuditoria a
-     LEFT JOIN imPersonal p ON p.IdEmpresa = a.IdEmpresa AND p.Valor = a.Actor
-     WHERE a.IdEmpresa = ? AND a.IdRol = ?
-     ORDER BY a.Fecha DESC, a.IdAuditoria DESC
-     LIMIT ?`,
-		[Number(idEmpresa), id, Math.min(Math.max(Number(limite) || 100, 1), 500)],
-	);
-	return rows.map((r) => {
-		let detalle = null;
-		try { detalle = r.detalle ? JSON.parse(r.detalle) : null; } catch (_) { detalle = null; }
-		return {
-			id: Number(r.id),
-			accion: r.accion,
-			actor: r.actor == null ? null : Number(r.actor),
-			actorNombre: String(r.actorNombre || '').trim(),
-			fecha: r.fecha,
-			detalle,
-		};
+	return auditoria.listar({
+		idEmpresa,
+		modulo: MODULO_AUDITORIA,
+		entidad: 'ROL',
+		idEntidad: id,
+		limite,
 	});
 }
 

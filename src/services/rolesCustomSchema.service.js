@@ -5,13 +5,15 @@
  *   - imRoles: columnas nuevas con valores por defecto (los roles existentes
  *     quedan como "del sistema": IdEmpresa = 0).
  *   - imRolPermisosCustom: permisos de cada rol personalizado (por código).
- *   - imRolesAuditoria: quién cambió qué.
+ *   - imAuditoria (auditoria.service): historial general del sistema; los roles
+ *     sólo lo usan con la bandeja Modulo = ROLES, no tienen tabla propia.
  *
  * La migración NO se ejecuta al arrancar: sólo cuando un administrador crea el
  * primer rol personalizado (`asegurarEsquema`). Mientras no exista, todo el
  * sistema usa las consultas de siempre (`esquemaListo()` devuelve false).
  */
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
+const auditoria = require('./auditoria.service');
 
 const REVISAR_CADA_MS = 60 * 1000;
 
@@ -59,7 +61,7 @@ async function esquemaListo() {
 			(await existeColumna('imRoles', 'IdEmpresa')) &&
 			(await existeColumna('imRoles', 'RolBase')) &&
 			(await existeTabla('imRolPermisosCustom')) &&
-			(await existeTabla('imRolesAuditoria'));
+			(await auditoria.esquemaListo());
 		listo = !!ok;
 	} catch (e) {
 		console.warn('[rolesCustomSchema] no se pudo verificar el esquema:', e.message);
@@ -126,20 +128,8 @@ async function migrar() {
     ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
   `);
 
-	// 4) Auditoría de cambios de roles y de asignaciones
-	await consultar(`
-    CREATE TABLE IF NOT EXISTS \`imRolesAuditoria\` (
-      \`IdAuditoria\` BIGINT NOT NULL AUTO_INCREMENT,
-      \`IdEmpresa\` INT NOT NULL,
-      \`IdRol\` INT NULL,
-      \`Accion\` VARCHAR(30) NOT NULL,
-      \`Actor\` INT NULL,
-      \`Fecha\` DATETIME NOT NULL,
-      \`Detalle\` TEXT NULL,
-      PRIMARY KEY (\`IdAuditoria\`),
-      KEY \`IX_imRolesAuditoria_Rol\` (\`IdEmpresa\`, \`IdRol\`, \`Fecha\`)
-    ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
-  `);
+	// 4) Auditoría general del sistema (imAuditoria), compartida por todos los módulos
+	await auditoria.asegurarEsquema();
 }
 
 /** Crea el esquema si falta. Seguro de llamar varias veces y en paralelo. */
