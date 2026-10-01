@@ -13,7 +13,9 @@
  * Diferencias permitidas (cambios intencionales): sólo permisos AGREGADOS
  *   - INTERNACION.MOVIMIENTOS.TRASLADAR
  *   - CONFIGURACION.ROLES.*
- * Cualquier permiso quitado o agregado fuera de esa lista es una VIOLACIÓN.
+ * Permisos QUITADOS permitidos (decisión de producto, commit 3819759):
+ *   - ADMINISTRATIVO pierde REPORTES.FACTURACION.VER (la producción del hospital queda para ADMIN)
+ * Cualquier permiso quitado o agregado fuera de esas listas es una VIOLACIÓN.
  * Sale con código 1 si hay violaciones.
  */
 const path = require('path');
@@ -37,6 +39,8 @@ if (!process.env.MYSQL_PUBLIC_URL) {
 	process.exit(2);
 }
 
+const PERMITIDOS_QUITADOS_POR_ROL = { ADMINISTRATIVO: new Set(['REPORTES.FACTURACION.VER']) };
+const PERMITIDOS_QUITADOS = new Set(Object.values(PERMITIDOS_QUITADOS_POR_ROL).flatMap((s) => [...s]));
 const PERMITIDOS_AGREGADOS = (c) =>
 	c === 'INTERNACION.MOVIMIENTOS.TRASLADAR' || c.startsWith('CONFIGURACION.ROLES.');
 
@@ -99,6 +103,33 @@ function cargar(raiz) {
 const enEmpresa = (t, idEmpresa, fn) => t.ctx.runWithTenant(idEmpresa, fn);
 const firma = (o) => JSON.stringify(o);
 
+// Campos que el codigo nuevo AGREGA al catalogo (informativos, aditivos). Se informan y se
+// ignoran en la comparacion; cualquier otra diferencia (valores, campos que faltan) falla.
+const camposAgregados = new Set();
+function clavesDe(o, acc = new Set()) {
+	if (Array.isArray(o)) o.forEach((x) => clavesDe(x, acc));
+	else if (o && typeof o === 'object') {
+		for (const [k, v] of Object.entries(o)) {
+			acc.add(k);
+			clavesDe(v, acc);
+		}
+	}
+	return acc;
+}
+function sinClaves(o, quitar) {
+	if (Array.isArray(o)) return o.map((x) => sinClaves(x, quitar));
+	if (o && typeof o === 'object') {
+		return Object.fromEntries(Object.entries(o).filter(([k]) => !quitar.has(k)).map(([k, v]) => [k, sinClaves(v, quitar)]));
+	}
+	return o;
+}
+function firmaComparable(viejo, nuevo) {
+	const kv = clavesDe(viejo);
+	const extra = new Set([...clavesDe(nuevo)].filter((k) => !kv.has(k)));
+	extra.forEach((k) => camposAgregados.add(k));
+	return [firma(viejo), firma(sinClaves(nuevo, extra))];
+}
+
 async function enParalelo(items, n, fn) {
 	let i = 0;
 	await Promise.all(
@@ -132,10 +163,11 @@ async function enParalelo(items, n, fn) {
 		const a = new Set(viejo.matriz.permisosDeRol(r));
 		const b = new Set(nuevo.matriz.permisosDeRol(r));
 		const agregados = [...b].filter((c) => !a.has(c));
-		const quitados = [...a].filter((c) => !b.has(c));
+		const quitadosTodos = [...a].filter((c) => !b.has(c));
+		const quitados = quitadosTodos.filter((c) => !PERMITIDOS_QUITADOS_POR_ROL[r]?.has(c));
 		const fuera = agregados.filter((c) => !PERMITIDOS_AGREGADOS(c));
 		console.log(
-			`  ${r.padEnd(15)} quitados: ${quitados.length}  agregados: ${agregados.length}` +
+			`  ${r.padEnd(15)} quitados: ${quitadosTodos.length}${quitadosTodos.length ? ` [${quitadosTodos.join(', ')}; previstos: ${quitadosTodos.length - quitados.length}]` : ''}  agregados: ${agregados.length}` +
 				(agregados.length ? `  (${agregados.join(', ')})` : ''),
 		);
 		ok(quitados.length === 0, `${r}: se QUITARON permisos: ${quitados.join(', ')}`);
@@ -174,7 +206,7 @@ async function enParalelo(items, n, fn) {
 		const b = await enEmpresa(nuevo, u.e, () => nuevo.permisos.permisosDeUsuario(u.v));
 		const pa = new Set(a.permisos || []);
 		const pb = new Set(b.permisos || []);
-		const quitados = [...pa].filter((c) => !pb.has(c));
+		const quitados = [...pa].filter((c) => !pb.has(c) && !PERMITIDOS_QUITADOS.has(c));
 		const agregados = [...pb].filter((c) => !pa.has(c));
 		const fuera = agregados.filter((c) => !PERMITIDOS_AGREGADOS(c));
 		const mismoRol = firma(a.rol) === firma(b.rol) && firma(a.roles) === firma(b.roles);
@@ -236,14 +268,17 @@ async function enParalelo(items, n, fn) {
 	for (const e of empresas) {
 		const a = await enEmpresa(viejo, e, () => viejo.roles.listarRoles());
 		const b = await enEmpresa(nuevo, e, () => nuevo.roles.listarRoles());
-		if (ok(firma(a) === firma(b), `listarRoles difiere en empresa ${e}`)) catIguales += 1;
+		const [fa, fb] = firmaComparable(a, b);
+		if (ok(fa === fb, `listarRoles difiere en empresa ${e}`)) catIguales += 1;
 		for (let id = 1; id <= 7; id++) {
 			const ra = await enEmpresa(viejo, e, () => viejo.roles.obtenerRolPorId(id));
 			const rb = await enEmpresa(nuevo, e, () => nuevo.roles.obtenerRolPorId(id));
-			ok(firma(ra) === firma(rb), `obtenerRolPorId(${id}) difiere en empresa ${e}`);
+			const [fra, frb] = firmaComparable(ra, rb);
+			ok(fra === frb, `obtenerRolPorId(${id}) difiere en empresa ${e}`);
 		}
 	}
 	console.log(`  Empresas con catálogo idéntico: ${catIguales}/${empresas.length}`);
+	if (camposAgregados.size) console.log(`  Campos agregados por el código nuevo (aditivos, ignorados en la comparación): ${[...camposAgregados].join(', ')}`);
 
 	// 4) Nada intentó escribir
 	if (ddlOmitidos.size) {
