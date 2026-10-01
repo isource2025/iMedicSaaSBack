@@ -33,4 +33,7 @@ router.get('/camas/estado-actual', requirePermiso('INTERNACION.CAMAS.VER'), obte
 router.get('/ambulatorio', requirePermiso('TURNOS.TABLA.VER'), obtenerAnaliticaAmbulatoria);
 router.get('/ambulatorio/resumen-hoy', requirePermiso('DASHBOARD.INICIO.VER'), obtenerResumenAmbulatorioHoy);
 
+// Producción del hospital (facturado / liquidado por cobertura, sector, profesional...).
+router.use('/produccion', require('./produccionHospital.routes'));
+
 module.exports = router;

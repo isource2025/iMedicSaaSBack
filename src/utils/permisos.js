@@ -329,7 +329,9 @@ const PLANTILLAS = Object.freeze({
 		..._soloVer('INTERNACION', ['AUDITORIA_HC']),
 		..._soloVer('FACTURACION'),
 		..._soloVer('ALMACEN'),
-		..._soloVer('REPORTES'),
+		// Reportes → Facturación (producción del hospital) muestra montos por
+		// profesional y cobertura: queda reservado a ADMIN.
+		..._soloVer('REPORTES', ['FACTURACION']),
 		'CONFIGURACION.PERSONAL.VER',
 
 		..._todas('ADMISION', 'PACIENTES'),
