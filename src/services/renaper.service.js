@@ -70,7 +70,7 @@ async function fetchJSON(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
 					}
 					if (!text) return resolve(null);
 					try {
-						resolve(repararStringsDeep(JSON.parse(text)));
+						resolve(repararStringsDeep(JSON.parse(text), 0, { restaurarEnie: true }));
 					} catch {
 						resolve(text);
 					}
@@ -348,7 +348,7 @@ async function searchByDniViaProxy(NumeroDocumento, opts = {}) {
 		if (!resp.ok || !body?.success || !body?.persona) {
 			return { ok: false, reason: body?.reason || 'not_found' };
 		}
-		const p = repararStringsDeep(body.persona);
+		const p = repararStringsDeep(body.persona, 0, { restaurarEnie: true });
 		const sexoDetectado =
 			body.sexoDetectado ||
 			(p.sexo === 'F' || p.sexo === 'M' ? p.sexo : null) ||

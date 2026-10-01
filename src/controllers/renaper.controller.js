@@ -1,11 +1,18 @@
 const renaperService = require('../services/renaper.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
-const { repararTextoClarionAnsi, repararStringsDeep } = require('../utils/clarionText');
+const {
+	repararTextoClarionAnsi: repararBase,
+	repararStringsDeep,
+	restaurarEnieDePersona,
+} = require('../utils/clarionText');
+
+/** Texto de persona (RENAPER): repara mojibake y recupera Ñ perdida (U+FFFD). */
+const repararTextoClarionAnsi = (v) => restaurarEnieDePersona(repararBase(v));
 
 /** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER. */
 function normalizePersonaForClient(raw) {
 	if (!raw || typeof raw !== 'object') return raw;
-	const fixed = repararStringsDeep(raw);
+	const fixed = repararStringsDeep(raw, 0, { restaurarEnie: true });
 	const apellido = repararTextoClarionAnsi(String(fixed.apellido ?? fixed.Apellido ?? '').trim());
 	const nombres = repararTextoClarionAnsi(
 		String(fixed.nombres ?? fixed.Nombres ?? fixed.nombre ?? fixed.Nombre ?? '').trim(),

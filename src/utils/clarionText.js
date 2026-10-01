@@ -14,28 +14,68 @@ const SPANISH_CHARS = /[ñÑáéíóúÁÉÍÓÚüÜ¿¡]/;
  * @param {Buffer} buf
  * @returns {string}
  */
+/**
+ * "ï¿½" = los 3 bytes UTF-8 de U+FFFD (EF BF BD) leídos como Latin-1/CP1252.
+ * Es la firma de un carácter ya perdido río arriba que se decodificó dos veces.
+ */
+const FFFD_LEIDO_COMO_LATIN1 = /\u00EF\u00BF\u00BD/g;
+
+/** UTF-8 estricto: devuelve null si el buffer NO es UTF-8 válido. */
+function decodeUtf8Estricto(buf) {
+	try {
+		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
+	} catch {
+		return null;
+	}
+}
+
 function decodeBufferPreferUtf8(buf) {
 	if (!Buffer.isBuffer(buf) || buf.length === 0) return '';
-	const utf8 = buf.toString('utf8');
-	if (!utf8.includes('\uFFFD')) return utf8;
 
+	// 1) Si es UTF-8 válido, ES UTF-8 (aunque traiga un U+FFFD legítimo del origen).
+	//    Antes se reintentaba como CP1252 y EF BF BD terminaba como "ï¿½".
+	const estricto = decodeUtf8Estricto(buf);
+	if (estricto !== null) return estricto;
+
+	// 2) No es UTF-8 válido: es ANSI (Clarion / APIs latin1) → Windows-1252.
 	try {
-		const cp1252 = iconv.decode(buf, 'windows-1252');
-		if (!cp1252.includes('\uFFFD') && (SPANISH_CHARS.test(cp1252) || cp1252.length >= utf8.length)) {
-			return cp1252;
+		return iconv.decode(buf, 'windows-1252');
+	} catch {
+		return buf.toString('latin1');
+	}
+}
+
+/**
+ * Bytes CP1252 de un string cuyos code units son "bytes leídos como CP1252/Latin-1"
+ * (incluye ‘ ’ “ ” … del rango 0x80-0x9F). null si algún carácter no encaja.
+ */
+function bytesCp1252(s) {
+	const out = Buffer.alloc(s.length);
+	for (let i = 0; i < s.length; i++) {
+		const code = s.charCodeAt(i);
+		if (code <= 0xff) {
+			out[i] = code;
+			continue;
 		}
-	} catch {
-		/* keep */
+		const b = iconv.encode(s[i], 'windows-1252');
+		if (b.length !== 1 || iconv.decode(b, 'windows-1252') !== s[i]) return null;
+		out[i] = b[0];
 	}
+	return out;
+}
 
-	try {
-		const latin1 = buf.toString('latin1');
-		if (SPANISH_CHARS.test(latin1)) return latin1;
-	} catch {
-		/* keep */
-	}
-
-	return utf8;
+/**
+ * Nombres/domicilios de personas (RENAPER): cuando el origen ya perdió la Ñ y mandó U+FFFD,
+ * la Ñ es prácticamente el único caso posible entre vocal y vocal/fin de palabra
+ * (ACU�A, NU�EZ, ORGO�). No toca "ATENCI�N", "MART�N", "PA�S" (vocal + FFFD + consonante).
+ * @param {string} s
+ */
+function restaurarEnieDePersona(s) {
+	if (typeof s !== 'string' || !s.includes('\uFFFD')) return s;
+	return s.replace(
+		/([AEIOUaeiou\u00C1\u00C9\u00CD\u00D3\u00DA\u00E1\u00E9\u00ED\u00F3\u00FA])\uFFFD(?![bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])/g,
+		(_m, prev) => prev + (prev === prev.toUpperCase() ? '\u00D1' : '\u00F1'),
+	);
 }
 
 /**
@@ -86,30 +126,21 @@ function repararTextoClarionAnsi(texto) {
 
 	s = decodeMultipartFilename(s);
 
-	// Si quedó U+FFFD, reinterpreta code units como latin1→utf8 (a veces ayuda con dobles)
-	if (s.includes('\uFFFD')) {
-		try {
-			const asBuf = Buffer.from(s, 'binary');
-			const retried = decodeBufferPreferUtf8(asBuf);
-			if (!retried.includes('\uFFFD') && SPANISH_CHARS.test(retried)) {
-				s = retried;
-			}
-		} catch {
-			/* keep */
-		}
-	}
-
 	// Mojibake típico "ACUÃ'A" / "ACUÃ?A" si decodeMultipart no alcanzó
 	if (/Ã[\u0080-\u00FF'?‘’]/.test(s) || /Ã./.test(s)) {
 		try {
-			const decoded = Buffer.from(s, 'latin1').toString('utf8');
-			if (!decoded.includes('\uFFFD') && (SPANISH_CHARS.test(decoded) || decoded.length < s.length)) {
+			const bytes = bytesCp1252(s);
+			const decoded = bytes ? decodeUtf8Estricto(bytes) : null;
+			if (decoded !== null && !decoded.includes('\uFFFD') && (SPANISH_CHARS.test(decoded) || decoded.length < s.length)) {
 				s = decoded;
 			}
 		} catch {
 			/* keep */
 		}
 	}
+
+	// "ï¿½" (U+FFFD mal decodificado) → U+FFFD real; nunca dejar esa basura visible ni persistirla.
+	s = s.replace(FFFD_LEIDO_COMO_LATIN1, '\uFFFD');
 
 	try {
 		return s.normalize('NFC');
@@ -119,26 +150,40 @@ function repararTextoClarionAnsi(texto) {
 }
 
 /** Recorre objetos/arrays y repara strings que lucen corruptos (lecturas SQL / JSON). */
-function repararStringsDeep(value, depth = 0) {
+function repararStringsDeep(value, depth = 0, opts = {}) {
 	if (depth > 8) return value;
 	if (typeof value === 'string') {
-		if (!/Ã|Â|\uFFFD|[\u0080-\u009F]/.test(value)) return value;
-		return repararTextoClarionAnsi(value);
+		if (!/Ã|Â|\u00EF\u00BF\u00BD|\uFFFD|[\u0080-\u009F]/.test(value)) return value;
+		const fixed = repararTextoClarionAnsi(value);
+		return opts.restaurarEnie ? restaurarEnieDePersona(fixed) : fixed;
 	}
 	if (Array.isArray(value)) {
-		return value.map((v) => repararStringsDeep(v, depth + 1));
+		return value.map((v) => repararStringsDeep(v, depth + 1, opts));
 	}
 	if (value && typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value)) {
 		const out = {};
 		for (const [k, v] of Object.entries(value)) {
-			out[k] = repararStringsDeep(v, depth + 1);
+			out[k] = repararStringsDeep(v, depth + 1, opts);
 		}
 		return out;
 	}
 	return value;
 }
 
+/**
+ * Valor de texto que va a la BD: repara mojibake y elimina U+FFFD / "ï¿½"
+ * (nunca persistir basura de codificación, venga de donde venga el request).
+ * @param {unknown} v
+ */
+function sanitizarTextoParaBd(v) {
+	if (typeof v !== 'string') return v;
+	if (!/Ã|Â|\u00EF\u00BF\u00BD|\uFFFD/.test(v)) return v;
+	return repararTextoClarionAnsi(v).replace(/\uFFFD/g, '');
+}
+
 module.exports = {
+	sanitizarTextoParaBd,
+	restaurarEnieDePersona,
 	decodeBufferPreferUtf8,
 	normalizarTextoParaClarionAnsi,
 	repararTextoClarionAnsi,

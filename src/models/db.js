@@ -6,7 +6,7 @@ const { sql, connectDB } = require('../config/database');
 const { getTenantPool } = require('../config/tenantDb');
 const { getTenantId } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
-const { repararStringsDeep } = require('../utils/clarionText');
+const { repararStringsDeep, sanitizarTextoParaBd } = require('../utils/clarionText');
 
 async function resolvePool(forcePlatform = false) {
   if (forcePlatform) return connectDB();
@@ -83,17 +83,20 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
           console.log(`Añadiendo parámetro ${nombreParametro}:`, parametro.value, `Tipo: ${parametro.type || 'auto'}`);
         }
 
+        // Nunca persistir mojibake / U+FFFD / "ï¿½" (aplica a TODA escritura de texto)
+        const valorParam = sanitizarTextoParaBd(parametro.value);
+
         // Si se especifica un tipo, usarlo; si no, dejar que SQL Server lo infiera
         if (parametro.type) {
           const typeName = typeof parametro.type === 'string' ? parametro.type : '';
-          const emptyFixed = FIXED_LENGTH_TYPES.has(typeName) && isEmptySqlValue(parametro.value);
+          const emptyFixed = FIXED_LENGTH_TYPES.has(typeName) && isEmptySqlValue(valorParam);
           request.input(
             nombreParametro,
-            resolveMssqlType(parametro),
-            emptyFixed ? null : parametro.value,
+            resolveMssqlType({ ...parametro, value: valorParam }),
+            emptyFixed ? null : valorParam,
           );
         } else {
-          request.input(nombreParametro, parametro.value === '' ? null : parametro.value);
+          request.input(nombreParametro, valorParam === '' ? null : valorParam);
         }
         
         const regex = new RegExp(`@p${indice}\\b`, 'g');
