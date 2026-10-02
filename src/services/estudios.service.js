@@ -993,9 +993,46 @@ async function expandCodigosReceptor(sectorReceptor) {
 	return out;
 }
 
-async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
+/**
+ * @param {string[]|null} [prefijos] Si viene (solicitud con servicio elegido) limita el catálogo a las
+ *   prácticas cuyo código empieza con alguno de esos prefijos y permite listar sin texto.
+ *   Sin prefijos el comportamiento es el de siempre (mínimo 2 caracteres, todo el catálogo).
+ */
+async function buscarTiposPedidosEstudios({ q, limit = 30, prefijos = null }) {
 	const term = String(q || '').trim();
 	const lim = Math.min(Math.max(Number(limit) || 30, 1), 100);
+	const porServicio = Array.isArray(prefijos);
+	if (porServicio) {
+		const seguros = prefijos.map((p) => String(p).trim()).filter((p) => /^\d{1,4}$/.test(p));
+		if (!seguros.length) return [];
+		if (term.length === 1) return [];
+		const like = `%${term}%`;
+		const filas = await executeQuery(
+			`SELECT TOP ${lim}
+			        IdTipoPedido,
+			        RTRIM(LTRIM(DescPractica)) AS descripcion,
+			        IdPractica AS idPractica
+			 FROM dbo.imTiposPedidosEstudios
+			 WHERE (IdTipoPedido IS NULL OR IdTipoPedido <> 33)
+			   AND (${seguros.map((p) => `CAST(IdPractica AS VARCHAR(20)) LIKE '${p}%'`).join(' OR ')})
+			   ${
+					term
+						? `AND (
+			     DescPractica LIKE @p0
+			     OR CAST(IdPractica AS VARCHAR(20)) LIKE @p0
+			     OR CAST(IdTipoPedido AS VARCHAR(20)) LIKE @p0
+			   )`
+						: ''
+				}
+			 ORDER BY DescPractica`,
+			term ? [{ value: like, type: 'VarChar' }] : [],
+		);
+		return filas.map((r) => ({
+			idTipoPedido: r.IdTipoPedido,
+			descripcion: r.descripcion,
+			idPractica: r.idPractica,
+		}));
+	}
 	if (term.length < 2) return [];
 	const like = `%${term}%`;
 	const rows = await executeQuery(

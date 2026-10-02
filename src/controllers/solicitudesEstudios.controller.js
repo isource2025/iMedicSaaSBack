@@ -235,6 +235,15 @@ async function cumplir(req, res) {
 /** Catálogo = imTiposPedidosEstudios (agrupador de prácticas nomencladas y moduladas). */
 async function buscarTipos(req, res) {
 	try {
+		const servicio = String(req.query.servicio || '').trim();
+		if (servicio) {
+			const data = await svc.buscarTiposDeServicio({
+				q: req.query.q,
+				limit: req.query.limit,
+				servicio,
+			});
+			return res.json({ success: true, data });
+		}
 		const data = await estudiosService.buscarTiposPedidosEstudios({
 			q: req.query.q,
 			limit: req.query.limit,

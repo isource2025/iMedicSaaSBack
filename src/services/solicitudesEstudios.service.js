@@ -19,6 +19,7 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { createTenantOnce } = require('../context/tenantCache');
+const { getTenantId } = require('../context/tenantContext');
 const est = require('./estudios.service');
 const {
 	convertirFechaAClarion,
@@ -515,6 +516,93 @@ function _req(tx, inputs = []) {
 	return r;
 }
 
+/* ---- Catálogo por servicio: un servicio solo puede recibir las prácticas que le corresponden ---- */
+
+const PREFIJOS_TTL_MS = 10 * 60 * 1000;
+const _cachePrefijos = new Map();
+// El historial solo cuenta si el prefijo es relevante para el servicio (evita arrastrar pedidos mal cargados).
+const HIST_MIN_PEDIDOS = 10;
+const HIST_MIN_PROPORCION = 0.05;
+
+function _perteneceAPrefijos(codPractica, prefijos) {
+	const d = String(codPractica ?? '').replace(/\D/g, '');
+	return d.length >= 3 && prefijos.some((p) => d.startsWith(p));
+}
+
+/**
+ * Prefijos de práctica que corresponden a un servicio:
+ *  - los configurados en imServicios.PrefijosPractica, más
+ *  - los que ese servicio recibe de verdad en el historial (>= 10 pedidos y >= 5% de los suyos).
+ * Devuelve [] si no se puede determinar.
+ */
+async function prefijosDeServicio(servicio) {
+	const code = String(servicio || '').trim();
+	if (!code) return [];
+	const key = `${getTenantId() ?? 'default'}|${code.toUpperCase()}`;
+	const hit = _cachePrefijos.get(key);
+	if (hit && hit.exp > Date.now()) return hit.prefijos;
+
+	const set = new Set();
+	try {
+		const rows = await executeQuery(
+			`SELECT RTRIM(LTRIM(ISNULL(CAST(PrefijosPractica AS VARCHAR(200)), ''))) AS pref
+			 FROM dbo.imServicios WHERE RTRIM(LTRIM(Valor)) = @p0`,
+			[{ value: code, type: 'VarChar' }],
+		);
+		for (const r of rows || []) {
+			for (const p of String(r.pref || '').split(',')) {
+				const v = p.trim();
+				if (/^\d{1,4}$/.test(v)) set.add(v);
+			}
+		}
+	} catch {
+		/* sin imServicios.PrefijosPractica */
+	}
+	try {
+		const rows = await executeQuery(
+			`SELECT LEFT(CAST(IdPractica AS VARCHAR(20)), 2) AS pref, COUNT(*) AS n
+			 FROM dbo.imPedidosEstudios
+			 WHERE IdSectorReceptor = @p0 AND IdPractica >= 100000
+			 GROUP BY LEFT(CAST(IdPractica AS VARCHAR(20)), 2)`,
+			[{ value: est._padSector(code), type: 'VarChar' }],
+		);
+		const total = (rows || []).reduce((n, r) => n + (Number(r.n) || 0), 0);
+		for (const r of rows || []) {
+			const n = Number(r.n) || 0;
+			if (n >= HIST_MIN_PEDIDOS && total > 0 && n / total >= HIST_MIN_PROPORCION) {
+				set.add(String(r.pref).trim());
+			}
+		}
+	} catch {
+		/* sin historial */
+	}
+	const prefijos = Array.from(set);
+	_cachePrefijos.set(key, { exp: Date.now() + PREFIJOS_TTL_MS, prefijos });
+	return prefijos;
+}
+
+/** Catálogo (imTiposPedidosEstudios) restringido a lo que realiza el servicio elegido. */
+async function buscarTiposDeServicio({ q, limit, servicio }) {
+	const prefijos = await prefijosDeServicio(servicio);
+	return est.buscarTiposPedidosEstudios({ q, limit, prefijos });
+}
+
+/** Rechaza prácticas que no corresponden al servicio destino (si se puede determinar). */
+async function _validarPracticasDelServicio(servicio, practicas) {
+	const prefijos = await prefijosDeServicio(servicio);
+	if (!prefijos.length) return;
+	const fuera = (practicas || []).filter((p) => !_perteneceAPrefijos(p.idPractica, prefijos));
+	if (fuera.length) {
+		const nombres = fuera
+			.slice(0, 3)
+			.map((p) => p.descripcion || p.idPractica)
+			.join(', ');
+		throw _httpError(
+			`Los estudios deben corresponder al servicio destino (${String(servicio).trim()}). No corresponden: ${nombres}${fuera.length > 3 ? '…' : ''}`,
+		);
+	}
+}
+
 async function _resolverItemsAlta(items) {
 	const lista = Array.isArray(items) ? items : [];
 	if (!lista.length) throw _httpError('Seleccione al menos un estudio');
@@ -601,6 +689,7 @@ async function crearSolicitud({
 	if (!String(idSectorReceptor || '').trim()) throw _httpError('El servicio destino es obligatorio');
 
 	const resueltos = await _resolverItemsAlta(items);
+	await _validarPracticasDelServicio(idSectorReceptor, resueltos);
 	const cab = {
 		idVisita: visita,
 		matricula,
@@ -937,6 +1026,12 @@ async function actualizarSolicitud({
 	}
 	const nuevos = cambiaItems ? await _resolverItemsAlta(items) : null;
 	const sectorRec = cambiaReceptor ? est._padSector(idSectorReceptor) : null;
+	// Pedidos anteriores (sin cabecera) se toleran como estaban; lo demás debe respetar el servicio.
+	if (!legacy && (nuevos || cambiaReceptor)) {
+		const servicioFinal = sectorRec || actuales[0].IdSectorReceptor;
+		const practicas = nuevos || actuales.map((i) => ({ idPractica: i.IdPractica }));
+		await _validarPracticasDelServicio(servicioFinal, practicas);
+	}
 
 	await _tx(async (tx) => {
 		await _req(tx, [
@@ -1032,6 +1127,8 @@ module.exports = {
 	aplicarEsquema,
 	ensureSchema,
 	crearSolicitud,
+	prefijosDeServicio,
+	buscarTiposDeServicio,
 	obtenerSolicitud,
 	listarPorVisita,
 	listarPendientes,
