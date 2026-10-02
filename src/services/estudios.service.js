@@ -445,7 +445,16 @@ const SELECT_PEDIDO = `
   END AS UbicacionCama
 `;
 
-const FROM_PEDIDO = `
+/**
+ * FROM de pedidos. `coincidirPractica` (solicitudes multi-práctica): cuando varios pedidos
+ * comparten un mismo protocolo hay N filas en imFacPracticas; se prefiere la fila de la
+ * práctica del propio pedido. Con false el SQL es idéntico al histórico.
+ */
+function _fromPedido(coincidirPractica) {
+	const ordenPractica = coincidirPractica
+		? 'CASE WHEN fac.Practica = pe.IdPractica THEN 0 ELSE 1 END,'
+		: '';
+	return `
   FROM dbo.imPedidosEstudios pe
   OUTER APPLY (
     SELECT TOP 1 LTRIM(RTRIM(ISNULL(t.DescPractica, ''))) AS DescPractica
@@ -511,6 +520,7 @@ const FROM_PEDIDO = `
     LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
     WHERE pe.IdProtocolo > 0 AND fac.IdProtocolo = pe.IdProtocolo
     ORDER BY
+      ${ordenPractica}
       CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
       fprof.IDFacProfesional
   ) realz
@@ -574,6 +584,10 @@ const FROM_PEDIDO = `
     END
   ))
 `;
+}
+
+const FROM_PEDIDO = _fromPedido(false);
+const FROM_PEDIDO_SOLICITUD = _fromPedido(true);
 
 /** Tabla SaaS: un solo operador puede tomar un pedido (PK = IdPedido). */
 const ensureTomaTable = createTenantOnce(async () => {
@@ -1710,4 +1724,10 @@ module.exports = {
 	rtfToPlain,
 	_padSector,
 	ensureTomaTable,
+	// Compartidos con solicitudesEstudios.service (función nueva multi-práctica).
+	SELECT_PEDIDO,
+	FROM_PEDIDO_SOLICITUD,
+	mapPedidoRow,
+	completarLocalidades: _completarLocalidades,
+	ahoraWallArgentina: _ahoraWallArgentina,
 };

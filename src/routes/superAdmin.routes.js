@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const ctrl = require('../controllers/superAdmin.controller');
+const solicitudesEstudiosCtrl = require('../controllers/solicitudesEstudios.controller');
 
 router.use(requireAuth);
 
@@ -30,6 +31,9 @@ router.post(
 	ctrl.syncCatalogosDesdeFisico,
 );
 router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.eliminarEmpresa);
+// Migración aditiva de solicitudes de estudios multi-práctica (diagnóstico / aplicar) en la BD de la empresa.
+router.get('/empresas/:id/migraciones/solicitudes-estudios', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), solicitudesEstudiosCtrl.estadoEsquemaEmpresa);
+router.post('/empresas/:id/migraciones/solicitudes-estudios', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), solicitudesEstudiosCtrl.aplicarEsquemaEmpresa);
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
 router.put('/empresas/:id/onboarding', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarOnboarding);
 router.put('/empresas/:id/suscripcion', requirePermiso('PLATAFORMA.COBRANZA.GESTIONAR'), ctrl.actualizarSuscripcion);
