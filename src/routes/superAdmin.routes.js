@@ -33,6 +33,7 @@ router.post(
 router.delete('/empresas/:id', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), ctrl.eliminarEmpresa);
 // Migración aditiva de solicitudes de estudios multi-práctica (diagnóstico / aplicar) en la BD de la empresa.
 router.get('/empresas/:id/migraciones/solicitudes-estudios', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), solicitudesEstudiosCtrl.estadoEsquemaEmpresa);
+router.get('/empresas/:id/diagnostico/estudios-laboratorio', requirePermiso('PLATAFORMA.EMPRESAS.VER'), solicitudesEstudiosCtrl.diagnosticoLaboratorioEmpresa);
 router.post('/empresas/:id/migraciones/solicitudes-estudios', requirePermiso('PLATAFORMA.EMPRESAS.EDITAR'), solicitudesEstudiosCtrl.aplicarEsquemaEmpresa);
 router.put('/empresas/:id/packs', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarPacks);
 router.put('/empresas/:id/onboarding', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarOnboarding);

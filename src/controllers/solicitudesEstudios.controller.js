@@ -1,4 +1,5 @@
 const svc = require('../services/solicitudesEstudios.service');
+const diagnosticoEstudios = require('../services/diagnosticoEstudios.service');
 const estudiosService = require('../services/estudios.service');
 const { runWithTenant } = require('../context/tenantContext');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
@@ -279,6 +280,17 @@ async function estadoEsquemaEmpresa(req, res) {
 	}
 }
 
+// Solo lectura: conteos agregados de estudios/laboratorio de la empresa (sin datos de pacientes).
+async function diagnosticoLaboratorioEmpresa(req, res) {
+	try {
+		const id = _idEmpresaParam(req);
+		const data = await runWithTenant(id, () => diagnosticoEstudios.diagnosticoLaboratorio({ codigo: req.query?.codigo }));
+		return res.json({ success: true, data });
+	} catch (err) {
+		return _err(res, err);
+	}
+}
+
 async function aplicarEsquemaEmpresa(req, res) {
 	try {
 		const id = _idEmpresaParam(req);
@@ -313,4 +325,5 @@ module.exports = {
 	listarServicios,
 	estadoEsquemaEmpresa,
 	aplicarEsquemaEmpresa,
+	diagnosticoLaboratorioEmpresa,
 };
