@@ -2,6 +2,7 @@ const { executeQuery } = require('../models/db');
 const hciService = require('./hci.service');
 const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina, horaClarionAhoraArgentina } = require('../utils/dateUtils');
 const { calcularIMC } = require('../utils/antropometria');
+const { resolverPresionMedia } = require('../utils/presionArterial');
 
 /**
  * Servicio integrado para Signos Vitales
@@ -146,7 +147,9 @@ class SignosVitalesService {
       if (medibles.temperatura) datosControl.Axilar = medibles.temperatura;
       if (medibles.presionMax) datosControl.Maximo = medibles.presionMax;
       if (medibles.presionMin) datosControl.Minimo = medibles.presionMin;
-      if (medibles.presionMedia) datosControl.PAMedia = medibles.presionMedia;
+      // PAMedia se calcula con máx/mín; si no hay ambas se conserva la informada
+      const presionMedia = resolverPresionMedia(medibles);
+      if (presionMedia > 0) datosControl.PAMedia = presionMedia;
       if (medibles.saturacion) datosControl.Saturometria = medibles.saturacion;
       if (medibles.glucemia) datosControl.Hgt = medibles.glucemia;
       if (medibles.peso) datosControl.Peso = medibles.peso;

@@ -16,6 +16,7 @@ const {
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { conContextoAuditoria } = require("../utils/auditoriaHci");
 const { calcularIMC } = require("../utils/antropometria");
+const { calcularPresionMedia } = require("../utils/presionArterial");
 
 /** Texto libre / memos hacia imHCI (ANSI Clarion). */
 function valorTextoHci(v) {
@@ -201,7 +202,7 @@ const guardarSignosVitalesEnControles = async (data) => {
             { value: talla },
             { value: imc },
             { value: 0 },                 // Saturometria
-            { value: 0 },                 // PAMedia
+            { value: calcularPresionMedia(maximo, minimo) ?? 0 }, // PAMedia (calculada con máx/mín)
             { value: normalizarIdSector(data.IdSector) }, // IdSector
             { value: 0 },                 // IdTurno
             { value: 0 },                 // Nroindicacion

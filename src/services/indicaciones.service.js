@@ -7,6 +7,7 @@ const {
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
+const { resolverPresionMedia } = require("../utils/presionArterial");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -639,6 +640,26 @@ const resolverFechaCargaIndicacion = (fechaSolicitada) => {
     return ymd;
 };
 
+/**
+ * Fecha (YYYY-MM-DD) de carga de la indicación principal. Un adicional hereda la fecha de su padre:
+ * al editar una indicación que viene de un día anterior no corresponde exigir "hoy o mañana".
+ */
+const obtenerFechaCargaPadre = async (nroPadre) => {
+    const rows = await executeQuery(
+        `SELECT TOP 1 CONVERT(varchar(10), DATEADD(DAY, CAST(FechaCarga AS int), '1800-12-28'), 23) AS FechaCarga
+         FROM dbo.imInterIndMedicas
+         WHERE NroIndicacion = @param0`,
+        [{ value: nroPadre }],
+    );
+    const ymd = parseYmd(rows?.[0]?.FechaCarga);
+    if (!ymd) {
+        const err = new Error("La indicación principal del adicional no existe");
+        err.statusCode = 404;
+        throw err;
+    }
+    return ymd;
+};
+
 //Crear - Insertar nueva indicación
 
 const nuevaIndicacion = async (data) => {
@@ -650,8 +671,12 @@ const nuevaIndicacion = async (data) => {
         OperadorCarga: data.OperadorCarga,
     });
     
-    // Fecha de carga: hoy por defecto, o mañana si el médico la pide
-    const fechaCargaYmd = resolverFechaCargaIndicacion(data.FechaCarga);
+    // Fecha de carga: hoy por defecto, o mañana si el médico la pide.
+    // Un adicional (NroAdicional > 0) hereda la fecha de su indicación principal.
+    const nroPadre = toNumberOrNull(data.NroAdicional);
+    const fechaCargaYmd = nroPadre
+        ? await obtenerFechaCargaPadre(nroPadre)
+        : resolverFechaCargaIndicacion(data.FechaCarga);
     const ahora = new Date();
     const arAhora = getArgentinaDate(ahora);
     const horaActual =
@@ -1561,7 +1586,12 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             Nroindicacion: nroIndicacion, // Parece que hay dos campos similares
             Hgt: data.control.glucemia ? toNumberOrNull(data.control.glucemia) : null,
             IdSector: limitLength(data.sector || '', 4),
-            PAMedia: data.control.presionArterialMedia ? parseFloat(data.control.presionArterialMedia) : null,
+            // PAMedia se calcula con máx/mín; si no hay ambas se conserva la informada
+            PAMedia: resolverPresionMedia({
+                presionMax: data.control.presionArterialMax,
+                presionMin: data.control.presionArterialMin,
+                presionMedia: data.control.presionArterialMedia,
+            }) || null,
             Saturometria: data.control.saturometria ? toNumberOrNull(data.control.saturometria) : null,
             Peso: null, // No viene del frontend por ahora
             Talla: null, // No viene del frontend por ahora

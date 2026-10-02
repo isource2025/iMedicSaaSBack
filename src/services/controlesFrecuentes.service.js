@@ -3,6 +3,7 @@ const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina,
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 const { normalizarFilas } = require("../utils/codigoSector");
+const { calcularPresionMedia, resolverPresionMedia } = require("../utils/presionArterial");
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -243,7 +244,7 @@ const crearControl = async (data) => {
         { value: data.temperaturaAxilar || 0 },                             // @param11
         { value: data.temperaturaRectal || 0 },                             // @param12
         { value: data.glucemia ? String(data.glucemia) : '0' },             // @param13 (Hgt es varchar)
-        { value: data.presionMedia || 0 },                                  // @param14
+        { value: resolverPresionMedia(data) },                              // @param14 PAMedia (se calcula con máx/mín)
         { value: data.saturacion || 0 },                                    // @param15
         { value: peso },                                                    // @param16 Peso
         { value: talla },                                                   // @param17 Talla
@@ -280,6 +281,21 @@ const actualizarControl = async (valor, data) => {
     const imc =
         peso != null && talla != null ? calcularIMC(peso, talla) : null;
 
+    // PAMedia: si se toca la máxima o la mínima se recalcula (completando la que no llegó
+    // con el valor guardado); si no, se respeta la media informada.
+    let presionMedia = data.presionMedia != null ? Number(data.presionMedia) || 0 : null;
+    if (data.presionMax != null || data.presionMin != null) {
+        let max = data.presionMax;
+        let min = data.presionMin;
+        if (max == null || min == null) {
+            const actual = await obtenerControlPorId(valor);
+            if (max == null) max = actual?.Maximo;
+            if (min == null) min = actual?.Minimo;
+        }
+        const calculada = calcularPresionMedia(max, min);
+        if (calculada != null) presionMedia = calculada;
+    }
+
     const sql = `
         UPDATE dbo.imInterCtrlFrecuente
         SET
@@ -312,7 +328,7 @@ const actualizarControl = async (valor, data) => {
         { value: data.temperaturaAxilar != null ? Number(data.temperaturaAxilar) || 0 : null },
         { value: data.temperaturaRectal != null ? Number(data.temperaturaRectal) || 0 : null },
         { value: data.glucemia != null ? String(data.glucemia) : null },
-        { value: data.presionMedia != null ? Number(data.presionMedia) || 0 : null },
+        { value: presionMedia },
         { value: data.saturacion != null ? Number(data.saturacion) || 0 : null },
         { value: peso },
         { value: talla },
