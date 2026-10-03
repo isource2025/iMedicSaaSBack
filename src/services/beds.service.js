@@ -4,6 +4,7 @@ const { executeQuery } = require('../models/db');
 const { enrichControlesWithIMC } = require('../utils/antropometria');
 const { normalizarFilas } = require('../utils/codigoSector');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
+const { SQL_APPLY_PERSONAS } = require('./controlesFrecuentes.service');
 
 async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	try {
@@ -410,7 +411,7 @@ const obtenerTotalCamas = async () => {
  */
 const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') => {
 	// Construir la cláusula WHERE según el filtro de días
-	let whereClause = 'icf.NumeroVisita = @param0';
+	let whereClause = 'cf.NumeroVisita = @param0';
 	
 	if (dias !== 'all' && dias !== undefined) {
 		const numDias = Number(dias);
@@ -425,35 +426,37 @@ const obtenerControlesFrecuentesPorVisita = async (numeroVisita, dias = 'all') =
 			const diffTime = fechaLimite.getTime() - clarionEpoch.getTime();
 			const fechaClarion = Math.floor(diffTime / (24 * 60 * 60 * 1000));
 			
-			whereClause += ` AND icf.FechaControl >= ${fechaClarion}`;
+			whereClause += ` AND cf.FechaControl >= ${fechaClarion}`;
 		}
 	}
 
 	const consulta = `
     SELECT 
-      dbo.fn_ClarionDATE2SQL(icf.FechaControl) as FechaControl,
-      dbo.fn_ClarionTIME2SQL(icf.HoraControl) as HoraControl,
-      icf.IdSector,
-      icf.Pulso,
-      icf.Maximo,
-      icf.Minimo,
-      icf.PAMedia,
-      icf.FrecuenciaRespiratoria,
-      icf.Axilar,
-      icf.Rectal,
-      icf.Saturometria,
-      icf.HGT,
-      icf.Peso,
-      icf.Talla,
-      icf.IMC,
-      icf.Observaciones,
-      icf.Profesional
+      dbo.fn_ClarionDATE2SQL(cf.FechaControl) as FechaControl,
+      dbo.fn_ClarionTIME2SQL(cf.HoraControl) as HoraControl,
+      cf.IdSector,
+      cf.Pulso,
+      cf.Maximo,
+      cf.Minimo,
+      cf.PAMedia,
+      cf.FrecuenciaRespiratoria,
+      cf.Axilar,
+      cf.Rectal,
+      cf.Saturometria,
+      cf.HGT,
+      cf.Peso,
+      cf.Talla,
+      cf.IMC,
+      cf.Observaciones,
+      cf.Profesional,
+      prof.NombreCompleto AS ProfesionalNombre
     FROM 
-      imInterCtrlFrecuente icf
+      imInterCtrlFrecuente cf
+    ${SQL_APPLY_PERSONAS}
     WHERE 
       ${whereClause}
     ORDER BY 
-      icf.FechaControl DESC, icf.HoraControl DESC
+      cf.FechaControl DESC, cf.HoraControl DESC
   `;
 
 	const parametros = [{ value: numeroVisita }];

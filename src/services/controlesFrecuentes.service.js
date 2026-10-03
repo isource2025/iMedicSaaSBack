@@ -355,4 +355,5 @@ module.exports = {
     eliminarControl,
     crearControl,
     actualizarControl,
+    SQL_APPLY_PERSONAS,
 };
