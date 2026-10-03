@@ -7,6 +7,8 @@ const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 router.use(requireTenant);
 
 router.get('/', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerCamas);
+// Lista + sectores + estados en una request (debe ir antes de '/:id').
+router.get('/bootstrap', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerBootstrap);
 router.get('/estados', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerEstadosCama);
 router.get('/sectores', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerSectores);
 router.get('/total', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerTotalCamas);

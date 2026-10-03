@@ -201,7 +201,17 @@ async function crearSector({ valor, descripcion, ambInt }) {
 			{ value: amb, type: 'Char' },
 		],
 	);
+	invalidarCatalogoCamas();
 	return { IdSector: id, Descripcion: desc, AmbInt: amb };
+}
+
+/** El combo de sectores de la lista de camas se cachea en beds.service; purgarlo al escribir. */
+function invalidarCatalogoCamas() {
+	try {
+		require('./beds.service').invalidarCatalogosCamas();
+	} catch {
+		/* best-effort */
+	}
 }
 
 async function actualizarSector(valor, { descripcion, ambInt }) {
@@ -223,6 +233,7 @@ async function actualizarSector(valor, { descripcion, ambInt }) {
 		sql += ` WHERE LTRIM(RTRIM(Valor)) = @p0`;
 	}
 	const r = await executeQuery(sql, params);
+	invalidarCatalogoCamas();
 	return { IdSector: id, Descripcion: desc, AmbInt: ambInt ?? null, rowsAffected: r };
 }
 

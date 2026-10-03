@@ -5,6 +5,35 @@ const { enrichControlesWithIMC } = require('../utils/antropometria');
 const { normalizarFilas } = require('../utils/codigoSector');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 const { SQL_APPLY_PERSONAS } = require('./controlesFrecuentes.service');
+const { tenantCacheKey } = require('../context/tenantCache');
+const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { sumarCacheHit } = require('../context/requestTiming');
+
+/**
+ * Catálogos de camas por tenant (sectores de internación, estados de cama).
+ * Cambian sólo desde pantallas de configuración, que invalidan al escribir
+ * (sectores.service, catalogoSql.service → invalidarCatalogosCamas).
+ */
+const CATALOGO_CAMAS_CACHE_MS = ttlDesdeEnv('CATALOGO_CAMAS_CACHE_MS', 5 * 60_000);
+const catalogoCache = new TtlCache({ ttlMs: CATALOGO_CAMAS_CACHE_MS, max: 500, nombre: 'catalogoCamas' });
+
+async function conCacheCatalogo(nombre, cargar) {
+	if (catalogoCache.ttlMs <= 0) return cargar();
+	const key = `${tenantCacheKey()}|${nombre}`;
+	const hit = catalogoCache.get(key);
+	if (hit !== undefined) {
+		sumarCacheHit();
+		return hit;
+	}
+	return catalogoCache.getOrLoad(key, cargar);
+}
+
+/** Purga sectores/estados cacheados del tenant actual (o de todos si no hay contexto). */
+function invalidarCatalogosCamas() {
+	const key = tenantCacheKey();
+	if (key === 'platform') catalogoCache.clear();
+	else catalogoCache.deletePrefix(`${key}|`);
+}
 
 async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	try {
@@ -83,11 +112,12 @@ const obtenerCamas = async (idSector) => {
  * Obtener todos los estados de cama desde imEstadoCama
  * @returns {Promise<Array>} Lista de estados de cama
  */
-const obtenerEstadosCama = async () => {
-	// Usando alias para devolver los campos con nombres en minúsculas
-	const consulta = `SELECT Valor as valor, Descripcion as descripcion FROM imEstadoCama WITH (NOLOCK)`;
-	return await executeQuery(consulta);
-};
+const obtenerEstadosCama = async () =>
+	conCacheCatalogo('estados', async () => {
+		// Usando alias para devolver los campos con nombres en minúsculas
+		const consulta = `SELECT Valor as valor, Descripcion as descripcion FROM imEstadoCama WITH (NOLOCK)`;
+		return (await executeQuery(consulta)) || [];
+	});
 
 /**
  * Filtrar camas por estado usando la relación entre imhabitacioncamas y imestadocama
@@ -326,7 +356,9 @@ function _mapSectorInternacion(r) {
  * Sectores de internación (AmbInt = I). Todos, no solo los asignados al personal.
  * El sector del login solo preselecciona el filtro en el front.
  */
-const obtenerSectores = async () => {
+const obtenerSectores = async () => conCacheCatalogo('sectores', obtenerSectoresSinCache);
+
+async function obtenerSectoresSinCache() {
 	const sqlTodosI = `
     SELECT
       LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS valor,
@@ -369,6 +401,27 @@ const obtenerSectores = async () => {
 	);
 	console.log(`[beds] sectores n=${list.length} ms=${Date.now() - t0}`);
 	return list;
+}
+
+/**
+ * Arranque de la lista de camas en UNA request: camas del sector + catálogos.
+ * Las camas son obligatorias (si fallan, falla el bootstrap); sectores y
+ * estados son best-effort (vienen vacíos y el front cae a su propio seed).
+ */
+const obtenerBootstrap = async (idSector) => {
+	const [camas, sectores, estados] = await Promise.allSettled([
+		obtenerCamas(idSector),
+		obtenerSectores(),
+		obtenerEstadosCama(),
+	]);
+	if (camas.status === 'rejected') throw camas.reason;
+	if (sectores.status === 'rejected') console.warn('[beds] bootstrap sectores:', sectores.reason?.message);
+	if (estados.status === 'rejected') console.warn('[beds] bootstrap estados:', estados.reason?.message);
+	return {
+		camas: camas.value || [],
+		sectores: sectores.status === 'fulfilled' ? sectores.value || [] : [],
+		estados: estados.status === 'fulfilled' ? estados.value || [] : [],
+	};
 };
 
 /**
@@ -478,5 +531,7 @@ module.exports = {
 	filtrarCamasPorEstado,
 	obtenerSectores,
 	obtenerTotalCamas,
+	obtenerBootstrap,
 	obtenerControlesFrecuentesPorVisita,
+	invalidarCatalogosCamas,
 };

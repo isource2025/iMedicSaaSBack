@@ -611,6 +611,10 @@ async function validarMulti(c, texto, previo) {
 /** Los prefijos por servicio se guardan en memoria unos minutos: se descartan al escribir. */
 function alEscribir(def) {
 	if (def.id === 'servicios') require('./prefijosPractica.service').limpiarCache();
+	const tabla = String(def.table || '').toLowerCase();
+	if (tabla === 'imsectores' || tabla === 'imestadocama') {
+		require('./beds.service').invalidarCatalogosCamas();
+	}
 }
 
 async function validarCampos(def, body, { actual = null, clave = '' } = {}) {

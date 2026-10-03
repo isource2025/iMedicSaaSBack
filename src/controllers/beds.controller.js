@@ -12,6 +12,18 @@ const obtenerCamas = async (req, res) => {
 	}
 };
 
+/** GET /beds/bootstrap?sector= → { camas, sectores, estados } en un solo viaje. */
+const obtenerBootstrap = async (req, res) => {
+	try {
+		const sector = String(req.query?.sector || req.query?.idSector || '').trim();
+		const data = await bedsService.obtenerBootstrap(sector || null);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('Error en beds.bootstrap:', error);
+		res.status(statusDeError(error)).json({ success: false, mensaje: 'Error al obtener las camas' });
+	}
+};
+
 const obtenerCamasPorId = async (req, res) => {
 	const { id } = req.params;
 
@@ -197,6 +209,7 @@ module.exports = {
 	filtrarCamasPorEstado,
 	obtenerSectores,
 	obtenerTotalCamas,
+	obtenerBootstrap,
 	obtenerControlesFrecuentesPorVisita,
 	actualizarEstadoCama,
 };

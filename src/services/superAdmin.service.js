@@ -999,6 +999,7 @@ async function crearSector(data) {
 			],
 		);
 
+		require('./beds.service').invalidarCatalogosCamas();
 		await authCentralSync.syncSector(idEmpresa, valor);
 		return { id: valor, descripcion, ambInt };
 	});
@@ -1044,6 +1045,7 @@ async function actualizarSector(valor, data) {
 			]);
 		}
 
+		require('./beds.service').invalidarCatalogosCamas();
 		await authCentralSync.syncSector(idEmpresa, id);
 		return { id, descripcion, ambInt: ambInt || null };
 	});
@@ -1076,6 +1078,7 @@ async function eliminarSector(valor, idEmpresa) {
 		await tenantDb.executeQuery(`DELETE FROM dbo.imSectores WHERE Valor = @p0`, [
 			{ value: id, type: 'VarChar' },
 		]);
+		require('./beds.service').invalidarCatalogosCamas();
 		await authCentralSync.removeSector(tenantId, id);
 		return { ok: true, id };
 	});
