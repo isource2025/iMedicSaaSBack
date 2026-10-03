@@ -4,6 +4,7 @@ const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const ctrl = require('../controllers/superAdmin.controller');
 const solicitudesEstudiosCtrl = require('../controllers/solicitudesEstudios.controller');
+const prefijosPracticaCtrl = require('../controllers/prefijosPractica.controller');
 
 router.use(requireAuth);
 
@@ -44,6 +45,9 @@ router.post('/empresas/:id/usuarios', requirePermiso('PLATAFORMA.USUARIOS.GESTIO
 router.post('/empresas/:id/usuarios/nuevo', requirePermiso('PLATAFORMA.USUARIOS.GESTIONAR'), ctrl.crearUsuario);
 router.put('/empresas/:id/usuarios/:idPersonal', requirePermiso('PLATAFORMA.USUARIOS.GESTIONAR'), ctrl.actualizarUsuario);
 router.delete('/empresas/:id/usuarios/:idPersonal', requirePermiso('PLATAFORMA.USUARIOS.GESTIONAR'), ctrl.desvincularUsuario);
+
+router.get('/empresas/:id/servicios-prefijos', requirePermiso('PLATAFORMA.EMPRESAS.VER'), prefijosPracticaCtrl.obtener);
+router.put('/empresas/:id/servicios/:valor/prefijos', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), prefijosPracticaCtrl.guardar);
 
 router.post('/sectores', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.crearSector);
 router.put('/sectores/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTIONAR'), ctrl.actualizarSector);

@@ -19,7 +19,7 @@
 const crypto = require('crypto');
 const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { createTenantOnce } = require('../context/tenantCache');
-const { getTenantId } = require('../context/tenantContext');
+const prefijosPractica = require('./prefijosPractica.service');
 const est = require('./estudios.service');
 const {
 	convertirFechaAClarion,
@@ -518,68 +518,7 @@ function _req(tx, inputs = []) {
 
 /* ---- Catálogo por servicio: un servicio solo puede recibir las prácticas que le corresponden ---- */
 
-const PREFIJOS_TTL_MS = 10 * 60 * 1000;
-const _cachePrefijos = new Map();
-// El historial solo cuenta si el prefijo es relevante para el servicio (evita arrastrar pedidos mal cargados).
-const HIST_MIN_PEDIDOS = 10;
-const HIST_MIN_PROPORCION = 0.05;
-
-function _perteneceAPrefijos(codPractica, prefijos) {
-	const d = String(codPractica ?? '').replace(/\D/g, '');
-	return d.length >= 3 && prefijos.some((p) => d.startsWith(p));
-}
-
-/**
- * Prefijos de práctica que corresponden a un servicio:
- *  - los configurados en imServicios.PrefijosPractica, más
- *  - los que ese servicio recibe de verdad en el historial (>= 10 pedidos y >= 5% de los suyos).
- * Devuelve [] si no se puede determinar.
- */
-async function prefijosDeServicio(servicio) {
-	const code = String(servicio || '').trim();
-	if (!code) return [];
-	const key = `${getTenantId() ?? 'default'}|${code.toUpperCase()}`;
-	const hit = _cachePrefijos.get(key);
-	if (hit && hit.exp > Date.now()) return hit.prefijos;
-
-	const set = new Set();
-	try {
-		const rows = await executeQuery(
-			`SELECT RTRIM(LTRIM(ISNULL(CAST(PrefijosPractica AS VARCHAR(200)), ''))) AS pref
-			 FROM dbo.imServicios WHERE RTRIM(LTRIM(Valor)) = @p0`,
-			[{ value: code, type: 'VarChar' }],
-		);
-		for (const r of rows || []) {
-			for (const p of String(r.pref || '').split(',')) {
-				const v = p.trim();
-				if (/^\d{1,4}$/.test(v)) set.add(v);
-			}
-		}
-	} catch {
-		/* sin imServicios.PrefijosPractica */
-	}
-	try {
-		const rows = await executeQuery(
-			`SELECT LEFT(CAST(IdPractica AS VARCHAR(20)), 2) AS pref, COUNT(*) AS n
-			 FROM dbo.imPedidosEstudios
-			 WHERE IdSectorReceptor = @p0 AND IdPractica >= 100000
-			 GROUP BY LEFT(CAST(IdPractica AS VARCHAR(20)), 2)`,
-			[{ value: est._padSector(code), type: 'VarChar' }],
-		);
-		const total = (rows || []).reduce((n, r) => n + (Number(r.n) || 0), 0);
-		for (const r of rows || []) {
-			const n = Number(r.n) || 0;
-			if (n >= HIST_MIN_PEDIDOS && total > 0 && n / total >= HIST_MIN_PROPORCION) {
-				set.add(String(r.pref).trim());
-			}
-		}
-	} catch {
-		/* sin historial */
-	}
-	const prefijos = Array.from(set);
-	_cachePrefijos.set(key, { exp: Date.now() + PREFIJOS_TTL_MS, prefijos });
-	return prefijos;
-}
+const prefijosDeServicio = prefijosPractica.prefijosDeServicio;
 
 /** Catálogo (imTiposPedidosEstudios) restringido a lo que realiza el servicio elegido. */
 async function buscarTiposDeServicio({ q, limit, servicio }) {
@@ -591,7 +530,9 @@ async function buscarTiposDeServicio({ q, limit, servicio }) {
 async function _validarPracticasDelServicio(servicio, practicas) {
 	const prefijos = await prefijosDeServicio(servicio);
 	if (!prefijos.length) return;
-	const fuera = (practicas || []).filter((p) => !_perteneceAPrefijos(p.idPractica, prefijos));
+	const fuera = (practicas || []).filter(
+		(p) => !prefijos.includes(prefijosPractica.capituloDe(p.idPractica)),
+	);
 	if (fuera.length) {
 		const nombres = fuera
 			.slice(0, 3)

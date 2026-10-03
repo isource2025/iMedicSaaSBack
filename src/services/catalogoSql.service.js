@@ -29,6 +29,8 @@ function col(name, opts = {}) {
 		options: opts.options,
 		/** Clave de LOOKUPS: opciones leídas de la base en cada listado. */
 		lookup: opts.lookup,
+		/** Lista separada por comas que se elige con checks (opciones del lookup). */
+		multi: Boolean(opts.multi),
 		/** Clave de BUSQUEDAS: el front busca con /:id/buscar/:campo?q= */
 		search: opts.search,
 	};
@@ -321,7 +323,12 @@ const CATALOGOS = [
 		columns: [
 			col('Valor', { editable: false }),
 			col('Descripcion', { length: 40 }),
-			col('PrefijosPractica', { length: 40 }),
+			col('PrefijosPractica', {
+				length: 40,
+				label: 'Prefijos de práctica',
+				multi: true,
+				lookup: 'prefijos-practica',
+			}),
 		],
 	},
 	{
@@ -436,6 +443,8 @@ function opcionDeFila(r) {
 }
 
 const LOOKUPS = {
+	/** Capítulos del nomenclador (imNomenclador.Valor / imModuladas.Valor) para PrefijosPractica. */
+	'prefijos-practica': () => require('./prefijosPractica.service').listarOpciones(),
 	/** Sectores de internación (AmbInt = I); si la base no marca ninguno, todos. */
 	'sectores-internacion': async () => {
 		const sql = (filtro) => `
@@ -574,6 +583,35 @@ async function validarVisitaSinEgreso(def, numeroVisita, claveActual) {
  * Obligatorios, valores de listas cerradas y búsquedas. En edición, un valor
  * igual al guardado se acepta aunque ya no esté en la lista (datos viejos).
  */
+/** Listas con checks: se guardan como "42,66,87" (únicas, numéricas y ordenadas). */
+function normalizarMulti(def, body) {
+	const ps = require('./prefijosPractica.service');
+	const out = { ...body };
+	for (const c of def.columns) {
+		if (!c.multi) continue;
+		const k = Object.prototype.hasOwnProperty.call(out, c.as)
+			? c.as
+			: Object.prototype.hasOwnProperty.call(out, c.name)
+				? c.name
+				: null;
+		if (k) out[k] = ps.formatear(out[k]);
+	}
+	return out;
+}
+
+async function validarMulti(c, texto, previo) {
+	const ps = require('./prefijosPractica.service');
+	await ps.validarYFormatear(texto, {
+		permitidosExtra: ps.parsear(previo),
+		largoMax: c.length || 200,
+	});
+}
+
+/** Los prefijos por servicio se guardan en memoria unos minutos: se descartan al escribir. */
+function alEscribir(def) {
+	if (def.id === 'servicios') require('./prefijosPractica.service').limpiarCache();
+}
+
 async function validarCampos(def, body, { actual = null, clave = '' } = {}) {
 	for (const c of def.columns) {
 		if (esAutoKeyCol(def, c)) continue;
@@ -586,6 +624,11 @@ async function validarCampos(def, body, { actual = null, clave = '' } = {}) {
 		if (!texto) continue;
 		const previo = actual ? String(actual[c.as] ?? '').trim() : null;
 		const sinCambio = previo != null && previo.toUpperCase() === texto.toUpperCase();
+
+		if (c.multi) {
+			await validarMulti(c, texto, previo);
+			continue;
+		}
 
 		const opciones = await opcionesDeColumna(c);
 		if (opciones && !sinCambio) {
@@ -777,6 +820,7 @@ async function insertarFila(def, names, placeholders, params) {
 
 async function crear(id, body = {}) {
 	const def = porId(id);
+	body = normalizarMulti(def, body);
 	await validarCampos(def, body);
 	const params = [];
 	const names = [];
@@ -818,11 +862,13 @@ async function crear(id, body = {}) {
 	}
 
 	await insertarFila(def, names, placeholders, params);
+	alEscribir(def);
 	return listar(id);
 }
 
 async function actualizar(id, clave, body = {}) {
 	const def = porId(id);
+	body = normalizarMulti(def, body);
 	if (def.columns.some((c) => c.required || c.options || c.lookup || c.search)) {
 		await validarCampos(def, body, { actual: await filaActual(def, clave), clave });
 	}
@@ -836,6 +882,7 @@ async function actualizar(id, clave, body = {}) {
 	if (!sets.length) throw errorHttp('Nada para actualizar', 400);
 	const where = whereClave(def, clave, params);
 	await executeQuery(`UPDATE dbo.[${def.table}] SET ${sets.join(', ')} WHERE ${where}`, params);
+	alEscribir(def);
 	return listar(id);
 }
 
@@ -844,6 +891,7 @@ async function borrar(id, clave) {
 	const params = [];
 	const where = whereClave(def, clave, params);
 	await executeQuery(`DELETE FROM dbo.[${def.table}] WHERE ${where}`, params);
+	alEscribir(def);
 	return listar(id);
 }
 
@@ -873,7 +921,16 @@ async function columnasUi(def) {
 			type: inputTypeDe(c),
 		};
 		if (c.required) ui.required = true;
-		if (c.options || c.lookup) {
+		if (c.multi) {
+			ui.input = 'multicheck';
+			ui.maxLength = c.length;
+			try {
+				ui.options = (await opcionesDeColumna(c)) || [];
+			} catch (err) {
+				console.warn(`[catalogoSql] opciones ${def.id}.${c.as}:`, err?.message || err);
+				ui.options = [];
+			}
+		} else if (c.options || c.lookup) {
 			ui.input = 'select';
 			try {
 				ui.options = (await opcionesDeColumna(c)) || [];
