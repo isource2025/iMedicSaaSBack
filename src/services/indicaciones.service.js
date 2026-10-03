@@ -30,6 +30,41 @@ const SQL_EXCLUIR_SIN_EFECTO =
 	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'";
 
 /**
+ * SQL: profesional de la indicación. ProfesionalAsiste guarda matrícula, CodOperador
+ * (usuarios sin matrícula) o, en registros viejos, imPersonal.Valor.
+ * Expone `per` (imPersonal) y `p` (imPassword); usar después de FROM imInterIndMedicas AS iim.
+ */
+const SQL_APPLY_PERSONAL_PROFESIONAL = `
+OUTER APPLY (
+  SELECT TOP 1
+    per0.Valor,
+    per0.Matricula,
+    per0.ApellidoNombre
+  FROM dbo.imPersonal AS per0
+  WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
+  ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
+) per`;
+
+const SQL_APPLY_PASSWORD_PROFESIONAL = `
+OUTER APPLY (
+  SELECT TOP 1 p0.Apellido, p0.Nombres
+  FROM dbo.imPassword AS p0
+  WHERE (per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor)
+     OR p0.ValorPersonal = iim.ProfesionalAsiste
+     OR p0.CodOperador = iim.ProfesionalAsiste
+  ORDER BY CASE
+    WHEN per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor THEN 0
+    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 1
+    ELSE 2
+  END
+) p`;
+
+const SQL_NOMBRE_PROFESIONAL = `COALESCE(
+    NULLIF(LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))), ''),
+    NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), '')
+  )`;
+
+/**
  * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
  * Sistema viejo: "Más", "Alterno", "Paralero" (con espacios y variantes de capitalización)
  * Sistema nuevo: "MAS", "ALTERNO", "PARALELO"
@@ -261,11 +296,7 @@ SELECT ${topClause}
   iim.CantidadIndicada AS Cantidad,
   iim.TipoUnidad,
   iim.ProfesionalAsiste,
-  COALESCE(
-    NULLIF(LTRIM(RTRIM(ISNULL(p.Nombres, '') + ' ' + ISNULL(p.Apellido, ''))), ''),
-    per.ApellidoNombre,
-    CAST(iim.ProfesionalAsiste AS varchar(20))
-  ) AS FullName,
+  ${SQL_NOMBRE_PROFESIONAL} AS FullName,
   per.Matricula AS MatriculaProfesional,
   iim.Frecuencia,
   fa.Intervalo,
@@ -317,18 +348,8 @@ SELECT ${topClause}
     ELSE iim.AliasMedicamento
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
-OUTER APPLY (
-  SELECT TOP 1
-    per0.Valor,
-    per0.Matricula,
-    per0.ApellidoNombre
-  FROM dbo.imPersonal AS per0
-  WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
-  ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
-) per
-LEFT JOIN dbo.imPassword AS p
-  ON p.ValorPersonal = iim.ProfesionalAsiste
-  OR (per.Valor IS NOT NULL AND p.ValorPersonal = per.Valor)
+${SQL_APPLY_PERSONAL_PROFESIONAL}
+${SQL_APPLY_PASSWORD_PROFESIONAL}
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
@@ -443,7 +464,7 @@ SELECT DISTINCT
   iim.OperadorCarga,
   p.Apellido,
   p.Nombres,
-  p.Nombres + ' ' + p.Apellido AS FullName,
+  NULLIF(LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))), '') AS FullName,
   iim.Observaciones,
   
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
@@ -1077,7 +1098,7 @@ SELECT
     CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCarga / 100, '00:00:00'), 108) AS HoraCarga,    
     iim.OperadorCarga,
     iim.ProfesionalAsiste,
-    LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
+    ISNULL(${SQL_NOMBRE_PROFESIONAL}, '') AS ProfesionalNombre,
     CONVERT(varchar(10), DATEADD(DAY, iim.FechaCumplido, '1800-12-28'), 23) AS FechaCumplido,
     CONVERT(varchar(8), DATEADD(SECOND, iim.HoraCumplido / 100, '00:00:00'), 108) AS HoraCumplido, 
    
@@ -1117,13 +1138,14 @@ SELECT
     END AS DescripcionIndicacion,
     v.TipoMedicamento AS VademecumTipoMedicamento
 FROM imInterIndMedicas iim
+${SQL_APPLY_PERSONAL_PROFESIONAL}
+${SQL_APPLY_PASSWORD_PROFESIONAL}
 LEFT JOIN imFrecuenciasAdmin fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
 LEFT JOIN imTipoDieta td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN imInterCtrlAsistenciales ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
 LEFT JOIN imVademecum v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
-LEFT JOIN imPassword pw ON iim.ProfesionalAsiste = pw.ValorPersonal
 WHERE iim.NroIndicacion = @param0
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 `;

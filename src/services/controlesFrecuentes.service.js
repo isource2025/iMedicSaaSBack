@@ -4,6 +4,19 @@ const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { calcularPresionMedia, resolverPresionMedia } = require("../utils/presionArterial");
+const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+
+/**
+ * La web graba CodOperador en ambas columnas; el escritorio graba en Profesional el
+ * imPersonal.Valor de quien carga, que a veces coincide con el CodOperador de otra persona.
+ */
+const SQL_APPLY_PERSONAS = `
+    ${sqlApplyNombrePersona("cf.OperadorCarga", "op")}
+    ${sqlApplyNombrePersona("cf.Profesional", "profFicha", ["valor", "matricula", "operador"])}
+    OUTER APPLY (
+      SELECT CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
+             CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula
+    ) prof`;
 
 /**
  * Obtener controles frecuentes por número de visita y fecha
@@ -37,11 +50,11 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
         ELSE STUFF(STUFF(RIGHT('000000' + CAST(cf.HoraCarga AS VARCHAR(6)), 6), 5, 0, ':'), 3, 0, ':')
       END AS HoraCarga,
       cf.OperadorCarga,
-      pw1.Apellido AS OperadorApellido,
-      pw1.Nombres AS OperadorNombres,
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres,
       cf.Profesional,
-      pw2.Apellido AS ProfesionalApellido,
-      pw2.Nombres AS ProfesionalNombres,
+      prof.NombreCompleto AS ProfesionalApellido,
+      CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
       CONVERT(varchar(10), DATEADD(day, NULLIF(cf.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
       CONVERT(varchar(8), DATEADD(ms, (NULLIF(cf.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
       cf.Pulso,
@@ -61,18 +74,9 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
       cf.IMC,
       cf.IdTurno,
       cf.IdHci,
-      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula
     FROM dbo.imInterCtrlFrecuente AS cf
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = cf.OperadorCarga
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = cf.Profesional
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
-    ) perOp
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = cf.Profesional OR p.Matricula = cf.Profesional OR p.Valor = pw2.ValorPersonal
-    ) perProf
+    ${SQL_APPLY_PERSONAS}
     WHERE cf.NumeroVisita = @param0 
       AND cf.FechaControl = @param1
     ORDER BY cf.HoraControl ASC, cf.Valor ASC
@@ -116,11 +120,11 @@ const obtenerControlPorId = async (valor) => {
         ELSE STUFF(STUFF(RIGHT('000000' + CAST(cf.HoraCarga AS VARCHAR(6)), 6), 5, 0, ':'), 3, 0, ':')
       END AS HoraCarga,
       cf.OperadorCarga,
-      pw1.Apellido AS OperadorApellido,
-      pw1.Nombres AS OperadorNombres,
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres,
       cf.Profesional,
-      pw2.Apellido AS ProfesionalApellido,
-      pw2.Nombres AS ProfesionalNombres,
+      prof.NombreCompleto AS ProfesionalApellido,
+      CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
       CONVERT(varchar(10), DATEADD(day, NULLIF(cf.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
       CONVERT(varchar(8), DATEADD(ms, (NULLIF(cf.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
       cf.Pulso,
@@ -139,10 +143,10 @@ const obtenerControlPorId = async (valor) => {
       cf.Talla,
       cf.IMC,
       cf.IdTurno,
-      cf.IdHci
+      cf.IdHci,
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula
     FROM dbo.imInterCtrlFrecuente AS cf
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = cf.OperadorCarga
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = cf.Profesional
+    ${SQL_APPLY_PERSONAS}
     WHERE cf.Valor = @param0
   `;
     const parametros = [{ value: valor }];

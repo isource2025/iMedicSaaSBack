@@ -5,17 +5,19 @@ const {
     restarDiasISO,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
+const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
 
-/** SELECT compartido: nombre de profesional desde imPersonal; operador desde imPassword. */
+/**
+ * Profesional: el escritorio graba imPersonal.Valor; la web, la matrícula o (sin matrícula)
+ * el mismo CodOperador de OperadorCarga. El CodOperador puede coincidir con el Valor de otra persona.
+ */
 const SELECT_EVOLUCION = `
     SELECT 
       ev.NumeroVisita,
       ev.Profesional,
-      per.Matricula AS Matricula,
-      COALESCE(
-        NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), ''),
-        NULLIF(LTRIM(RTRIM(ISNULL(pwOp.Apellido, '') + ' ' + ISNULL(pwOp.Nombres, ''))), '')
-      ) AS ProfesionalApellido,
+      CASE WHEN ev.Profesional = ev.OperadorCarga THEN op.Matricula ELSE prof.Matricula END AS Matricula,
+      CASE WHEN ev.Profesional = ev.OperadorCarga THEN op.NombreCompleto
+           ELSE COALESCE(prof.NombreCompleto, op.NombreCompleto) END AS ProfesionalApellido,
       CAST(NULL AS VARCHAR(80)) AS ProfesionalNombres,
       CONVERT(varchar(10), DATEADD(day, ev.FechaControl, '1800-12-28'), 23) AS FechaControl,
       CONVERT(varchar(5), DATEADD(ms, (ev.HoraControl - 1) * 10, 0), 108) AS HoraControl,
@@ -24,17 +26,11 @@ const SELECT_EVOLUCION = `
       ev.Observaciones,
       ev.FechaHoraCarga,
       ev.OperadorCarga,
-      NULLIF(LTRIM(RTRIM(pwOp.Apellido)), '') AS OperadorApellido,
-      NULLIF(LTRIM(RTRIM(pwOp.Nombres)), '') AS OperadorNombres
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
-    OUTER APPLY (
-      SELECT TOP 1 p.ApellidoNombre, p.Matricula
-      FROM dbo.imPersonal p
-      WHERE p.Valor = ev.Profesional OR p.Matricula = ev.Profesional
-      ORDER BY CASE WHEN p.Valor = ev.Profesional THEN 0 ELSE 1 END
-    ) per
-    LEFT JOIN dbo.imPassword AS pwOp
-      ON pwOp.CodOperador = ev.OperadorCarga
+    ${sqlApplyNombrePersona("ev.Profesional", "prof", ["valor", "matricula", "operador"])}
+    ${sqlApplyNombrePersona("ev.OperadorCarga", "op")}
 `;
 
 /**

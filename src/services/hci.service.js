@@ -1,6 +1,9 @@
 const { executeQuery } = require('../models/db');
 const { conContextoAuditoria } = require('../utils/auditoriaHci');
 const { normalizarFila, normalizarFilas } = require('../utils/codigoSector');
+const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+
+const SQL_APPLY_PROFESIONAL = sqlApplyNombrePersona('h.IdProfecional', 'prof');
 
 /**
  * Servicio para gestionar Historia Clínica de Ingreso (imHCI)
@@ -19,10 +22,10 @@ class HCIService {
       const query = `
         SELECT 
           h.*,
-          p.Apellido + ' ' + p.Nombres as ProfesionalNombre,
+          prof.NombreCompleto as ProfesionalNombre,
           s.Descripcion as SectorDescripcion
         FROM imHCI h
-        LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
+        ${SQL_APPLY_PROFESIONAL}
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
         WHERE h.NumeroVisita = @p0
         ORDER BY h.Fecha DESC
@@ -53,10 +56,10 @@ class HCIService {
       const query = `
         SELECT 
           h.*,
-          p.Apellido + ' ' + p.Nombres as ProfesionalNombre,
+          prof.NombreCompleto as ProfesionalNombre,
           s.Descripcion as SectorDescripcion
         FROM imHCI h
-        LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
+        ${SQL_APPLY_PROFESIONAL}
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
         WHERE h.IdHCIngreso = @p0
       `;
@@ -189,11 +192,11 @@ class HCIService {
         SELECT 
           h.*,
           v.NUMEROVISITA,
-          p.Apellido + ' ' + p.Nombres as ProfesionalNombre,
+          prof.NombreCompleto as ProfesionalNombre,
           s.Descripcion as SectorDescripcion
         FROM imVisita v
         INNER JOIN imHCI h ON v.NUMEROVISITA = h.NumeroVisita
-        LEFT JOIN imPassword p ON h.IdProfecional = p.CodOperador
+        ${SQL_APPLY_PROFESIONAL}
         LEFT JOIN imSectores s ON h.IdSector = s.Valor
         WHERE v.IdPaciente = @p0
         ORDER BY h.Fecha DESC

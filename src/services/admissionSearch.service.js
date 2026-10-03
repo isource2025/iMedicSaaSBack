@@ -641,7 +641,12 @@ async function _profesionalesPorPracticas(valoresPractica) {
         fn.Descripcion AS FuncionDescripcion,
         LTRIM(RTRIM(per.ApellidoNombre)) AS ProfesionalNombre
       FROM dbo.imFacProfesionales fprof
-      LEFT JOIN dbo.imPersonal per ON per.Matricula = fprof.Matricula
+      OUTER APPLY (
+        SELECT TOP 1 p.ApellidoNombre
+        FROM dbo.imPersonal p
+        WHERE p.Valor = fprof.Matricula OR p.Matricula = fprof.Matricula
+        ORDER BY CASE WHEN p.Valor = fprof.Matricula THEN 0 ELSE 1 END
+      ) per
       LEFT JOIN dbo.imFunciones fn ON fn.Valor = fprof.Funcion
       WHERE fprof.Valor IN (${inList})
       ORDER BY fprof.Valor, fprof.Funcion, fprof.Matricula
@@ -653,7 +658,7 @@ async function _profesionalesPorPracticas(valoresPractica) {
 	for (const r of rows || []) {
 		const valor = Number(r.Valor);
 		if (!map.has(valor)) map.set(valor, []);
-		const nombre = String(r.ProfesionalNombre || '').trim() || `Mat. ${r.Matricula}`;
+		const nombre = String(r.ProfesionalNombre || '').trim() || 'Profesional sin identificar';
 		const funcion = String(r.FuncionDescripcion || '').trim();
 		const etiqueta = funcion ? `${nombre} (${funcion})` : nombre;
 		map.get(valor).push({

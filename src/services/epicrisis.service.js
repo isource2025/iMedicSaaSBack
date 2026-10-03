@@ -54,7 +54,12 @@ const SELECT_BASE = `
     ep.DiagnosticoText
   FROM dbo.imHCEpicrisis AS ep
   LEFT JOIN dbo.imSectores AS sec ON ep.IdSector = sec.Valor
-  LEFT JOIN dbo.imPersonal AS per ON ep.Profecional = per.Matricula
+  OUTER APPLY (
+    SELECT TOP 1 per0.ApellidoNombre
+    FROM dbo.imPersonal AS per0
+    WHERE per0.Matricula = ep.Profecional OR per0.Valor = ep.Profecional
+    ORDER BY CASE WHEN per0.Matricula = ep.Profecional THEN 0 ELSE 1 END
+  ) AS per
 `;
 
 async function listarPorVisita(idVisita) {

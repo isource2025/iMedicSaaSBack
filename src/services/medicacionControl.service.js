@@ -1,6 +1,19 @@
 const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion } = require("../utils/dateUtils");
 const { normalizarFilas } = require("../utils/codigoSector");
+const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+
+/**
+ * OperadorCarga = CodOperador. Profesional: el escritorio graba el imPersonal.Valor de quien
+ * carga (que a veces coincide con el CodOperador de otra persona); la web, el CodOperador.
+ */
+const SQL_APPLY_PERSONAS = `
+    ${sqlApplyNombrePersona("mc.OperadorCarga", "op")}
+    ${sqlApplyNombrePersona("mc.Profesional", "profFicha", ["valor", "matricula", "operador"])}
+    OUTER APPLY (
+      SELECT CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
+             CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula
+    ) prof`;
 
 /**
  * Obtener medicación suministrada por número de visita
@@ -24,13 +37,13 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
         ELSE STUFF(STUFF(RIGHT('000000' + CAST(mc.HoraCarga AS VARCHAR(6)), 6), 5, 0, ':'), 3, 0, ':')
       END AS HoraCarga,
       mc.OperadorCarga,
-      pw1.Apellido AS OperadorApellido,
-      pw1.Nombres AS OperadorNombres,
-      pw1.Nombres + ' ' + pw1.Apellido AS OperadorFullName,
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres,
+      op.NombreCompleto AS OperadorFullName,
       mc.Profesional,
-      pw2.Apellido AS ProfesionalApellido,
-      pw2.Nombres AS ProfesionalNombres,
-      pw2.Nombres + ' ' + pw2.Apellido AS ProfesionalFullName,
+      prof.NombreCompleto AS ProfesionalApellido,
+      CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
+      prof.NombreCompleto AS ProfesionalFullName,
       CONVERT(varchar(10), DATEADD(day, NULLIF(mc.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
       CONVERT(varchar(8), DATEADD(ms, (NULLIF(mc.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
       mc.Troquel,
@@ -45,20 +58,11 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
       ind.FormaAdicional,
-      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula
     FROM dbo.imInterCtrlMedicamento AS mc
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
-    ) perOp
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = mc.Profesional OR p.Matricula = mc.Profesional OR p.Valor = pw2.ValorPersonal
-    ) perProf
+    ${SQL_APPLY_PERSONAS}
     WHERE mc.NumeroVisita = @param0
     ORDER BY mc.FechaCarga DESC, mc.HoraCarga DESC, mc.IDCtrlMedica DESC
   `;
@@ -185,13 +189,13 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
         ELSE STUFF(STUFF(RIGHT('000000' + CAST(mc.HoraCarga AS VARCHAR(6)), 6), 5, 0, ':'), 3, 0, ':')
       END AS HoraCarga,
       mc.OperadorCarga,
-      pw1.Apellido AS OperadorApellido,
-      pw1.Nombres AS OperadorNombres,
-      pw1.Nombres + ' ' + pw1.Apellido AS OperadorFullName,
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres,
+      op.NombreCompleto AS OperadorFullName,
       mc.Profesional,
-      pw2.Apellido AS ProfesionalApellido,
-      pw2.Nombres AS ProfesionalNombres,
-      pw2.Nombres + ' ' + pw2.Apellido AS ProfesionalFullName,
+      prof.NombreCompleto AS ProfesionalApellido,
+      CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
+      prof.NombreCompleto AS ProfesionalFullName,
       CONVERT(varchar(10), DATEADD(day, NULLIF(mc.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
       CONVERT(varchar(8), DATEADD(ms, (NULLIF(mc.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
       mc.Troquel,
@@ -206,20 +210,11 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
       ind.FormaAdicional,
-      COALESCE(perOp.Matricula, perProf.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula
     FROM dbo.imInterCtrlMedicamento AS mc
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = pw1.ValorPersonal OR p.Matricula = pw1.ValorPersonal
-    ) perOp
-    OUTER APPLY (
-      SELECT TOP 1 p.Matricula FROM dbo.imPersonal p
-      WHERE p.Valor = mc.Profesional OR p.Matricula = mc.Profesional OR p.Valor = pw2.ValorPersonal
-    ) perProf
+    ${SQL_APPLY_PERSONAS}
     WHERE mc.NumeroVisita = @param0 
       AND mc.FechaCarga = @param1
     ORDER BY mc.HoraControl ASC, mc.IDCtrlMedica ASC
@@ -313,13 +308,13 @@ const obtenerMedicacionPorId = async (idCtrlMedica) => {
         ELSE STUFF(STUFF(RIGHT('000000' + CAST(mc.HoraCarga AS VARCHAR(6)), 6), 5, 0, ':'), 3, 0, ':')
       END AS HoraCarga,
       mc.OperadorCarga,
-      pw1.Apellido AS OperadorApellido,
-      pw1.Nombres AS OperadorNombres,
-      pw1.Nombres + ' ' + pw1.Apellido AS OperadorFullName,
+      op.NombreCompleto AS OperadorApellido,
+      CAST(NULL AS VARCHAR(150)) AS OperadorNombres,
+      op.NombreCompleto AS OperadorFullName,
       mc.Profesional,
-      pw2.Apellido AS ProfesionalApellido,
-      pw2.Nombres AS ProfesionalNombres,
-      pw2.Nombres + ' ' + pw2.Apellido AS ProfesionalFullName,
+      prof.NombreCompleto AS ProfesionalApellido,
+      CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
+      prof.NombreCompleto AS ProfesionalFullName,
       CONVERT(varchar(10), DATEADD(day, NULLIF(mc.FechaControl,0) - 4, '1801-01-01'), 23) AS FechaControl,
       CONVERT(varchar(8), DATEADD(ms, (NULLIF(mc.HoraControl,0) - 1) * 10, 0), 108) AS HoraControl,
       mc.Troquel,
@@ -335,10 +330,9 @@ const obtenerMedicacionPorId = async (idCtrlMedica) => {
       ind.NroAdicional,
       ind.FormaAdicional
     FROM dbo.imInterCtrlMedicamento AS mc
-    LEFT JOIN dbo.imPassword AS pw1 ON pw1.CodOperador = mc.OperadorCarga
-    LEFT JOIN dbo.imPassword AS pw2 ON pw2.CodOperador = mc.Profesional
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
+    ${SQL_APPLY_PERSONAS}
     WHERE mc.IDCtrlMedica = @param0
   `;
     const parametros = [{ value: idCtrlMedica }];

@@ -2,6 +2,7 @@ const { executeQuery } = require('../models/db');
 const { convertirHoraAClarion: horaAClarion } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi: toAnsi } = require('../utils/clarionText');
 const { normalizarFilas } = require('../utils/codigoSector');
+const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
 
 function num(v, fallback = 0) {
 	if (v == null || v === '') return fallback;
@@ -68,28 +69,11 @@ const SELECT_BALANCE = `
     b.Total,
     b.Profesional,
     b.Sector,
-    COALESCE(
-      NULLIF(LTRIM(RTRIM(pw.Apellido)), ''),
-      NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), '')
-    ) AS ProfesionalApellido,
-    NULLIF(LTRIM(RTRIM(pw.Nombres)), '') AS ProfesionalNombres,
-    per.Matricula AS Matricula
+    prof.NombreCompleto AS ProfesionalApellido,
+    CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
+    prof.Matricula AS Matricula
   FROM dbo.imBalanceHidrico AS b
-  LEFT JOIN dbo.imPassword AS pw
-    ON pw.CodOperador = b.Profesional
-    OR pw.ValorPersonal = b.Profesional
-  OUTER APPLY (
-    SELECT TOP 1 p.Matricula, p.ApellidoNombre
-    FROM dbo.imPersonal p
-    WHERE p.Valor = b.Profesional
-       OR p.Matricula = b.Profesional
-       OR p.Valor = pw.ValorPersonal
-    ORDER BY CASE
-      WHEN p.Valor = b.Profesional THEN 0
-      WHEN p.Matricula = b.Profesional THEN 1
-      ELSE 2
-    END
-  ) per
+  ${sqlApplyNombrePersona('b.Profesional', 'prof', ['matricula', 'operador', 'valor'])}
 `;
 
 /**

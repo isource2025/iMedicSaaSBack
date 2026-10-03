@@ -5,6 +5,25 @@ const {
 	fechaCalendarioArgentina,
 	horaWallArgentina,
 } = require('../utils/dateUtils');
+const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+
+/**
+ * IdOperador: la web graba el ValorPersonal de quien carga; el escritorio, su CodOperador
+ * (el mismo que deja en imFacPracticas). Ambos números pueden ser de personas distintas.
+ */
+const SQL_APPLY_OPERADOR_PROTOCOLO = `
+		 ${sqlApplyNombrePersona('p.IdOperador', 'opCod', ['operador', 'valor'])}
+		 ${sqlApplyNombrePersona('p.IdOperador', 'opVal', ['valor', 'operador'])}
+		 OUTER APPLY (
+		   SELECT CASE WHEN EXISTS (
+		       SELECT 1 FROM dbo.imFacPracticas fpo
+		       WHERE fpo.IdProtocolo = p.IdProtocolo AND fpo.CodOperador = p.IdOperador
+		     ) THEN 1 ELSE 0 END AS EsEscritorio
+		 ) origen
+		 OUTER APPLY (
+		   SELECT CASE WHEN origen.EsEscritorio = 1 THEN opCod.NombreCompleto ELSE opVal.NombreCompleto END AS NombreCompleto,
+		          CASE WHEN origen.EsEscritorio = 1 THEN opCod.Matricula ELSE opVal.Matricula END AS Matricula
+		 ) op`;
 
 const FUNCION_FALLBACK = {
 	1: 'Especialista',
@@ -255,12 +274,12 @@ async function listarPorVisita(numeroVisita) {
 		   p.Texto,
 		   LTRIM(RTRIM(ISNULL(p.Estado, ''))) AS Estado,
 		   p.IdOperador,
-		   pers.ApellidoNombre AS OperadorNombre,
-		   pers.Matricula AS OperadorMatricula
+		   op.NombreCompleto AS OperadorNombre,
+		   op.Matricula AS OperadorMatricula
 		 FROM dbo.HCProtocolosPtes p
 		 LEFT JOIN dbo.HCTiposProtocolos tp
 		   ON LTRIM(RTRIM(tp.TipoProtocolo)) = LTRIM(RTRIM(p.TipoProtocolo))
-		 LEFT JOIN dbo.imPersonal pers ON pers.Valor = p.IdOperador
+		 ${SQL_APPLY_OPERADOR_PROTOCOLO}
 		 WHERE p.NumeroVisita = @p0
 		 ORDER BY p.Fecha DESC, p.IdProtocolo DESC`,
 		[{ value: nv, type: 'Int' }],
@@ -302,11 +321,11 @@ async function listarPorVisita(numeroVisita) {
 			   fprof.Matricula AS valorPersonal,
 			   fprof.Funcion,
 			   LTRIM(RTRIM(ISNULL(fn.Descripcion, ''))) AS funcionNombre,
-			   pers.ApellidoNombre AS apellidoNombre,
+			   pers.NombreCompleto AS apellidoNombre,
 			   pers.Matricula AS matricula
 			 FROM dbo.imFacProfesionales fprof
 			 LEFT JOIN dbo.imFunciones fn ON fn.Valor = fprof.Funcion
-			 LEFT JOIN dbo.imPersonal pers ON pers.Valor = fprof.Matricula
+			 ${sqlApplyNombrePersona('fprof.Matricula', 'pers', ['valor', 'matricula'])}
 			 WHERE fprof.Valor IN (${valores.join(',')})
 			 ORDER BY fprof.Funcion, fprof.IDFacProfesional`,
 		);

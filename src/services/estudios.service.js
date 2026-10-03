@@ -8,6 +8,7 @@ const {
 	horaWallArgentina,
 	partesFechaHoraArgentina,
 } = require('../utils/dateUtils');
+const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
 
 function _s(v, max) {
 	if (v == null) return '';
@@ -405,7 +406,7 @@ const SELECT_PEDIDO = `
   toma.Matricula AS MatriculaToma,
   toma.CodOperador AS CodOperadorToma,
   CONVERT(varchar(16), toma.FechaToma, 120) AS FechaToma,
-  tomaPer.ApellidoNombre AS NombreToma,
+  COALESCE(tomaPer.NombreCompleto, tomaOp.NombreCompleto) AS NombreToma,
   v.IDPACIENTE AS IdPaciente,
   LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) AS ClasePaciente,
   LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) AS TipoAdmision,
@@ -558,7 +559,8 @@ function _fromPedido(coincidirPractica) {
     ORDER BY op.Ord
   ) opRes
   LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
-  LEFT JOIN dbo.imPersonal tomaPer ON tomaPer.Matricula = toma.Matricula
+  ${sqlApplyNombrePersona('toma.Matricula', 'tomaPer', ['matricula'])}
+  ${sqlApplyNombrePersona('toma.CodOperador', 'tomaOp', ['operador'])}
   LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = pe.IdVisita
   LEFT JOIN dbo.imPacientes pac ON pac.IDPaciente = v.IDPACIENTE
   LEFT JOIN dbo.imSexo sx ON sx.Valor = pac.Sexo

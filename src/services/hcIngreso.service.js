@@ -238,7 +238,11 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             hc.*,
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
-            LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
+            COALESCE(
+                NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))), ''),
+                NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), ''),
+                ''
+            ) AS ProfesionalNombre,
             COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
             per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,
@@ -308,7 +312,11 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             hc.*,
             CONVERT(VARCHAR(10), hc.Fecha, 23) AS FechaFormateada,
             SUBSTRING(CONVERT(VARCHAR(8), hc.Fecha, 108), 1, 5) AS HoraFormateada,
-            LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))) AS ProfesionalNombre,
+            COALESCE(
+                NULLIF(LTRIM(RTRIM(ISNULL(pw.Apellido, '') + ' ' + ISNULL(pw.Nombres, ''))), ''),
+                NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), ''),
+                ''
+            ) AS ProfesionalNombre,
             COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
             per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,

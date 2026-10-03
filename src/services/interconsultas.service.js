@@ -2,6 +2,10 @@ const estudiosService = require('./estudios.service');
 const { executeQuery } = require('../models/db');
 const { convertirFechaAClarion, convertirHoraAClarion } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+
+const SQL_APPLY_SOLICITANTE = sqlApplyNombrePersona('ic.MedicoSolicitante', 'sol', ['matricula', 'valor', 'operador']);
+const SQL_APPLY_SOLICITANTE_LEGACY = sqlApplyNombrePersona('vic.MatriculaSolicitante', 'sol', ['matricula', 'valor', 'operador']);
 
 /** Código canónico en imTiposPedidosEstudios (práctica 420303 INTERCONSULTA). */
 const ID_TIPO_INTERCONSULTA = 33;
@@ -24,7 +28,7 @@ const CAMPOS_LEGACY = `
   NomencladorDescripcion,
   ISNULL(SectorReceptorNombre, ISNULL(ServicioDescripcion, SectorReceptor)) AS Especialidad,
   MatriculaSolicitante AS MedicoSolicitante,
-  MedicoSolicitanteNombre,
+  COALESCE(sol.NombreCompleto, NULLIF(LTRIM(RTRIM(MedicoSolicitanteNombre)), '')) AS MedicoSolicitanteNombre,
   NotasObservacion AS Motivo,
   ISNULL(EstadoUrgencia, 'PENDIENTE') AS Estado,
   IdProtocolo,
@@ -40,14 +44,16 @@ const CAMPOS_LEGACY = `
 
 const LEGACY_LISTAR_SQL = `
   SELECT ${CAMPOS_LEGACY}, 'LEGACY' AS Origen
-  FROM dbo.vw_iMedic_PedidosInterconsultas
+  FROM dbo.vw_iMedic_PedidosInterconsultas vic
+  ${SQL_APPLY_SOLICITANTE_LEGACY}
   WHERE IdVisita = @p0
   ORDER BY FechaPedido DESC
 `;
 
 const LEGACY_OBTENER_SQL = `
   SELECT ${CAMPOS_LEGACY}, 'LEGACY' AS Origen
-  FROM dbo.vw_iMedic_PedidosInterconsultas
+  FROM dbo.vw_iMedic_PedidosInterconsultas vic
+  ${SQL_APPLY_SOLICITANTE_LEGACY}
   WHERE IdPedido = @p0
 `;
 
@@ -59,7 +65,7 @@ const NUEVAS_LISTAR_SQL = `
     CONVERT(varchar(5), DATEADD(ms, (ISNULL(ic.HoraSolicitud, 1) - 1) * 10, 0), 108) AS HoraSolicitud,
     ic.Especialidad,
     ic.MedicoSolicitante,
-    per.ApellidoNombre AS MedicoSolicitanteNombre,
+    sol.NombreCompleto AS MedicoSolicitanteNombre,
     ic.Motivo,
     ic.Estado,
     ic.Respuesta,
@@ -73,7 +79,7 @@ const NUEVAS_LISTAR_SQL = `
     NULL AS EstadoUrgencia,
     'WEB' AS Origen
   FROM dbo.imHCInterconsulta ic
-  LEFT JOIN dbo.imPersonal per ON per.Matricula = ic.MedicoSolicitante
+  ${SQL_APPLY_SOLICITANTE}
   WHERE ic.IdVisita = @p0
   ORDER BY ic.FechaSolicitud DESC, ic.HoraSolicitud DESC
 `;
@@ -86,7 +92,7 @@ const NUEVA_OBTENER_SQL = `
     CONVERT(varchar(5), DATEADD(ms, (ISNULL(ic.HoraSolicitud, 1) - 1) * 10, 0), 108) AS HoraSolicitud,
     ic.Especialidad,
     ic.MedicoSolicitante,
-    per.ApellidoNombre AS MedicoSolicitanteNombre,
+    sol.NombreCompleto AS MedicoSolicitanteNombre,
     ic.Motivo,
     ic.Estado,
     ic.Respuesta,
@@ -100,7 +106,7 @@ const NUEVA_OBTENER_SQL = `
     NULL AS EstadoUrgencia,
     'WEB' AS Origen
   FROM dbo.imHCInterconsulta ic
-  LEFT JOIN dbo.imPersonal per ON per.Matricula = ic.MedicoSolicitante
+  ${SQL_APPLY_SOLICITANTE}
   WHERE ic.IdInterconsulta = @p0
 `;
 

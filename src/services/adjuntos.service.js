@@ -438,7 +438,12 @@ class AdjuntosService {
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
           FROM imPedidosEstudiosAdjuntos a
-          LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
+          OUTER APPLY (
+            SELECT TOP 1 p0.Apellido, p0.Nombres
+            FROM imPassword p0
+            WHERE p0.CodOperador = a.IdOperador OR p0.ValorPersonal = a.IdOperador
+            ORDER BY CASE WHEN p0.CodOperador = a.IdOperador THEN 0 ELSE 1 END
+          ) p
           LEFT JOIN hctiposimagenes t ON a.idtipoimagen = t.tipoimagen
           WHERE a.NumeroVisita = @p0
           ORDER BY a.Fecha DESC
@@ -476,7 +481,12 @@ class AdjuntosService {
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
           FROM imPedidosEstudiosAdjuntos a
-          LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
+          OUTER APPLY (
+            SELECT TOP 1 p0.Apellido, p0.Nombres
+            FROM imPassword p0
+            WHERE p0.CodOperador = a.IdOperador OR p0.ValorPersonal = a.IdOperador
+            ORDER BY CASE WHEN p0.CodOperador = a.IdOperador THEN 0 ELSE 1 END
+          ) p
           LEFT JOIN hctiposimagenes t ON a.idtipoimagen = t.tipoimagen
           WHERE a.IdTurno = @p0
              OR a.NumeroVisita IN (
@@ -590,7 +600,12 @@ class AdjuntosService {
             a.IdOperador,
             LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))) AS NombreOperador
           FROM imPedidosEstudiosAdjuntos a
-          LEFT JOIN imPassword p ON a.IdOperador = p.CodOperador
+          OUTER APPLY (
+            SELECT TOP 1 p0.Apellido, p0.Nombres
+            FROM imPassword p0
+            WHERE p0.CodOperador = a.IdOperador OR p0.ValorPersonal = a.IdOperador
+            ORDER BY CASE WHEN p0.CodOperador = a.IdOperador THEN 0 ELSE 1 END
+          ) p
           WHERE a.IdAdjunto = @p0
         `,
         [{ value: idAdjunto, type: 'Int' }],

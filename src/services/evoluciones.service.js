@@ -5,6 +5,10 @@ const {
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
+const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+
+/** Profecional guarda la matrícula de la sesión o, si no tiene, su imPersonal.Valor. */
+const SQL_APPLY_PROFESIONAL = sqlApplyNombrePersona("ev.Profecional", "prof", ["matricula", "valor", "operador"]);
 
 /**
  * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).
@@ -79,15 +83,16 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
-            per.Valor AS IdPersonal,
-            per.Matricula AS Matricula,
-            per.ApellidoNombre AS ProfesionalNombreCompleto,
+            prof.ValorPersonal AS IdPersonal,
+            prof.Matricula AS Matricula,
+            prof.NombreCompleto AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
             esp.Descripcion AS EspecialidadDescripcion,
             glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
-        LEFT JOIN dbo.imPersonal AS per ON (ev.Profecional = per.Matricula OR ev.Profecional = per.Valor)
+        ${SQL_APPLY_PROFESIONAL}
+        LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ${whereClause}
@@ -171,15 +176,16 @@ const obtenerEvolucionPorId = async (idHCEvolucion) => {
             ev.Evolucion,
             ev.NumeroDocumento,
             ev.Profecional,
-            per.Valor AS IdPersonal,
-            per.Matricula AS Matricula,
-            per.ApellidoNombre AS ProfesionalNombreCompleto,
+            prof.ValorPersonal AS IdPersonal,
+            prof.Matricula AS Matricula,
+            prof.NombreCompleto AS ProfesionalNombreCompleto,
             per.ValorEspecialidad,
             esp.Descripcion AS EspecialidadDescripcion,
             glu.Glucemia AS Glucemia
         FROM dbo.imHCEvolucion AS ev
         LEFT JOIN dbo.imSectores AS sec ON ev.IdSector = sec.Valor
-        LEFT JOIN dbo.imPersonal AS per ON (ev.Profecional = per.Matricula OR ev.Profecional = per.Valor)
+        ${SQL_APPLY_PROFESIONAL}
+        LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal
         LEFT JOIN dbo.imEspecialidad AS esp ON per.ValorEspecialidad = esp.Valor
         ${SQL_GLUCEMIA_OUTER_APPLY}
         WHERE ev.IdHCEvolucion = @param0
