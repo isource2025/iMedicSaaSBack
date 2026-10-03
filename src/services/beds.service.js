@@ -6,7 +6,7 @@ const { normalizarFilas } = require('../utils/codigoSector');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 const { SQL_APPLY_PERSONAS } = require('./controlesFrecuentes.service');
 const { tenantCacheKey } = require('../context/tenantCache');
-const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { TtlCache } = require('../utils/ttlCache');
 const { sumarCacheHit } = require('../context/requestTiming');
 
 /**
@@ -14,7 +14,8 @@ const { sumarCacheHit } = require('../context/requestTiming');
  * Cambian sólo desde pantallas de configuración, que invalidan al escribir
  * (sectores.service, catalogoSql.service → invalidarCatalogosCamas).
  */
-const CATALOGO_CAMAS_CACHE_MS = ttlDesdeEnv('CATALOGO_CAMAS_CACHE_MS', 5 * 60_000);
+// Catálogos de camas (sectores/estados): cambian muy poco y se invalidan al escribir.
+const CATALOGO_CAMAS_CACHE_MS = 5 * 60_000;
 const catalogoCache = new TtlCache({ ttlMs: CATALOGO_CAMAS_CACHE_MS, max: 500, nombre: 'catalogoCamas' });
 
 async function conCacheCatalogo(nombre, cargar) {

@@ -12,7 +12,7 @@ const JOIN_PERSONAL_EMPRESA = `pe.IdPersonal = pw.ValorPersonal AND pe.IdEmpresa
 
 let empresasMysqlColumnsCache = null;
 
-const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { TtlCache } = require('../utils/ttlCache');
 const { sumarCacheHit } = require('../context/requestTiming');
 
 /**
@@ -20,7 +20,8 @@ const { sumarCacheHit } = require('../context/requestTiming');
  * request; sin cache era una query MySQL por request en 469 rutas.
  * asignarRolesDeValorPersonal y nubeTenant invalidan al escribir.
  */
-const ROLES_USUARIO_CACHE_MS = ttlDesdeEnv('ROLES_USUARIO_CACHE_MS', 60_000);
+// Roles por usuario: 60 s; se invalida al asignar/sincronizar roles.
+const ROLES_USUARIO_CACHE_MS = 60_000;
 const rolesUsuarioCache = new TtlCache({
 	ttlMs: ROLES_USUARIO_CACHE_MS,
 	max: 20_000,

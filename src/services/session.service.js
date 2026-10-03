@@ -14,7 +14,7 @@ const {
 	hashToken,
 } = require('../config/security');
 
-const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { TtlCache } = require('../utils/ttlCache');
 const { sumarCacheHit } = require('../context/requestTiming');
 
 let tablesReady = false;
@@ -22,16 +22,17 @@ let idleMinutesCache = { value: DEFAULT_IDLE_MINUTES, at: 0 };
 
 /**
  * Cache de filas AuthSessions: evita SELECT + UPDATE en MySQL por cada request.
- * - La fila se relee de MySQL cada SESSION_CACHE_MS (default 30 s).
+ * - La fila se relee de MySQL cada SESSION_CACHE_MS (30 s).
  * - LastActivityAt se actualiza en memoria en cada request y se persiste
- *   como máximo una vez cada SESSION_TOUCH_MS (default 60 s) por sesión.
+ *   como máximo una vez cada SESSION_TOUCH_MS (60 s) por sesión.
  * - revoke/rotate/logout purgan la entrada en este proceso.
  * Efecto: una revocación hecha desde otra instancia tarda ≤ SESSION_CACHE_MS
  * en verse; el idle real puede quedar hasta SESSION_TOUCH_MS atrasado en BD
  * si el proceso se reinicia (irrelevante con idle ≥ 5 min).
  */
-const SESSION_CACHE_MS = ttlDesdeEnv('SESSION_CACHE_MS', 30_000);
-const SESSION_TOUCH_MS = ttlDesdeEnv('SESSION_TOUCH_MS', 60_000);
+// Sesión en memoria 30 s (revocaciones locales son inmediatas); LastActivityAt se persiste cada 60 s.
+const SESSION_CACHE_MS = 30_000;
+const SESSION_TOUCH_MS = 60_000;
 const sessionCache = new TtlCache({ ttlMs: SESSION_CACHE_MS, max: 20_000, nombre: 'session' });
 /** sessionId -> timestamp del último UPDATE LastActivityAt persistido. */
 const ultimoTouchPersistido = new Map();

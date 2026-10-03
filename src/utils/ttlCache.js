@@ -94,12 +94,4 @@ class TtlCache {
 	}
 }
 
-/** Lee un TTL desde env (ms) con default; 0 desactiva el cache. */
-function ttlDesdeEnv(nombreVar, defaultMs) {
-	const raw = process.env[nombreVar];
-	if (raw == null || String(raw).trim() === '') return defaultMs;
-	const n = Number(raw);
-	return Number.isFinite(n) && n >= 0 ? n : defaultMs;
-}
-
-module.exports = { TtlCache, ttlDesdeEnv };
+module.exports = { TtlCache };

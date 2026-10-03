@@ -10,7 +10,7 @@ const {
 	empresaRowHasSqlConnection,
 } = require('../utils/empresaDbConnection');
 const authCentralService = require('../services/authCentral.service');
-const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { TtlCache } = require('../utils/ttlCache');
 const { sumarCacheHit } = require('../context/requestTiming');
 
 /** @type {Map<number, { pool: sql.ConnectionPool, key: string }>} */
@@ -26,7 +26,7 @@ let empresasColumnsCache = null;
  * y cualquier otro cambio se ve en ≤ TENANT_EMPRESA_CACHE_MS.
  */
 const empresaRowCache = new TtlCache({
-	ttlMs: ttlDesdeEnv('TENANT_EMPRESA_CACHE_MS', 120_000),
+	ttlMs: 120_000, // fila de Empresas: 2 min; se invalida al reconfigurar el tenant
 	max: 500,
 	nombre: 'empresaRow',
 });

@@ -1,7 +1,7 @@
 const { executeQuery, sql } = require('../models/db');
 const { normalizarFilas } = require('../utils/codigoSector');
 const { createTenantOnce, tenantCacheKey } = require('../context/tenantCache');
-const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { TtlCache } = require('../utils/ttlCache');
 const { sumarCacheHit } = require('../context/requestTiming');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
@@ -11,11 +11,12 @@ const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
  * imVisitaMovimiento). El dashboard las pide con el mismo rango de 30 días
  * para todos los usuarios de la clínica; con TTL de 2 min la segunda persona
  * que entra no toca SQL Server.
- *  - ANALYTICS_CACHE_MS: ocupación por rango / serie diaria / indicadores (default 120 s)
- *  - ESTADO_CAMAS_CACHE_MS: conteo actual de camas (default 15 s)
+ *  - ANALYTICS_CACHE_MS: ocupación por rango / serie diaria / indicadores (120 s)
+ *  - ESTADO_CAMAS_CACHE_MS: conteo actual de camas (15 s)
  */
-const ANALYTICS_CACHE_MS = ttlDesdeEnv('ANALYTICS_CACHE_MS', 120_000);
-const ESTADO_CAMAS_CACHE_MS = ttlDesdeEnv('ESTADO_CAMAS_CACHE_MS', 15_000);
+// Analítica histórica (rangos de fechas): 2 min. Estado actual de camas: 15 s.
+const ANALYTICS_CACHE_MS = 120_000;
+const ESTADO_CAMAS_CACHE_MS = 15_000;
 const analyticsCache = new TtlCache({ ttlMs: ANALYTICS_CACHE_MS, max: 2000, nombre: 'analytics' });
 const estadoCamasCache = new TtlCache({ ttlMs: ESTADO_CAMAS_CACHE_MS, max: 200, nombre: 'estadoCamas' });
 
