@@ -864,6 +864,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     `
       SELECT
         ISNULL(TRY_CAST(v.FECHAEGRESO AS int), 0) AS FechaEgreso,
+        ISNULL(TRY_CAST(v.HORAEGRESO AS int), 0) AS HoraEgreso,
+        LTRIM(RTRIM(ISNULL(v.DIAGNOSTICO, ''))) AS Diagnostico,
+        LTRIM(RTRIM(ISNULL(v.DIAGNOSTICOEGRESO, ''))) AS DiagnosticoEgreso,
         LTRIM(RTRIM(ISNULL(v.VALORHABITACIONCAMA, ''))) AS ValorHabitacionCama,
         LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS ValorSector,
         ISNULL(TRY_CAST(v.IDPACIENTE AS int), 0) AS IdPaciente,
@@ -930,6 +933,11 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     ocupanteNombre: '',
     ultimo,
     fechaIngresoMov: clarionInt(ultimo?.FechaAdmision),
+    // Momento del egreso: el del movimiento (es el que cerró la cama); si falta, el de la internación
+    fechaEgreso: clarionInt(ultimo?.FechaEgreso) > 0 ? clarionInt(ultimo.FechaEgreso) : clarionInt(visita.FechaEgreso),
+    horaEgreso: clarionInt(ultimo?.FechaEgreso) > 0 ? clarionInt(ultimo.HoraEgreso) : clarionInt(visita.HoraEgreso),
+    diagnosticoVisita: String(visita.Diagnostico || '').trim(),
+    diagnosticoEgreso: String(visita.DiagnosticoEgreso || '').trim(),
     conflictos: [],
     avisos: [],
   };
@@ -1060,9 +1068,44 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     return finalizarContextoRevertir(ctx);
   }
 
+  // Libre ahora, pero si otro paciente pasó por esa cama después del egreso, reabrir la
+  // estadía original superpondría las dos historias.
+  if (ctx.fechaEgreso > 0) {
+    const usoPosterior = await executeQuery(
+      `
+        SELECT TOP 1
+          m.NumeroVisita,
+          LTRIM(RTRIM(ISNULL(p.ApellidoYNombre, ''))) AS Nombre
+        FROM dbo.imVisitaMovimiento m
+        LEFT JOIN dbo.imVisita v ON v.NumeroVisita = m.NumeroVisita
+        LEFT JOIN dbo.imPacientes p ON p.IdPaciente = v.IDPACIENTE
+        WHERE m.NumeroVisita <> @p0
+          AND LTRIM(RTRIM(m.ValorHabitacionCama)) = LTRIM(RTRIM(@p1))
+          AND LTRIM(RTRIM(m.ValorSector)) = LTRIM(RTRIM(@p2))
+          AND (
+            m.FechaAdmision > @p3
+            OR (m.FechaAdmision = @p3 AND m.HoraAdmision >= @p4)
+          )
+        ORDER BY m.FechaAdmision, m.HoraAdmision
+      `,
+      [{ value: num }, { value: cama }, { value: sector }, { value: ctx.fechaEgreso }, { value: ctx.horaEgreso }],
+    );
+    if (usoPosterior?.[0]) {
+      ctx.camaEstado = 'usada_despues';
+      const quien = String(usoPosterior[0].Nombre || '').trim();
+      ctx.avisos.push({
+        codigo: 'cama_usada_despues',
+        mensaje: `Después del egreso la ${etiquetaUbicacion} la ocupó otro paciente${quien ? ` (${quien})` : ''}. Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos; su estadía anterior en esa cama queda en el historial.`,
+      });
+      return finalizarContextoRevertir(ctx);
+    }
+  }
+
   ctx.camaEstado = 'libre';
   return finalizarContextoRevertir(ctx);
 }
+
+const ESTADOS_REVERTIR_SIN_CAMA = new Set(['sin_cama', 'inexistente', 'ocupada', 'no_disponible', 'usada_despues']);
 
 function finalizarContextoRevertir(ctx) {
   ctx.puedeRevertir = ctx.conflictos.length === 0;
@@ -1076,12 +1119,7 @@ function mensajeEstadoRevertir(ctx) {
   if (!ctx.puedeRevertir && ctx.conflictos.length) {
     return ctx.conflictos.map((c) => c.mensaje).join('\n\n');
   }
-  if (
-    ctx.camaEstado === 'sin_cama' ||
-    ctx.camaEstado === 'inexistente' ||
-    ctx.camaEstado === 'ocupada' ||
-    ctx.camaEstado === 'no_disponible'
-  ) {
+  if (ESTADOS_REVERTIR_SIN_CAMA.has(ctx.camaEstado)) {
     return `Se va a anular el egreso de ${quien}. Quedará en internación sin cama; después podés asignarle ubicación en movimientos.`;
   }
   return `Se va a anular el egreso de ${quien}. Volverá a internación en la ${donde}.`;
@@ -1159,24 +1197,46 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
       }
     }
 
+    const codOp = Number(opciones.codOperador);
+    const opTexto = Number.isFinite(codOp) && codOp > 0 ? String(codOp) : '';
+    const ultimoTeniaCama = Boolean(
+      ultimo && String(ultimo.ValorHabitacionCama || ultimo.bedId || '').trim(),
+    );
+    // Sin poder volver a la cama: la estadía en esa cama queda cerrada en el historial y se abre
+    // un movimiento nuevo sin cama, que después completa "Asignar cama" (asignarPacienteACama).
+    const conservarEstadiaAnterior = Boolean(
+      ultimo && limpiarCama && ultimoTeniaCama && ctx.fechaEgreso > 0,
+    );
+
     if (ultimo) {
       const reqMov = new sql.Request(tx);
       reqMov.input('nv', sql.Int, num);
       reqMov.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
       reqMov.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
       reqMov.input('limpiar', sql.Int, limpiarCama ? 1 : 0);
+      reqMov.input('conservar', sql.Int, conservarEstadiaAnterior ? 1 : 0);
       reqMov.input('estado', sql.VarChar(5), reubicarEnCama ? 'O' : '');
-      const codOp = Number(opciones.codOperador);
-      reqMov.input('op', sql.VarChar(20), Number.isFinite(codOp) && codOp > 0 ? String(codOp) : '');
+      reqMov.input('op', sql.VarChar(20), opTexto);
+      reqMov.input('diagEgreso', sql.VarChar(20), ctx.diagnosticoEgreso);
+      reqMov.input('diagVisita', sql.VarChar(20), ctx.diagnosticoVisita);
       await reqMov.query(`
         UPDATE dbo.imVisitaMovimiento
         SET
-          FechaEgreso = 0,
-          HoraEgreso = 0,
+          FechaEgreso = CASE WHEN @conservar = 1 THEN FechaEgreso ELSE 0 END,
+          HoraEgreso = CASE WHEN @conservar = 1 THEN HoraEgreso ELSE 0 END,
           DisposicionEgreso = 0,
-          ValorHabitacionCama = CASE WHEN @limpiar = 1 THEN '' ELSE ValorHabitacionCama END,
-          ValorSector = CASE WHEN @limpiar = 1 THEN '' ELSE ValorSector END,
+          -- El egreso pisa el diagnóstico del movimiento con el de egreso: se vuelve al de la internación
+          Diagnostico = CASE
+            WHEN LTRIM(RTRIM(@diagEgreso)) <> ''
+              AND LTRIM(RTRIM(@diagVisita)) <> ''
+              AND LTRIM(RTRIM(ISNULL(Diagnostico, ''))) = LTRIM(RTRIM(@diagEgreso))
+            THEN @diagVisita
+            ELSE Diagnostico
+          END,
+          ValorHabitacionCama = CASE WHEN @limpiar = 1 AND @conservar = 0 THEN '' ELSE ValorHabitacionCama END,
+          ValorSector = CASE WHEN @limpiar = 1 AND @conservar = 0 THEN '' ELSE ValorSector END,
           EstadoCama = CASE
+            WHEN @conservar = 1 THEN EstadoCama
             WHEN @limpiar = 1 THEN ''
             WHEN LTRIM(RTRIM(@estado)) = '' THEN EstadoCama
             ELSE @estado
@@ -1187,6 +1247,51 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
             THEN @op
             ELSE Operador
           END
+        WHERE NumeroVisita = @nv
+          AND FechaAdmision = @fa
+          AND HoraAdmision = @ha
+      `);
+    }
+
+    if (conservarEstadiaAnterior) {
+      const ahora = new Date();
+      const dos = (n) => String(n).padStart(2, '0');
+      const hoyYmd = `${ahora.getFullYear()}-${dos(ahora.getMonth() + 1)}-${dos(ahora.getDate())}`;
+      const ahoraHms = `${dos(ahora.getHours())}:${dos(ahora.getMinutes())}:${dos(ahora.getSeconds())}`;
+      const reqNuevo = new sql.Request(tx);
+      reqNuevo.input('nv', sql.Int, num);
+      reqNuevo.input('fa', sql.Int, clarionInt(ultimo.FechaAdmision));
+      reqNuevo.input('ha', sql.Int, clarionInt(ultimo.HoraAdmision));
+      reqNuevo.input('feg', sql.Int, ctx.fechaEgreso);
+      reqNuevo.input('heg', sql.Int, Math.max(1, ctx.horaEgreso));
+      reqNuevo.input('op', sql.VarChar(20), opTexto);
+      reqNuevo.input('diagVisita', sql.VarChar(20), ctx.diagnosticoVisita);
+      reqNuevo.input('fc', sql.Int, convertirFechaAClarion(hoyYmd));
+      reqNuevo.input('hc', sql.Int, convertirHoraAClarion(ahoraHms));
+      await reqNuevo.query(`
+        DECLARE @h int = @heg;
+        WHILE EXISTS (
+          SELECT 1 FROM dbo.imVisitaMovimiento
+          WHERE NumeroVisita = @nv AND FechaAdmision = @feg AND HoraAdmision = @h
+        )
+          SET @h = @h + 1;
+
+        INSERT INTO dbo.imVisitaMovimiento (
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, TipoPaciente, DoctorAsistiendo, [Status]
+        )
+        SELECT
+          NumeroVisita, @feg, @h,
+          0, 0,
+          EstadoAmbulatorio,
+          CASE WHEN LTRIM(RTRIM(@diagVisita)) <> '' THEN @diagVisita ELSE Diagnostico END,
+          CASE WHEN LTRIM(RTRIM(@op)) <> '' THEN @op ELSE Operador END,
+          @fc, @hc, '', '', '',
+          ServicioHospital, TipoPaciente, DoctorAsistiendo, 0
+        FROM dbo.imVisitaMovimiento
         WHERE NumeroVisita = @nv
           AND FechaAdmision = @fa
           AND HoraAdmision = @ha
@@ -1232,6 +1337,7 @@ async function revertirEgresoVisita(numeroVisita, opciones = {}) {
         cama: reubicarEnCama ? cama : '',
         sector: reubicarEnCama ? sector : '',
         sinCama: !reubicarEnCama,
+        estadiaAnteriorConservada: conservarEstadiaAnterior,
       },
     };
   } catch (err) {
