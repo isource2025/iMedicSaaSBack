@@ -849,16 +849,25 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 	const sectores = Array.isArray(sectoresSesion) && sectoresSesion.length
 		? sectoresSesion
 		: await listarSectoresReceptor({ valorPersonal });
-	const baseCodes = [...new Set(sectores.flatMap((s) => _codigosPedidoDeSector(s)))].filter(Boolean);
+	const expansion = await expandCodigosReceptorMuchos(
+		sectores.flatMap((s) => _codigosPedidoDeSector(s)),
+	);
 	const codes = [];
 	const seen = new Set();
-	for (const c of baseCodes) {
-		for (const x of await expandCodigosReceptor(c)) {
-			const k = String(x).trim().toUpperCase();
-			if (!k || seen.has(k)) continue;
-			seen.add(k);
-			codes.push(x);
+	const keysByServicio = new Map();
+	for (const s of sectores) {
+		const keys = new Set();
+		for (const c of _codigosPedidoDeSector(s)) {
+			for (const x of expansion.get(c.toUpperCase()) || []) {
+				const k = String(x).trim().toUpperCase();
+				if (!k) continue;
+				keys.add(k);
+				if (seen.has(k)) continue;
+				seen.add(k);
+				codes.push(x);
+			}
 		}
+		keysByServicio.set(s.valor, keys);
 	}
 	const vacio = {
 		estudios: 0,
@@ -897,18 +906,6 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 			interconsultas: Number(r.interconsultas) || 0,
 			urgentes: Number(r.urgentes) || 0,
 		});
-	}
-
-	const keysByServicio = new Map();
-	for (const s of sectores) {
-		const expanded = new Set();
-		for (const c of _codigosPedidoDeSector(s)) {
-			for (const x of await expandCodigosReceptor(c)) {
-				const k = String(x || '').trim().toUpperCase();
-				if (k) expanded.add(k);
-			}
-		}
-		keysByServicio.set(s.valor, expanded);
 	}
 
 	const porServicio = sectores
@@ -993,6 +990,66 @@ async function expandCodigosReceptor(sectorReceptor) {
 		/* sin imSectores.ValorServicio */
 	}
 	return out;
+}
+
+/** Primeros 4 caracteres en mayúscula, sin espacios finales (SQL Server los ignora al comparar). */
+function _prefijo4Receptor(v) {
+	return `${String(v || '').trim().toUpperCase()}    `.slice(0, 4).trimEnd();
+}
+
+/**
+ * Igual que expandCodigosReceptor pero para muchos códigos con una sola consulta a imSectores.
+ * @param {string[]} codigos
+ * @returns {Promise<Map<string, string[]>>} código en mayúscula → códigos expandidos
+ */
+async function expandCodigosReceptorMuchos(codigos) {
+	let filas = [];
+	try {
+		filas = await executeQuery(
+			`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS valor,
+			        RTRIM(LTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50)))) AS valorServicio
+			 FROM dbo.imSectores`,
+		);
+	} catch {
+		/* sin imSectores.ValorServicio: cada código se expande solo a sí mismo */
+	}
+	const sectores = (filas || []).map((f) => {
+		const servicio = String(f.valorServicio || '').trim();
+		return {
+			valor: String(f.valor || '').trim(),
+			servicio,
+			valorServicio: servicio.toUpperCase(),
+			prefijo: _prefijo4Receptor(servicio),
+		};
+	});
+	const servicioDeSector = new Map();
+	for (const s of sectores) {
+		const k = s.valor.toUpperCase();
+		if (k && !servicioDeSector.has(k)) servicioDeSector.set(k, s.servicio);
+	}
+
+	const resultado = new Map();
+	for (const c of codigos || []) {
+		const raw = String(c || '').trim();
+		const rawU = raw.toUpperCase();
+		if (!raw || resultado.has(rawU)) continue;
+		const seen = new Set();
+		const out = [];
+		const add = (v) => {
+			const x = String(v || '').trim();
+			if (!x || seen.has(x.toUpperCase())) return;
+			seen.add(x.toUpperCase());
+			out.push(x);
+		};
+		add(raw);
+		add(servicioDeSector.get(rawU));
+		const prefijo = _prefijo4Receptor(rawU);
+		for (const s of sectores) {
+			if (s.valorServicio === rawU || (s.prefijo && s.prefijo === prefijo)) add(s.valor);
+		}
+		resultado.set(rawU, out);
+	}
+	return resultado;
 }
 
 /**
@@ -1750,6 +1807,7 @@ module.exports = {
 	listarInterconsultasPorVisita,
 	listarPendientesPorSector,
 	contarLibresPorServicios,
+	expandCodigosReceptorMuchos,
 	obtenerPorId,
 	tomarPedido,
 	liberarPedido,

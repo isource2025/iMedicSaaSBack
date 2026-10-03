@@ -409,12 +409,15 @@ function _codigosPedidoDeSector(item) {
 async function contarLibres({ valorPersonal } = {}) {
 	await ensureSchema();
 	const sectores = await est.listarSectoresReceptor({ valorPersonal });
+	const expansion = await est.expandCodigosReceptorMuchos(
+		sectores.flatMap((s) => _codigosPedidoDeSector(s)),
+	);
 	const keysByServicio = new Map();
 	const todos = new Set();
 	for (const s of sectores) {
 		const keys = new Set();
 		for (const c of _codigosPedidoDeSector(s)) {
-			for (const x of await est.expandCodigosReceptor(c)) {
+			for (const x of expansion.get(c.toUpperCase()) || []) {
 				const k = String(x || '').trim().toUpperCase();
 				if (k) keys.add(k);
 			}
