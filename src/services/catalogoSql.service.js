@@ -3,6 +3,7 @@
  * de CATALOGOS: nunca se interpola un nombre de tabla que venga del cliente.
  */
 const { executeQuery } = require('../models/db');
+const { ayudaDeColumna } = require('./catalogoAyudas');
 
 function errorHttp(mensaje, statusCode) {
 	const err = new Error(mensaje);
@@ -921,6 +922,8 @@ async function columnasUi(def) {
 			type: inputTypeDe(c),
 		};
 		if (c.required) ui.required = true;
+		const ayuda = ayudaDeColumna(def, c, { isKey, auto });
+		if (ayuda) ui.help = ayuda;
 		if (c.multi) {
 			ui.input = 'multicheck';
 			ui.maxLength = c.length;
