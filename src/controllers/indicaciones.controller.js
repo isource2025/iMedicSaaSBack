@@ -78,6 +78,9 @@ const byDate = async (req, res) => {
     try {
         const { numeroVisita } = req.params;
         const { date } = req.query;
+        const incluirSuspendidas = ["1", "true"].includes(
+            String(req.query.incluirSuspendidas ?? "").toLowerCase()
+        );
 
         const visitaNum = Number(numeroVisita);
         if (!Number.isFinite(visitaNum) || visitaNum <= 0) {
@@ -94,7 +97,8 @@ const byDate = async (req, res) => {
 
         const rows = await indicacionesService.getByVisitaAndDate(
             visitaNum,
-            String(date)
+            String(date),
+            { incluirSuspendidas }
         );
 
         return res.json({

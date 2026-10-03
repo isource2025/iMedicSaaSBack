@@ -263,10 +263,11 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  * @param {Object} opciones - Opciones de filtrado
  * @param {string} [opciones.fecha] - Fecha en formato 'YYYY-MM-DD' para filtrar por FechaCarga
  * @param {number} [opciones.limit] - Límite de registros (TOP N)
+ * @param {boolean} [opciones.incluirSuspendidas] - Incluir las dejadas sin efecto (Estado = 'S')
  * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
-    const { fecha, limit, excluirSuspendidas = false } = opciones;
+    const { fecha, limit, excluirSuspendidas = false, incluirSuspendidas = false } = opciones;
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -285,7 +286,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     // Excluir descartables sin registro
     whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
     // Tabla de cama: no listar indicaciones suspendidas (Estado = 'S')
-    if (excluirSuspendidas) {
+    if (excluirSuspendidas && !incluirSuspendidas) {
         whereParts.push(SQL_EXCLUIR_SIN_EFECTO);
     }
 
@@ -367,7 +368,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
     const indicacionesHijas = new Map();
     
     rows.forEach((r) => {
-        if (esEstadoSinEfecto(r.Estado)) {
+        if (!incluirSuspendidas && esEstadoSinEfecto(r.Estado)) {
             return;
         }
 
@@ -451,8 +452,12 @@ const obtenerUltimaIndicacionPorVisita = (numeroVisita) =>
 const obtenerUltimasIndicacionesPorVisita = (numeroVisita, limit = 3) =>
     getIndicacionesByVisita(numeroVisita, { limit });
 
-const getByVisitaAndDate = (numeroVisita, ymdDate) =>
-    getIndicacionesByVisita(numeroVisita, { fecha: ymdDate, excluirSuspendidas: true });
+const getByVisitaAndDate = (numeroVisita, ymdDate, { incluirSuspendidas = false } = {}) =>
+    getIndicacionesByVisita(numeroVisita, {
+        fecha: ymdDate,
+        excluirSuspendidas: true,
+        incluirSuspendidas,
+    });
 
 // ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
 async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
