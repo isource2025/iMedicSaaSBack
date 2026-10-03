@@ -75,6 +75,19 @@ function authDbConfig() {
 	};
 }
 
+/**
+ * Envuelve pool.query / pool.execute para acumular su duración en el
+ * Server-Timing del request (ver context/requestTiming.js). No cambia la API.
+ */
+function instrumentarPool(p) {
+	const { medir } = require('../context/requestTiming');
+	const query = p.query.bind(p);
+	const execute = p.execute.bind(p);
+	p.query = (...args) => medir('mysql', () => query(...args));
+	p.execute = (...args) => medir('mysql', () => execute(...args));
+	return p;
+}
+
 async function getAuthCentralPool() {
 	if (!isAuthCentralEnabled()) {
 		const err = new Error('AUTH_DB no configurada');
@@ -82,7 +95,7 @@ async function getAuthCentralPool() {
 		throw err;
 	}
 	if (pool) return pool;
-	pool = mysql.createPool(authDbConfig());
+	pool = instrumentarPool(mysql.createPool(authDbConfig()));
 	return pool;
 }
 

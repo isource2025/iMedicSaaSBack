@@ -1,15 +1,56 @@
 const { executeQuery, sql } = require('../models/db');
 const { normalizarFilas } = require('../utils/codigoSector');
+const { createTenantOnce, tenantCacheKey } = require('../context/tenantCache');
+const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { sumarCacheHit } = require('../context/requestTiming');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 
-/** Bases Clarion viejas no tienen imHabitacionCamas.Tipo: ahí toda fila cuenta como cama. */
-async function camaOnlyWhere() {
+/**
+ * Caches por tenant de la analítica (resultados de queries pesadas sobre
+ * imVisitaMovimiento). El dashboard las pide con el mismo rango de 30 días
+ * para todos los usuarios de la clínica; con TTL de 2 min la segunda persona
+ * que entra no toca SQL Server.
+ *  - ANALYTICS_CACHE_MS: ocupación por rango / serie diaria / indicadores (default 120 s)
+ *  - ESTADO_CAMAS_CACHE_MS: conteo actual de camas (default 15 s)
+ */
+const ANALYTICS_CACHE_MS = ttlDesdeEnv('ANALYTICS_CACHE_MS', 120_000);
+const ESTADO_CAMAS_CACHE_MS = ttlDesdeEnv('ESTADO_CAMAS_CACHE_MS', 15_000);
+const analyticsCache = new TtlCache({ ttlMs: ANALYTICS_CACHE_MS, max: 2000, nombre: 'analytics' });
+const estadoCamasCache = new TtlCache({ ttlMs: ESTADO_CAMAS_CACHE_MS, max: 200, nombre: 'estadoCamas' });
+
+function claveAnalytics(nombre, ...partes) {
+  return `${tenantCacheKey()}|${nombre}|${partes.map((p) => (p == null ? '' : String(p))).join('|')}`;
+}
+
+/** Ejecuta `cargar` con cache por tenant + dedup de llamadas concurrentes. */
+async function conCache(cache, key, cargar) {
+  if (cache.ttlMs <= 0) return cargar();
+  const hit = cache.get(key);
+  if (hit !== undefined) {
+    sumarCacheHit();
+    return hit;
+  }
+  return cache.getOrLoad(key, cargar);
+}
+
+/** Permite purgar la analítica del tenant actual (p. ej. tras cambios masivos de camas). */
+function invalidarCacheAnalitica() {
+  const prefijo = `${tenantCacheKey()}|`;
+  analyticsCache.deletePrefix(prefijo);
+  estadoCamasCache.deletePrefix(prefijo);
+}
+
+/**
+ * Bases Clarion viejas no tienen imHabitacionCamas.Tipo: ahí toda fila cuenta como cama.
+ * El esquema no cambia en caliente → se consulta una sola vez por tenant.
+ */
+const camaOnlyWhere = createTenantOnce(async () => {
   const rows = await executeQuery(
     "SELECT COL_LENGTH('dbo.imHabitacionCamas', 'Tipo') AS Largo",
   );
   return rows?.[0]?.Largo == null ? '1 = 1' : CAMA_ONLY_WHERE;
-}
+});
 
 function esObjetoSqlMissing(error) {
 	return (
@@ -107,6 +148,13 @@ async function obtenerIndicadoresInline(tipoIndicador, fechaInicio, fechaFin) {
  * @returns {Array} Array de indicadores con Fecha, ClasePaciente y TotalIngresos
  */
 const obtenerIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio, fechaFin) => {
+  const key = claveAnalytics('indicadores', tipoIndicador, fechaInicio, fechaFin);
+  return conCache(analyticsCache, key, () =>
+    obtenerIndicadoresSinCache(tipoIndicador, fechaInicio, fechaFin),
+  );
+};
+
+const obtenerIndicadoresSinCache = async (tipoIndicador = 'Ingresos', fechaInicio, fechaFin) => {
   try {
     const query = `
       SELECT 
@@ -145,49 +193,63 @@ const obtenerIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio, fecha
  * @param {string} fechaFin - Fecha de fin
  * @returns {Object} Resumen con totales por clase de paciente
  */
+/** Resumen (promedio por clase + total) a partir de filas ya obtenidas. Puro. */
+function resumenDesdeFilas(indicadores, fechaInicio, fechaFin) {
+  const resumenPorSector = {};
+
+  const sectoresData = (indicadores || []).reduce((acc, item) => {
+    const sectorKey = item.ClasePaciente || 'Sin clasificar';
+    if (!acc[sectorKey]) {
+      acc[sectorKey] = { totalIngresos: 0, registros: 0 };
+    }
+    acc[sectorKey].totalIngresos += item.TotalIngresos || 0;
+    acc[sectorKey].registros += 1;
+    return acc;
+  }, {});
+
+  Object.keys(sectoresData).forEach((sector) => {
+    const data = sectoresData[sector];
+    const promedio = data.registros > 0 ? data.totalIngresos / data.registros : 0;
+    resumenPorSector[sector] = Number(promedio.toFixed(1));
+  });
+
+  const totalGeneral = Object.values(resumenPorSector).reduce((sum, value) => sum + value, 0);
+
+  return {
+    resumenPorSector,
+    totalGeneral,
+    periodo: { fechaInicio, fechaFin },
+  };
+}
+
+/** Clave YYYY-MM-DD de una fila (mssql devuelve Date para columnas DATE). */
+function fechaClave(fecha) {
+  if (fecha == null) return '';
+  if (fecha instanceof Date) return fecha.toISOString().slice(0, 10);
+  return String(fecha).slice(0, 10);
+}
+
+/** Serie por fecha a partir de filas ya obtenidas. Puro. */
+function porFechaDesdeFilas(indicadores) {
+  const porFecha = (indicadores || []).reduce((acc, item) => {
+    const fecha = item.Fecha;
+    const k = fechaClave(fecha);
+    if (!acc[k]) {
+      acc[k] = { fecha, total: 0, porClase: {} };
+    }
+    const clase = item.ClasePaciente || 'Sin clasificar';
+    acc[k].total += item.TotalIngresos || 0;
+    acc[k].porClase[clase] = (acc[k].porClase[clase] || 0) + (item.TotalIngresos || 0);
+    return acc;
+  }, {});
+
+  return Object.values(porFecha).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+}
+
 const obtenerResumenIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio, fechaFin) => {
   try {
     const indicadores = await obtenerIndicadores(tipoIndicador, fechaInicio, fechaFin);
-    
-    // Resumen por sector con cálculos correctos
-    const resumenPorSector = {};
-    
-    // Agrupar por sector y calcular métricas reales
-    const sectoresData = indicadores.reduce((acc, item) => {
-      const sectorKey = item.ClasePaciente || 'Sin clasificar';
-      if (!acc[sectorKey]) {
-        acc[sectorKey] = {
-          totalIngresos: 0,
-          registros: 0
-        };
-      }
-      
-      acc[sectorKey].totalIngresos += item.TotalIngresos || 0;
-      acc[sectorKey].registros += 1;
-      
-      return acc;
-    }, {});
-    
-    // Calcular porcentaje de ocupación real por sector
-    Object.keys(sectoresData).forEach(sector => {
-      const data = sectoresData[sector];
-      const totalIngresosPromedio = data.registros > 0 
-        ? data.totalIngresos / data.registros
-        : 0;
-      resumenPorSector[sector] = Number(totalIngresosPromedio.toFixed(1));
-    });
-    
-    // Calcular total general
-    const totalGeneral = Object.values(resumenPorSector).reduce((sum, value) => sum + value, 0);
-    
-    return {
-      resumenPorSector,
-      totalGeneral,
-      periodo: {
-        fechaInicio,
-        fechaFin
-      }
-    };
+    return resumenDesdeFilas(indicadores, fechaInicio, fechaFin);
   } catch (error) {
     console.error('Error al obtener resumen de indicadores:', error);
     throw new Error('Error al obtener resumen de indicadores');
@@ -204,26 +266,7 @@ const obtenerResumenIndicadores = async (tipoIndicador = 'Ingresos', fechaInicio
 const obtenerIndicadoresPorFecha = async (tipoIndicador = 'Ingresos', fechaInicio, fechaFin) => {
   try {
     const indicadores = await obtenerIndicadores(tipoIndicador, fechaInicio, fechaFin);
-    
-    // Agrupar por fecha
-    const porFecha = indicadores.reduce((acc, item) => {
-      const fecha = item.Fecha;
-      if (!acc[fecha]) {
-        acc[fecha] = {
-          fecha,
-          total: 0,
-          porClase: {}
-        };
-      }
-      
-      const clase = item.ClasePaciente || 'Sin clasificar';
-      acc[fecha].total += item.TotalIngresos || 0;
-      acc[fecha].porClase[clase] = (acc[fecha].porClase[clase] || 0) + (item.TotalIngresos || 0);
-      
-      return acc;
-    }, {});
-    
-    return Object.values(porFecha).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+    return porFechaDesdeFilas(indicadores);
   } catch (error) {
     console.error('Error al obtener indicadores por fecha:', error);
     throw new Error('Error al obtener indicadores por fecha');
@@ -246,15 +289,14 @@ const obtenerResumenPacientesHoy = async () => {
 
     const fechaHoy = formatDate(today);
     const fechaAyer = formatDate(yesterday);
-    
-    console.log(`[DEBUG SERVICE] Fecha hoy (Argentina): ${fechaHoy}`);
-    console.log(`[DEBUG SERVICE] Fecha ayer (Argentina): ${fechaAyer}`);
 
-    const resumenHoy = await obtenerResumenIndicadores('Ingresos', fechaHoy, fechaHoy);
-    const resumenAyer = await obtenerResumenIndicadores('Ingresos', fechaAyer, fechaAyer);
+    // Una sola query ayer..hoy; se separa por fecha en memoria (antes eran 2 viajes a SQL Server).
+    const filas = await obtenerIndicadores('Ingresos', fechaAyer, fechaHoy);
+    const filasHoy = filas.filter((f) => fechaClave(f.Fecha) === fechaHoy);
+    const filasAyer = filas.filter((f) => fechaClave(f.Fecha) === fechaAyer);
 
-    const totalHoy = resumenHoy.totalGeneral || 0;
-    const totalAyer = resumenAyer.totalGeneral || 0;
+    const totalHoy = resumenDesdeFilas(filasHoy, fechaHoy, fechaHoy).totalGeneral || 0;
+    const totalAyer = resumenDesdeFilas(filasAyer, fechaAyer, fechaAyer).totalGeneral || 0;
 
     let porcentajeCambio = 0;
     if (totalAyer > 0) {
@@ -283,7 +325,10 @@ module.exports = {
   obtenerIndicadores,
   obtenerResumenIndicadores,
   obtenerIndicadoresPorFecha,
-  obtenerResumenPacientesHoy
+  obtenerResumenPacientesHoy,
+  resumenDesdeFilas,
+  porFechaDesdeFilas,
+  invalidarCacheAnalitica,
 };
 
 /**
@@ -496,16 +541,46 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
   console.log(`🔍 [CAMAS] Iniciando consulta - Rango: ${fechaInicio} a ${fechaFin}, Sector: ${sector || 'TODOS'}`);
 
   try {
-    const queryStartTime = Date.now();
-    // Consulta inline: respeta el rango (la UDF histórica proyecta hasta fin de mes).
-    const result = await obtenerOcupacionCamasInline(fechaInicio, fechaFin);
-    console.log(`✅ [CAMAS] Query SQL completada en ${Date.now() - queryStartTime}ms`);
-    console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
+    // Filas normalizadas (sin filtro de sector) cacheadas por tenant+rango.
+    let datos = await conCache(
+      analyticsCache,
+      claveAnalytics('ocupacionCamas', fechaInicio, fechaFin),
+      () => cargarOcupacionCamasNormalizada(fechaInicio, fechaFin),
+    );
 
-    let datos = normalizarFilas(result || []);
+    if (sector && sector.trim()) {
+      const sectorTrim = sector.trim().toUpperCase();
+      const antes = datos.length;
+      datos = datos.filter(
+        (row) => row.ValorSector && row.ValorSector.toString().trim().toUpperCase() === sectorTrim,
+      );
+      console.log(`🔽 [CAMAS] Filtrado por sector '${sector}': ${antes} → ${datos.length}`);
+    }
 
-    const camasPorSector = await obtenerMapaCamasInternacionPorSector();
-    datos = datos
+    console.log(`🏁 [CAMAS] Proceso completado en ${Date.now() - startTime}ms total`);
+    return datos;
+  } catch (error) {
+    console.error(`❌ [CAMAS] Error después de ${Date.now() - startTime}ms:`, {
+      message: error.message,
+      code: error.code,
+      number: error.number,
+    });
+    throw new Error('Error al obtener ocupación promedio de camas');
+  }
+};
+
+async function cargarOcupacionCamasNormalizada(fechaInicio, fechaFin) {
+  const queryStartTime = Date.now();
+  // Consulta inline: respeta el rango (la UDF histórica proyecta hasta fin de mes).
+  // Las dos queries son independientes → en paralelo.
+  const [result, camasPorSector] = await Promise.all([
+    obtenerOcupacionCamasInline(fechaInicio, fechaFin),
+    obtenerMapaCamasInternacionPorSector(),
+  ]);
+  console.log(`✅ [CAMAS] Query SQL completada en ${Date.now() - queryStartTime}ms`);
+  console.log(`📊 [CAMAS] Registros obtenidos: ${result?.length || 0}`);
+
+  const datos = normalizarFilas(result || [])
       .map((row) => {
         const sectorKey = String(row.ValorSector || '').trim().toUpperCase();
         const totalCamasInternacion = Number(camasPorSector.get(sectorKey) || 0);
@@ -528,40 +603,22 @@ const obtenerOcupacionCamas = async (fechaInicio, fechaFin, sector) => {
       })
       .filter(Boolean);
 
-    if (datos.length > 0) {
-      console.log(
-        `🔍 [CAMAS] Muestra (primeros 3):`,
-        datos.slice(0, 3).map((row) => ({
-          ValorSector: row.ValorSector,
-          Periodo: row.Periodo,
-          PacientesDia: row.PacientesDia,
-          TotalCamas: row.TotalCamas,
-          DiasDelMes: row.DiasDelMes,
-          OcupacionPromedioPct: row.OcupacionPromedioPct,
-        })),
-      );
-    }
-
-    if (sector && sector.trim()) {
-      const sectorTrim = sector.trim().toUpperCase();
-      const antes = datos.length;
-      datos = datos.filter(
-        (row) => row.ValorSector && row.ValorSector.toString().trim().toUpperCase() === sectorTrim,
-      );
-      console.log(`🔽 [CAMAS] Filtrado por sector '${sector}': ${antes} → ${datos.length}`);
-    }
-
-    console.log(`🏁 [CAMAS] Proceso completado en ${Date.now() - startTime}ms total`);
-    return datos;
-  } catch (error) {
-    console.error(`❌ [CAMAS] Error después de ${Date.now() - startTime}ms:`, {
-      message: error.message,
-      code: error.code,
-      number: error.number,
-    });
-    throw new Error('Error al obtener ocupación promedio de camas');
+  if (datos.length > 0) {
+    console.log(
+      `🔍 [CAMAS] Muestra (primeros 3):`,
+      datos.slice(0, 3).map((row) => ({
+        ValorSector: row.ValorSector,
+        Periodo: row.Periodo,
+        PacientesDia: row.PacientesDia,
+        TotalCamas: row.TotalCamas,
+        DiasDelMes: row.DiasDelMes,
+        OcupacionPromedioPct: row.OcupacionPromedioPct,
+      })),
+    );
   }
-};
+
+  return datos;
+}
 
 /**
  * Resumen de ocupación en el período (días-cama, tasa global, distribución por sector).
@@ -668,7 +725,11 @@ const obtenerOcupacionCamasPorFecha = async (fechaInicio, fechaFin, sector) => {
   console.log(`🔍 [POR-FECHA] Serie diaria real - Rango: ${fechaInicio} a ${fechaFin}`);
 
   try {
-    const rows = await obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector);
+    const rows = await conCache(
+      analyticsCache,
+      claveAnalytics('ocupacionDiaria', fechaInicio, fechaFin, sector),
+      () => obtenerOcupacionCamasDiariaInline(fechaInicio, fechaFin, sector),
+    );
     const mapped = (rows || []).map((r) => {
       const totalCamas = toNumberSafe(r.TotalCamas);
       const ocupadas = toNumberSafe(r.Ocupadas);
@@ -709,13 +770,14 @@ function toNumberSafe(v) {
 /**
  * Obtiene el estado actual REAL de ocupación de camas (tiempo real, no estadísticas)
  */
-const obtenerEstadoActualCamas = async () => {
+const obtenerEstadoActualCamas = async () =>
+  conCache(estadoCamasCache, claveAnalytics('estadoActual'), obtenerEstadoActualCamasSinCache);
+
+const obtenerEstadoActualCamasSinCache = async () => {
   const startTime = Date.now();
   console.log(`🔍 [ESTADO-ACTUAL] Iniciando consulta de estado actual en tiempo real`);
   
   try {
-    console.log(`⏱️ [ESTADO-ACTUAL] Conexión DB establecida en ${Date.now() - startTime}ms`);
-    
     // Query para obtener estado actual real de camas ocupadas HOY
     // Basada en la estructura real: imHabitacionCamas usa ValorHabitacionCama como ID y NumeroVisita para ocupación
     const soloCamas = await camaOnlyWhere();
@@ -727,8 +789,6 @@ const obtenerEstadoActualCamas = async () => {
       FROM dbo.imHabitacionCamas hc
       WHERE ${soloCamas}
     `;
-    
-    console.log(`📋 [ESTADO-ACTUAL] Ejecutando query de estado real`);
     
     const queryStartTime = Date.now();
     const result = await executeQuery(query);

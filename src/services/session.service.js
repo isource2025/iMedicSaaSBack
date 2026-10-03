@@ -14,8 +14,27 @@ const {
 	hashToken,
 } = require('../config/security');
 
+const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { sumarCacheHit } = require('../context/requestTiming');
+
 let tablesReady = false;
 let idleMinutesCache = { value: DEFAULT_IDLE_MINUTES, at: 0 };
+
+/**
+ * Cache de filas AuthSessions: evita SELECT + UPDATE en MySQL por cada request.
+ * - La fila se relee de MySQL cada SESSION_CACHE_MS (default 30 s).
+ * - LastActivityAt se actualiza en memoria en cada request y se persiste
+ *   como máximo una vez cada SESSION_TOUCH_MS (default 60 s) por sesión.
+ * - revoke/rotate/logout purgan la entrada en este proceso.
+ * Efecto: una revocación hecha desde otra instancia tarda ≤ SESSION_CACHE_MS
+ * en verse; el idle real puede quedar hasta SESSION_TOUCH_MS atrasado en BD
+ * si el proceso se reinicia (irrelevante con idle ≥ 5 min).
+ */
+const SESSION_CACHE_MS = ttlDesdeEnv('SESSION_CACHE_MS', 30_000);
+const SESSION_TOUCH_MS = ttlDesdeEnv('SESSION_TOUCH_MS', 60_000);
+const sessionCache = new TtlCache({ ttlMs: SESSION_CACHE_MS, max: 20_000, nombre: 'session' });
+/** sessionId -> timestamp del último UPDATE LastActivityAt persistido. */
+const ultimoTouchPersistido = new Map();
 
 async function ensureTables() {
 	if (!isAuthCentralEnabled() || tablesReady) return;
@@ -150,7 +169,7 @@ async function createSession({ valorPersonal, username, idEmpresa, ip, userAgent
 	return { accessToken, refreshToken, sessionId };
 }
 
-async function getSessionAny(sessionId) {
+async function getSessionAnyDesdeDb(sessionId) {
 	if (!sessionId || !isAuthCentralEnabled()) return null;
 	await ensureTables();
 	const pool = await getAuthCentralPool();
@@ -160,18 +179,63 @@ async function getSessionAny(sessionId) {
 	return rows[0] || null;
 }
 
+/**
+ * Fila de sesión (revocadas incluidas). Usa el cache en memoria; pasar
+ * `{ fresco: true }` para forzar lectura de MySQL (logout, refresh, auditoría).
+ */
+async function getSessionAny(sessionId, opts = {}) {
+	if (!sessionId || !isAuthCentralEnabled()) return null;
+	const key = String(sessionId);
+	if (!opts.fresco && SESSION_CACHE_MS > 0) {
+		const hit = sessionCache.get(key);
+		if (hit !== undefined) {
+			sumarCacheHit();
+			return hit;
+		}
+		return sessionCache.getOrLoad(key, () => getSessionAnyDesdeDb(key));
+	}
+	const row = await getSessionAnyDesdeDb(key);
+	if (SESSION_CACHE_MS > 0) {
+		if (row) sessionCache.set(key, row);
+		else sessionCache.delete(key);
+	}
+	return row;
+}
+
 async function getSession(sessionId) {
 	const row = await getSessionAny(sessionId);
 	if (!row || Number(row.Revoked) === 1) return null;
 	return row;
 }
 
-async function touchSession(sessionId) {
+function olvidarSesion(sessionId) {
 	if (!sessionId) return;
+	sessionCache.delete(String(sessionId));
+	ultimoTouchPersistido.delete(String(sessionId));
+}
+
+/**
+ * Marca actividad. Siempre actualiza la copia en memoria; escribe en MySQL
+ * sólo si pasaron más de SESSION_TOUCH_MS desde el último UPDATE (o si se
+ * pide `{ forzar: true }`).
+ */
+async function touchSession(sessionId, opts = {}) {
+	if (!sessionId) return;
+	const key = String(sessionId);
+	const ahora = Date.now();
+	const cached = sessionCache.get(key);
+	if (cached) cached.LastActivityAt = new Date(ahora);
+
+	const ultimo = ultimoTouchPersistido.get(key) || 0;
+	if (!opts.forzar && SESSION_TOUCH_MS > 0 && ahora - ultimo < SESSION_TOUCH_MS) return;
+	ultimoTouchPersistido.set(key, ahora);
+	if (ultimoTouchPersistido.size > 50_000) {
+		// Limpieza barata: descartar la mitad más vieja.
+		const keys = [...ultimoTouchPersistido.keys()].slice(0, 25_000);
+		for (const k of keys) ultimoTouchPersistido.delete(k);
+	}
 	const pool = await getAuthCentralPool();
-	await pool.query(`UPDATE AuthSessions SET LastActivityAt = NOW() WHERE SessionId = ?`, [
-		String(sessionId),
-	]);
+	await pool.query(`UPDATE AuthSessions SET LastActivityAt = NOW() WHERE SessionId = ?`, [key]);
 }
 
 function isIdleExpired(row, idleMinutes) {
@@ -213,20 +277,25 @@ async function validateSession(sessionId) {
 
 async function revokeSession(sessionId) {
 	if (!sessionId) return;
+	olvidarSesion(sessionId);
 	const pool = await getAuthCentralPool();
 	await pool.query(`UPDATE AuthSessions SET Revoked = 1 WHERE SessionId = ?`, [String(sessionId)]);
 }
 
 async function revokeByRefreshToken(refreshToken) {
 	if (!refreshToken) return;
+	const hash = hashToken(refreshToken);
+	// Purga las entradas cacheadas con ese refresh (normalmente una).
+	for (const [key, entry] of sessionCache.map) {
+		if (entry?.valor?.RefreshTokenHash === hash) olvidarSesion(key);
+	}
 	const pool = await getAuthCentralPool();
-	await pool.query(`UPDATE AuthSessions SET Revoked = 1 WHERE RefreshTokenHash = ?`, [
-		hashToken(refreshToken),
-	]);
+	await pool.query(`UPDATE AuthSessions SET Revoked = 1 WHERE RefreshTokenHash = ?`, [hash]);
 }
 
 async function rotateRefresh(sessionId, oldRefreshToken) {
 	await ensureTables();
+	olvidarSesion(sessionId);
 	const pool = await getAuthCentralPool();
 	const [rows] = await pool.query(
 		`SELECT * FROM AuthSessions WHERE SessionId = ? AND RefreshTokenHash = ? AND Revoked = 0 LIMIT 1`,
@@ -259,6 +328,7 @@ module.exports = {
 	revokeByRefreshToken,
 	rotateRefresh,
 	touchSession,
+	olvidarSesion,
 	COOKIE_ACCESS,
 	COOKIE_REFRESH,
 };

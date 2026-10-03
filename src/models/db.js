@@ -7,6 +7,7 @@ const { getTenantPool } = require('../config/tenantDb');
 const { getTenantId } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
 const { repararStringsDeep, sanitizarTextoParaBd } = require('../utils/clarionText');
+const { medir } = require('../context/requestTiming');
 
 async function resolvePool(forcePlatform = false) {
   if (forcePlatform) return connectDB();
@@ -107,7 +108,8 @@ async function executeQuery(consulta, parametros = [], opts = {}) {
     if (process.env.NODE_ENV === 'development') {
       console.log('Consulta final:', consulta);
     }
-    const resultado = await request.query(consulta);
+    const sqlFinal = consulta;
+    const resultado = await medir('sql', () => request.query(sqlFinal));
     if (process.env.NODE_ENV === 'development') {
       console.log('Resultado consulta:', resultado.recordset ? `${resultado.recordset.length} registros encontrados` : 'Sin registros');
     }
@@ -148,7 +150,7 @@ async function executeProcedure(nombreProcedimiento, parametros = {}, opts = {})
       }
     }
     
-    const resultado = await request.execute(nombreProcedimiento);
+    const resultado = await medir('sql', () => request.execute(nombreProcedimiento));
     return resultado;
   } catch (error) {
     console.error(`Error al ejecutar procedimiento ${nombreProcedimiento}:`, error);

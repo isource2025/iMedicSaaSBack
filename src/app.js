@@ -101,6 +101,9 @@ dotenv.config();
 
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
+const { requestTimingMiddleware } = require('./context/requestTiming');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 // Inicializar la aplicación Express
 const app = express();
@@ -112,6 +115,20 @@ app.use(
 	}),
 );
 app.use(cookieParser());
+// Server-Timing (mysql / sqlserver / total) por request — visible en DevTools → Network → Timing.
+app.use(requestTimingMiddleware);
+// gzip/brotli de respuestas JSON (listas de camas, pacientes, analítica: 5–10x menos bytes).
+// SSE (streams) ya se marca con Cache-Control: no-transform, así que compression lo deja pasar.
+app.use(
+	compression({
+		threshold: 1024,
+		filter: (req, res) => {
+			if (req.headers['x-no-compression']) return false;
+			if (/text\/event-stream/i.test(String(res.getHeader('Content-Type') || ''))) return false;
+			return compression.filter(req, res);
+		},
+	}),
+);
 
 // Webhook Meta PRIMERO — stream crudo antes de cors/body-parser (firma X-Hub-Signature-256)
 app.use('/api/webhook/whatsapp', whatsappRawBody, whatsappWebhookRoutes);
@@ -171,6 +188,7 @@ app.use('/api/indicaciones', indicacionesRoutes);
 app.use('/api/evoluciones', evolucionesRoutes);
 app.use('/api/epicrisis', epicrisisRoutes);
 app.use('/api/indicadores', indicadoresRoutes);
+app.use('/api/dashboard', dashboardRoutes); // agregado del panel de inicio (1 request en vez de ~10)
 app.use('/api/empresa', empresaRoutes);
 app.use('/api/catalogs', catalogsRoutes);
 app.use('/api/disposiciones-egreso', disposicionEgresoRoutes);

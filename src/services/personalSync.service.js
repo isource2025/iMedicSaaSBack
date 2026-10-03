@@ -1283,6 +1283,9 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 			);
 		}
 	}
+	if (insertados > 0) {
+		require('./authCentral.service').invalidarRolesDeValorPersonal(emp, null);
+	}
 
 	return {
 		asignados: insertados,

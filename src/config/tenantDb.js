@@ -10,12 +10,26 @@ const {
 	empresaRowHasSqlConnection,
 } = require('../utils/empresaDbConnection');
 const authCentralService = require('../services/authCentral.service');
+const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { sumarCacheHit } = require('../context/requestTiming');
 
 /** @type {Map<number, { pool: sql.ConnectionPool, key: string }>} */
 const poolCache = new Map();
 /** Conexiones en curso: evita N pools simultáneos al mismo SQL (Sarmiento, etc.). */
 const connectInflight = new Map();
 let empresasColumnsCache = null;
+
+/**
+ * Fila de conexión de Empresas por idEmpresa. Antes se releía de MySQL en
+ * CADA executeQuery (una query MySQL extra por cada query SQL Server).
+ * TTL corto: los cambios desde Super Admin pasan por invalidateTenantPool,
+ * y cualquier otro cambio se ve en ≤ TENANT_EMPRESA_CACHE_MS.
+ */
+const empresaRowCache = new TtlCache({
+	ttlMs: ttlDesdeEnv('TENANT_EMPRESA_CACHE_MS', 120_000),
+	max: 500,
+	nombre: 'empresaRow',
+});
 
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
 const REQUEST_MS = Number(process.env.TENANT_REQUEST_TIMEOUT_MS) || 120000;
@@ -115,9 +129,19 @@ function configCacheKey(config) {
 }
 
 /**
- * Lee fila de conexión desde BD plataforma.
+ * Lee fila de conexión desde BD plataforma (con cache en memoria).
  */
 async function loadEmpresaConnectionRow(idEmpresa) {
+	const key = String(Number(idEmpresa));
+	const cached = empresaRowCache.get(key);
+	if (cached !== undefined) {
+		sumarCacheHit();
+		return cached;
+	}
+	return empresaRowCache.getOrLoad(key, () => loadEmpresaConnectionRowSinCache(idEmpresa));
+}
+
+async function loadEmpresaConnectionRowSinCache(idEmpresa) {
 	if (authCentralService.isAuthCentralEnabled()) {
 		try {
 			const rowCentral = await authCentralService.obtenerEmpresaPorId(idEmpresa);
@@ -242,6 +266,7 @@ async function getTenantPool(idEmpresa) {
 /** Invalida pool cacheado tras cambiar credenciales SQL en Empresas (MySQL). */
 function invalidateTenantPool(idEmpresa) {
 	const id = Number(idEmpresa);
+	empresaRowCache.delete(String(id));
 	for (const k of [...connectInflight.keys()]) {
 		if (k.startsWith(`${id}|`)) connectInflight.delete(k);
 	}
@@ -275,9 +300,19 @@ async function testTenantConnection(configOrIdEmpresa) {
 	}
 }
 
+/** Purga la fila Empresas cacheada (sin cerrar el pool). */
+function invalidateEmpresaRowCache(idEmpresa) {
+	if (idEmpresa == null) {
+		empresaRowCache.clear();
+		return;
+	}
+	empresaRowCache.delete(String(Number(idEmpresa)));
+}
+
 module.exports = {
 	getTenantPool,
 	loadEmpresaConnectionRow,
+	invalidateEmpresaRowCache,
 	rowToSqlConfig,
 	configCacheKey,
 	testTenantConnection,

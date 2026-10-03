@@ -12,6 +12,38 @@ const JOIN_PERSONAL_EMPRESA = `pe.IdPersonal = pw.ValorPersonal AND pe.IdEmpresa
 
 let empresasMysqlColumnsCache = null;
 
+const { TtlCache, ttlDesdeEnv } = require('../utils/ttlCache');
+const { sumarCacheHit } = require('../context/requestTiming');
+
+/**
+ * Roles por (idEmpresa, valorPersonal). requirePermiso lo consulta en cada
+ * request; sin cache era una query MySQL por request en 469 rutas.
+ * asignarRolesDeValorPersonal y nubeTenant invalidan al escribir.
+ */
+const ROLES_USUARIO_CACHE_MS = ttlDesdeEnv('ROLES_USUARIO_CACHE_MS', 60_000);
+const rolesUsuarioCache = new TtlCache({
+	ttlMs: ROLES_USUARIO_CACHE_MS,
+	max: 20_000,
+	nombre: 'rolesUsuario',
+});
+
+function claveRolesUsuario(idEmpresa, valorPersonal) {
+	return `${Number(idEmpresa)}|${Number(valorPersonal)}`;
+}
+
+/** Purga el cache de roles de un personal (o de toda una empresa si vp es null). */
+function invalidarRolesDeValorPersonal(idEmpresa, valorPersonal = null) {
+	if (idEmpresa == null) {
+		rolesUsuarioCache.clear();
+		return;
+	}
+	if (valorPersonal == null) {
+		rolesUsuarioCache.deletePrefix(`${Number(idEmpresa)}|`);
+		return;
+	}
+	rolesUsuarioCache.delete(claveRolesUsuario(idEmpresa, valorPersonal));
+}
+
 function normalizarUsername(username) {
 	return String(username || '').trim().toLowerCase();
 }
@@ -542,6 +574,20 @@ async function listarRolesDeValorPersonal(idEmpresa, valorPersonal) {
 	const vp = Number(valorPersonal);
 	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) return [];
 
+	if (ROLES_USUARIO_CACHE_MS <= 0) return listarRolesDeValorPersonalDesdeDb(emp, vp);
+	const key = claveRolesUsuario(emp, vp);
+	const hit = rolesUsuarioCache.get(key);
+	if (hit !== undefined) {
+		sumarCacheHit();
+		return hit.map((r) => ({ ...r }));
+	}
+	const lista = await rolesUsuarioCache.getOrLoad(key, () =>
+		listarRolesDeValorPersonalDesdeDb(emp, vp),
+	);
+	return lista.map((r) => ({ ...r }));
+}
+
+async function listarRolesDeValorPersonalDesdeDb(emp, vp) {
 	await ensurePersonalRolesTable();
 
 	const rows = await query(
@@ -701,6 +747,7 @@ async function asignarRolesDeValorPersonal(idEmpresa, valorPersonal, idRoles, id
 		throw err;
 	} finally {
 		conn.release();
+		invalidarRolesDeValorPersonal(emp, vp);
 	}
 
 	return listarRolesDeValorPersonal(emp, vp);
@@ -782,6 +829,7 @@ module.exports = {
 	eximeSectorPorUsername,
 	obtenerRolDeValorPersonal,
 	listarRolesDeValorPersonal,
+	invalidarRolesDeValorPersonal,
 	asignarRolesDeValorPersonal,
 	asignarRolDeValorPersonal,
 	obtenerRolPorId,

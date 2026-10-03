@@ -1043,21 +1043,26 @@ async function asignarRolNube(idEmpresa, valorPersonal, idRol) {
     )
   `);
 	await mysqlExec(`DELETE FROM \`imPersonalRoles\` WHERE IdEmpresa = ? AND Valor = ?`, [emp, vp]);
-	if (rol == null) {
-		await mysqlExec(`UPDATE \`imPersonal\` SET Rol = NULL WHERE IdEmpresa = ? AND Valor = ?`, [emp, vp]).catch(
-			() => {},
+	try {
+		if (rol == null) {
+			await mysqlExec(`UPDATE \`imPersonal\` SET Rol = NULL WHERE IdEmpresa = ? AND Valor = ?`, [emp, vp]).catch(
+				() => {},
+			);
+			return;
+		}
+		await mysqlExec(
+			`INSERT INTO \`imPersonalRoles\` (IdEmpresa, Valor, IdRol, EsPrincipal) VALUES (?, ?, ?, 1)`,
+			[emp, vp, rol],
 		);
-		return;
+		await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
+			String(rol),
+			emp,
+			vp,
+		]);
+	} finally {
+		// Cache de roles por usuario (requirePermiso) — se requiere acá para evitar ciclo de módulos.
+		require('./authCentral.service').invalidarRolesDeValorPersonal(emp, vp);
 	}
-	await mysqlExec(
-		`INSERT INTO \`imPersonalRoles\` (IdEmpresa, Valor, IdRol, EsPrincipal) VALUES (?, ?, ?, 1)`,
-		[emp, vp, rol],
-	);
-	await mysqlExec(`UPDATE \`imPersonal\` SET Rol = ? WHERE IdEmpresa = ? AND Valor = ?`, [
-		String(rol),
-		emp,
-		vp,
-	]);
 }
 
 function payloadUsuarioCreado(valorPersonal, body, idRol) {
