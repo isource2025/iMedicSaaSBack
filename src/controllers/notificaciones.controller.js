@@ -3,6 +3,8 @@ const router = express.Router();
 const { requireAuth } = require('../middlewares/authJwt.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const notificacionesService = require('../services/notificaciones.service');
+const notificacionesEvents = require('../services/notificacionesEvents.service');
+const { getTenantId } = require('../context/tenantContext');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 router.use(requireAuth, requireTenant);
@@ -32,6 +34,41 @@ router.get('/', async (req, res) => {
     console.error('[notificaciones] list', e);
     res.status(statusDeError(e)).json({ success: false, error: e.message || 'Error al listar notificaciones' });
   }
+});
+
+/**
+ * GET /api/notificaciones/stream  (SSE)
+ * Mantiene abierta la conexión y emite `cambio` cuando hay que refrescar la campanita.
+ */
+router.get('/stream', (req, res) => {
+  const vp = req.valorPersonal;
+  if (!vp) {
+    return res.status(400).json({ success: false, error: 'Usuario sin identificar' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  req.socket.setTimeout(0);
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  res.write('retry: 5000\n');
+  res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+
+  const unsubscribe = notificacionesEvents.subscribe(getTenantId() ?? req.idEmpresa, vp, res);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      /* conexión cerrada */
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 });
 
 /**

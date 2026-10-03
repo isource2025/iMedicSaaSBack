@@ -1,6 +1,7 @@
 const { executeQuery } = require('../models/db');
 const { resolveImNotificacionesColumns, sqlEscapeIdent } = require('./notificacionesColumns');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+const notificacionesEvents = require('./notificacionesEvents.service');
 
 let warnedSchemaUnusable = false;
 
@@ -100,6 +101,7 @@ async function eliminarPorEntidadPedido(idPedido) {
       [{ value: id, type: 'Int' }],
     );
     const deleted = Number(result?.rowsAffected?.[0] ?? result?.length ?? 0) || 0;
+    notificacionesEvents.publicarAEmpresa({ notificaciones: deleted > 0, bandeja: true });
     return { success: true, deleted };
   } catch (e) {
     console.warn('[notificaciones] eliminarPorEntidadPedido:', e.message);
@@ -282,6 +284,7 @@ async function marcarLeida(idNotificacion, valorPersonal) {
         { value: valorPersonal, type: 'Int' },
       ],
     );
+    notificacionesEvents.publicarAUsuario(valorPersonal);
     return { success: true };
   } catch (e) {
     console.warn('[notificaciones] marcarLeida:', e.message);
@@ -305,6 +308,7 @@ async function marcarTodasLeidas(valorPersonal) {
       `,
       [{ value: valorPersonal, type: 'Int' }],
     );
+    notificacionesEvents.publicarAUsuario(valorPersonal);
     return { success: true };
   } catch (e) {
     console.warn('[notificaciones] marcarTodasLeidas:', e.message);
@@ -335,6 +339,7 @@ async function marcarPedidosLeidas(valorPersonal) {
       `,
       [{ value: valorPersonal, type: 'Int' }],
     );
+    notificacionesEvents.publicarAUsuario(valorPersonal);
     return { success: true };
   } catch (e) {
     console.warn('[notificaciones] marcarPedidosLeidas:', e.message);
@@ -471,6 +476,7 @@ async function crear({
         params,
       );
       const outKey = Object.keys(rows[0] || {})[0];
+      notificacionesEvents.publicarAUsuario(valorPersonal);
       return { success: true, idNotificacion: rows[0]?.[outKey] };
     }
   } catch (e) {
@@ -485,6 +491,7 @@ async function crear({
       `,
       params,
     );
+    notificacionesEvents.publicarAUsuario(valorPersonal);
     return { success: true, idNotificacion: rows[0]?.IdNotificacion };
   } catch (e2) {
     console.warn('[notificaciones] crear falló (esquema distinto):', e2.message);

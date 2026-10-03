@@ -1,5 +1,6 @@
 const { executeQuery } = require('../models/db');
 const notificacionesService = require('./notificaciones.service');
+const notificacionesEvents = require('./notificacionesEvents.service');
 const { getTenantId } = require('../context/tenantContext');
 const { sqlImPasswordSinMarcaBaja } = require('../utils/imPasswordActivo');
 
@@ -276,6 +277,8 @@ async function notificarPedidoSectorReceptor({
 		);
 	} catch (err) {
 		console.warn('[notif pedidos] No se pudo notificar:', err.message || err);
+	} finally {
+		notificacionesEvents.publicarAEmpresa({ bandeja: true });
 	}
 }
 
