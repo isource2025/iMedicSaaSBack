@@ -523,10 +523,13 @@ function _req(tx, inputs = []) {
 
 const prefijosDeServicio = prefijosPractica.prefijosDeServicio;
 
-/** Catálogo (imTiposPedidosEstudios) restringido a lo que realiza el servicio elegido. */
+/**
+ * Catálogo (imTiposPedidosEstudios) restringido a lo que realiza el servicio elegido.
+ * Un servicio sin prefijos (ni configurados ni usados) no restringe, igual que la validación al guardar.
+ */
 async function buscarTiposDeServicio({ q, limit, servicio }) {
 	const prefijos = await prefijosDeServicio(servicio);
-	return est.buscarTiposPedidosEstudios({ q, limit, prefijos });
+	return est.buscarTiposPedidosEstudios({ q, limit, prefijos: prefijos.length ? prefijos : null });
 }
 
 /** Rechaza prácticas que no corresponden al servicio destino (si se puede determinar). */
