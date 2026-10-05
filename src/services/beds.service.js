@@ -103,11 +103,69 @@ const obtenerCamas = async (idSector) => {
       hc.ValorHabitacionCama ASC`;
 	const t0 = Date.now();
 	const rows = normalizarFilas(await executeQuery(sqlList, params));
+	const t1 = Date.now();
+	const visitas = (rows || []).map((r) => r.NumeroVisita ?? r.numeroVisita);
+	const [nuevas, respondidos] = await Promise.all([
+		vistoEnfermeria.contarNuevasPorVisitas(visitas),
+		contarEstudiosRespondidosPorVisitas(visitas),
+	]);
+	for (const r of rows || []) {
+		const nv = Number(r.NumeroVisita ?? r.numeroVisita);
+		const n = nuevas.get(nv);
+		if (n) r.IndicacionesNuevasEnfermeria = n;
+		r.EstudiosRespondidos = respondidos.get(nv) || 0;
+	}
 	console.log(
-		`[beds] list sector=${sector || 'ALL'} n=${(rows || []).length} ms=${Date.now() - t0}`,
+		`[beds] list sector=${sector || 'ALL'} n=${(rows || []).length} ms=${t1 - t0} nuevas=${nuevas.size} respondidos=${respondidos.size} ms=${Date.now() - t1}`,
 	);
 	return rows;
 };
+
+const CONTEO_RESPONDIDOS_TIMEOUT_MS = 4000;
+
+/**
+ * Estudios e interconsultas respondidos por visita (pedido con protocolo de resultado),
+ * en una sola consulta agregada. Si tarda o falla, devuelve un Map vacío (el listado sigue).
+ * @param {Array<number|string>} visitas
+ * @returns {Promise<Map<number, number>>}
+ */
+async function contarEstudiosRespondidosPorVisitas(visitas) {
+	const ids = [...new Set((visitas || []).map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+	const out = new Map();
+	if (!ids.length) return out;
+
+	const sql = `
+	SET LOCK_TIMEOUT 2000;
+	SELECT pe.IdVisita, COUNT(1) AS Respondidos
+	FROM dbo.imPedidosEstudios pe WITH (NOLOCK)
+	WHERE pe.IdVisita IN (${ids.join(',')})
+	  AND ISNULL(pe.IdProtocolo, 0) > 0
+	GROUP BY pe.IdVisita;
+	`;
+
+	let timer;
+	try {
+		const rows = await Promise.race([
+			executeQuery(sql),
+			new Promise((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`timeout ${CONTEO_RESPONDIDOS_TIMEOUT_MS}ms`)),
+					CONTEO_RESPONDIDOS_TIMEOUT_MS,
+				);
+			}),
+		]);
+		for (const r of Array.isArray(rows) ? rows : []) {
+			const nv = Number(r.IdVisita ?? r.idVisita);
+			const n = Number(r.Respondidos ?? r.respondidos ?? 0);
+			if (Number.isFinite(nv) && n > 0) out.set(nv, n);
+		}
+	} catch (e) {
+		console.warn('[beds] Conteo de estudios respondidos omitido:', e?.message || e);
+	} finally {
+		clearTimeout(timer);
+	}
+	return out;
+}
 
 /**
  * Obtener todos los estados de cama desde imEstadoCama

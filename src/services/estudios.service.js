@@ -1799,7 +1799,61 @@ async function actualizarResultado({
 	return obtenerPorId(Number(idPedido));
 }
 
+/**
+ * Estudios e interconsultas respondidos (IdProtocolo > 0) de una visita, para el
+ * preview del badge de la card de cama. Mismo criterio que el contador de beds.service.
+ */
+async function listarRespondidosResumen(idVisita, limit = 3) {
+	const top = Math.min(Math.max(Number(limit) || 3, 1), 20);
+	const rows = await executeQuery(
+		`SET LOCK_TIMEOUT 3000;
+		 SELECT
+		   COUNT(1) OVER () AS Total,
+		   pe.IdPractica AS CodigoPractica,
+		   CASE WHEN pe.IdTipoPedido = 33 THEN 'INTERCONSULTA' ELSE 'ESTUDIO' END AS Categoria,
+		   LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))), ''), ISNULL(nom.Descripcion, '')))) AS Descripcion,
+		   LTRIM(RTRIM(ISNULL(secRec.Descripcion, ISNULL(srv.Descripcion, '')))) AS Especialidad,
+		   CONVERT(varchar(16), pr.FechaResultado, 120) AS FechaResultado
+		 FROM dbo.imPedidosEstudios pe WITH (NOLOCK)
+		 OUTER APPLY (
+		   SELECT TOP 1 LTRIM(RTRIM(ISNULL(t.DescPractica, ''))) AS DescPractica
+		   FROM dbo.imTiposPedidosEstudios t WITH (NOLOCK)
+		   WHERE (ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica)
+		      OR (ISNULL(pe.IdTipoPedido, 0) > 0 AND t.IdTipoPedido = pe.IdTipoPedido)
+		   ORDER BY CASE WHEN ISNULL(pe.IdPractica, 0) > 0 AND t.IdPractica = pe.IdPractica THEN 0 ELSE 1 END
+		 ) tp
+		 OUTER APPLY (
+		   SELECT TOP 1 LTRIM(RTRIM(ISNULL(n.Descripcion, ''))) AS Descripcion
+		   FROM dbo.imNomenclador n WITH (NOLOCK)
+		   WHERE n.IDPractica = pe.IdPractica
+		 ) nom
+		 LEFT JOIN dbo.imSectores secRec WITH (NOLOCK) ON LTRIM(RTRIM(secRec.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
+		 LEFT JOIN dbo.imServicios srv WITH (NOLOCK) ON LTRIM(RTRIM(srv.Valor)) = LTRIM(RTRIM(pe.IdSectorReceptor))
+		 OUTER APPLY (
+		   SELECT TOP 1 r.FechaResultado
+		   FROM dbo.imProtocolosResultados r WITH (NOLOCK)
+		   WHERE r.IdProtocolo = pe.IdProtocolo
+		 ) pr
+		 WHERE pe.IdVisita = @p0 AND ISNULL(pe.IdProtocolo, 0) > 0
+		 ORDER BY pr.FechaResultado DESC, pe.FechaPedido DESC
+		 OFFSET 0 ROWS FETCH NEXT ${top} ROWS ONLY`,
+		[{ value: Number(idVisita), type: 'Int' }],
+	);
+	const list = Array.isArray(rows) ? rows : [];
+	return {
+		total: Number(list[0]?.Total || 0),
+		items: list.map((r) => ({
+			codigo: r.CodigoPractica != null ? String(r.CodigoPractica).trim() : '',
+			categoria: r.Categoria,
+			descripcion: r.Descripcion || '',
+			especialidad: r.Especialidad || '',
+			fechaResultado: r.FechaResultado || null,
+		})),
+	};
+}
+
 module.exports = {
+	listarRespondidosResumen,
 	crearPedido,
 	actualizarPedido,
 	eliminarPedido,

@@ -4,6 +4,7 @@ const {
     convertirHoraAClarion,
     convertirFechaClarionADate,
     convertirHoraClarionAString,
+    filtroPeriodoClarion,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
@@ -267,7 +268,7 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
-    const { fecha, limit, excluirSuspendidas = false, incluirSuspendidas = false } = opciones;
+    const { fecha, days, limit, excluirSuspendidas = false, incluirSuspendidas = false } = opciones;
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -277,8 +278,11 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     const params = [{ value: numeroVisita }];
 
     if (fecha) {
-        whereParts.push('iim.FechaCarga = @param1');
-        params.push({ value: convertirFechaAClarion(fecha) });
+        const periodo = filtroPeriodoClarion('iim.FechaCarga', fecha, days, params.length);
+        if (periodo.sql) {
+            whereParts.push(periodo.sql);
+            params.push(...periodo.params);
+        }
     }
 
     // Excluir insumos/descartables (TipoIndicacion = 9)
@@ -452,15 +456,17 @@ const obtenerUltimaIndicacionPorVisita = (numeroVisita) =>
 const obtenerUltimasIndicacionesPorVisita = (numeroVisita, limit = 3) =>
     getIndicacionesByVisita(numeroVisita, { limit });
 
-const getByVisitaAndDate = (numeroVisita, ymdDate, { incluirSuspendidas = false } = {}) =>
+const getByVisitaAndDate = (numeroVisita, ymdDate, { incluirSuspendidas = false, days } = {}) =>
     getIndicacionesByVisita(numeroVisita, {
         fecha: ymdDate,
+        days,
         excluirSuspendidas: true,
         incluirSuspendidas,
     });
 
 // ✅ NUEVA FUNCIÓN: Obtener solo insumos/descartables por visita y fecha
-async function getInsumosByVisitaAndDate(numeroVisita, ymdDate) {
+async function getInsumosByVisitaAndDate(numeroVisita, ymdDate, { days } = {}) {
+    const periodo = filtroPeriodoClarion('iim.FechaCarga', ymdDate, days, 1);
     const sql = `
 SELECT DISTINCT
   iim.NroIndicacion,
@@ -487,16 +493,13 @@ LEFT JOIN dbo.imPassword AS p ON p.CodOperador = iim.OperadorCarga
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
 WHERE iim.NumeroVisita = @param0
-  AND iim.FechaCarga   = @param1
+  ${periodo.sql ? `AND ${periodo.sql}` : ''}
   AND iim.TipoIndicacion = 9
   AND (iim.NroAdicional IS NULL OR iim.NroAdicional = 0)
 ORDER BY iim.Orden ASC;
   `;
 
-    const params = [
-        { value: numeroVisita },
-        { value: convertirFechaAClarion(ymdDate) },
-    ];
+    const params = [{ value: numeroVisita }, ...periodo.params];
 
     const rows = normalizarFilas(await executeQuery(sql, params));
     

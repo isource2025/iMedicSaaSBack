@@ -98,7 +98,7 @@ const byDate = async (req, res) => {
         const rows = await indicacionesService.getByVisitaAndDate(
             visitaNum,
             String(date),
-            { incluirSuspendidas }
+            { incluirSuspendidas, days: req.query.days }
         );
 
         return res.json({
@@ -135,7 +135,8 @@ const insumosByDate = async (req, res) => {
 
         const rows = await indicacionesService.getInsumosByVisitaAndDate(
             visitaNum,
-            String(date)
+            String(date),
+            { days: req.query.days }
         );
 
         return res.json({

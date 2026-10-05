@@ -48,6 +48,20 @@ async function listarPorVisita(req, res) {
 	}
 }
 
+async function respondidosResumen(req, res) {
+	try {
+		const idVisita = Number(req.params.idVisita);
+		if (!Number.isFinite(idVisita) || idVisita <= 0) {
+			return res.status(400).json({ success: false, mensaje: 'idVisita inválido' });
+		}
+		const data = await estudiosService.listarRespondidosResumen(idVisita, req.query.limit);
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[estudios] respondidos resumen:', err.message);
+		return res.json({ success: true, data: { total: 0, items: [] } });
+	}
+}
+
 async function listarPendientes(req, res) {
 	try {
 		const todos = await _veTodosLosServicios(req);
@@ -323,6 +337,7 @@ async function listarSectores(req, res) {
 }
 
 module.exports = {
+	respondidosResumen,
 	listarPorVisita,
 	listarPendientes,
 	contarLibres,

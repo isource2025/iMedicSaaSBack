@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion } = require("../utils/dateUtils");
+const { convertirFechaAClarion, filtroPeriodoClarion } = require("../utils/dateUtils");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
 
@@ -130,7 +130,7 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
  * @param {string} fecha - Fecha en formato YYYY-MM-DD
  * @returns {Promise<Array>} Lista de medicación suministrada
  */
-const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
+const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha, days) => {
     console.log('🔵 [medicacionControl.service] obtenerMedicacionPorVisitaYFecha called:', {
         numeroVisita,
         fecha,
@@ -166,12 +166,7 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
     }
 
     // Convertir fecha YYYY-MM-DD a formato Clarion usando la función correcta
-    const fechaClarion = convertirFechaAClarion(fecha);
-
-    console.log('🔵 [medicacionControl.service] Fecha Clarion calculada:', {
-        fechaISO: fecha,
-        fechaClarion
-    });
+    const periodo = filtroPeriodoClarion('mc.FechaCarga', fecha, days, 1);
 
     const consulta = `
     SELECT 
@@ -216,10 +211,10 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha) => {
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
     ${SQL_APPLY_PERSONAS}
     WHERE mc.NumeroVisita = @param0 
-      AND mc.FechaCarga = @param1
-    ORDER BY mc.HoraControl ASC, mc.IDCtrlMedica ASC
+      ${periodo.sql ? `AND ${periodo.sql}` : ''}
+    ORDER BY mc.FechaCarga ASC, mc.HoraControl ASC, mc.IDCtrlMedica ASC
   `;
-    const parametros = [{ value: numeroVisita }, { value: fechaClarion }];
+    const parametros = [{ value: numeroVisita }, ...periodo.params];
     
     console.log('🔵 [medicacionControl.service] Ejecutando query con parámetros:', {
         parametros,

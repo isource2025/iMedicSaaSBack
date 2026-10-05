@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina } = require("../utils/dateUtils");
+const { convertirFechaAClarion, convertirHoraAClarion, fechaCalendarioArgentina, horaWallArgentina, filtroPeriodoClarion } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 const { normalizarFilas } = require("../utils/codigoSector");
@@ -24,7 +24,7 @@ const SQL_APPLY_PERSONAS = `
  * @param {string} fecha - Fecha en formato YYYY-MM-DD
  * @returns {Promise<Array>} Lista de controles frecuentes
  */
-const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
+const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha, days) => {
     console.log('🔵 [controlesFrecuentes.service] obtenerControlesPorVisitaYFecha called:', {
         numeroVisita,
         fecha,
@@ -33,12 +33,7 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
     });
 
     // Convertir fecha YYYY-MM-DD a formato Clarion usando la función correcta
-    const fechaClarion = convertirFechaAClarion(fecha);
-
-    console.log('🔵 [controlesFrecuentes.service] Fecha Clarion calculada:', {
-        fechaISO: fecha,
-        fechaClarion
-    });
+    const periodo = filtroPeriodoClarion('cf.FechaControl', fecha, days, 1);
 
     const consulta = `
     SELECT 
@@ -78,10 +73,10 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha) => {
     FROM dbo.imInterCtrlFrecuente AS cf
     ${SQL_APPLY_PERSONAS}
     WHERE cf.NumeroVisita = @param0 
-      AND cf.FechaControl = @param1
-    ORDER BY cf.HoraControl ASC, cf.Valor ASC
+      ${periodo.sql ? `AND ${periodo.sql}` : ''}
+    ORDER BY cf.FechaControl ASC, cf.HoraControl ASC, cf.Valor ASC
   `;
-    const parametros = [{ value: numeroVisita }, { value: fechaClarion }];
+    const parametros = [{ value: numeroVisita }, ...periodo.params];
     
     console.log('🔵 [controlesFrecuentes.service] Ejecutando query con parámetros:', {
         parametros,

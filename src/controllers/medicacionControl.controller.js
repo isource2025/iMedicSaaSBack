@@ -79,7 +79,8 @@ const obtenerMedicacionPorVisitaYFecha = async (req, res) => {
 
         const resultado = await medicacionControlService.obtenerMedicacionPorVisitaYFecha(
             numeroVisitaInt,
-            String(fechaParam)
+            String(fechaParam),
+            req.query.days
         );
 
         console.log('🔵 [medicacionControl.controller] Service returned:', {

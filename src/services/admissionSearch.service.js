@@ -16,6 +16,10 @@ const evolucionesService = require('./evoluciones.service');
 const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
 const estudiosService = require('./estudios.service');
+const interconsultasService = require('./interconsultas.service');
+const controlesFrecuentesService = require('./controlesFrecuentes.service');
+const balanceHidricoService = require('./balanceHidrico.service');
+const evolucionEnfermeriaService = require('./evolucionEnfermeria.service');
 const { jsonSafe } = require('../utils/jsonSafe');
 
 function getEpicrisisService() {
@@ -1148,6 +1152,16 @@ function filterEpicrisis(rows, fechaInicio, fechaFin, exportAll) {
   });
 }
 
+function filterPorFecha(rows, getFecha, fechaInicio, fechaFin, exportAll) {
+  return (rows || []).filter((r) => inDateRange(toYmd(getFecha(r)), fechaInicio, fechaFin, exportAll));
+}
+
+function esDieta(row) {
+  const tipo = String(row?.tipo ?? row?.TipoIndicacion ?? '').trim().toUpperCase();
+  const prompt = String(row?.promptCodigo ?? '').toUpperCase();
+  return tipo === 'D' || prompt.includes('DIET');
+}
+
 function filterAdjuntosMeta(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => {
     const ymd = toYmd(r.FechaCarga) || toYmd(r.Fecha);
@@ -1202,6 +1216,12 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     prot: sections.includes('protocolos'),
     epi: sections.includes('epicrisis'),
     adj: sections.includes('adjuntos'),
+    inter: sections.includes('interconsultas'),
+    ctrl: sections.includes('controles'),
+    dieta: sections.includes('dietas'),
+    bal: sections.includes('balanceHidrico'),
+    evoEnf: sections.includes('evolucionEnfermeria'),
+    ins: sections.includes('insumos'),
   };
 
   const today = new Date().toISOString().slice(0, 10);
@@ -1215,9 +1235,14 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     estudiosRaw,
     protocolosRaw,
     epicrisisRaw,
+    interconsultasRaw,
+    controlesRaw,
+    balanceRaw,
+    evolucionesEnfermeriaRaw,
+    insumosRaw,
   ] = await Promise.all([
     need.hc ? settled(() => obtenerHCIngresoPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.ind
+    need.ind || need.dieta
       ? settled(() => indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000), [])
       : Promise.resolve([]),
     need.prac ? settled(() => obtenerPracticasPorVisita(numeroVisita), []) : Promise.resolve([]),
@@ -1229,6 +1254,17 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     need.est ? settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []) : Promise.resolve([]),
     need.prot ? settled(() => protocolosService.listarPorVisita(numeroVisita), []) : Promise.resolve([]),
     need.epi ? settled(() => getEpicrisisService().listarPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.inter ? settled(() => interconsultasService.listarPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.ctrl
+      ? settled(() => controlesFrecuentesService.obtenerControlesPorVisitaYFecha(numeroVisita, today, 'all'), [])
+      : Promise.resolve([]),
+    need.bal ? settled(() => balanceHidricoService.obtenerPorVisita(numeroVisita), []) : Promise.resolve([]),
+    need.evoEnf
+      ? settled(() => evolucionEnfermeriaService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), [])
+      : Promise.resolve([]),
+    need.ins
+      ? settled(() => indicacionesService.getInsumosByVisitaAndDate(numeroVisita, today, { days: 'all' }), [])
+      : Promise.resolve([]),
   ]);
   const indicaciones = filterIndicacionesClinicas(asArray(indicacionesRaw));
 
@@ -1278,7 +1314,13 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   }
 
   if (sections.includes('estudios')) {
-    out.estudios = filterEstudiosAd(estudiosRaw, fechaInicio, fechaFin, exportAll);
+    // Las interconsultas son pedidos tipo 33 pero tienen su propio bloque.
+    out.estudios = filterEstudiosAd(
+      asArray(estudiosRaw).filter((e) => e.idTipoPedido !== interconsultasService.ID_TIPO_INTERCONSULTA),
+      fechaInicio,
+      fechaFin,
+      exportAll,
+    );
   }
 
   if (sections.includes('protocolos')) {
@@ -1287,6 +1329,42 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
 
   if (sections.includes('epicrisis')) {
     out.epicrisis = filterEpicrisis(epicrisisRaw, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (need.inter) {
+    out.interconsultas = filterPorFecha(asArray(interconsultasRaw), (r) => r.FechaSolicitud, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (need.ctrl) {
+    out.controles = filterPorFecha(asArray(controlesRaw), (r) => r.FechaControl, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (need.dieta) {
+    // Copias: jsonSafe anula los objetos repetidos y estas filas también van en out.indicaciones.
+    out.dietas = filterIndicaciones(
+      asArray(indicacionesRaw).filter(esDieta).map((r) => structuredClone(r)),
+      fechaInicio,
+      fechaFin,
+      exportAll,
+    );
+  }
+
+  if (need.bal) {
+    out.balanceHidrico = filterPorFecha(asArray(balanceRaw), (r) => r.Fecha, fechaInicio, fechaFin, exportAll);
+  }
+
+  if (need.evoEnf) {
+    out.evolucionesEnfermeria = filterPorFecha(
+      asArray(evolucionesEnfermeriaRaw),
+      (r) => r.FechaControl,
+      fechaInicio,
+      fechaFin,
+      exportAll,
+    );
+  }
+
+  if (need.ins) {
+    out.insumos = filterPorFecha(asArray(insumosRaw), (r) => r.vigenteDesde, fechaInicio, fechaFin, exportAll);
   }
 
   if (sections.includes('adjuntos')) {

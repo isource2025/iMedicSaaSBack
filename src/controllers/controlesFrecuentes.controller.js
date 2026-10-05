@@ -43,7 +43,8 @@ const obtenerControlesPorVisitaYFecha = async (req, res) => {
 
         const resultado = await controlesFrecuentesService.obtenerControlesPorVisitaYFecha(
             numeroVisitaInt,
-            fecha
+            fecha,
+            req.query.days
         );
 
         console.log('🔵 [controlesFrecuentes.controller] Service returned:', {

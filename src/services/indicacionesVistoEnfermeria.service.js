@@ -1,13 +1,15 @@
 const { executeQuery } = require('../models/db');
 
 /**
- * "Nueva" para enfermería = Estado = 'N' en imInterIndMedicas (sistema Clarion).
+ * "Nueva" para enfermería = Estado = 'N' en imInterIndMedicas (sistema Clarion)
+ * y sin NroIndicacionAnterior: la reindicación diaria también entra con Estado 'N'
+ * pero apunta a la del día anterior, y no es una indicación nueva.
  * Al entrar al detalle de cama, enfermería limpia Estado N → NULL.
  * No usa tabla auxiliar: unifica con el sistema anterior.
  */
 
 const SQL_ES_NUEVA =
-	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) = 'N'";
+	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) = 'N' AND ISNULL(iim.NroIndicacionAnterior, 0) = 0";
 
 const OUTER_APPLY_COUNT = `
     OUTER APPLY (
@@ -33,14 +35,14 @@ const CASE_NUEVA_ENFERMERIA = `
 `;
 
 /**
- * Limpia el estado "nueva": Estado 'N' → NULL (padres de la visita).
- * @returns {{ actualizadas: number, nros: number[] }}
+ * Limpia el estado "nueva": Estado 'N' → NULL (padres de la visita, incluidas las reindicadas).
+ * @returns {{ actualizadas: number, nros: number[] }} nros: solo las nuevas de verdad (sin anterior).
  */
 async function marcarVistoPorVisita(numeroVisita, _operadorVista) {
 	const sql = `
 	UPDATE dbo.imInterIndMedicas
 	SET Estado = NULL
-	OUTPUT inserted.NroIndicacion
+	OUTPUT inserted.NroIndicacion, inserted.NroIndicacionAnterior
 	WHERE NumeroVisita = @param0
 	  AND ISNULL(NroAdicional, 0) = 0
 	  AND TipoIndicacion <> 9
@@ -50,9 +52,10 @@ async function marcarVistoPorVisita(numeroVisita, _operadorVista) {
 	const rows = await executeQuery(sql, [{ value: Number(numeroVisita) }]);
 	const list = Array.isArray(rows) ? rows : [];
 	const nros = list
+		.filter((r) => !Number(r.NroIndicacionAnterior ?? r.nroIndicacionAnterior ?? 0))
 		.map((r) => Number(r.NroIndicacion ?? r.nroIndicacion))
 		.filter((n) => Number.isFinite(n) && n > 0);
-	return { actualizadas: nros.length, nros };
+	return { actualizadas: list.length, nros };
 }
 
 async function listarNuevasResumen(numeroVisita, limit = 3) {
@@ -120,6 +123,58 @@ async function listarNuevasResumen(numeroVisita, limit = 3) {
 	}
 }
 
+const CONTEO_NUEVAS_TIMEOUT_MS = 4000;
+
+/**
+ * Indicaciones nuevas (Estado N) por visita, en una sola consulta agregada.
+ * Va aparte del listado de camas: el OUTER APPLY por fila colgaba el SQL en
+ * tenants grandes. Si tarda o falla, devuelve un Map vacío (el listado sigue).
+ * @param {Array<number|string>} visitas
+ * @returns {Promise<Map<number, number>>}
+ */
+async function contarNuevasPorVisitas(visitas) {
+	const ids = [...new Set((visitas || []).map(Number))].filter(
+		(n) => Number.isInteger(n) && n > 0,
+	);
+	const out = new Map();
+	if (!ids.length) return out;
+
+	const sql = `
+	SET LOCK_TIMEOUT 2000;
+	SELECT iim.NumeroVisita, COUNT(1) AS Nuevas
+	FROM dbo.imInterIndMedicas iim WITH (NOLOCK)
+	WHERE iim.NumeroVisita IN (${ids.join(',')})
+	  AND iim.Estado = 'N'
+	  AND ISNULL(iim.NroIndicacionAnterior, 0) = 0
+	  AND ISNULL(iim.NroAdicional, 0) = 0
+	  AND iim.TipoIndicacion <> 9
+	GROUP BY iim.NumeroVisita;
+	`;
+
+	let timer;
+	try {
+		const rows = await Promise.race([
+			executeQuery(sql),
+			new Promise((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`timeout ${CONTEO_NUEVAS_TIMEOUT_MS}ms`)),
+					CONTEO_NUEVAS_TIMEOUT_MS,
+				);
+			}),
+		]);
+		for (const r of Array.isArray(rows) ? rows : []) {
+			const nv = Number(r.NumeroVisita ?? r.numeroVisita);
+			const n = Number(r.Nuevas ?? r.nuevas ?? 0);
+			if (Number.isFinite(nv) && n > 0) out.set(nv, n);
+		}
+	} catch (e) {
+		console.warn('[indicacionesVistoEnfermeria] Conteo de nuevas omitido:', e?.message || e);
+	} finally {
+		clearTimeout(timer);
+	}
+	return out;
+}
+
 /** Compat: ya no hay tabla auxiliar; siempre disponible. */
 async function ensureTable() {
 	return true;
@@ -139,4 +194,5 @@ module.exports = {
 	SQL_ES_NUEVA,
 	marcarVistoPorVisita,
 	listarNuevasResumen,
+	contarNuevasPorVisitas,
 };

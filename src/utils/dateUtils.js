@@ -285,11 +285,33 @@ function restarDiasISO(fechaISO, dias) {
 	).padStart(2, '0')}`;
 }
 
+/**
+ * Filtro de período sobre una columna de fecha Clarion (Hoy / Semana / Mes / Todas).
+ * @param {string} columna - p. ej. 'iim.FechaCarga'
+ * @param {string} fechaISO - día de referencia YYYY-MM-DD
+ * @param {*} days - req.query.days ('0' | '7' | '30' | 'all'); vacío = solo el día
+ * @param {number} indiceParam - índice del primer @paramN libre
+ * @returns {{ sql: string, params: Array<{ value: number }> }} sql vacío = sin filtro
+ */
+function filtroPeriodoClarion(columna, fechaISO, days, indiceParam) {
+	const dias = parseDaysFiltro(days);
+	if (dias === null) return { sql: '', params: [] };
+	const hasta = convertirFechaAClarion(fechaISO);
+	if (dias === 0) {
+		return { sql: `${columna} = @param${indiceParam}`, params: [{ value: hasta }] };
+	}
+	return {
+		sql: `${columna} BETWEEN @param${indiceParam} AND @param${indiceParam + 1}`,
+		params: [{ value: convertirFechaAClarion(restarDiasISO(fechaISO, dias)) }, { value: hasta }],
+	};
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
 	parseDaysFiltro,
 	restarDiasISO,
+	filtroPeriodoClarion,
 	convertirFechaDesdeFormatoClarion,
 	convertirHoraDesdeFormatoClarion,
 	convertirFechaClarionADate,
