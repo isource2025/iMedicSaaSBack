@@ -25,6 +25,7 @@ const ALIAS_PROVINCIA = {
 	'CIUDAD AUTONOMA DE BUENOS AIRES': ['CAPITAL FEDERAL', 'CIUDAD DE BUENOS AIRES', 'CABA'],
 	'CAPITAL FEDERAL': ['CIUDAD AUTONOMA DE BUENOS AIRES', 'CIUDAD DE BUENOS AIRES', 'CABA'],
 	'TIERRA DEL FUEGO, ANTARTIDA E ISLAS DEL ATLANTICO SUR': ['TIERRA DEL FUEGO'],
+	'TIERRA DEL FUEGO ANTARTIDA E ISLAS DEL ATLANTICO SUR': ['TIERRA DEL FUEGO'],
 };
 
 /** Código de provincia de Georef para desambiguar nombres repetidos entre provincias. */
@@ -33,6 +34,69 @@ const GEOREF_PROVINCIA = {
 	'CIUDAD AUTONOMA DE BUENOS AIRES': '02',
 	'CAPITAL FEDERAL': '02',
 };
+
+/** Nombre de catálogo y letra ISO 3166-2:AR para dar de alta provincias faltantes. */
+const PROVINCIAS_AR = {
+	'CAPITAL FEDERAL': 'C',
+	'BUENOS AIRES': 'B',
+	CATAMARCA: 'K',
+	CHACO: 'H',
+	CHUBUT: 'U',
+	CORDOBA: 'X',
+	CORRIENTES: 'W',
+	'ENTRE RIOS': 'E',
+	FORMOSA: 'P',
+	JUJUY: 'Y',
+	'LA PAMPA': 'L',
+	'LA RIOJA': 'F',
+	MENDOZA: 'M',
+	MISIONES: 'N',
+	NEUQUEN: 'Q',
+	'RIO NEGRO': 'R',
+	SALTA: 'A',
+	'SAN JUAN': 'J',
+	'SAN LUIS': 'D',
+	'SANTA CRUZ': 'Z',
+	'SANTA FE': 'S',
+	'SANTIAGO DEL ESTERO': 'G',
+	'TIERRA DEL FUEGO': 'V',
+	TUCUMAN: 'T',
+};
+
+function nombreCanonicoProvincia(nombre) {
+	if (PROVINCIAS_AR[nombre]) return nombre;
+	return (ALIAS_PROVINCIA[nombre] || []).find((a) => PROVINCIAS_AR[a]) || null;
+}
+
+async function crearProvincia(canonico, rows) {
+	const usadas = new Set((rows || []).map((r) => String(r.LetraProvincia || '').trim()));
+	const iso = PROVINCIAS_AR[canonico];
+	const letra = !usadas.has(iso)
+		? iso
+		: [canonico.slice(0, 2), canonico.slice(0, 3), `${iso}1`].find((l) => !usadas.has(l));
+	if (!letra) return null;
+	const params = [
+		{ value: letra, type: 'VarChar', length: 3 },
+		{ value: canonico.slice(0, 30), type: 'VarChar', length: 30 },
+	];
+	// Valor es IDENTITY en algunas bases de clínica y manual en otras
+	const ident = await executeQuery(
+		`SELECT COLUMNPROPERTY(OBJECT_ID('imProvincia'), 'Valor', 'IsIdentity') AS esIdentity`,
+	);
+	if (Number(ident?.[0]?.esIdentity) === 1) {
+		await executeQuery(
+			`INSERT INTO imProvincia (LetraProvincia, Descripcion, ValorNacionalidad) VALUES (@p0, @p1, 'AR')`,
+			params,
+		);
+	} else {
+		const next = await executeQuery('SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM imProvincia');
+		await executeQuery(
+			`INSERT INTO imProvincia (LetraProvincia, Descripcion, ValorNacionalidad, Valor) VALUES (@p0, @p1, 'AR', @p2)`,
+			[...params, { value: Number(next[0]?.NextValor) || 1, type: 'Int' }],
+		);
+	}
+	return { letra, descripcion: canonico, creada: true };
+}
 
 async function resolverProvincia(provinciaRenaper) {
 	const nombre = aCatalogo(provinciaRenaper);
@@ -45,7 +109,8 @@ async function resolverProvincia(provinciaRenaper) {
 		const hit = (rows || []).find((r) => aCatalogo(r.Descripcion) === cand);
 		if (hit) return { letra: String(hit.LetraProvincia || '').trim(), descripcion: hit.Descripcion };
 	}
-	return null;
+	const canonico = nombreCanonicoProvincia(nombre);
+	return canonico ? crearProvincia(canonico, rows) : null;
 }
 
 async function buscarEnCatalogo(nombre, letraProvincia, esPatron) {

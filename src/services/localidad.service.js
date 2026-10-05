@@ -159,23 +159,35 @@ const localidadService = {
       const valorProvincia = String(data.ValorProvincia || '').trim();
       if (!nombre) throw new Error('El nombre de la localidad es obligatorio');
 
-      const next = await executeQuery(
-        'SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM imLocalidades',
-      );
-      const valor = Number(data.Valor) > 0 ? Number(data.Valor) : Number(next[0]?.NextValor) || 1;
-
-      const query = `
-        INSERT INTO imLocalidades (Valor, CodigoPostal, NombreLocalidad, Localidad, ValorProvincia)
-        VALUES (@p0, @p1, @p2, @p3, @p4)
-      `;
-
-      await executeQuery(query, [
-        { value: valor, type: 'Int' },
+      const campos = [
         { value: codigoPostal, type: 'Int' },
         { value: nombre, type: 'VarChar', length: 85 },
         { value: nombre.slice(0, 35), type: 'VarChar', length: 35 },
         { value: valorProvincia, type: 'VarChar', length: 3 },
-      ]);
+      ];
+
+      // Valor es IDENTITY en algunas bases de clínica y manual en otras
+      const ident = await executeQuery(
+        `SELECT COLUMNPROPERTY(OBJECT_ID('imLocalidades'), 'Valor', 'IsIdentity') AS esIdentity`,
+      );
+      if (Number(ident?.[0]?.esIdentity) === 1) {
+        await executeQuery(
+          `INSERT INTO imLocalidades (CodigoPostal, NombreLocalidad, Localidad, ValorProvincia)
+           VALUES (@p0, @p1, @p2, @p3)`,
+          campos,
+        );
+        return true;
+      }
+
+      const next = await executeQuery(
+        'SELECT ISNULL(MAX(Valor), 0) + 1 AS NextValor FROM imLocalidades',
+      );
+      const valor = Number(data.Valor) > 0 ? Number(data.Valor) : Number(next[0]?.NextValor) || 1;
+      await executeQuery(
+        `INSERT INTO imLocalidades (CodigoPostal, NombreLocalidad, Localidad, ValorProvincia, Valor)
+         VALUES (@p0, @p1, @p2, @p3, @p4)`,
+        [...campos, { value: valor, type: 'Int' }],
+      );
       return true;
     } catch (error) {
       console.error('Error al crear localidad:', error);
