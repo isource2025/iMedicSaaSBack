@@ -147,11 +147,15 @@ function Map-Path([string]$p) {
 		foreach ($root in @($LocalRoot, $UncRoot)) {
 			if (-not $root) { continue }
 			if (-not (Test-Path -LiteralPath $root)) { continue }
-			$dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
-				Where-Object { $_.Name -eq $visita -or $_.Name.StartsWith(($visita + ' ')) }
-			foreach ($d in $dirs) {
-				$c = Join-Path $d.FullName $name
-				if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			foreach ($pat in @($visita, ($visita + ' *'))) {
+				$enum = $null
+				try { $enum = [IO.Directory]::EnumerateDirectories($root, $pat) } catch { continue }
+				foreach ($full in $enum) {
+					$leaf = [IO.Path]::GetFileName($full)
+					if ($leaf -ne $visita -and -not $leaf.StartsWith($visita + ' ')) { continue }
+					$c = Join-Path $full $name
+					if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+				}
 			}
 		}
 	}

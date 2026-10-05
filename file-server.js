@@ -17,6 +17,7 @@
  */
 const express = require('express');
 const cors = require('cors');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
@@ -79,6 +80,59 @@ function existeArchivo(c) {
 	}
 }
 
+const carpetasVisitaCache = new Map();
+
+/** Solo las carpetas `166618` o `166618 APELLIDO`. No lista el disco entero. */
+function carpetasDeVisita(root, visita) {
+	if (!root || !/^\d+$/.test(visita)) return [];
+	const key = `${root.toLowerCase()}|${visita}`;
+	const prev = carpetasVisitaCache.get(key);
+	if (prev && Date.now() - prev.at < 60_000) return prev.names;
+
+	const names = [];
+	const directa = path.join(root, visita);
+	try {
+		if (fs.existsSync(directa) && fs.statSync(directa).isDirectory()) names.push(visita);
+	} catch {
+		/* no es carpeta */
+	}
+	if (process.platform === 'win32') {
+		const rootPs = String(root).replace(/'/g, "''");
+		const cmd =
+			`[IO.Directory]::EnumerateDirectories('${rootPs}','${visita} *') | ForEach-Object { [IO.Path]::GetFileName($_) }`;
+		try {
+			const out = execFileSync(
+				'powershell.exe',
+				['-NoProfile', '-NonInteractive', '-Command', cmd],
+				{ encoding: 'utf8', windowsHide: true, timeout: 20000 },
+			);
+			for (const line of String(out).split(/\r?\n/)) {
+				const name = line.trim();
+				if (name.startsWith(`${visita} `) && !names.includes(name)) names.push(name);
+			}
+		} catch {
+			/* sin coincidencias o disco ocupado: seguir con la carpeta exacta */
+		}
+	}
+	carpetasVisitaCache.set(key, { at: Date.now(), names });
+	return names;
+}
+
+function archivoEnCarpeta(folder, fileName, wantedLower) {
+	const exact = path.join(folder, fileName);
+	if (existeArchivo(exact)) return exact;
+	try {
+		for (const entrada of fs.readdirSync(folder, { withFileTypes: true })) {
+			if (!entrada.isFile()) continue;
+			if (decodeMultipartFilename(entrada.name).toLowerCase() !== wantedLower) continue;
+			return path.join(folder, entrada.name);
+		}
+	} catch {
+		/* carpeta ilegible */
+	}
+	return null;
+}
+
 /** Si la carpeta es `{visita} {PACIENTE}` y la ñ no coincide, busca por número de visita. */
 function buscarEnCarpetaVisita(rutaPedida) {
 	const base = String(rutaPedida || '');
@@ -98,27 +152,9 @@ function buscarEnCarpetaVisita(rutaPedida) {
 	const wanted = decodeMultipartFilename(fileName).toLowerCase();
 	for (const root of roots) {
 		if (!root || !fs.existsSync(root)) continue;
-		let dirs = [];
-		try {
-			dirs = fs.readdirSync(root, { withFileTypes: true });
-		} catch {
-			continue;
-		}
-		for (const d of dirs) {
-			if (!d.isDirectory()) continue;
-			if (d.name !== visita && !d.name.startsWith(`${visita} `)) continue;
-			const folder = path.join(root, d.name);
-			const exact = path.join(folder, fileName);
-			if (existeArchivo(exact)) return exact;
-			try {
-				for (const f of fs.readdirSync(folder)) {
-					if (decodeMultipartFilename(f).toLowerCase() !== wanted) continue;
-					const full = path.join(folder, f);
-					if (existeArchivo(full)) return full;
-				}
-			} catch {
-				/* carpeta ilegible */
-			}
+		for (const name of carpetasDeVisita(root, visita)) {
+			const hit = archivoEnCarpeta(path.join(root, name), fileName, wanted);
+			if (hit) return hit;
 		}
 	}
 	return null;
@@ -148,17 +184,12 @@ function buscarArchivo(rutaPedida) {
 	if (porVisita) return porVisita;
 
 	const buscado = decodeMultipartFilename(nombre).toLowerCase();
-	for (const carpeta of [path.dirname(rutaPedida || ''), UPLOAD_ROOT]) {
-		if (!carpeta || !fs.existsSync(carpeta)) continue;
-		try {
-			for (const entrada of fs.readdirSync(carpeta)) {
-				const full = path.join(carpeta, entrada);
-				if (!fs.statSync(full).isFile()) continue;
-				if (decodeMultipartFilename(entrada).toLowerCase() === buscado) return full;
-			}
-		} catch {
-			/* carpeta ilegible */
-		}
+	const parent = path.dirname(String(rutaPedida || ''));
+	const parentNorm = parent.replace(/[\\/]+$/, '').toLowerCase();
+	const rootNorm = String(UPLOAD_ROOT).replace(/[\\/]+$/, '').toLowerCase();
+	if (parent && parentNorm !== rootNorm) {
+		const hit = archivoEnCarpeta(parent, nombre, buscado);
+		if (hit) return hit;
 	}
 	return null;
 }
@@ -182,7 +213,7 @@ app.get(['/', '/health'], (req, res) => {
 		success: true,
 		ok: true,
 		status: 'ok',
-		encoding: 'utf8-v2',
+		encoding: 'utf8-v3',
 		root: UPLOAD_ROOT,
 		port: PORT,
 		maxMb: Math.round(MAX_BYTES / 1024 / 1024),

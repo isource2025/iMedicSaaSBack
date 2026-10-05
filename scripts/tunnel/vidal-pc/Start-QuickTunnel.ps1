@@ -101,21 +101,11 @@ function Get-HealthJson([string]$url) {
 
 function Test-ImedicFileServer {
 	$h = Get-HealthJson "http://127.0.0.1:$Port/health"
-	return ($h -and $h -match '"success"\s*:\s*true' -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"encoding"\s*:\s*"utf8-v2"')
+	return ($h -and $h -match '"success"\s*:\s*true' -and $h -match '"status"\s*:\s*"ok"' -and $h -match '"encoding"\s*:\s*"utf8-v3"')
 }
 
 function Stop-LegacyFileServers {
-	# Parche-Unc-Vidal / tarea programada vieja (encoding ps1-unc-v1) ocupa el 9012.
-	foreach ($taskName in @('iMedic File Server', 'iMedicFileServer')) {
-		try {
-			$t = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-			if ($t) {
-				Write-Host "Deteniendo tarea programada '$taskName'..."
-				Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-				Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-			}
-		} catch {}
-	}
+	# La tarea "iMedic File Server" es el arranque permanente. No se borra.
 
 	Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
 		Where-Object {
@@ -371,6 +361,27 @@ function Get-VidalDest([string]$root, [string]$visita, [string]$paciente, [strin
   if ($folder) { return (Join-Path (Join-Path $root $folder) $safeFile) }
   return (Join-Path $root $safeFile)
 }
+function Find-NamedFileInFolder([string]$folder, [string]$wantLower) {
+  if (-not $folder -or -not $wantLower) { return $null }
+  if (-not (Test-Path -LiteralPath $folder -PathType Container)) { return $null }
+  try {
+    foreach ($f in [IO.Directory]::EnumerateFiles($folder)) {
+      $have = (Sanitize-FileName ([IO.Path]::GetFileName($f))).ToLowerInvariant()
+      if ($have -eq $wantLower) { return $f }
+    }
+  } catch {}
+  return $null
+}
+function Find-VisitId([string]$path) {
+  if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+  $parts = @()
+  try { $parts += [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($path)) } catch {}
+  $parts += ($path -split '\\')
+  foreach ($seg in $parts) {
+    if ($seg -and $seg -match '^(\d+)(\s|$)') { return $Matches[1] }
+  }
+  return $null
+}
 function Find-ExistingFile([string]$p) {
   $names = New-Object System.Collections.Generic.List[string]
   foreach ($c in @($p, (Repair-Utf8Mojibake $p), (Legacy-UnderscoreN $p), (Legacy-UnderscoreN (Repair-Utf8Mojibake $p)))) {
@@ -395,17 +406,28 @@ function Find-ExistingFile([string]$p) {
     if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
   }
   $want = $fileName.ToLowerInvariant()
-  foreach ($folder in @($dir, $RootDir)) {
-    if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
-    foreach ($f in (Get-ChildItem -LiteralPath $folder -File -ErrorAction SilentlyContinue)) {
-      $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
-      if ($have -eq $want) { return $f.FullName }
-    }
-  }
-  if ($want -and (Test-Path -LiteralPath $RootDir)) {
-    foreach ($f in (Get-ChildItem -LiteralPath $RootDir -Recurse -File -ErrorAction SilentlyContinue)) {
-      $have = (Sanitize-FileName $f.Name).ToLowerInvariant()
-      if ($have -eq $want) { return $f.FullName }
+  # Carpeta pedida solamente: ahi hay pocos archivos.
+  $hit = Find-NamedFileInFolder $dir $want
+  if ($hit) { return $hit }
+  # Ultimo recurso: solo las carpetas de ESA visita (166618 o "166618 APELLIDO").
+  # No recorrer el arbol completo: eso trababa el unico hilo del servidor.
+  $visita = Find-VisitId $p
+  if (-not $visita -or -not (Test-Path -LiteralPath $RootDir -PathType Container)) { return $null }
+  FsLog "busqueda acotada visita=$visita archivo=$fileName"
+  $rawName = [IO.Path]::GetFileName($p)
+  foreach ($pat in @($visita, ($visita + ' *'))) {
+    $enum = $null
+    try { $enum = [IO.Directory]::EnumerateDirectories($RootDir, $pat) } catch { continue }
+    foreach ($full in $enum) {
+      $leaf = [IO.Path]::GetFileName($full)
+      if ($leaf -ne $visita -and -not $leaf.StartsWith($visita + ' ')) { continue }
+      foreach ($candidate in @($fileName, $rawName)) {
+        if (-not $candidate) { continue }
+        $direct = Join-Path $full $candidate
+        if (Test-Path -LiteralPath $direct -PathType Leaf) { return $direct }
+      }
+      $hit = Find-NamedFileInFolder $full $want
+      if ($hit) { return $hit }
     }
   }
   return $null
@@ -501,7 +523,7 @@ try {
       if ($req.HttpMethod -eq "OPTIONS") { Add-Cors $res; $res.StatusCode = 204; $res.Close(); continue }
       if ($req.HttpMethod -eq "GET" -and ($route -eq "/" -or $route -eq "/health")) {
         $rootEsc = $RootDir.Replace("\","\\")
-        Send-Json $res 200 "{""success"":true,""ok"":true,""status"":""ok"",""encoding"":""utf8-v2"",""root"":""$rootEsc"",""port"":$Port}"
+        Send-Json $res 200 "{""success"":true,""ok"":true,""status"":""ok"",""encoding"":""utf8-v3"",""root"":""$rootEsc"",""port"":$Port}"
         continue
       }
       if ($req.HttpMethod -eq "GET" -and $route -eq "/file") {
@@ -510,14 +532,19 @@ try {
         $found = Find-ExistingFile $p
         if (-not $found) { Send-Json $res 404 "{""success"":false,""error"":""Archivo no encontrado""}"; continue }
         $p = $found
-        $bytes = [IO.File]::ReadAllBytes($p)
-        Add-Cors $res
-        $res.StatusCode = 200
-        $res.ContentType = (Mime-Of $p)
-        $res.ContentLength64 = $bytes.LongLength
-        $res.AddHeader("Content-Disposition", "inline; filename=""" + [IO.Path]::GetFileName($p) + """")
-        $res.OutputStream.Write($bytes,0,$bytes.Length)
-        $res.Close()
+        $stream = $null
+        try {
+          $stream = [IO.File]::Open($p, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          Add-Cors $res
+          $res.StatusCode = 200
+          $res.ContentType = (Mime-Of $p)
+          $res.ContentLength64 = $stream.Length
+          $res.AddHeader("Content-Disposition", "inline; filename=""" + [IO.Path]::GetFileName($p) + """")
+          $stream.CopyTo($res.OutputStream)
+          $res.Close()
+        } finally {
+          if ($stream) { $stream.Dispose() }
+        }
         continue
       }
       if ($req.HttpMethod -eq "DELETE" -and $route -eq "/file") {
@@ -585,7 +612,7 @@ try {
 function Start-ImedicFileServer {
 	Stop-LegacyFileServers
 	Ensure-HttpUrlAcl $Port
-	Write-Host 'Reiniciando file server iMedic (utf8-v2, carpetas por visita + requisitos relativos)...'
+	Write-Host 'Reiniciando file server iMedic (utf8-v3, busqueda por visita, sin recorrer el disco)...'
 	Write-FileServerRuntime
 	foreach ($f in @($fsLog, $fsErrLog)) {
 		if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
@@ -613,7 +640,7 @@ function Start-ImedicFileServer {
 		if ($proc.HasExited) {
 			throw "File server termino con codigo $($proc.ExitCode). Ver $fsErrLog y $fsLog"
 		}
-		throw "File server iMedic no respondio encoding=utf8-v2 en http://127.0.0.1:$Port/health"
+		throw "File server iMedic no respondio encoding=utf8-v3 en http://127.0.0.1:$Port/health"
 	}
 	Probe-Utf8Filename
 }
@@ -650,10 +677,17 @@ function Save-FileServerUrlRest([string]$publicUrl) {
 	Invoke-RestMethod -Uri "$Api/super-admin/empresas/$EmpresaId/conexion" -Method PUT -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json; charset=utf-8' -Body ((@{ fileServerUrl = $publicUrl } | ConvertTo-Json)) | Out-Null
 }
 
+if (Get-ScheduledTask -TaskName 'iMedic File Server' -ErrorAction SilentlyContinue) {
+	Write-Host 'La tarea permanente "iMedic File Server" esta instalada.'
+	Write-Host 'No se borra, no se mata ese proceso y no se abre otro tunel.'
+	Write-Host 'Para reponerla: scripts\tunnel\Asegurar-FileServer.ps1'
+	exit 0
+}
+
 Write-Host 'iMedic - file server + tunel'
 Write-Host "Root: $Root"
 Start-ImedicFileServer
-Write-Host "File server OK  http://127.0.0.1:$Port/health  (encoding=utf8-v2)"
+Write-Host "File server OK  http://127.0.0.1:$Port/health  (encoding=utf8-v3)"
 
 if ($KeepTunnel) {
 	$url = $null
