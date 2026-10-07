@@ -134,13 +134,16 @@ async function contarEstudiosRespondidosPorVisitas(visitas) {
 	const out = new Map();
 	if (!ids.length) return out;
 
+	// Una solicitud agrupada cuenta una vez; sin la columna IdSolicitud (base sin migrar) cuenta por práctica.
+	const filtro = `WHERE pe.IdVisita IN (${ids.join(',')}) AND ISNULL(pe.IdProtocolo, 0) > 0 GROUP BY pe.IdVisita`;
 	const sql = `
 	SET LOCK_TIMEOUT 2000;
-	SELECT pe.IdVisita, COUNT(1) AS Respondidos
-	FROM dbo.imPedidosEstudios pe WITH (NOLOCK)
-	WHERE pe.IdVisita IN (${ids.join(',')})
-	  AND ISNULL(pe.IdProtocolo, 0) > 0
-	GROUP BY pe.IdVisita;
+	IF COL_LENGTH('dbo.imPedidosEstudios', 'IdSolicitud') IS NOT NULL
+	  EXEC sp_executesql N'SELECT pe.IdVisita, COUNT(DISTINCT COALESCE(pe.IdSolicitud, -pe.IdPedido)) AS Respondidos
+	    FROM dbo.imPedidosEstudios pe WITH (NOLOCK) ${filtro}';
+	ELSE
+	  SELECT pe.IdVisita, COUNT(1) AS Respondidos
+	  FROM dbo.imPedidosEstudios pe WITH (NOLOCK) ${filtro};
 	`;
 
 	let timer;

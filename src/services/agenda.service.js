@@ -2100,6 +2100,104 @@ function _msCierreDesdeClarion(fechaClarion, horaClarion) {
 	return Number.isFinite(t) ? t : null;
 }
 
+const _RANK_URGENCIA = { NORMAL: 0, MEDIO: 1, URGENTE: 2 };
+
+/** Un pedido (agrupado o no) no puede llevar la misma práctica dos veces. */
+async function _validarEstudiosRepetidos(items) {
+	const vistos = new Set();
+	for (const item of items) {
+		const cod = Number(item?.idPractica) || 0;
+		const clave = cod > 0 ? `p${cod}` : `t${Number(item?.idTipoPedido) || 0}`;
+		if (!vistos.has(clave)) {
+			vistos.add(clave);
+			continue;
+		}
+		let nombre = cod > 0 ? String(cod) : `tipo ${item?.idTipoPedido}`;
+		try {
+			const tipo = await estudiosService.resolverTipoPedidoEstudio(item?.idTipoPedido, item?.idPractica);
+			const desc = String(tipo?.DescPractica || '').trim();
+			if (desc) nombre = `${desc} (${tipo.IdPractica})`;
+		} catch {
+			/* se informa con el código */
+		}
+		const e = new Error(
+			`${nombre} está repetida en los pedidos de estudio: no se puede pedir la misma práctica dos veces.`,
+		);
+		e.statusCode = 400;
+		throw e;
+	}
+}
+
+/**
+ * Pedidos de estudios del turno: 2+ prácticas al mismo servicio → una solicitud con cabecera
+ * (igual que Internación). Si la solicitud no se puede crear (p. ej. el servicio no admite alguna
+ * práctica por prefijo), se registran sueltas como antes para no bloquear el cierre.
+ */
+async function _crearPedidosEstudiosTurno({ numeroVisita, matriculaMedico, sectorSolicitante, items, fechaPedido }) {
+	const solicitudesService = require('./solicitudesEstudios.service');
+	const out = { idsPedido: [], idsSolicitud: [] };
+	const porServicio = new Map();
+	for (const item of items) {
+		const k = String(item?.idSectorReceptor || '').trim().toUpperCase();
+		if (!porServicio.has(k)) porServicio.set(k, []);
+		porServicio.get(k).push(item);
+	}
+
+	const crearSuelto = async (item) => {
+		const creado = await estudiosService.crearPedido({
+			idVisita: numeroVisita,
+			matriculaSolicitante: matriculaMedico,
+			sectorSolicitante,
+			idTipoPedido: item?.idTipoPedido,
+			idPractica: item?.idPractica,
+			idSectorReceptor: item?.idSectorReceptor,
+			notas: item?.notas,
+			estadoUrgencia: item?.estadoUrgencia,
+			fechaPedido,
+		});
+		out.idsPedido.push(creado.idPedido);
+	};
+
+	for (const [servicio, grupo] of porServicio) {
+		if (grupo.length < 2 || !servicio) {
+			for (const item of grupo) await crearSuelto(item);
+			continue;
+		}
+		const notas = [...new Set(grupo.map((i) => String(i?.notas || '').trim()).filter(Boolean))].join('\n');
+		const urgencia = grupo.reduce((acc, i) => {
+			const u = String(i?.estadoUrgencia || 'Normal');
+			return (_RANK_URGENCIA[u.toUpperCase()] ?? 0) > (_RANK_URGENCIA[acc.toUpperCase()] ?? 0) ? u : acc;
+		}, 'Normal');
+		try {
+			const sol = await solicitudesService.crearSolicitud({
+				idVisita: numeroVisita,
+				matriculaSolicitante: matriculaMedico,
+				sectorSolicitante,
+				idSectorReceptor: grupo[0].idSectorReceptor,
+				items: grupo.map((i) => ({ idTipoPedido: i?.idTipoPedido, idPractica: i?.idPractica })),
+				notas,
+				estadoUrgencia: urgencia,
+				fechaSolicitud: fechaPedido,
+			});
+			out.idsSolicitud.push(Number(sol.idSolicitud));
+			for (const c of sol.items || []) out.idsPedido.push(Number(c.idPedido));
+		} catch (err) {
+			// crearSolicitud es transaccional: si falla no dejó nada a medias.
+			console.warn('[agenda] solicitud agrupada rechazada, se registran sueltos:', err?.message || err);
+			for (const item of grupo) await crearSuelto(item);
+		}
+	}
+	return out;
+}
+
+async function _borrarSolicitudesEstudios(idsSolicitud) {
+	for (const id of idsSolicitud) {
+		await executeQuery(`DELETE FROM dbo.imSolicitudesEstudios WHERE IdSolicitud = @p0`, [
+			{ value: id, type: 'Int' },
+		]).catch(() => {});
+	}
+}
+
 async function _resolverEdicionPostCierre({ numeroVisita, codOperador, valorPersonal }) {
 	const nv = Number(numeroVisita) || 0;
 	if (nv <= 0) {
@@ -2254,6 +2352,7 @@ async function cerrarTurno({
 		practicasExtra: [],
 		profesionalesExtra: [],
 		pedidosEstudios: [],
+		solicitudesEstudios: [],
 		pedidosInterconsultas: [],
 	};
 
@@ -2264,6 +2363,7 @@ async function cerrarTurno({
 		: [];
 	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
 	const now = new Date();
+	await _validarEstudiosRepetidos(listaPedidosEstudios);
 
 	try {
 		if (!yaTieneVisita) {
@@ -2396,19 +2496,16 @@ async function cerrarTurno({
 		}
 
 		// 5) Pedidos de estudios (vía Agenda — misma persistencia que Internación)
-		for (const item of listaPedidosEstudios) {
-			const creado = await estudiosService.crearPedido({
-				idVisita: numeroVisita,
-				matriculaSolicitante: matriculaMedico,
+		if (listaPedidosEstudios.length) {
+			const r = await _crearPedidosEstudiosTurno({
+				numeroVisita,
+				matriculaMedico,
 				sectorSolicitante,
-				idTipoPedido: item?.idTipoPedido,
-				idPractica: item?.idPractica,
-				idSectorReceptor: item?.idSectorReceptor,
-				notas: item?.notas,
-				estadoUrgencia: item?.estadoUrgencia,
+				items: listaPedidosEstudios,
 				fechaPedido: now,
 			});
-			creados.pedidosEstudios.push(creado.idPedido);
+			creados.pedidosEstudios.push(...r.idsPedido);
+			creados.solicitudesEstudios.push(...r.idsSolicitud);
 		}
 
 		// 5b) Interconsultas (tipo 33 → servicio destino)
@@ -2489,6 +2586,7 @@ async function cerrarTurno({
 				]);
 				await notificacionesService.eliminarPorEntidadPedido(idPed).catch(() => {});
 			}
+			await _borrarSolicitudesEstudios(creados.solicitudesEstudios);
 			for (let i = creados.profesionalesExtra.length - 1; i >= 0; i--) {
 				await executeQuery(`DELETE FROM dbo.imFacProfesionales WHERE IDFacProfesional = @p0`, [
 					{ value: creados.profesionalesExtra[i], type: 'Int' },
@@ -2598,6 +2696,7 @@ async function actualizarAtencionPostCierre({
 		? pedidosInterconsultas
 		: [];
 
+	await _validarEstudiosRepetidos(listaPedidosEstudios);
 	if (listaPedidosEstudios.some((p) => !String(p?.idSectorReceptor || '').trim())) {
 		const e = new Error('Cada pedido de estudio requiere servicio destino');
 		e.statusCode = 400;
@@ -2670,21 +2769,17 @@ async function actualizarAtencionPostCierre({
 		practicasExtra.push(extra.valorPractica);
 	}
 
-	const pedidosCreados = [];
-	for (const item of listaPedidosEstudios) {
-		const creado = await estudiosService.crearPedido({
-			idVisita: numeroVisita,
-			matriculaSolicitante: matriculaMedico,
-			sectorSolicitante,
-			idTipoPedido: item?.idTipoPedido,
-			idPractica: item?.idPractica,
-			idSectorReceptor: item?.idSectorReceptor,
-			notas: item?.notas,
-			estadoUrgencia: item?.estadoUrgencia,
-			fechaPedido: now,
-		});
-		pedidosCreados.push(creado.idPedido);
-	}
+	const pedidosCreados = listaPedidosEstudios.length
+		? (
+				await _crearPedidosEstudiosTurno({
+					numeroVisita,
+					matriculaMedico,
+					sectorSolicitante,
+					items: listaPedidosEstudios,
+					fechaPedido: now,
+				})
+			).idsPedido
+		: [];
 
 	const interconsultasService = require('./interconsultas.service');
 	const icsCreadas = [];

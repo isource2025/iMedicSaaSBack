@@ -563,7 +563,12 @@ async function _resolverItemsAlta(items) {
 		if (Number(tipo.IdTipoPedido) === 33) {
 			throw _httpError('Las interconsultas no se piden como estudios');
 		}
-		if (vistos.has(codPractica)) continue; // misma práctica repetida: se ignora
+		if (vistos.has(codPractica)) {
+			const nombre = String(tipo.DescPractica || '').trim() || codPractica;
+			throw _httpError(
+				`${nombre} (${codPractica}) está repetida: no se puede pedir la misma práctica dos veces en un mismo pedido.`,
+			);
+		}
 		vistos.add(codPractica);
 		resueltos.push({
 			idTipoPedido: Number(tipo.IdTipoPedido),
@@ -792,9 +797,10 @@ async function liberarSolicitud({ clave, matricula }) {
 }
 
 /**
- * Cumple la solicitud: UN informe compartido + una práctica facturable por ítem.
- * `idsPedidos` (opcional) permite cumplir solo algunas prácticas (queda PARCIAL).
- * Solo quien tomó la solicitud.
+ * Cumple la solicitud. Dos modos (una práctica facturable por ítem en ambos):
+ * - Informe único: `textoInforme` compartido por las prácticas (`idsPedidos` opcional → PARCIAL).
+ * - Informe por práctica: `respuestas: [{ idPedido, texto }]`, un protocolo por práctica.
+ * Todo en una transacción. Solo quien tomó la solicitud.
  */
 async function cumplirSolicitud({
 	clave,
@@ -803,11 +809,24 @@ async function cumplirSolicitud({
 	codOperador,
 	sectorServicio,
 	idsPedidos,
+	respuestas,
 }) {
 	await ensureSchema();
 	const n = _parseClave(clave);
+	const porPractica = Array.isArray(respuestas) && respuestas.length > 0;
 	const texto = String(textoInforme || '').trim();
-	if (!texto) throw _httpError('El informe / resultado es obligatorio');
+	if (!porPractica && !texto) throw _httpError('El informe / resultado es obligatorio');
+	const textoPorPedido = new Map();
+	if (porPractica) {
+		for (const r of respuestas) {
+			const id = Number(r?.idPedido);
+			const t = String(r?.texto || '').trim();
+			if (!Number.isFinite(id) || id <= 0) throw _httpError('Estudio inválido en las respuestas');
+			if (!t) throw _httpError('Cada estudio marcado necesita su informe / resultado');
+			if (textoPorPedido.has(id)) throw _httpError('Hay un estudio repetido en las respuestas');
+			textoPorPedido.set(id, t);
+		}
+	}
 	const matriculaSesion = Number(matriculaRealizador);
 	if (!Number.isFinite(matriculaSesion) || matriculaSesion <= 0) {
 		throw _httpError('matrícula del realizador inválida');
@@ -818,14 +837,22 @@ async function cumplirSolicitud({
 	let objetivo = items.filter(_sinProtocolo);
 	if (!objetivo.length) throw _httpError('La solicitud ya está cumplida', 409);
 
-	if (Array.isArray(idsPedidos) && idsPedidos.length) {
-		const pedidos = new Set(idsPedidos.map(Number));
+	const idsObjetivo = porPractica
+		? [...textoPorPedido.keys()]
+		: Array.isArray(idsPedidos) && idsPedidos.length
+			? idsPedidos.map(Number)
+			: null;
+	if (idsObjetivo) {
+		const pedidos = new Set(idsObjetivo);
 		const filtrados = objetivo.filter((i) => pedidos.has(Number(i.IdPedido)));
 		if (filtrados.length !== pedidos.size) {
 			throw _httpError('Hay estudios indicados que no pertenecen a la solicitud o ya están cumplidos', 409);
 		}
 		objetivo = filtrados;
 	}
+	const grupos = porPractica
+		? objetivo.map((it) => ({ texto: textoPorPedido.get(Number(it.IdPedido)), items: [it] }))
+		: [{ texto, items: objetivo }];
 
 	for (const it of objetivo) {
 		if (it.TomaMatricula == null) throw _httpError('Debe tomar la solicitud antes de cumplirla', 409);
@@ -854,76 +881,75 @@ async function cumplirSolicitud({
 	const fechaClarion = convertirFechaAClarion(fechaCalendarioArgentina(now));
 	const horaClarion = convertirHoraAClarion(horaWallArgentina(true, now));
 	const fechaWall = est.ahoraWallArgentina();
-	const textoRtf = est.plainToRtf(texto);
-	const sqlId = crypto.randomUUID().toUpperCase();
 
-	let idProtocolo = 0;
 	try {
 		await _tx(async (tx) => {
-			const resIns = await _req(tx, [
-				['visita', sql.Int, numeroVisita],
-				['fecha', sql.DateTime, fechaWall],
-				['texto', sql.VarChar(sql.MAX), textoRtf],
-				['codOp', sql.Int, codOp],
-				['servicio', sql.Char(4), sectorFac],
-				['sqlId', sql.Char(36), sqlId],
-			]).query(`
-				INSERT INTO dbo.imProtocolosResultados (
-					NumeroVisita, FechaResultado, FechaCarga, NroProtocolo,
-					TextoProtocolo, Estado, CodOperador, ValorServicio, SqlId
-				) VALUES (@visita, @fecha, @fecha, '', @texto, 'N', @codOp, @servicio, @sqlId);
-				SELECT SCOPE_IDENTITY() AS IdProtocolo`);
-			idProtocolo = Number(resIns.recordset?.[0]?.IdProtocolo) || 0;
-			if (idProtocolo <= 0) throw _httpError('No se pudo crear el resultado', 500);
-
-			for (const it of objetivo) {
-				const facIns = await _req(tx, [
+			for (const grupo of grupos) {
+				const resIns = await _req(tx, [
 					['visita', sql.Int, numeroVisita],
-					['practica', sql.Int, Number(it.IdPractica)],
-					['fechaC', sql.Int, fechaClarion],
-					['horaC', sql.Int, horaClarion],
-					['sector', sql.VarChar(4), sectorFac],
+					['fecha', sql.DateTime, fechaWall],
+					['texto', sql.VarChar(sql.MAX), est.plainToRtf(grupo.texto)],
 					['codOp', sql.Int, codOp],
-					['idPac', sql.Int, idPaciente > 0 ? idPaciente : null],
-					['idProt', sql.Int, idProtocolo],
+					['servicio', sql.Char(4), sectorFac],
+					['sqlId', sql.Char(36), crypto.randomUUID().toUpperCase()],
 				]).query(`
-					INSERT INTO dbo.imFacPracticas (
-						Numero, NumeroVisita, TipoPractica, Practica,
-						CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
-						ValorSector, FechaPrograma, HoraPrograma, CodOperador,
-						FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
-						NroInforme, NroAutorizacion, IdPaciente, IdProtocolo
-					) VALUES (
-						0, @visita, 'NO', @practica,
-						1, @fechaC, @horaC, 0,
-						@sector, @fechaC, @horaC, @codOp,
-						@fechaC, @horaC, 0, 2, 2, 0,
-						0, '', @idPac, @idProt
-					);
-					SELECT SCOPE_IDENTITY() AS Valor`);
-				const valorFac = Number(facIns.recordset?.[0]?.Valor) || 0;
-				if (valorFac <= 0) throw _httpError('No se pudo registrar la práctica', 500);
+					INSERT INTO dbo.imProtocolosResultados (
+						NumeroVisita, FechaResultado, FechaCarga, NroProtocolo,
+						TextoProtocolo, Estado, CodOperador, ValorServicio, SqlId
+					) VALUES (@visita, @fecha, @fecha, '', @texto, 'N', @codOp, @servicio, @sqlId);
+					SELECT SCOPE_IDENTITY() AS IdProtocolo`);
+				const idProtocolo = Number(resIns.recordset?.[0]?.IdProtocolo) || 0;
+				if (idProtocolo <= 0) throw _httpError('No se pudo crear el resultado', 500);
 
-				await _req(tx, [
-					['valor', sql.Int, valorFac],
-					['mat', sql.Int, matriculaFac],
-					['codOp', sql.Int, codOp],
-					['fechaC', sql.Int, fechaClarion],
-					['horaC', sql.Int, horaClarion],
-				]).query(`
-					INSERT INTO dbo.imFacProfesionales (
-						Valor, Matricula, Funcion, CodOperador, FachaGraba, HoraGraba, Factura, Status
-					) VALUES (@valor, @mat, 1, @codOp, @fechaC, @horaC, 0, 0)`);
+				for (const it of grupo.items) {
+					const facIns = await _req(tx, [
+						['visita', sql.Int, numeroVisita],
+						['practica', sql.Int, Number(it.IdPractica)],
+						['fechaC', sql.Int, fechaClarion],
+						['horaC', sql.Int, horaClarion],
+						['sector', sql.VarChar(4), sectorFac],
+						['codOp', sql.Int, codOp],
+						['idPac', sql.Int, idPaciente > 0 ? idPaciente : null],
+						['idProt', sql.Int, idProtocolo],
+					]).query(`
+						INSERT INTO dbo.imFacPracticas (
+							Numero, NumeroVisita, TipoPractica, Practica,
+							CantidadPractica, FechaPractica, HoraPracticaInicio, HoraPracticaFin,
+							ValorSector, FechaPrograma, HoraPrograma, CodOperador,
+							FechaGraba, HoraGraba, Factura, Estado, Autorizada, Status,
+							NroInforme, NroAutorizacion, IdPaciente, IdProtocolo
+						) VALUES (
+							0, @visita, 'NO', @practica,
+							1, @fechaC, @horaC, 0,
+							@sector, @fechaC, @horaC, @codOp,
+							@fechaC, @horaC, 0, 2, 2, 0,
+							0, '', @idPac, @idProt
+						);
+						SELECT SCOPE_IDENTITY() AS Valor`);
+					const valorFac = Number(facIns.recordset?.[0]?.Valor) || 0;
+					if (valorFac <= 0) throw _httpError('No se pudo registrar la práctica', 500);
 
-				const upd = await _req(tx, [
-					['idProt', sql.Int, idProtocolo],
-					['idPed', sql.Int, Number(it.IdPedido)],
-				]).query(`
-					UPDATE dbo.imPedidosEstudios SET IdProtocolo = @idProt
-					WHERE IdPedido = @idPed AND (IdProtocolo IS NULL OR IdProtocolo = 0);
-					SELECT @@ROWCOUNT AS n`);
-				if (Number(upd.recordset?.[0]?.n) !== 1) {
-					throw _httpError('No se pudo vincular el resultado a un estudio (¿ya cumplido?)', 409);
+					await _req(tx, [
+						['valor', sql.Int, valorFac],
+						['mat', sql.Int, matriculaFac],
+						['codOp', sql.Int, codOp],
+						['fechaC', sql.Int, fechaClarion],
+						['horaC', sql.Int, horaClarion],
+					]).query(`
+						INSERT INTO dbo.imFacProfesionales (
+							Valor, Matricula, Funcion, CodOperador, FachaGraba, HoraGraba, Factura, Status
+						) VALUES (@valor, @mat, 1, @codOp, @fechaC, @horaC, 0, 0)`);
+
+					const upd = await _req(tx, [
+						['idProt', sql.Int, idProtocolo],
+						['idPed', sql.Int, Number(it.IdPedido)],
+					]).query(`
+						UPDATE dbo.imPedidosEstudios SET IdProtocolo = @idProt
+						WHERE IdPedido = @idPed AND (IdProtocolo IS NULL OR IdProtocolo = 0);
+						SELECT @@ROWCOUNT AS n`);
+					if (Number(upd.recordset?.[0]?.n) !== 1) {
+						throw _httpError('No se pudo vincular el resultado a un estudio (¿ya cumplido?)', 409);
+					}
 				}
 			}
 		});

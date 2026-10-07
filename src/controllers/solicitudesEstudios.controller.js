@@ -224,6 +224,7 @@ async function cumplir(req, res) {
 			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 			idsPedidos: Array.isArray(body.idsPedidos) ? body.idsPedidos : undefined,
+			respuestas: Array.isArray(body.respuestas) ? body.respuestas : undefined,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

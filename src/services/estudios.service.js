@@ -1242,6 +1242,25 @@ async function _assertPedidoDelCreador(idPedido, sesion) {
 	return ped;
 }
 
+const _tieneColumnaIdSolicitud = createTenantOnce(async () => {
+	const r = await executeQuery(
+		`SELECT CASE WHEN COL_LENGTH(N'dbo.imPedidosEstudios', N'IdSolicitud') IS NULL THEN 0 ELSE 1 END AS ok`,
+	);
+	return !!r?.[0]?.ok;
+});
+
+/** Cabecera del pedido (null si se pidió suelto o la base no tiene solicitudes agrupadas). */
+async function _solicitudDePedido(idPedido) {
+	if (!(await _tieneColumnaIdSolicitud().catch(() => false))) return null;
+	const r = await executeQuery(
+		`SELECT IdSolicitud, IdSectorReceptor FROM dbo.imPedidosEstudios WHERE IdPedido = @p0`,
+		[{ value: Number(idPedido), type: 'Int' }],
+	);
+	const idSolicitud = Number(r?.[0]?.IdSolicitud) || 0;
+	if (idSolicitud <= 0) return null;
+	return { idSolicitud, sectorReceptor: String(r[0].IdSectorReceptor || '').trim() };
+}
+
 /** Pendiente = sin toma y sin resultado. Tomado/respondido: no se elimina. */
 async function _assertPedidoPendienteDelCreador(idPedido, sesion) {
 	const ped = await _assertPedidoDelCreador(idPedido, sesion);
@@ -1273,9 +1292,29 @@ async function actualizarPedido({
 	const urgencia = ['Normal', 'Urgente', 'Medio'].includes(urgRaw) ? urgRaw : 'Normal';
 	const notasFinal = notas != null ? _s(notas, 5000) : _s(ped.NotasObservacion, 5000);
 
+	const grupo = await _solicitudDePedido(id);
+	// En un pedido agrupado las notas y la urgencia son de la cabecera: se aplican a todas sus prácticas.
+	const propagarCabecera = async () => {
+		if (!grupo) return;
+		const params = [
+			{ value: grupo.idSolicitud, type: 'Int' },
+			{ value: notasFinal, type: 'VarChar' },
+			{ value: urgencia, type: 'VarChar' },
+		];
+		await executeQuery(
+			`UPDATE dbo.imPedidosEstudios SET NotasObservacion = @p1, EstadoUrgencia = @p2 WHERE IdSolicitud = @p0;
+			 UPDATE dbo.imSolicitudesEstudios SET NotasObservacion = @p1, EstadoUrgencia = @p2 WHERE IdSolicitud = @p0;`,
+			params,
+		);
+	};
+
 	const bloqueado = !!(ped.Cumplido || Number(ped.IdProtocolo) > 0 || ped.Tomado);
 	if (bloqueado) {
 		// Ya tomado/respondido: solo el motivo/notas y la urgencia del solicitante.
+		if (grupo) {
+			await propagarCabecera();
+			return obtenerPorId(id);
+		}
 		await executeQuery(
 			`UPDATE dbo.imPedidosEstudios
 			 SET NotasObservacion = @p1,
@@ -1299,6 +1338,31 @@ async function actualizarPedido({
 		throw _httpError(`Práctica inválida para pedido ${tipo.IdTipoPedido}`);
 	}
 
+	if (grupo) {
+		const servicioNuevo = String(idSectorReceptor).trim().toUpperCase();
+		if (servicioNuevo !== grupo.sectorReceptor.toUpperCase()) {
+			throw _httpError(
+				'Esta práctica es parte de un pedido agrupado y no se puede cambiar de servicio. ' +
+					'Eliminá la práctica y hacé un pedido nuevo al servicio que corresponde.',
+			);
+		}
+		const repetida = await executeQuery(
+			`SELECT TOP 1 1 AS x FROM dbo.imPedidosEstudios
+			 WHERE IdSolicitud = @p0 AND IdPedido <> @p1 AND IdPractica = @p2`,
+			[
+				{ value: grupo.idSolicitud, type: 'Int' },
+				{ value: id, type: 'Int' },
+				{ value: codPractica, type: 'Int' },
+			],
+		);
+		if (repetida?.length) {
+			const nombre = String(tipo.DescPractica || '').trim() || codPractica;
+			throw _httpError(
+				`${nombre} (${codPractica}) ya está en este pedido: no se puede pedir la misma práctica dos veces.`,
+			);
+		}
+	}
+
 	await executeQuery(
 		`UPDATE dbo.imPedidosEstudios
 		 SET NotasObservacion = @p1,
@@ -1317,6 +1381,7 @@ async function actualizarPedido({
 			{ value: Number(tipo.IdTipoPedido), type: 'Int' },
 		],
 	);
+	await propagarCabecera();
 	return obtenerPorId(id);
 }
 
@@ -1325,6 +1390,7 @@ async function eliminarPedido({ idPedido, matricula, valorPersonal, codOperador 
 	if (!Number.isFinite(id) || id <= 0) throw _httpError('idPedido inválido');
 	await _assertPedidoPendienteDelCreador(id, { matricula, valorPersonal, codOperador });
 	await ensureTomaTable();
+	const grupo = await _solicitudDePedido(id);
 	await executeQuery(`DELETE FROM dbo.imPedidosEstudiosToma WHERE IdPedido = @p0`, [
 		{ value: id, type: 'Int' },
 	]);
@@ -1334,6 +1400,14 @@ async function eliminarPedido({ idPedido, matricula, valorPersonal, codOperador 
 		   AND (IdProtocolo IS NULL OR IdProtocolo = 0)`,
 		[{ value: id, type: 'Int' }],
 	);
+	if (grupo) {
+		await executeQuery(
+			`DELETE FROM dbo.imSolicitudesEstudios
+			 WHERE IdSolicitud = @p0
+			   AND NOT EXISTS (SELECT 1 FROM dbo.imPedidosEstudios WHERE IdSolicitud = @p0)`,
+			[{ value: grupo.idSolicitud, type: 'Int' }],
+		);
+	}
 	try {
 		const notificacionesService = require('./notificaciones.service');
 		await notificacionesService.eliminarPorEntidadPedido(id);
@@ -1796,7 +1870,15 @@ async function actualizarResultado({
 	if (Number(upd.recordset?.[0]?.n) !== 1) {
 		throw _httpError('No se pudo actualizar el resultado', 409);
 	}
-	return obtenerPorId(Number(idPedido));
+	const compartidos = await executeQuery(
+		`SELECT IdPedido FROM dbo.imPedidosEstudios WHERE IdProtocolo = @p0 ORDER BY IdPedido`,
+		[{ value: idProt, type: 'Int' }],
+	);
+	const actualizado = await obtenerPorId(Number(idPedido));
+	return {
+		...actualizado,
+		PedidosConMismoInforme: (compartidos || []).map((r) => Number(r.IdPedido)),
+	};
 }
 
 /**
@@ -1805,10 +1887,12 @@ async function actualizarResultado({
  */
 async function listarRespondidosResumen(idVisita, limit = 3) {
 	const top = Math.min(Math.max(Number(limit) || 3, 1), 20);
+	const conSolicitud = await _tieneColumnaIdSolicitud().catch(() => false);
+	const clave = conSolicitud ? 'COALESCE(pe.IdSolicitud, -pe.IdPedido)' : '-pe.IdPedido';
 	const rows = await executeQuery(
 		`SET LOCK_TIMEOUT 3000;
 		 SELECT
-		   COUNT(1) OVER () AS Total,
+		   ${clave} AS Clave,
 		   pe.IdPractica AS CodigoPractica,
 		   CASE WHEN pe.IdTipoPedido = 33 THEN 'INTERCONSULTA' ELSE 'ESTUDIO' END AS Categoria,
 		   LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))), ''), ISNULL(nom.Descripcion, '')))) AS Descripcion,
@@ -1835,19 +1919,34 @@ async function listarRespondidosResumen(idVisita, limit = 3) {
 		   WHERE r.IdProtocolo = pe.IdProtocolo
 		 ) pr
 		 WHERE pe.IdVisita = @p0 AND ISNULL(pe.IdProtocolo, 0) > 0
-		 ORDER BY pr.FechaResultado DESC, pe.FechaPedido DESC
-		 OFFSET 0 ROWS FETCH NEXT ${top} ROWS ONLY`,
+		 ORDER BY pr.FechaResultado DESC, pe.FechaPedido DESC`,
 		[{ value: Number(idVisita), type: 'Int' }],
 	);
-	const list = Array.isArray(rows) ? rows : [];
-	return {
-		total: Number(list[0]?.Total || 0),
-		items: list.map((r) => ({
+	// Las prácticas de una misma solicitud se muestran como un solo ítem ("A y N más").
+	const grupos = new Map();
+	for (const r of Array.isArray(rows) ? rows : []) {
+		const k = String(r.Clave);
+		const g = grupos.get(k);
+		if (g) {
+			g.cantidad += 1;
+			continue;
+		}
+		grupos.set(k, {
 			codigo: r.CodigoPractica != null ? String(r.CodigoPractica).trim() : '',
 			categoria: r.Categoria,
 			descripcion: r.Descripcion || '',
 			especialidad: r.Especialidad || '',
 			fechaResultado: r.FechaResultado || null,
+			cantidad: 1,
+		});
+	}
+	const todos = [...grupos.values()];
+	return {
+		total: todos.length,
+		items: todos.slice(0, top).map(({ cantidad, ...it }) => ({
+			...it,
+			practicas: cantidad,
+			descripcion: cantidad > 1 && it.descripcion ? `${it.descripcion} y ${cantidad - 1} más` : it.descripcion,
 		})),
 	};
 }
