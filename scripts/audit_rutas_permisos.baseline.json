@@ -84,6 +84,7 @@
 	"miPerfil.routes.js GET /produccion-mes/convenios",
 	"miPerfil.routes.js PUT /",
 	"miPerfil.routes.js PUT /foto",
+	"miPerfil.routes.js PUT /password",
 	"nacionalidad.routes.js DELETE /:valor",
 	"nacionalidad.routes.js GET /",
 	"nacionalidad.routes.js GET /:valor",

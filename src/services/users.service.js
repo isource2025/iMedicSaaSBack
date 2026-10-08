@@ -704,6 +704,70 @@ const cambiarPassword = async (valorPersonal, nuevaPassword) => {
   }
 };
 
+function _errorHttp(mensaje, statusCode) {
+  const e = new Error(mensaje);
+  e.statusCode = statusCode;
+  return e;
+}
+
+/** El login de producción valida contra la copia MySQL; puede ir un paso adelantada al SQL del hospital. */
+async function _passwordCoincideEnCentral(valorPersonal, plain) {
+  const { isAuthCentralEnabled, getAuthCentralPool } = require('../config/authCentralDb');
+  const idEmpresa = Number(getTenantId());
+  if (!isAuthCentralEnabled() || !Number.isFinite(idEmpresa) || idEmpresa <= 0) return false;
+  try {
+    const pool = await getAuthCentralPool();
+    const [rows] = await pool.query(
+      'SELECT Password, PasswordHash FROM `imPassword` WHERE IdEmpresa = ? AND ValorPersonal = ? LIMIT 1',
+      [idEmpresa, Number(valorPersonal)],
+    );
+    const passwordService = require('./password.service');
+    return Boolean(rows?.[0]) && (await passwordService.verifyPassword(plain, rows[0]));
+  } catch (e) {
+    console.warn('[users] verificar contraseña en central:', e.message);
+    return false;
+  }
+}
+
+/**
+ * El usuario logueado cambia su propia contraseña: exige la actual.
+ * La nueva se guarda igual que cuando la cambia un administrador.
+ */
+const cambiarPasswordPropia = async (valorPersonal, passwordActual, passwordNueva) => {
+  const vp = Number(valorPersonal);
+  if (!Number.isFinite(vp) || vp <= 0) throw _errorHttp('No se pudo identificar tu usuario', 400);
+  const actual = String(passwordActual || '');
+  const nueva = String(passwordNueva || '').trim();
+  if (!actual.trim()) throw _errorHttp('Ingresá tu contraseña actual', 400);
+  if (nueva.length < 4) throw _errorHttp('La contraseña nueva debe tener al menos 4 caracteres', 400);
+
+  const cols = await getImPasswordColumns();
+  const max = Number(colInfo(cols, 'Password')?.maxlen);
+  if (Number.isFinite(max) && max > 0 && max < 8000 && nueva.length > max) {
+    throw _errorHttp(`La contraseña nueva puede tener como máximo ${max} caracteres`, 400);
+  }
+
+  const conHash = Boolean(colInfo(cols, 'PasswordHash'));
+  const rows = await executeQuery(
+    `SELECT TOP 1 Password${conHash ? ', PasswordHash' : ''} FROM dbo.imPassword WHERE ValorPersonal = @p0`,
+    [{ value: vp, type: 'Int' }],
+  );
+  if (!rows?.length) throw _errorHttp('Tu usuario no tiene cuenta de acceso en esta clínica', 404);
+
+  const passwordService = require('./password.service');
+  const actualOk =
+    (await passwordService.verifyPassword(actual, rows[0])) ||
+    (await _passwordCoincideEnCentral(vp, actual));
+  // 400 y no 401: el front cierra la sesión ante un 401.
+  if (!actualOk) throw _errorHttp('La contraseña actual no es correcta', 400);
+  if (passwordService.matchesLegacyPassword(nueva, actual)) {
+    throw _errorHttp('La contraseña nueva tiene que ser distinta de la actual', 400);
+  }
+
+  await cambiarPassword(vp, nueva);
+  return true;
+};
+
 /**
  * Asigna un sector a un usuario
  * @param {number} valorPersonal - ID del usuario
@@ -989,6 +1053,7 @@ module.exports = {
   crearUsuario,
   crearImPasswordParaPersonal,
   cambiarPassword,
+  cambiarPasswordPropia,
   asignarSector,
   quitarSector,
   actualizarUsuario

@@ -1,4 +1,5 @@
 const miPerfilService = require('../services/miPerfil.service');
+const usersService = require('../services/users.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const obtenerPerfil = async (req, res) => {
@@ -63,9 +64,24 @@ const listarConveniosProduccion = async (req, res) => {
 	}
 };
 
+const cambiarPassword = async (req, res) => {
+	try {
+		const { passwordActual, passwordNueva } = req.body || {};
+		await usersService.cambiarPasswordPropia(req.valorPersonal, passwordActual, passwordNueva);
+		res.json({ success: true, mensaje: 'Contraseña actualizada' });
+	} catch (error) {
+		console.error('[miPerfil.cambiarPassword]', error.message);
+		res.status(statusDeError(error)).json({
+			success: false,
+			mensaje: mensajeDeError(error, 'Error al cambiar la contraseña'),
+		});
+	}
+};
+
 module.exports = {
 	obtenerPerfil,
 	rechazarCambio,
+	cambiarPassword,
 	obtenerFotoPerfil,
 	obtenerProduccionMes,
 	listarConveniosProduccion,
