@@ -154,6 +154,9 @@ function describeFileServerError(err) {
 	) {
 		return 'El túnel de adjuntos está caído (Cloudflare 530). La PC de la clínica está apagada o sin internet: cuando vuelva, el servicio cloudflared reconecta solo con el mismo hostname.';
 	}
+	if (status === 502) {
+		return 'El túnel de adjuntos está conectado pero el file server de la PC de la clínica no responde (Cloudflare 502). En esa PC inicie sesión en Windows y ejecute Start-ScheduledTask -TaskName "iMedic File Server"; debe responder http://127.0.0.1:9012/health.';
+	}
 	if (err && (err.code === 'FILE_SERVER_BAD_UPLOAD' || err.code === 'FILE_SERVER_URL_MISSING')) {
 		return err.message;
 	}
