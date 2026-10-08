@@ -298,6 +298,25 @@ async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, 
   return id;
 }
 
+/**
+ * imPassword (Clarion) no tiene índice único en NombreRed: sin este control se duplican
+ * cuentas y el login termina eligiendo una fila arbitraria.
+ */
+async function assertNombreRedLibre(nombreRed) {
+  const rows = await executeQuery(
+    `SELECT TOP 1 ValorPersonal FROM dbo.imPassword
+      WHERE UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0)))`,
+    [{ value: String(nombreRed || ''), type: 'VarChar' }],
+  );
+  if (rows.length) {
+    const e = new Error(
+      `Ya existe un usuario con el nombre de acceso "${String(nombreRed).trim()}" (ValorPersonal ${rows[0].ValorPersonal ?? 'vacío'}). Elegí otro.`,
+    );
+    e.statusCode = 409;
+    throw e;
+  }
+}
+
 function splitApellidoNombre(apellidoNombre) {
   const s = String(apellidoNombre || '').trim();
   if (!s) return { apellido: '', nombres: '' };
@@ -554,6 +573,7 @@ const crearUsuario = async (userData) => {
       legajo 
     } = userData;
 
+    await assertNombreRedLibre(nombreRed);
     const cols = await getImPasswordColumns();
     const fechaTipo = await getImPasswordFechaActualTipo();
     const hoy = new Date();
@@ -963,6 +983,7 @@ async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
     return obtenerUsuarioPorId(vp);
   }
 
+  await assertNombreRedLibre(nombreRed);
   const fechaTipo = await getImPasswordFechaActualTipo();
   const hoy = new Date();
   const fechaLocalStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;

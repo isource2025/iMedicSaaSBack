@@ -288,6 +288,15 @@ async function completarLogin({
 	ip,
 	userAgent,
 }) {
+	// requireAuth rechaza tokens sin ValorPersonal > 0: emitirlo deja al usuario logueado
+	// pero con 401 en cada request (pantalla cargando sin fin).
+	if (!(Number(usuario?.ValorPersonal) > 0)) {
+		const e = new Error(
+			'Tu usuario no está vinculado a una ficha de personal. Pedí al administrador que lo vincule para poder ingresar.',
+		);
+		e.statusCode = 403;
+		throw e;
+	}
 	let rolPreliminar = resolverRol(usuario);
 	// SUPER_ADMIN solo existe en la plataforma. Dentro de un hospital el rol
 	// llega de un imPersonal.Rol='5' desalineado, y el JWT se firma con este rol

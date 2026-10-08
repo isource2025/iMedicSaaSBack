@@ -44,12 +44,14 @@ async function listarEmpresasActivas() {
 
 
 /**
- * Autentica en una BD tenant concreta.
+ * Filas candidatas de login para un NombreRed, en el orden en que se prueban.
+ * Puede haber filas duplicadas por NombreRed (p. ej. una vieja con ValorPersonal 0):
+ * van primero las vinculadas a una ficha y gana la primera cuya clave coincide.
  */
-async function autenticarEnTenant(idEmpresa, username, password) {
+async function filasLoginEnTenant(idEmpresa, username) {
 	const pool = await getTenantPool(idEmpresa);
 	const result = await pool.request().input('user', username).query(`
-      SELECT TOP 1
+      SELECT
         pw.*,
         p.Matricula AS Matricula,
         r.IdRol AS RolId,
@@ -62,13 +64,24 @@ async function autenticarEnTenant(idEmpresa, username, password) {
           UPPER(RTRIM(LTRIM(pw.NombreRed))) = UPPER(RTRIM(LTRIM(@user)))
           OR UPPER(RTRIM(LTRIM(pw.nombrered))) = UPPER(RTRIM(LTRIM(@user)))
         )
+      ORDER BY
+        CASE WHEN ISNULL(pw.ValorPersonal, 0) > 0 THEN 0 ELSE 1 END,
+        CASE WHEN p.Valor IS NOT NULL THEN 0 ELSE 1 END
     `);
+	return { pool, filas: result.recordset || [] };
+}
 
-	const row = result.recordset?.[0];
-	if (!row) return null;
-	if (!(await passwordService.verifyPassword(password, row))) return null;
-	await passwordService.upgradePasswordHashTenant(pool, row.ValorPersonal, password);
-	return row;
+/**
+ * Autentica en una BD tenant concreta.
+ */
+async function autenticarEnTenant(idEmpresa, username, password) {
+	const { pool, filas } = await filasLoginEnTenant(idEmpresa, username);
+	for (const row of filas) {
+		if (!(await passwordService.verifyPassword(password, row))) continue;
+		await passwordService.upgradePasswordHashTenant(pool, row.ValorPersonal, password);
+		return row;
+	}
+	return null;
 }
 
 /** Agrupa empresas del catálogo que comparten la misma conexión SQL (evita duplicar por misma BD). */
@@ -454,6 +467,7 @@ module.exports = {
 	listarEmpresasActivas,
 	descubrirEmpresasPorUsuario,
 	resolverLogin,
+	filasLoginEnTenant,
 	autenticarEnTenant,
 	autenticarEnPlataforma,
 	empresasDelUsuarioEnTenant,

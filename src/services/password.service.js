@@ -59,7 +59,8 @@ async function upgradePasswordHashCentral(idEmpresa, valorPersonal, plain) {
 }
 
 async function upgradePasswordHashTenant(pool, valorPersonal, plain) {
-	if (!pool || !plain) return;
+	// El UPDATE es por ValorPersonal: con 0/NULL pisaría la clave de todas las cuentas sin ficha.
+	if (!pool || !plain || !(Number(valorPersonal) > 0)) return;
 	try {
 		const hash = await hashPassword(plain);
 		const cols = await pool.request().query(`
