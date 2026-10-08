@@ -435,7 +435,7 @@ async function contarLibres({ valorPersonal } = {}) {
 		   UPPER(LTRIM(RTRIM(pe.IdSectorReceptor))) AS valor,
 		   COUNT(DISTINCT COALESCE(pe.IdSolicitud, -pe.IdPedido)) AS solicitudes,
 		   COUNT(*) AS items,
-		   COUNT(DISTINCT CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(pe.EstadoUrgencia, '')))) = 'URGENTE'
+		   COUNT(DISTINCT CASE WHEN UPPER(ISNULL(pe.EstadoUrgencia, '')) LIKE '%URGENT%'
 		                       THEN COALESCE(pe.IdSolicitud, -pe.IdPedido) END) AS urgentes
 		 FROM dbo.imPedidosEstudios pe
 		 LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido

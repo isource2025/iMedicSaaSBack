@@ -885,9 +885,14 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 		    ISNULL(SUM(CASE WHEN ISNULL(pe.IdTipoPedido, 0) <> 33 THEN 1 ELSE 0 END), 0) AS estudios,
 		    ISNULL(SUM(CASE WHEN pe.IdTipoPedido = 33 THEN 1 ELSE 0 END), 0) AS interconsultas,
 		    ISNULL(SUM(CASE
-		      WHEN NULLIF(LTRIM(RTRIM(ISNULL(CAST(pe.EstadoUrgencia AS varchar(40)), ''))), '') IS NOT NULL
+		      WHEN UPPER(ISNULL(CAST(pe.EstadoUrgencia AS varchar(40)), '')) LIKE '%URGENT%'
 		      THEN 1 ELSE 0
-		    END), 0) AS urgentes
+		    END), 0) AS urgentes,
+		    ISNULL(SUM(CASE
+		      WHEN pe.IdTipoPedido = 33
+		       AND UPPER(ISNULL(CAST(pe.EstadoUrgencia AS varchar(40)), '')) LIKE '%URGENT%'
+		      THEN 1 ELSE 0
+		    END), 0) AS urgentesInterconsultas
 		 FROM dbo.imPedidosEstudios pe
 		 LEFT JOIN dbo.imPedidosEstudiosToma toma ON toma.IdPedido = pe.IdPedido
 		 WHERE LTRIM(RTRIM(pe.IdSectorReceptor)) IN (${inList})
@@ -905,6 +910,7 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 			estudios: Number(r.estudios) || 0,
 			interconsultas: Number(r.interconsultas) || 0,
 			urgentes: Number(r.urgentes) || 0,
+			urgentesInterconsultas: Number(r.urgentesInterconsultas) || 0,
 		});
 	}
 
@@ -914,11 +920,13 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 			let estudios = 0;
 			let interconsultas = 0;
 			let urgentes = 0;
+			let urgentesInterconsultas = 0;
 			for (const [key, hit] of byCode) {
 				if (!keys.has(key)) continue;
 				estudios += hit.estudios;
 				interconsultas += hit.interconsultas;
 				urgentes += hit.urgentes;
+				urgentesInterconsultas += hit.urgentesInterconsultas;
 			}
 			return {
 				valor: s.valor,
@@ -928,6 +936,7 @@ async function contarLibresPorServicios({ valorPersonal, sectoresSesion } = {}) 
 				estudios,
 				interconsultas,
 				urgentes,
+				urgentesInterconsultas,
 				total: estudios + interconsultas,
 			};
 		})
