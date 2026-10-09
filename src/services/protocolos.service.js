@@ -1074,7 +1074,7 @@ async function actualizarProtocolo(
 		}
 		if (!plan.insertar.length && !plan.actualizar.length && !vistos.size) {
 			throw _httpError(
-				'El protocolo debe tener al menos una práctica. Para descartarlo entero, borrá el protocolo.',
+				'El protocolo debe tener al menos una práctica. Agregá una, o para descartarlo entero, borrá el protocolo.',
 			);
 		}
 	}
