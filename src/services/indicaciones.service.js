@@ -1096,14 +1096,6 @@ INSERT INTO imInterIndMedicas (
     }
 };
 
-const obtenerAutorIndicacion = async (nroIndicacion) => {
-    const rows = await executeQuery(
-        `SELECT NumeroVisita, ProfesionalAsiste FROM dbo.imInterIndMedicas WHERE NroIndicacion = @param0`,
-        [{ value: Number(nroIndicacion) }],
-    );
-    return rows?.[0] || null;
-};
-
 const getIndicacionById = async (nroIndicacion) => {
     const sql = `
 SELECT 
@@ -1922,7 +1914,6 @@ module.exports = {
     deleteIndicacion,
     deleteIndicacionHija,
     getIndicacionById,
-    obtenerAutorIndicacion,
     updateIndicacion,
     aplicarIndicacion,
     crearIndicacionHija,
