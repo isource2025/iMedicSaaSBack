@@ -16,6 +16,7 @@ const { isPlatformSuperAdminIdentity } = require('../config/tenantIdentity');
 const matrizPermisos = require('../utils/permisos');
 
 const ROL_SUPER_ADMIN = Object.freeze({ id: 5, nombre: 'SUPER_ADMIN', nivel: 200 });
+const ROLES_SIN_MATRICULA = new Set(['ADMIN', 'ADMINISTRADOR', 'ADMINISTRATIVO', 'SUPER_ADMIN']);
 
 function esCuentaPlataforma(userData, username) {
 	return isPlatformSuperAdminIdentity({
@@ -459,8 +460,33 @@ async function completarLogin({
 	const esRolClinicoConMatricula = rolNombreLogin
 		? rolNombreLogin === 'MEDICO' || rolNombreLogin === 'MÉDICO'
 		: String(usuario?.PersonalRol || '').trim() === '2';
+	let esAdministrador =
+		/^admin[a-z0-9._-]*$/i.test(String(username || '').trim()) ||
+		Number(usuario?.Grupo) === 11 ||
+		String(usuario?.PersonalRol || '').trim() === '1';
+	if (
+		!esAdministrador &&
+		esRolClinicoConMatricula &&
+		idEmpresaEfectiva != null &&
+		Number(idEmpresaEfectiva) > 0 &&
+		usuario?.ValorPersonal != null
+	) {
+		try {
+			const { listarRolesDeValorPersonal } = require('./authCentral.service');
+			const rolesUsuario = await listarRolesDeValorPersonal(
+				Number(idEmpresaEfectiva),
+				usuario.ValorPersonal,
+			);
+			esAdministrador = rolesUsuario.some((r) =>
+				ROLES_SIN_MATRICULA.has(String(r.RolBase || r.nombre || '').trim().toUpperCase()),
+			);
+		} catch (e) {
+			console.warn('[auth.login] Roles para matrícula:', e.message);
+		}
+	}
 	if (
 		!esSuperAdmin &&
+		!esAdministrador &&
 		esRolClinicoConMatricula &&
 		idEmpresaEfectiva != null &&
 		Number(idEmpresaEfectiva) > 0 &&
