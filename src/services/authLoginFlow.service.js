@@ -456,10 +456,9 @@ async function completarLogin({
 	}
 
 	const rolNombreLogin = String(rol?.nombre || usuario?.RolNombre || '').trim().toUpperCase();
-	const esRolClinicoConMatricula =
-		rolNombreLogin === 'MEDICO' ||
-		rolNombreLogin === 'MÉDICO' ||
-		String(usuario?.PersonalRol || '').trim() === '2';
+	const esRolClinicoConMatricula = rolNombreLogin
+		? rolNombreLogin === 'MEDICO' || rolNombreLogin === 'MÉDICO'
+		: String(usuario?.PersonalRol || '').trim() === '2';
 	if (
 		!esSuperAdmin &&
 		esRolClinicoConMatricula &&
