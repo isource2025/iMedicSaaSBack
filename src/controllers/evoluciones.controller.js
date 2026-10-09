@@ -89,15 +89,11 @@ const crearEvolucion = async (req, res) => {
             });
         }
 
-        data.IdSector = await evolucionesService.resolverSectorProfesional(
-            req.valorPersonal,
-            req.idSector,
-            data.IdSector
-        );
+        data.IdSector = await evolucionesService.resolverSectorInternacion(data.IdVisita, data.IdSector);
         if (!data.IdSector) {
             return res.status(400).json({
                 success: false,
-                mensaje: "Tu usuario no tiene un sector asignado para registrar la evolución"
+                mensaje: "No se encontró en qué sector está internado el paciente. Revisá que tenga cama asignada."
             });
         }
 

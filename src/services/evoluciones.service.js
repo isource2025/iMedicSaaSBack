@@ -109,24 +109,28 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
 };
 
 /**
- * Sector de quien evoluciona (imPersonalSectores), no el de la cama del paciente.
- * El sector de la sesión sólo vale si es uno de los asignados al profesional en esta clínica.
+ * Sector donde está actualmente la internación (cama ocupada por la visita; si no tiene, imVisita),
+ * no el del profesional que evoluciona.
  */
-const resolverSectorProfesional = async (valorPersonal, sectorSesion, sectorEnviado) => {
-    const sesion = String(sectorSesion || '').trim();
-    const vp = Number(valorPersonal);
-    if (Number.isFinite(vp) && vp > 0) {
+const resolverSectorInternacion = async (idVisita, sectorEnviado) => {
+    const nv = Number(idVisita);
+    if (Number.isFinite(nv) && nv > 0) {
         const filas = await executeQuery(
-            `SELECT LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) AS idSector
-             FROM dbo.imPersonalSectores WHERE idPersonal = @param0 ORDER BY idSector`,
-            [{ value: vp }]
+            `SELECT TOP 1 LTRIM(RTRIM(ISNULL(COALESCE(bed.ValorSector, v.VALORSECTOR), ''))) AS sector
+             FROM dbo.imVisita v
+             OUTER APPLY (
+                 SELECT TOP 1 hc.ValorSector
+                 FROM dbo.imHabitacionCamas hc
+                 WHERE hc.NumeroVisita = v.NUMEROVISITA
+                 ORDER BY CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.ValorEstadoCama, '')))) = 'O' THEN 0 ELSE 1 END
+             ) bed
+             WHERE v.NUMEROVISITA = @param0`,
+            [{ value: nv }]
         );
-        const propios = (filas || []).map((f) => String(f.idSector || '').trim()).filter(Boolean);
-        if (propios.length) {
-            return propios.find((s) => s.toUpperCase() === sesion.toUpperCase()) || propios[0];
-        }
+        const actual = String(filas?.[0]?.sector || '').trim();
+        if (actual) return actual;
     }
-    return sesion || String(sectorEnviado || '').trim() || null;
+    return String(sectorEnviado || '').trim() || null;
 };
 
 /**
@@ -282,7 +286,7 @@ const actualizarEvolucion = async (id, data) => {
 
 module.exports = {
     obtenerEvolucionesPorVisitaYFecha,
-    resolverSectorProfesional,
+    resolverSectorInternacion,
     crearEvolucion,
     obtenerEvolucionPorId,
     eliminarEvolucion,
