@@ -17,6 +17,8 @@
  *   node scripts/migrar_autor_reindicaciones.js --env-file .env.railway.local 101 --aplicar
  *   node scripts/migrar_autor_reindicaciones.js ... --visita 588                            (una internación)
  *   node scripts/migrar_autor_reindicaciones.js ... --desde 2026-06-15                      (fecha de carga mínima de la copia)
+ *   node scripts/migrar_autor_reindicaciones.js ... 101 --revertir scripts/backups/x.json --probar|--aplicar
+ *     (devuelve cada fila del respaldo al profesional que tenía antes de la migración)
  */
 const path = require('path');
 const fs = require('fs');
@@ -38,7 +40,8 @@ const valorDe = (flag) => {
 	const i = process.argv.indexOf(flag);
 	return i >= 0 ? process.argv[i + 1] : undefined;
 };
-const conValor = new Set(['--env-file', '--visita', '--desde']);
+const conValor = new Set(['--env-file', '--visita', '--desde', '--revertir']);
+const archivoRevertir = valorDe('--revertir');
 const args = process.argv.slice(2).filter((a, i, all) => !conValor.has(a) && !conValor.has(all[i - 1]));
 const aplicar = args.includes('--aplicar');
 const probar = !aplicar && args.includes('--probar');
@@ -230,10 +233,35 @@ SELECT @ok AS Ok, CASE WHEN @ok = 1 AND @param0 = 1 THEN 'COMMIT' ELSE 'ROLLBACK
 	return res?.[0] || null;
 }
 
+async function revertir() {
+	if (!only) {
+		console.error('--revertir requiere el número de empresa del respaldo');
+		process.exit(1);
+	}
+	const respaldo = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), archivoRevertir), 'utf8'));
+	// corregirEmpresa pasa de ProfActual a ProfRaiz: se invierten para volver al valor previo.
+	const rows = respaldo.map((r) => ({
+		NroIndicacion: r.NroIndicacion,
+		ProfActual: r.ProfRaiz,
+		ProfRaiz: Number(r.ProfActual) || 0,
+	}));
+	console.log(
+		aplicar ? '== REVIRTIENDO (COMMIT solo si la verificación pasa) ==' : '== PRUEBA DE REVERSIÓN (ROLLBACK) ==',
+		`empresa ${only}, ${rows.length} indicaciones`,
+	);
+	const r = await conTimeout(runWithTenant(only, () => corregirEmpresa(rows, aplicar)), TIMEOUT_MS);
+	console.table([r]);
+	process.exit(r?.Ok ? 0 : 1);
+}
+
 async function main() {
 	if (!isAuthCentralEnabled()) {
 		console.error('Sin AUTH_DB_* en el entorno: usar --env-file .env.railway.local');
 		process.exit(1);
+	}
+	if (archivoRevertir) {
+		await revertir();
+		return;
 	}
 	const mysql = await getAuthCentralPool();
 	const [list] = await mysql.query(
