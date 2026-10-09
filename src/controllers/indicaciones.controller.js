@@ -235,10 +235,24 @@ const nuevaIndicacion = async (req, res) => {
 
         const OperadorCarga = requireOperadorCarga(req, res);
         if (OperadorCarga == null) return;
-        const ProfesionalAsiste = requireProfesional(req, res);
-        if (ProfesionalAsiste == null) return;
         data.OperadorCarga = OperadorCarga;
-        data.ProfesionalAsiste = ProfesionalAsiste;
+
+        // Reindicación: el autor sigue siendo el de la indicación original, no quien la copia.
+        const nroAnterior = Number(data.NroIndicacionAnterior) || 0;
+        if (nroAnterior > 0) {
+            const anterior = await indicacionesService.obtenerAutorIndicacion(nroAnterior);
+            if (!anterior || Number(anterior.NumeroVisita) !== Number(data.NumeroVisita)) {
+                return res.status(400).json({
+                    success: false,
+                    mensaje: "La indicación anterior no existe o no pertenece a esta internación",
+                });
+            }
+            data.ProfesionalAsiste = anterior.ProfesionalAsiste;
+        } else {
+            const ProfesionalAsiste = requireProfesional(req, res);
+            if (ProfesionalAsiste == null) return;
+            data.ProfesionalAsiste = ProfesionalAsiste;
+        }
 
         const result = await indicacionesService.nuevaIndicacion(data);
         res.status(201).json({
