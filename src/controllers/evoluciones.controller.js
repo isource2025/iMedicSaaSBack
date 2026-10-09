@@ -89,10 +89,15 @@ const crearEvolucion = async (req, res) => {
             });
         }
 
+        data.IdSector = await evolucionesService.resolverSectorProfesional(
+            req.valorPersonal,
+            req.idSector,
+            data.IdSector
+        );
         if (!data.IdSector) {
             return res.status(400).json({
                 success: false,
-                mensaje: "IdSector es requerido"
+                mensaje: "Tu usuario no tiene un sector asignado para registrar la evolución"
             });
         }
 

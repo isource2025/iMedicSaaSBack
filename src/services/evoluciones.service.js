@@ -109,6 +109,27 @@ const obtenerEvolucionesPorVisitaYFecha = async (idVisita, fecha, dias = null) =
 };
 
 /**
+ * Sector de quien evoluciona (imPersonalSectores), no el de la cama del paciente.
+ * El sector de la sesión sólo vale si es uno de los asignados al profesional en esta clínica.
+ */
+const resolverSectorProfesional = async (valorPersonal, sectorSesion, sectorEnviado) => {
+    const sesion = String(sectorSesion || '').trim();
+    const vp = Number(valorPersonal);
+    if (Number.isFinite(vp) && vp > 0) {
+        const filas = await executeQuery(
+            `SELECT LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) AS idSector
+             FROM dbo.imPersonalSectores WHERE idPersonal = @param0 ORDER BY idSector`,
+            [{ value: vp }]
+        );
+        const propios = (filas || []).map((f) => String(f.idSector || '').trim()).filter(Boolean);
+        if (propios.length) {
+            return propios.find((s) => s.toUpperCase() === sesion.toUpperCase()) || propios[0];
+        }
+    }
+    return sesion || String(sectorEnviado || '').trim() || null;
+};
+
+/**
  * Crear nueva evolución
  */
 const crearEvolucion = async (data) => {
@@ -261,6 +282,7 @@ const actualizarEvolucion = async (id, data) => {
 
 module.exports = {
     obtenerEvolucionesPorVisitaYFecha,
+    resolverSectorProfesional,
     crearEvolucion,
     obtenerEvolucionPorId,
     eliminarEvolucion,
