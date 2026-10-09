@@ -676,7 +676,11 @@ async function _profesionalesPorPracticas(valoresPractica) {
 	return map;
 }
 
-/** Solicitantes de pedidos cumplidos (estudios/IC) indexados por IdProtocolo y Valor fac. */
+/**
+ * Solicitantes de pedidos cumplidos (estudios/IC), indexados por id de resultado
+ * (imProtocolosResultados.IdProtocolo). La práctica facturable del estudio lleva ese id en
+ * imFacPracticas.NroInforme — misma convención que iMedic escritorio.
+ */
 async function _solicitantesPedidosPorVisita(numeroVisita) {
 	const rows = await executeQuery(
 		`
@@ -700,16 +704,21 @@ async function _solicitantesPedidosPorVisita(numeroVisita) {
 		[{ value: numeroVisita, type: 'Int' }],
 	).catch(() => []);
 
-	const byProtocolo = new Map();
+	const byResultado = new Map();
 	for (const r of rows || []) {
 		const idProt = Number(r.IdProtocolo) || 0;
 		const nombre = String(r.Nombre || '').trim();
 		const matricula = Number(r.Matricula) || 0;
 		if (idProt <= 0 || !nombre) continue;
-		const item = { nombre, matricula: matricula > 0 ? matricula : null, idPedido: Number(r.IdPedido) || null };
-		byProtocolo.set(idProt, item);
+		if (!byResultado.has(idProt)) {
+			byResultado.set(idProt, {
+				nombre,
+				matricula: matricula > 0 ? matricula : null,
+				idPedido: Number(r.IdPedido) || null,
+			});
+		}
 	}
-	return byProtocolo;
+	return byResultado;
 }
 
 async function _medicoDelTurnoPorVisita(numeroVisita) {
@@ -740,7 +749,7 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 	const nomenclador = await getPracticasNomencladorResolver();
 	const descSql = _sqlDescripcionPractica(nomenclador);
 	const medicoTurno = await _medicoDelTurnoPorVisita(numeroVisita);
-	const solicitantesPorProt = await _solicitantesPedidosPorVisita(numeroVisita);
+	const solicitantes = await _solicitantesPedidosPorVisita(numeroVisita);
 
 	const hasIdProtCol = await executeQuery(
 		`SELECT CASE WHEN COL_LENGTH('dbo.imFacPracticas', 'IdProtocolo') IS NULL THEN 0 ELSE 1 END AS ok`,
@@ -787,10 +796,10 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 		const horaPractica =
 			_clarionHoraHm(r.HoraPracticaInicio) || medicoTurno?.horaSalida || null;
 
-		const solicitante =
-			(idProt > 0 && solicitantesPorProt.get(idProt)) ||
-			solicitantesPorProt.get(valor) ||
-			null;
+		// NroInforme > 0 ⇒ práctica de un estudio/IC: el solicitante es el del pedido.
+		// IdProtocolo (cabecera quirúrgica) no identifica pedidos.
+		const nroInforme = Number(r.NroInforme) || 0;
+		const solicitante = (nroInforme > 0 && solicitantes.get(nroInforme)) || null;
 
 		const realizadoresNombres = profFact.map((p) => p.etiqueta);
 		// Fallback: médico del turno solo si no hay profesionales en la práctica
@@ -1039,7 +1048,11 @@ async function obtenerEstudiosPorVisitaAd(numeroVisita) {
           FROM dbo.imFacPracticas fac
           INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
           LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
-          WHERE pe.IdProtocolo > 0 AND fac.IdProtocolo = pe.IdProtocolo
+          -- Realizador = profesional de la práctica facturable del estudio. Vínculo igual
+          -- al de iMedic escritorio: imFacPracticas.NroInforme = id del resultado.
+          WHERE pe.IdProtocolo > 0
+            AND fac.NroInforme = pe.IdProtocolo
+            AND fac.NumeroVisita = pe.IdVisita
           ORDER BY fprof.IDFacProfesional
         ) realz
         WHERE pe.IdVisita = @param0

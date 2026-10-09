@@ -126,6 +126,7 @@ async function estadoEsquema() {
 		  DB_NAME() AS baseDatos
 	`);
 	const r = rows?.[0] || {};
+	const practicas = await est.estadoPracticasEstudios().catch(() => ({ practicasConIdResultado: null }));
 	const out = {
 		baseDatos: String(r.baseDatos || '').trim(),
 		tablaPedidos: !!r.tablaPedidos,
@@ -135,6 +136,9 @@ async function estadoEsquema() {
 		ixReceptorProtocolo: !!r.ixReceptorProtocolo,
 		ixIdVisita: !!r.ixIdVisita,
 		ixCabeceraVisita: !!r.ixCabeceraVisita,
+		// Diagnóstico: prácticas de estudios que la versión anterior grabó con el id del
+		// resultado en IdProtocolo en vez de NroInforme (las corrige aplicarEsquema / ensure).
+		practicasConIdResultado: practicas.practicasConIdResultado,
 	};
 	out.completo =
 		out.tablaPedidos &&
@@ -156,6 +160,8 @@ async function aplicarEsquema() {
 		await executeQuery(paso.sql);
 		pasos.push(paso.nombre);
 	}
+	const mig = await est.migrarPracticasEstudios();
+	pasos.push(`prácticas de estudios: ${mig.migradas} pasadas de IdProtocolo a NroInforme`);
 	const despues = await estadoEsquema();
 	return { antes, despues, pasos };
 }
@@ -902,6 +908,8 @@ async function cumplirSolicitud({
 				if (idProtocolo <= 0) throw _httpError('No se pudo crear el resultado', 500);
 
 				for (const it of grupo.items) {
+					// Igual que iMedic escritorio: el id del resultado va en NroInforme;
+					// IdProtocolo queda en 0 (es la cabecera quirúrgica HCProtocolosPtes).
 					const facIns = await _req(tx, [
 						['visita', sql.Int, numeroVisita],
 						['practica', sql.Int, Number(it.IdPractica)],
@@ -910,7 +918,7 @@ async function cumplirSolicitud({
 						['sector', sql.VarChar(4), sectorFac],
 						['codOp', sql.Int, codOp],
 						['idPac', sql.Int, idPaciente > 0 ? idPaciente : null],
-						['idProt', sql.Int, idProtocolo],
+						['nroInforme', sql.Int, idProtocolo],
 					]).query(`
 						INSERT INTO dbo.imFacPracticas (
 							Numero, NumeroVisita, TipoPractica, Practica,
@@ -923,7 +931,7 @@ async function cumplirSolicitud({
 							1, @fechaC, @horaC, 0,
 							@sector, @fechaC, @horaC, @codOp,
 							@fechaC, @horaC, 0, 2, 2, 0,
-							0, '', @idPac, @idProt
+							@nroInforme, '', @idPac, 0
 						);
 						SELECT SCOPE_IDENTITY() AS Valor`);
 					const valorFac = Number(facIns.recordset?.[0]?.Valor) || 0;

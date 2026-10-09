@@ -519,7 +519,11 @@ function _fromPedido(coincidirPractica) {
     FROM dbo.imFacPracticas fac
     INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
     LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
-    WHERE pe.IdProtocolo > 0 AND fac.IdProtocolo = pe.IdProtocolo
+    -- Mismo vínculo que iMedic escritorio: la práctica del estudio lleva el id del
+    -- resultado en NroInforme (IdProtocolo queda para HCProtocolosPtes).
+    WHERE pe.IdProtocolo > 0
+      AND fac.NroInforme = pe.IdProtocolo
+      AND fac.NumeroVisita = pe.IdVisita
     ORDER BY
       ${ordenPractica}
       CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
@@ -591,6 +595,51 @@ function _fromPedido(coincidirPractica) {
 const FROM_PEDIDO = _fromPedido(false);
 const FROM_PEDIDO_SOLICITUD = _fromPedido(true);
 
+/**
+ * Vínculo práctica facturable ↔ resultado, tal como lo graba iMedic escritorio:
+ *
+ *   imFacPracticas.NroInforme = imProtocolosResultados.IdProtocolo   (índice Por_NroInforme)
+ *   imFacPracticas.IdProtocolo = 0
+ *
+ * imFacPracticas.IdProtocolo es la cabecera quirúrgica (HCProtocolosPtes): el formulario de
+ * protocolos del escritorio lista las prácticas por ese campo. imProtocolosResultados tiene su
+ * propio contador, así que la versión anterior de la web, que guardaba el id del resultado en
+ * IdProtocolo, hacía que una práctica de estudio pudiera aparecer dentro de la cirugía de otro
+ * paciente cuando los números coincidieran.
+ *
+ * Esta migración corrige lo ya grabado: solo toca prácticas cuyo IdProtocolo existe en
+ * imProtocolosResultados de la MISMA visita y NO en HCProtocolosPtes de la misma visita, y que
+ * todavía no tienen NroInforme. Idempotente.
+ */
+const SQL_MIGRAR_PRACTICAS_LEGACY = `
+	UPDATE fp SET NroInforme = fp.IdProtocolo, IdProtocolo = 0
+	FROM dbo.imFacPracticas fp
+	WHERE ISNULL(fp.IdProtocolo, 0) > 0
+	  AND ISNULL(fp.NroInforme, 0) = 0
+	  AND EXISTS (SELECT 1 FROM dbo.imProtocolosResultados r
+	              WHERE r.IdProtocolo = fp.IdProtocolo AND r.NumeroVisita = fp.NumeroVisita)
+	  AND NOT EXISTS (SELECT 1 FROM dbo.HCProtocolosPtes hc
+	                  WHERE hc.IdProtocolo = fp.IdProtocolo AND hc.NumeroVisita = fp.NumeroVisita)`;
+
+/** Pasa a NroInforme las prácticas grabadas por la versión anterior. Devuelve cuántas. */
+async function migrarPracticasEstudios() {
+	const r = await executeQuery(`${SQL_MIGRAR_PRACTICAS_LEGACY}; SELECT @@ROWCOUNT AS n`);
+	return { migradas: Number(r?.[0]?.n) || 0 };
+}
+
+/** Diagnóstico de solo lectura: prácticas de estudios que aún tienen el id de resultado en IdProtocolo. */
+async function estadoPracticasEstudios() {
+	const r = await executeQuery(`
+		SELECT COUNT(*) AS n FROM dbo.imFacPracticas fp
+		WHERE ISNULL(fp.IdProtocolo, 0) > 0
+		  AND EXISTS (SELECT 1 FROM dbo.imProtocolosResultados r
+		              WHERE r.IdProtocolo = fp.IdProtocolo AND r.NumeroVisita = fp.NumeroVisita)
+		  AND NOT EXISTS (SELECT 1 FROM dbo.HCProtocolosPtes hc
+		                  WHERE hc.IdProtocolo = fp.IdProtocolo AND hc.NumeroVisita = fp.NumeroVisita)
+	`);
+	return { practicasConIdResultado: Number(r?.[0]?.n) || 0 };
+}
+
 /** Tabla SaaS: un solo operador puede tomar un pedido (PK = IdPedido). */
 const ensureTomaTable = createTenantOnce(async () => {
 	await executeQuery(`
@@ -606,6 +655,10 @@ const ensureTomaTable = createTenantOnce(async () => {
 				ON dbo.imPedidosEstudiosToma (Matricula);
 		END
 	`);
+	const mig = await migrarPracticasEstudios();
+	if (mig.migradas) {
+		console.log(`[estudios] ${mig.migradas} prácticas de estudios pasadas de IdProtocolo a NroInforme`);
+	}
 });
 
 async function _obtenerToma(idPedido) {
@@ -1718,6 +1771,8 @@ async function cumplirPedido({
 		if (idProtocolo <= 0) throw _httpError('No se pudo crear el resultado', 500);
 
 		// Valor es IDENTITY — no insertar Valor explícito (IDENTITY_INSERT OFF).
+		// Igual que iMedic escritorio: el id del resultado va en NroInforme; IdProtocolo
+		// queda en 0 porque ese campo es la cabecera quirúrgica (HCProtocolosPtes).
 		const reqInsFac = new sql.Request(tx);
 		reqInsFac.input('visita', sql.Int, numeroVisita);
 		reqInsFac.input('practica', sql.Int, practica);
@@ -1726,7 +1781,7 @@ async function cumplirPedido({
 		reqInsFac.input('sector', sql.VarChar(4), sectorFac);
 		reqInsFac.input('codOp', sql.Int, codOp);
 		reqInsFac.input('idPac', sql.Int, idPaciente > 0 ? idPaciente : null);
-		reqInsFac.input('idProt', sql.Int, idProtocolo);
+		reqInsFac.input('nroInforme', sql.Int, idProtocolo);
 		const facIns = await reqInsFac.query(`
 			INSERT INTO dbo.imFacPracticas (
 				Numero, NumeroVisita, TipoPractica, Practica,
@@ -1739,7 +1794,7 @@ async function cumplirPedido({
 				1, @fechaC, @horaC, 0,
 				@sector, @fechaC, @horaC, @codOp,
 				@fechaC, @horaC, 0, 2, 2, 0,
-				0, '', @idPac, @idProt
+				@nroInforme, '', @idPac, 0
 			);
 			SELECT SCOPE_IDENTITY() AS Valor;
 		`);
@@ -1983,6 +2038,8 @@ module.exports = {
 	rtfToPlain,
 	_padSector,
 	ensureTomaTable,
+	migrarPracticasEstudios,
+	estadoPracticasEstudios,
 	// Compartidos con solicitudesEstudios.service (función nueva multi-práctica).
 	SELECT_PEDIDO,
 	FROM_PEDIDO_SOLICITUD,

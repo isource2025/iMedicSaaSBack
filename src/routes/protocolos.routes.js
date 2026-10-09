@@ -23,7 +23,9 @@ const _own = requirePropietario({
 });
 
 router.get('/tipos', ver, protocolosController.listarTipos);
+router.get('/tipos/medicamentos', ver, protocolosController.medicamentosPorDefecto);
 router.get('/proforma', ver, protocolosController.proForma);
+router.get('/medicamentos/buscar', ver, protocolosController.buscarMedicamentos);
 router.get('/practicas/buscar', ver, protocolosController.buscarPracticas);
 router.get('/practicas/:idPractica', ver, protocolosController.detallePractica);
 router.get('/profesionales/buscar', ver, protocolosController.buscarProfesionales);
