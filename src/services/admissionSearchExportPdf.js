@@ -3,15 +3,25 @@ const path = require('path');
 const { PDFDocument: PDFLibDocument } = require('pdf-lib');
 const sharp = require('sharp');
 const adjuntosService = require('./adjuntos.service');
+const { resolverFirmas, claveFirmante } = require('./firmasPdf.service');
 
-const MARGIN = 48;
-const SECTION_BG = '#d6eff5';
-const SECTION_BORDER = '#5eb8cc';
 const TZ_AR = 'America/Argentina/Buenos_Aires';
 
-function contentWidth(doc) {
-  return doc.page.width - doc.page.margins.left - doc.page.margins.right;
-}
+const MARGINS = { top: 58, bottom: 46, left: 40, right: 40 };
+
+const C = {
+  brand: '#0083a9',
+  brandDark: '#0a4a5c',
+  brandSoft: '#e6f6fb',
+  brandLine: '#9dd5e8',
+  text: '#0f172a',
+  body: '#1e293b',
+  muted: '#64748b',
+  border: '#cbd5e1',
+  zebra: '#f8fafc',
+  danger: '#b91c1c',
+  warn: '#92400e',
+};
 
 function str(v) {
   if (v == null || v === '') return '';
@@ -27,15 +37,46 @@ function safeText(val, maxLen = null) {
   s = s.replace(/\uFFFD/g, '');
   s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   s = s.replace(/\n{3,}/g, '\n\n');
+  s = s.trim();
   if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) s = `${s.slice(0, maxLen)}…`;
   return s;
 }
 
-function formatFechaHoraAR(value) {
-  if (value == null || value === '') return '—';
+/** Texto clínico: algunos campos legacy vienen en RTF. */
+function plain(val) {
+  const s = str(val);
+  if (!s.trim().startsWith('{\\rtf')) return safeText(s);
   try {
-    const d = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(d.getTime())) return str(value);
+    return safeText(require('./estudios.service').rtfToPlain(s));
+  } catch {
+    return safeText(s.replace(/\\[a-z]+-?\d* ?/gi, '').replace(/[{}]/g, ''));
+  }
+}
+
+function fmtFecha(v) {
+  const s = str(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return s;
+}
+
+function fmtHora(v) {
+  const s = str(v).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : '';
+}
+
+/** "2026-10-08 10:30:00" | "2026-10-08T10:30" | (fecha, hora) → "08/10/2026 10:30" */
+function fmtFechaHora(fecha, hora) {
+  const f = str(fecha).trim();
+  if (!f) return fmtHora(hora);
+  const h = fmtHora(hora) || (/[T ]\d{1,2}:\d{2}/.test(f) ? fmtHora(f.slice(10)) : '');
+  return [fmtFecha(f), h].filter(Boolean).join(' ');
+}
+
+function formatAhoraAR(value) {
+  try {
+    const d = value ? new Date(value) : new Date();
     return new Intl.DateTimeFormat('es-AR', {
       day: '2-digit',
       month: '2-digit',
@@ -45,52 +86,537 @@ function formatFechaHoraAR(value) {
       timeZone: TZ_AR,
     }).format(d);
   } catch {
-    return str(value);
+    return '';
   }
 }
 
-function formatMedFechaHora(m) {
-  const fd = str(m.FechaControl);
-  const ht = str(m.HoraControl);
-  if (!fd && !ht) return '—';
-  if (fd.includes('T') || /^\d{4}-\d{2}-\d{2}/.test(fd)) {
-    try {
-      const t = ht ? `${fd.split('T')[0]}T${String(ht).replace(/:/g, ':').slice(0, 8)}` : fd;
-      const d = new Date(t);
-      if (!Number.isNaN(d.getTime())) return formatFechaHoraAR(d);
-    } catch (_) {
-      /* fallthrough */
-    }
-  }
-  return `${fd} ${ht}`.trim() || '—';
+function joinNombre(...parts) {
+  return parts.map((p) => str(p).trim()).filter(Boolean).join(' ');
 }
 
-function ensureSpace(doc, minBottom = 72) {
-  const mb = doc.page.margins.bottom;
-  const limit = doc.page.height - mb - minBottom;
-  if (doc.y > limit) {
-    doc.addPage();
-  }
+function matriculaTxt(m) {
+  const n = Number(m);
+  return Number.isFinite(n) && n > 0 && n !== 999999 ? `Mat. ${n}` : '';
 }
 
-const SECTION_LABEL_ES = {
-  admision: 'Admisión',
-  hcIngreso: 'HC ingreso',
-  indicaciones: 'Indicaciones',
-  estudios: 'Estudios',
-  interconsultas: 'Interconsultas',
-  protocolos: 'Protocolos',
-  practicas: 'Procedimientos',
-  evoluciones: 'Evoluciones',
-  epicrisis: 'Epicrisis',
-  controles: 'Controles',
-  medicamentos: 'Medicación suministrada',
-  dietas: 'Dietas',
-  balanceHidrico: 'Balance hídrico',
-  evolucionEnfermeria: 'Evolución de enfermería',
-  insumos: 'Insumos',
-  adjuntos: 'Adjuntos',
+/** "APELLIDO NOMBRE · Mat. 1234" para columnas de tabla. */
+function profesionalCelda(signer) {
+  if (!signer) return '';
+  return [str(signer.nombre).trim(), matriculaTxt(signer.matricula)].filter(Boolean).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Firmantes por bloque. La misma función alimenta la resolución de firmas y el dibujo.
+// `valor` solo se usa cuando el origen garantiza que es imPersonal.Valor.
+// ---------------------------------------------------------------------------
+
+const firmante = {
+  hci: (r) => ({ nombre: str(r.ProfesionalNombre), matricula: r.Matricula, valor: r.IdPersonal }),
+  indicacion: (r) => ({ nombre: str(r.fullName), matricula: r.matricula }),
+  evolucion: (r) => ({ nombre: str(r.ProfesionalNombreCompleto), matricula: r.Matricula, valor: r.IdPersonal }),
+  epicrisis: (r) => ({
+    nombre: str(r.ProfesionalNombreCompleto || r.profesionalNombreCompleto),
+    matricula: r.Profecional,
+  }),
+  estudioRealizador: (r) =>
+    str(r.RealizadorNombre || r.realizadorNombre).trim()
+      ? { nombre: str(r.RealizadorNombre || r.realizadorNombre), matricula: r.MatriculaRealizador ?? r.matriculaRealizador }
+      : null,
+  estudioSolicitante: (r) =>
+    str(r.MedicoSolicitanteNombre || r.medicoSolicitanteNombre).trim()
+      ? {
+          nombre: str(r.MedicoSolicitanteNombre || r.medicoSolicitanteNombre),
+          matricula: r.MatriculaSolicitante ?? r.matriculaSolicitante,
+        }
+      : null,
+  interSolicitante: (r) =>
+    str(r.MedicoSolicitanteNombre).trim() ? { nombre: str(r.MedicoSolicitanteNombre), matricula: r.MedicoSolicitante } : null,
+  interRespuesta: (r) =>
+    str(r.Respuesta).trim() && str(r.RealizadorNombre).trim()
+      ? { nombre: str(r.RealizadorNombre), matricula: r.MatriculaRealizador }
+      : null,
+  protocolo: (r) => (str(r.operadorNombre).trim() ? { nombre: str(r.operadorNombre), matricula: r.operadorMatricula } : null),
+  control: (r) => ({ nombre: joinNombre(r.ProfesionalApellido, r.ProfesionalNombres), matricula: r.Matricula }),
+  medicacion: (r) => ({
+    nombre: str(r.ProfesionalFullName) || joinNombre(r.ProfesionalApellido, r.ProfesionalNombres),
+    matricula: r.Matricula,
+  }),
+  dieta: (r) => ({ nombre: str(r.ProfesionalFullName || r.OperadorFullName), matricula: r.Matricula }),
+  balance: (r) => ({ nombre: joinNombre(r.ProfesionalApellido, r.ProfesionalNombres), matricula: r.Matricula }),
+  evolucionEnf: (r) => ({ nombre: joinNombre(r.ProfesionalApellido, r.ProfesionalNombres), matricula: r.Matricula }),
+  // Insumos solo traen el operador de carga (CodOperador): se muestra el nombre, sin buscar firma.
+  insumo: (r) => ({ nombre: str(r.fullName) }),
 };
+
+function todosLosFirmantes(p) {
+  const out = [];
+  const add = (rows, fn) => {
+    for (const r of rows || []) {
+      const s = fn(r);
+      if (s) out.push(s);
+    }
+  };
+  add(p.historialClinico, firmante.hci);
+  add(p.indicaciones, firmante.indicacion);
+  add(p.evolucionesMedicas, firmante.evolucion);
+  add(p.epicrisis, firmante.epicrisis);
+  add(p.estudios, firmante.estudioRealizador);
+  add(p.estudios, firmante.estudioSolicitante);
+  add(p.interconsultas, firmante.interSolicitante);
+  add(p.interconsultas, firmante.interRespuesta);
+  add(p.protocolos, firmante.protocolo);
+  add(p.controles, firmante.control);
+  add(p.medicamentos, firmante.medicacion);
+  add(p.dietas, firmante.dieta);
+  add(p.balanceHidrico, firmante.balance);
+  add(p.evolucionesEnfermeria, firmante.evolucionEnf);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Primitivas de layout
+// ---------------------------------------------------------------------------
+
+function cw(doc) {
+  return doc.page.width - doc.page.margins.left - doc.page.margins.right;
+}
+
+function left(doc) {
+  return doc.page.margins.left;
+}
+
+function bottomLimit(doc) {
+  return doc.page.height - doc.page.margins.bottom;
+}
+
+function ensureSpace(doc, needed) {
+  if (doc.y + needed > bottomLimit(doc)) doc.addPage();
+}
+
+function groupTitle(doc, title) {
+  ensureSpace(doc, 90);
+  doc.moveDown(0.4);
+  const y = doc.y;
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.brand).text(title.toUpperCase(), left(doc), y, {
+    width: cw(doc),
+    characterSpacing: 1.2,
+  });
+  const ly = doc.y + 2;
+  doc.save().moveTo(left(doc), ly).lineTo(left(doc) + cw(doc), ly).lineWidth(1).strokeColor(C.brand).stroke().restore();
+  doc.y = ly + 8;
+}
+
+function sectionTitle(doc, title, count) {
+  ensureSpace(doc, 70);
+  const y = doc.y;
+  const w = cw(doc);
+  doc.save().roundedRect(left(doc), y, w, 20, 3).fill(C.brandSoft).restore();
+  doc.save().rect(left(doc), y, 3, 20).fill(C.brand).restore();
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(C.brandDark).text(title, left(doc) + 10, y + 5.5, {
+    width: w - 80,
+    lineBreak: false,
+  });
+  if (count != null) {
+    doc.font('Helvetica').fontSize(8).fillColor(C.muted).text(
+      `${count} registro${count === 1 ? '' : 's'}`,
+      left(doc) + w - 120,
+      y + 6.5,
+      { width: 110, align: 'right', lineBreak: false },
+    );
+  }
+  doc.y = y + 28;
+  doc.fillColor(C.text);
+}
+
+/** Encabezado de un registro: título a la izquierda, metadatos a la derecha. */
+function recordHeader(doc, title, meta) {
+  ensureSpace(doc, 64);
+  const y = doc.y;
+  const w = cw(doc);
+  const metaTxt = safeText(meta);
+  doc.font('Helvetica').fontSize(7.5);
+  const metaW = metaTxt ? Math.min(w * 0.55, doc.widthOfString(metaTxt) + 4) : 0;
+  doc.font('Helvetica-Bold').fontSize(9);
+  const titleW = w - metaW - 12;
+  const titleH = doc.heightOfString(safeText(title) || '—', { width: titleW });
+  const h = Math.max(16, titleH + 6);
+  doc.save().rect(left(doc), y, w, h).fill(C.zebra).restore();
+  doc.save().moveTo(left(doc), y + h).lineTo(left(doc) + w, y + h).lineWidth(0.5).strokeColor(C.border).stroke().restore();
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.text).text(safeText(title) || '—', left(doc) + 6, y + 4, { width: titleW });
+  if (metaTxt) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text(metaTxt, left(doc) + w - metaW - 6, y + 4.5, {
+      width: metaW,
+      align: 'right',
+    });
+  }
+  doc.y = y + h + 5;
+  doc.fillColor(C.text);
+}
+
+/** Pares etiqueta: valor en N columnas (omite vacíos). */
+function fieldGrid(doc, pairs, cols = 2) {
+  const items = pairs.filter(([, v]) => safeText(v));
+  if (!items.length) return;
+  const gap = 12;
+  const colW = (cw(doc) - gap * (cols - 1)) / cols;
+  for (let i = 0; i < items.length; i += cols) {
+    const row = items.slice(i, i + cols);
+    doc.fontSize(8);
+    const heights = row.map(([k, v]) => {
+      doc.font('Helvetica-Bold');
+      return doc.heightOfString(`${k}: ${safeText(v)}`, { width: colW });
+    });
+    const rowH = Math.max(...heights);
+    ensureSpace(doc, rowH + 4);
+    const y = doc.y;
+    row.forEach(([k, v], ci) => {
+      const x = left(doc) + ci * (colW + gap);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(8)
+        .fillColor(C.muted)
+        .text(`${k}: `, x, y, { width: colW, continued: true })
+        .font('Helvetica')
+        .fillColor(C.text)
+        .text(safeText(v));
+    });
+    doc.y = y + rowH + 3;
+  }
+}
+
+function textBlock(doc, label, text) {
+  const t = plain(text);
+  if (!t) return;
+  ensureSpace(doc, 34);
+  doc.moveDown(0.15);
+  if (label) {
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.brand).text(label.toUpperCase(), left(doc), doc.y, {
+      width: cw(doc),
+      characterSpacing: 0.4,
+    });
+    doc.moveDown(0.1);
+  }
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.body).text(t, left(doc), doc.y, { width: cw(doc), lineGap: 1.5 });
+  doc.moveDown(0.3);
+}
+
+function mutedLine(doc, text, color = C.muted) {
+  ensureSpace(doc, 14);
+  doc.font('Helvetica-Oblique').fontSize(8).fillColor(color).text(text, left(doc), doc.y, { width: cw(doc) });
+  doc.moveDown(0.25);
+  doc.fillColor(C.text);
+}
+
+function recordEnd(doc) {
+  doc.moveDown(0.5);
+  ensureSpace(doc, 10);
+  const y = doc.y;
+  doc
+    .save()
+    .moveTo(left(doc), y)
+    .lineTo(left(doc) + cw(doc), y)
+    .lineWidth(0.4)
+    .dash(2, { space: 2 })
+    .strokeColor(C.border)
+    .stroke()
+    .undash()
+    .restore();
+  doc.y = y + 10;
+}
+
+const SIG_W = 160;
+const SIG_IMG_H = 34;
+const SIG_H = SIG_IMG_H + 36;
+
+function dedupeFirmantes(signers) {
+  const seen = new Set();
+  const out = [];
+  for (const s of signers) {
+    if (!s || !str(s.nombre).trim()) continue;
+    const k = claveFirmante(s) || `n:${str(s.nombre).trim().toUpperCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Bloques de firma (imagen + línea + aclaración + matrícula).
+ * Uno solo va a la derecha; varios se reparten en filas de 3.
+ */
+function drawSignatures(doc, signers, firmas, { caption } = {}) {
+  const list = dedupeFirmantes(signers);
+  if (!list.length) return;
+  const w = cw(doc);
+  const perRow = 3;
+  const gap = (w - SIG_W * perRow) / (perRow - 1);
+  for (let i = 0; i < list.length; i += perRow) {
+    const row = list.slice(i, i + perRow);
+    ensureSpace(doc, SIG_H + 6);
+    const y = doc.y + 4;
+    row.forEach((s, ci) => {
+      const x =
+        list.length === 1 ? left(doc) + w - SIG_W : left(doc) + ci * (SIG_W + gap);
+      const img = firmas.get(claveFirmante(s));
+      if (img) {
+        try {
+          doc.image(img, x + 10, y, { fit: [SIG_W - 20, SIG_IMG_H], align: 'center', valign: 'bottom' });
+        } catch {
+          /* imagen corrupta: queda la aclaración */
+        }
+      }
+      const ly = y + SIG_IMG_H + 2;
+      doc.save().moveTo(x, ly).lineTo(x + SIG_W, ly).lineWidth(0.6).strokeColor('#334155').stroke().restore();
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(7.5)
+        .fillColor(C.text)
+        .text(str(s.nombre).trim().toUpperCase(), x, ly + 3, { width: SIG_W, align: 'center', lineBreak: false, ellipsis: true });
+      const sub = [matriculaTxt(s.matricula), s.rol].filter(Boolean).join(' · ');
+      if (sub) {
+        doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(sub, x, ly + 13, {
+          width: SIG_W,
+          align: 'center',
+          lineBreak: false,
+        });
+      }
+    });
+    doc.y = y + SIG_H;
+  }
+  if (caption) mutedLine(doc, caption);
+  doc.fillColor(C.text);
+}
+
+/**
+ * Tabla con alto de fila según contenido (sin truncar texto clínico) y encabezado
+ * repetido en cada página.
+ * @param {{ label: string, width: number, value: (row: object) => string, align?: string }[]} columns
+ */
+function table(doc, columns, rows, { footer } = {}) {
+  if (!rows.length) return;
+  const x0 = left(doc);
+  const w = cw(doc);
+  const widths = columns.map((c) => c.width * w);
+  const pad = 3;
+  const fs = 7.2;
+  // Las columnas numéricas (a la derecha) dejan aire antes de la siguiente columna de texto.
+  const innerW = (i) => widths[i] - pad * 2 - (columns[i].align === 'right' ? 6 : 0);
+
+  const drawHeader = () => {
+    doc.font('Helvetica-Bold').fontSize(7.2);
+    const hh = Math.max(
+      15,
+      ...columns.map((c, i) => doc.heightOfString(c.label, { width: innerW(i) }) + pad * 2),
+    );
+    const y = doc.y;
+    doc.save().rect(x0, y, w, hh).fill(C.brand).restore();
+    let x = x0;
+    columns.forEach((c, i) => {
+      doc.fillColor('#ffffff').text(c.label, x + pad, y + pad, { width: innerW(i), align: c.align || 'left' });
+      x += widths[i];
+    });
+    doc.y = y + hh;
+  };
+
+  const drawRow = (cells, ri, bold = false) => {
+    const rowFont = () => doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fs);
+    rowFont();
+    const maxH = bottomLimit(doc) - doc.page.margins.top - 30;
+    const rowH = Math.min(
+      maxH,
+      Math.max(14, ...cells.map((t, i) => doc.heightOfString(t || ' ', { width: innerW(i) }) + pad * 2)),
+    );
+    if (doc.y + rowH > bottomLimit(doc)) {
+      doc.addPage();
+      drawHeader();
+      rowFont();
+    }
+    const y = doc.y;
+    if (ri % 2 === 1 || bold) doc.save().rect(x0, y, w, rowH).fill(bold ? C.brandSoft : C.zebra).restore();
+    doc.save().moveTo(x0, y + rowH).lineTo(x0 + w, y + rowH).lineWidth(0.3).strokeColor(C.border).stroke().restore();
+    let x = x0;
+    doc.fillColor(C.body);
+    cells.forEach((t, i) => {
+      doc.text(t, x + pad, y + pad, {
+        width: innerW(i),
+        height: rowH - pad,
+        ellipsis: true,
+        align: columns[i].align || 'left',
+      });
+      x += widths[i];
+    });
+    doc.y = y + rowH;
+  };
+
+  ensureSpace(doc, 40);
+  drawHeader();
+  rows.forEach((row, ri) => drawRow(columns.map((c) => safeText(c.value(row))), ri));
+  if (footer) drawRow(footer.map((t) => safeText(t)), 0, true);
+  doc.moveDown(0.6);
+  doc.fillColor(C.text);
+}
+
+// ---------------------------------------------------------------------------
+// Encabezados de documento
+// ---------------------------------------------------------------------------
+
+function drawInstitucion(doc, empresa, numeroVisita) {
+  const x0 = left(doc);
+  const w = cw(doc);
+  const y0 = 30;
+  const nombre = str(empresa?.razonSocial || empresa?.descripcion) || 'Institución';
+  const direccion = [
+    joinNombre(empresa?.calle, empresa?.calle_nro),
+    empresa?.piso ? `Piso ${empresa.piso}` : '',
+    empresa?.Depto ? `Dto. ${empresa.Depto}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const lugar = [empresa?.localidad, empresa?.provincia].map(str).filter(Boolean).join(', ');
+  const contacto = [
+    empresa?.cuit ? `CUIT ${empresa.cuit}` : '',
+    empresa?.telefono ? `Tel. ${empresa.telefono}` : '',
+    str(empresa?.email),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(C.text).text(nombre, x0, y0, { width: w * 0.6 });
+  doc.font('Helvetica').fontSize(7.5).fillColor(C.muted);
+  [direccion, lugar, contacto].filter(Boolean).forEach((l) => doc.text(l, x0, doc.y, { width: w * 0.6 }));
+  const yLeft = doc.y;
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(8)
+    .fillColor(C.brand)
+    .text('HISTORIA CLÍNICA', x0 + w * 0.6, y0 + 1, { width: w * 0.4, align: 'right', characterSpacing: 1 });
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(16)
+    .fillColor(C.text)
+    .text(`Visita #${str(numeroVisita)}`, x0 + w * 0.6, doc.y + 1, { width: w * 0.4, align: 'right' });
+
+  const y = Math.max(yLeft, doc.y) + 6;
+  doc.save().moveTo(x0, y).lineTo(x0 + w, y).lineWidth(1.2).strokeColor(C.brand).stroke().restore();
+  doc.y = y + 8;
+}
+
+function drawPacienteCard(doc, a, criterios) {
+  if (!a) return;
+  const x0 = left(doc);
+  const w = cw(doc);
+  const y0 = doc.y;
+  const pad = 10;
+
+  const egreso = a.FechaEgreso
+    ? fmtFechaHora(a.FechaEgreso, a.HoraEgreso)
+    : 'Internado / sin egreso';
+  const ubicacion = [str(a.SectorDescripcion || a.ServicioEgresoDescripcion), a.Habitacion ? `Hab. ${a.Habitacion}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const dx = [str(a.Diagnostico), str(a.DiagnosticoDescripcion)].filter(Boolean).join(' — ');
+  const cobertura = [str(a.CoberturaOS), str(a.ContratoDescripcion)].filter(Boolean).join(' · ');
+  const medico = str(a.DoctorAsistiendoNombre || a.DoctorCabeceraNombre || a.DoctorAdmisorNombre);
+
+  // Alto estimado antes de dibujar el fondo.
+  doc.font('Helvetica-Bold').fontSize(12);
+  const nameH = doc.heightOfString(str(a.ApellidoYNombre) || '—', { width: w - pad * 2 });
+  const lines = 4 + (dx ? 1 : 0);
+  const h = pad + nameH + 4 + lines * 12 + pad;
+
+  ensureSpace(doc, h + 10);
+  doc.save().roundedRect(x0, y0, w, h, 4).fill('#f0f9fc').restore();
+  doc.save().roundedRect(x0, y0, w, h, 4).lineWidth(0.6).strokeColor(C.brandLine).stroke().restore();
+
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(C.text).text(str(a.ApellidoYNombre) || '—', x0 + pad, y0 + pad, {
+    width: w - pad * 2,
+  });
+  doc.y += 3;
+  const colW = (w - pad * 2 - 12) / 2;
+  const row = (l1, v1, l2, v2) => {
+    const y = doc.y;
+    const put = (lab, val, x, width) => {
+      if (!safeText(val)) return;
+      const label = `${lab}: `;
+      doc.font('Helvetica-Bold').fontSize(7.8).fillColor(C.muted);
+      const lw = doc.widthOfString(label);
+      doc.text(label, x, y, { lineBreak: false });
+      doc
+        .font('Helvetica')
+        .fillColor(C.text)
+        .text(safeText(val).replace(/\s+/g, ' '), x + lw, y, { width: width - lw, height: 11, ellipsis: true });
+    };
+    put(l1, v1, x0 + pad, l2 ? colW : w - pad * 2);
+    if (l2) put(l2, v2, x0 + pad + colW + 12, colW);
+    doc.y = y + 12;
+  };
+  row('DNI', a.NumeroDocumento || '—', 'HC', a.NumeroHC || '—');
+  row('Cobertura', cobertura || '—', 'Nº afiliado', a.NumeroSSN || '—');
+  row('Ingreso', fmtFechaHora(a.FechaAdmision, a.HoraAdmision), 'Egreso', egreso);
+  row('Ubicación', ubicacion || '—', 'Médico', medico || '—');
+  if (dx) row('Diagnóstico', dx);
+
+  doc.y = y0 + h + 6;
+  if (criterios) {
+    const crit = criterios.exportAll
+      ? 'Período: toda la visita'
+      : `Período: ${fmtFecha(criterios.fechaInicio) || 'inicio'} al ${fmtFecha(criterios.fechaFin) || 'hoy'}`;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text(crit, x0, doc.y, { width: w });
+  }
+  doc.moveDown(0.6);
+  doc.fillColor(C.text);
+}
+
+/** Encabezado corrido + pie paginado en todas las páginas generadas por pdfkit. */
+function drawRunningChrome(doc, payload, empresa) {
+  const a = payload.paciente || payload.admision || {};
+  const range = doc.bufferedPageRange();
+  const total = range.count;
+  const generado = formatAhoraAR(payload.generadoEn);
+  const inst = str(empresa?.razonSocial || empresa?.descripcion);
+  for (let i = range.start; i < range.start + total; i += 1) {
+    doc.switchToPage(i);
+    const prevBottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+    const x0 = doc.page.margins.left;
+    const w = doc.page.width - x0 - doc.page.margins.right;
+    if (i > range.start) {
+      const head = [
+        str(a.ApellidoYNombre),
+        a.NumeroDocumento ? `DNI ${a.NumeroDocumento}` : '',
+        a.NumeroHC ? `HC ${a.NumeroHC}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.text).text(head, x0, 26, {
+        width: w * 0.7,
+        lineBreak: false,
+        ellipsis: true,
+      });
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.brand).text(`Visita #${str(payload.numeroVisita)}`, x0 + w * 0.7, 26, {
+        width: w * 0.3,
+        align: 'right',
+        lineBreak: false,
+      });
+      doc.save().moveTo(x0, 39).lineTo(x0 + w, 39).lineWidth(0.5).strokeColor(C.brandLine).stroke().restore();
+    }
+    const fy = doc.page.height - 30;
+    doc.save().moveTo(x0, fy - 6).lineTo(x0 + w, fy - 6).lineWidth(0.4).strokeColor(C.border).stroke().restore();
+    doc
+      .font('Helvetica')
+      .fontSize(7)
+      .fillColor(C.muted)
+      .text([inst, `Generado ${generado}`].filter(Boolean).join(' · '), x0, fy, { width: w * 0.75, lineBreak: false });
+    doc.text(`Página ${i - range.start + 1} de ${total}`, x0 + w * 0.75, fy, { width: w * 0.25, align: 'right', lineBreak: false });
+    doc.page.margins.bottom = prevBottom;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HC de ingreso (mapa de campos del examen físico)
+// ---------------------------------------------------------------------------
 
 const HCI_SECCIONES_CONFIG = {
   PF: 'PIEL Y FANERAS',
@@ -144,11 +670,11 @@ const HCI_IGNORE_KEYS = new Set([
 ]);
 
 const HCI_CAMPOS_TEXTO_LIBRE = {
-  ModMedica: 'MODIFICACIÓN MÉDICA',
-  Semiologia: 'SEMIOLOGÍA',
-  IMPRESIONDIAGNOSTICA: 'IMPRESIÓN DIAGNÓSTICA',
-  COMENTARIODEINGRESO: 'COMENTARIO DE INGRESO',
-  EXAMENCOMPLEMENTARIO: 'EXÁMENES COMPLEMENTARIOS',
+  ModMedica: 'Modificación médica',
+  Semiologia: 'Semiología',
+  IMPRESIONDIAGNOSTICA: 'Impresión diagnóstica',
+  COMENTARIODEINGRESO: 'Comentario de ingreso',
+  EXAMENCOMPLEMENTARIO: 'Exámenes complementarios',
 };
 
 const HCI_SECTION_ORDER = [
@@ -301,357 +827,493 @@ function buildHcDisplaySections(row) {
     .map((titulo) => ({ titulo, campos: map[titulo] }));
 }
 
-function humanizarSecciones(list) {
-  if (!Array.isArray(list)) return '';
-  return list.map((s) => SECTION_LABEL_ES[s] || s).join(' · ');
-}
+// ---------------------------------------------------------------------------
+// Bloques clínicos
+// ---------------------------------------------------------------------------
 
-function sectionTitle(doc, title) {
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  ensureSpace(doc, 30);
-  const y = doc.y;
-  doc.save();
-  doc.roundedRect(left, y, w, 22, 3).fill(SECTION_BG).stroke(SECTION_BORDER);
-  doc.fillColor('#0a4a5c').font('Helvetica-Bold').fontSize(10.5).text(title, left + 10, y + 5, { width: w - 20 });
-  doc.restore();
-  doc.y = y + 28;
-  doc.fillColor('#0f172a').font('Helvetica');
-}
-
-function drawCoverBlock(doc, payload) {
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const c = payload.criterios || {};
-  const colW = (w - 14) / 2;
-  const y0 = doc.y;
-
-  doc.save();
-  doc.roundedRect(left, y0, w, 96, 4).fill('#f0f9fc').stroke('#9dd5e8');
-  doc.restore();
-
-  let y = y0 + 10;
-  const padL = left + 12;
-  const mid = padL + colW + 6;
-
-  doc.font('Helvetica-Bold').fontSize(16).fillColor('#0083a9').text('Exportación clínica', padL, y0 + 8, { width: w - 24 });
-  y = y0 + 30;
-
-  doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(`Visita: ${str(payload.numeroVisita)}`, padL, y, {
-    width: colW,
-  });
-  doc.text(`Generado: ${formatFechaHoraAR(payload.generadoEn)}`, mid, y, { width: colW });
-  y += 16;
-
-  const crit = c.exportAll ? 'Sin filtro de fechas' : `Desde ${str(c.fechaInicio) || '—'} hasta ${str(c.fechaFin) || '—'}`;
-  doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Criterios: ', padL, y, { continued: true });
-  doc.font('Helvetica').fillColor('#0f172a').text(crit, { width: w - 24 });
-  y += 14;
-
-  if (Array.isArray(c.sections) && c.sections.length) {
-    doc.font('Helvetica-Bold').fontSize(8).text('Secciones: ', padL, y, { continued: true });
-    doc.font('Helvetica').fontSize(7.5).text(humanizarSecciones(c.sections), { width: w - 24 });
-    y += 14;
-  }
-
-  if (c.evolucionSectorIds && c.evolucionSectorIds.length) {
-    doc.font('Helvetica-Bold').fontSize(7.5).text('Evoluciones por servicio (IdSector): ', padL, y, { continued: true });
-    doc.font('Helvetica').text(c.evolucionSectorIds.join(', '), { width: w - 24 });
-    y += 12;
-  }
-
-  doc.y = y0 + 102;
-  doc.fillColor('#0f172a').font('Helvetica');
-}
-
-function keyValRow2(doc, pairs) {
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const colW = (w - 10) / 2;
-  for (let i = 0; i < pairs.length; i += 2) {
-    ensureSpace(doc, 30);
-    const yy = doc.y;
-    const [k1, v1] = pairs[i];
-    const p2 = pairs[i + 1];
-    const t1 = `${k1}: ${safeText(v1)}`;
-    doc.font('Helvetica').fontSize(7.5).fillColor('#0f172a').text(t1, left, yy, { width: colW - 4 });
-    let rowH = doc.y - yy;
-    if (p2) {
-      const [k2, v2] = p2;
-      const t2 = `${k2}: ${safeText(v2)}`;
-      doc.text(t2, left + colW + 6, yy, { width: colW - 4 });
-      rowH = Math.max(rowH, doc.y - yy);
-    }
-    doc.y = yy + rowH + 2;
-  }
-}
-
-/** Tarjetas encabezado + texto libre (evoluciones, interconsultas). */
-function renderTextCards(doc, title, cards) {
-  if (!cards.length) return;
-  sectionTitle(doc, title);
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  cards.forEach((card, i) => {
-    const head = safeText(card.head);
-    const body = safeText(card.body);
-    doc.font('Helvetica-Bold').fontSize(8);
-    const headH = doc.heightOfString(head, { width: w - 16 });
-    doc.font('Helvetica').fontSize(8);
-    const bodyH = body ? doc.heightOfString(body, { width: w - 16, lineGap: 1 }) : 0;
-    const boxH = Math.max(36, headH + bodyH + 18);
-    ensureSpace(doc, boxH + 10);
-    const top = doc.y;
-    doc.save();
-    doc.roundedRect(left, top, w, boxH, 4).fill(i % 2 === 0 ? '#f8fafc' : '#ffffff').stroke('#94a3b8');
-    doc.restore();
-    doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(head, left + 8, top + 8, { width: w - 16 });
-    if (body) {
-      doc
-        .font('Helvetica')
-        .fontSize(8)
-        .fillColor('#1e293b')
-        .text(body, left + 8, doc.y + 4, { width: w - 16, lineGap: 1 });
-    }
-    doc.y = top + boxH + 8;
-  });
-}
-
-/**
- * Tabla con alto de fila según el contenido.
- * @param {{ label: string, width: number, value: (row: object) => string }[]} columns width = fracción del ancho
- */
-function renderSimpleTable(doc, title, columns, rows) {
-  if (!rows.length) return;
-  sectionTitle(doc, title);
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const widths = columns.map((c) => c.width * w);
-  const headerH = 16;
-  const fontSize = 7;
-
-  const drawHeader = () => {
-    const y = doc.y;
-    doc.save();
-    doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
-    doc.restore();
-    let x = left;
-    doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#0f172a');
-    columns.forEach((c, i) => {
-      doc.text(c.label, x + 3, y + 4, { width: widths[i] - 6, height: headerH - 6, ellipsis: true });
-      x += widths[i];
-    });
-    doc.y = y + headerH + 2;
-  };
-
-  ensureSpace(doc, headerH + 24);
-  drawHeader();
-  rows.forEach((row, ri) => {
-    const cells = columns.map((c) => safeText(c.value(row), 600) || '—');
-    doc.font('Helvetica').fontSize(fontSize);
-    const rowH = Math.min(
-      90,
-      Math.max(16, ...cells.map((t, i) => doc.heightOfString(t, { width: widths[i] - 6 }) + 6)),
-    );
-    const before = doc.page;
-    ensureSpace(doc, rowH + 4);
-    if (doc.page !== before) drawHeader();
-    const y = doc.y;
-    doc.save();
-    doc.rect(left, y, w, rowH).fill(ri % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
-    doc.restore();
-    let x = left;
-    doc.font('Helvetica').fontSize(fontSize).fillColor('#334155');
-    cells.forEach((t, i) => {
-      doc.text(t, x + 3, y + 3, { width: widths[i] - 6, height: rowH - 6, ellipsis: true });
-      x += widths[i];
-    });
-    doc.y = y + rowH + 2;
-  });
-  doc.moveDown(0.3);
-}
-
-/** Valor de control: vacío si es 0 / null (Clarion graba 0 cuando no se midió). */
 function valorControl(v, decimales = null) {
   const n = Number(v);
   if (v == null || v === '' || !Number.isFinite(n) || n === 0) return '';
   return decimales != null ? n.toFixed(decimales) : String(n);
 }
 
-function renderIndicacionesGrid(doc, items, title = 'Indicaciones') {
-  if (!items.length) return;
-  sectionTitle(doc, title);
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const cols = 2;
-  const gap = 8;
-  const cellW = (w - gap * (cols - 1)) / cols;
-  const pad = 5;
-
-  const buildLines = (ind, idx) => {
-    const tipo = String(ind.tipo || ind.TipoIndicacion || '').trim().toUpperCase();
-    const desc = safeText(ind.descripcion);
-    const med = safeText(ind.medicamento || ind.AliasMedicamento);
-    const ultima = safeText(ind.ultimaAplicacion || ind.UltimaAplicacion);
-    const proxima = safeText(ind.proximaAplicacion || ind.ProximaAplicacion);
-    const freq = safeText(ind.frecuencia);
-    const prof = safeText(ind.fullName);
-    const obs = safeText(ind.observaciones);
-    const lines = [`#${idx}  Nº ${str(ind.nroIndicacion)}`];
-    if (desc) lines.push(`Desc.: ${desc}`);
-    // Solo mostrar Med. si hay alias distinto de la descripción, o si es medicación
-    if (med && med !== desc) lines.push(`Med.: ${med}`);
-    else if (tipo === 'M' && med) lines.push(`Med.: ${med}`);
-    if (ultima) lines.push(`Aplicación: ${ultima}`);
-    if (proxima) lines.push(`Próxima: ${proxima}`);
-    if (freq) lines.push(`Freq.: ${freq}`);
-    if (prof) lines.push(`Prof.: ${prof}`);
-    if (obs) lines.push(`Obs.: ${obs}`);
-    if (ind.indicacionesHijas && ind.indicacionesHijas.length) {
-      const hij = ind.indicacionesHijas
-        .map((h) => `#${str(h.nroIndicacion || '')} ${safeText(h.descripcion || h.medicamento)}`)
-        .filter(Boolean)
-        .join(' | ');
-      if (hij) lines.push(`Hijas: ${hij}`);
-    }
-    return lines;
-  };
-
-  for (let rowStart = 0; rowStart < items.length; rowStart += cols) {
-    const rowItems = items.slice(rowStart, rowStart + cols);
-    const heights = rowItems.map((ind, idx) => {
-      const lines = buildLines(ind, rowStart + idx + 1);
-      doc.font('Helvetica').fontSize(6.5);
-      const h = doc.heightOfString(lines.join('\n'), { width: cellW - pad * 2 });
-      return Math.max(28, h + 12);
-    });
-    const cellH = Math.max(...heights);
-    ensureSpace(doc, cellH + 8);
-    const rowTop = doc.y;
-
-    rowItems.forEach((ind, c) => {
-      const x = left + c * (cellW + gap);
-      doc.save();
-      doc.roundedRect(x, rowTop, cellW, cellH, 3).fill('#ffffff').stroke('#cbd5e1');
-      doc.restore();
-      const lines = buildLines(ind, rowStart + c + 1);
-      doc.font('Helvetica').fontSize(6.5).fillColor('#334155').text(lines.join('\n'), x + pad, rowTop + pad, {
-        width: cellW - pad * 2,
-      });
-    });
-
-    doc.y = rowTop + cellH + 6;
-  }
-  doc.moveDown(0.2);
+function ordenar(rows, key) {
+  return [...(rows || [])].sort((a, b) => key(a).localeCompare(key(b)));
 }
 
-function renderPracticasPacienteTable(doc, items) {
-  if (!items.length) return;
-  sectionTitle(doc, 'Procedimientos');
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const colW = [w * 0.09, w * 0.22, w * 0.08, w * 0.07, w * 0.1, w * 0.08, w * 0.08, w * 0.07, w * 0.24];
-  const headerH = 16;
-  const rowH = 22;
+function tipoIndicacion(r) {
+  const t = str(r.tipo).trim().toUpperCase();
+  const prompt = str(r.promptCodigo).toUpperCase();
+  if (prompt.includes('MEDIC') || t === 'M') return 'Medicamento';
+  if (prompt.includes('DIET') || t === 'D') return 'Dieta';
+  if (prompt) return prompt.charAt(0) + prompt.slice(1).toLowerCase();
+  return 'Otra';
+}
 
-  const drawRow = (y, cells, header) => {
-    let x = left;
-    doc.fillColor(header ? '#0f172a' : '#334155');
-    doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(header ? 8 : 7.2);
-    for (let i = 0; i < colW.length; i += 1) {
-      doc.text(safeText(cells[i]), x + 3, y + 3, {
-        width: colW[i] - 6,
-        height: (header ? headerH : rowH) - 6,
-        ellipsis: true,
-      });
-      x += colW[i];
-    }
-  };
+function estadoIndicacion(r) {
+  if (r.suspendida) return 'Dejada sin efecto';
+  if (r.unicaVez) return 'Única vez';
+  return 'Vigente';
+}
 
-  ensureSpace(doc, headerH + 6);
-  let y = doc.y;
-  doc.save();
-  doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
-  doc.restore();
-  drawRow(
-    y,
-    ['Código', 'Práctica', 'Tipo', 'Cant.', 'Fecha', 'Hora', 'Sector', 'Est.', 'Profesional'],
-    true
+function renderAdmision(doc, a) {
+  sectionTitle(doc, 'Datos de admisión');
+  fieldGrid(doc, [
+    ['Nº de visita', a.NumeroVisita],
+    ['Nº de internación', a.NumeroInternacion],
+    ['Clase de paciente', a.ClasePacienteDescripcion || a.ClasePaciente],
+    ['Tipo de paciente', a.TipoPacienteDescripcion || a.TipoPaciente],
+    ['Tipo de admisión', a.TipoAdmisionDescripcion || a.TipoAdmision],
+    ['Origen', a.OrigenAdmisionDescripcion],
+    ['Lugar del episodio', a.LugarEpisodioDescripcion],
+    ['Estado ambulatorio', a.EstadoAmbulatorioDescripcion],
+    ['Sexo', a.SexoDescripcion],
+    ['Cobertura', a.CoberturaOS],
+    ['Plan / convenio', a.ContratoDescripcion],
+    ['Nº de afiliado', a.NumeroSSN],
+    ['Médico admisor', a.DoctorAdmisorNombre],
+    ['Médico asistente', a.DoctorAsistiendoNombre],
+    ['Médico de cabecera', a.DoctorCabeceraNombre],
+    ['Servicio', a.ServicioHospitalDescripcion || a.ServicioHospital],
+    ['Sector', a.SectorDescripcion || a.Sector],
+    ['Habitación / cama', a.Habitacion],
+    ['Ingreso', fmtFechaHora(a.FechaAdmision, a.HoraAdmision)],
+    ['Egreso', a.FechaEgreso ? fmtFechaHora(a.FechaEgreso, a.HoraEgreso) : 'Sin egreso'],
+    ['Días de estadía', a.DiasEstadia],
+    ['Disposición de egreso', a.DisposicionEgresoDescripcion],
+    ['Diagnóstico de ingreso', [a.Diagnostico, a.DiagnosticoDescripcion].filter(Boolean).join(' — ')],
+    ['Diagnóstico de egreso', [a.DiagnosticoEgreso, a.DiagnosticoEgresoDescripcion].filter(Boolean).join(' — ')],
+    ['Egreso registrado por', a.OperadorEgresoNombre],
+    ['Centro de salud', a.CentroSalud],
+  ]);
+  doc.moveDown(0.6);
+}
+
+function renderMovimientos(doc, rows) {
+  const ts = (m) => `${str(m.FechaAdmisionISO)} ${str(m.HoraAdmisionISO)}`;
+  const list = ordenar(rows, ts);
+  sectionTitle(doc, 'Movimientos de cama', list.length);
+  const last = list.length - 1;
+  table(
+    doc,
+    [
+      { label: 'Tipo', width: 0.1, value: (m) => (list.indexOf(m) === 0 ? 'Ingreso' : 'Traslado') },
+      { label: 'Cama', width: 0.12, value: (m) => str(m.NombreCama || m.ValorHabitacionCama) },
+      { label: 'Sector / servicio', width: 0.18, value: (m) => [str(m.NombreSector || m.ValorSector), str(m.NombreServicio)].filter(Boolean).join('\n') },
+      { label: 'Desde', width: 0.12, value: (m) => fmtFechaHora(m.FechaAdmisionISO, m.HoraAdmisionISO) },
+      {
+        label: 'Hasta',
+        width: 0.15,
+        value: (m) => {
+          const hasta = fmtFechaHora(m.FechaEgresoISO, m.HoraEgresoISO);
+          if (!hasta) return list.indexOf(m) === last ? 'Actual' : '';
+          const disp = str(m.DisposicionEgresoDescripcion);
+          return disp && list.indexOf(m) === last ? `${hasta}\n${disp}` : hasta;
+        },
+      },
+      { label: 'Diagnóstico', width: 0.18, value: (m) => str(m.DiagnosticoDescripcion || m.Diagnostico) },
+      { label: 'Operador', width: 0.15, value: (m) => str(m.OperadorNombre) },
+    ],
+    list,
   );
-  doc.y = y + headerH + 2;
+}
 
-  items.forEach((p, i) => {
-    ensureSpace(doc, rowH + 4);
-    y = doc.y;
-    doc.save();
-    doc.rect(left, y, w, rowH).fill(i % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
-    doc.restore();
-    const hora =
-      [str(p.HoraPracticaInicio), str(p.HoraPracticaFin)].filter(Boolean).join('–') || '—';
-    drawRow(
-      y,
-      [
-        str(p.Practica),
-        str(p.PracticaDescripcion || p.Practica),
-        str(p.TipoPractica),
-        str(p.CantidadPractica),
-        str(p.FechaPractica),
-        hora,
-        str(p.ValorSector),
-        str(p.Estado),
-        str(p.Profesionales),
-      ],
-      false
+function renderHci(doc, rows, firmas) {
+  sectionTitle(doc, 'Historia clínica de ingreso', rows.length);
+  rows.forEach((row) => {
+    recordHeader(
+      doc,
+      'HC de ingreso',
+      [fmtFechaHora(row.FechaFormateada || row.Fecha, row.HoraFormateada), str(row.SectorDescripcion)]
+        .filter(Boolean)
+        .join(' · '),
     );
-    doc.y = y + rowH + 2;
+    textBlock(doc, 'Motivo de consulta', row.MotivoConsulta);
+    textBlock(doc, 'Enfermedad actual', row.EnfermedadActual);
+    Object.entries(HCI_CAMPOS_TEXTO_LIBRE).forEach(([field, label]) => textBlock(doc, label, row[field]));
+    buildHcDisplaySections(row).forEach((sec) => {
+      ensureSpace(doc, 30);
+      doc.moveDown(0.2);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.brand).text(sec.titulo, left(doc), doc.y, { width: cw(doc) });
+      doc.moveDown(0.1);
+      fieldGrid(
+        doc,
+        sec.campos.map((c) => [c.label, c.valor]),
+        3,
+      );
+    });
+    drawSignatures(doc, [firmante.hci(row)], firmas);
+    recordEnd(doc);
   });
-  doc.moveDown(0.25);
 }
 
-function renderMedicamentosTable(doc, items) {
-  if (!items.length) return;
-  sectionTitle(doc, 'Medicación suministrada');
-  const left = doc.page.margins.left;
-  const w = contentWidth(doc);
-  const cw = [w * 0.34, w * 0.2, w * 0.14, w * 0.32];
-  const headerH = 16;
-  const bodyRowH = 26;
+function renderIndicaciones(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.vigenteDesde)} ${str(r.horaCarga)} ${String(r.nroIndicacion).padStart(8, '0')}`);
+  sectionTitle(doc, 'Indicaciones médicas', list.length);
+  table(
+    doc,
+    [
+      { label: 'Nº', width: 0.06, value: (r) => str(r.nroIndicacion) },
+      { label: 'Indicada', width: 0.11, value: (r) => fmtFechaHora(r.vigenteDesde, r.horaCarga) },
+      { label: 'Tipo', width: 0.1, value: tipoIndicacion },
+      {
+        label: 'Indicación',
+        width: 0.34,
+        value: (r) => {
+          const desc = str(r.descripcion).trim();
+          const med = str(r.medicamento).trim();
+          const dosis = [str(r.cantidad), str(r.tipoUnidad)].filter(Boolean).join(' ');
+          const lines = [desc || med];
+          if (med && desc && med !== desc) lines.push(med);
+          if (dosis && Number(r.cantidad) > 0) lines.push(`Dosis: ${dosis}`);
+          (r.indicacionesHijas || []).forEach((h) => {
+            const hd = [str(h.descripcion || h.medicamento), [str(h.cantidad), str(h.tipoUnidad)].filter(Boolean).join(' ')]
+              .filter(Boolean)
+              .join(' · ');
+            if (hd) lines.push(`+ ${hd}`);
+          });
+          if (str(r.observaciones).trim()) lines.push(`Obs.: ${str(r.observaciones).trim()}`);
+          return lines.filter(Boolean).join('\n');
+        },
+      },
+      { label: 'Frecuencia', width: 0.11, value: (r) => str(r.frecuencia) },
+      { label: 'Estado', width: 0.09, value: estadoIndicacion },
+      { label: 'Indicó', width: 0.19, value: (r) => profesionalCelda(firmante.indicacion(r)) },
+    ],
+    list,
+  );
+  drawSignatures(doc, list.map(firmante.indicacion), firmas, {
+    caption: 'Firmas de los profesionales que indicaron.',
+  });
+  doc.moveDown(0.4);
+}
 
-  function rowCellsAt(y, cells, header) {
-    let x = left;
-    doc.fillColor(header ? '#0f172a' : '#334155');
-    doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(header ? 8 : 7);
-    for (let i = 0; i < 4; i += 1) {
-      doc.text(safeText(cells[i], 800), x + 3, y + 3, {
-        width: cw[i] - 6,
-        height: header ? headerH - 6 : bodyRowH - 6,
-        ellipsis: !header,
-      });
-      x += cw[i];
+function renderEstudios(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => str(r.FechaPedido || r.fechaPedido));
+  sectionTitle(doc, 'Estudios solicitados', list.length);
+  list.forEach((ex, i) => {
+    const titulo =
+      str(ex.PracticaDescripcion || ex.practicaDescripcion) || `Pedido #${str(ex.IdPedido || ex.id || i + 1)}`;
+    recordHeader(
+      doc,
+      titulo,
+      [fmtFechaHora(ex.FechaPedido || ex.fechaPedido), str(ex.EstadoUrgencia || ex.estadoUrgencia)].filter(Boolean).join(' · '),
+    );
+    const sol = firmante.estudioSolicitante(ex);
+    const real = firmante.estudioRealizador(ex);
+    fieldGrid(doc, [
+      ['Solicitó', profesionalCelda(sol).replace('\n', ' · ')],
+      ['Realizó', profesionalCelda(real).replace('\n', ' · ')],
+      ['Nº protocolo', ex.NroProtocolo || ex.nroProtocolo],
+      ['Fecha de resultado', fmtFechaHora(ex.FechaResultado || ex.fechaResultado)],
+    ]);
+    textBlock(doc, 'Pedido', ex.PedidoEstudio || ex.pedidoEstudio);
+    const resultado = ex.ResultadoEstudio || ex.resultadoEstudio;
+    if (plain(resultado)) textBlock(doc, 'Resultado', resultado);
+    else mutedLine(doc, 'Sin resultado cargado.');
+    if (Number(ex.cantidadAdjuntos) > 0) mutedLine(doc, `${ex.cantidadAdjuntos} archivo(s) adjunto(s) al estudio.`);
+    drawSignatures(doc, [real || sol], firmas);
+    recordEnd(doc);
+  });
+}
+
+function renderInterconsultas(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaSolicitud)} ${str(r.HoraSolicitud)}`);
+  sectionTitle(doc, 'Interconsultas', list.length);
+  list.forEach((ic) => {
+    const destino = str(ic.ServicioDescripcion || ic.SectorReceptorNombre || ic.Especialidad) || 'Interconsulta';
+    const estado = str(ic.EstadoWorkflow || ic.Estado);
+    recordHeader(
+      doc,
+      `Interconsulta a ${destino}`,
+      [fmtFechaHora(ic.FechaSolicitud, ic.HoraSolicitud), estado, str(ic.EstadoUrgencia)].filter(Boolean).join(' · '),
+    );
+    const sol = firmante.interSolicitante(ic);
+    const resp = firmante.interRespuesta(ic);
+    fieldGrid(doc, [
+      ['Solicitó', profesionalCelda(sol).replace('\n', ' · ')],
+      ['Sector solicitante', ic.SectorSolicitanteNombre],
+      ['Respondió', profesionalCelda(resp).replace('\n', ' · ')],
+      ['Fecha de respuesta', fmtFechaHora(ic.FechaRespuesta)],
+    ]);
+    textBlock(doc, 'Motivo', ic.Motivo);
+    if (plain(ic.Respuesta)) textBlock(doc, 'Respuesta', ic.Respuesta);
+    else mutedLine(doc, 'Sin respuesta cargada.');
+    drawSignatures(
+      doc,
+      [sol && { ...sol, rol: 'Solicita' }, resp && { ...resp, rol: 'Responde' }].filter(Boolean),
+      firmas,
+    );
+    recordEnd(doc);
+  });
+}
+
+function renderProtocolos(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => str(r.fecha || r.fechaHoraInicio));
+  sectionTitle(doc, 'Protocolos', list.length);
+  list.forEach((p) => {
+    const tipo = str(p.tipoDescripcion || p.tipoProtocolo) || 'Protocolo';
+    recordHeader(
+      doc,
+      `${tipo}${p.numeroProtocolo != null ? ` · Nº ${p.numeroProtocolo}` : ''}`,
+      [fmtFechaHora(p.fecha), str(p.estado)].filter(Boolean).join(' · '),
+    );
+    const practicas = Array.isArray(p.practicas) ? p.practicas : [];
+    const equipo = practicas
+      .flatMap((x) => (Array.isArray(x.profesionales) ? x.profesionales : []))
+      .map((pr) => [str(pr.apellidoNombre), str(pr.funcionNombre) && `(${str(pr.funcionNombre)})`].filter(Boolean).join(' '))
+      .filter(Boolean);
+    fieldGrid(doc, [
+      ['Inicio', fmtFechaHora(p.fechaHoraInicio)],
+      ['Fin', fmtFechaHora(p.fechaHoraFin)],
+      ['Diagnóstico pre', p.diagnosticoPre],
+      ['Diagnóstico post', p.diagnosticoPos],
+    ]);
+    if (equipo.length) fieldGrid(doc, [['Equipo', [...new Set(equipo)].join(' · ')]], 1);
+    if (practicas.length) {
+      fieldGrid(
+        doc,
+        [['Prácticas', practicas.map((x) => [str(x.codigoPractica), str(x.descripcion)].filter(Boolean).join(' ')).join(' · ')]],
+        1,
+      );
     }
-  }
-
-  ensureSpace(doc, headerH + 8);
-  let y = doc.y;
-  doc.save();
-  doc.rect(left, y, w, headerH).fill('#e0f2fe').stroke('#93c5fd');
-  doc.restore();
-  rowCellsAt(y, ['Medicamento', 'Fecha / hora', 'Cantidad', 'Observaciones'], true);
-  doc.y = y + headerH + 2;
-
-  items.forEach((m, i) => {
-    ensureSpace(doc, bodyRowH + 4);
-    y = doc.y;
-    doc.save();
-    doc.rect(left, y, w, bodyRowH).fill(i % 2 === 0 ? '#fafafa' : '#ffffff').stroke('#e5e7eb');
-    doc.restore();
-    const med = str(m.NombreMedicamento || m.AliasMedicamento || m.DescripcionMedicamento || '—');
-    const cant = `${str(m.Cantidad)} ${str(m.TipoUnidad)}`.trim();
-    rowCellsAt(y, [med, formatMedFechaHora(m), cant || '—', str(m.Observaciones)], false);
-    doc.y = y + bodyRowH + 2;
+    const meds = Array.isArray(p.medicamentos) ? p.medicamentos : [];
+    if (meds.length) {
+      fieldGrid(
+        doc,
+        [['Medicación', meds.map((m) => [str(m.descripcion), [str(m.cantidad), str(m.unidad)].filter(Boolean).join(' ')].filter(Boolean).join(' ')).join(' · ')]],
+        1,
+      );
+    }
+    textBlock(doc, 'Técnica', p.tecnica);
+    textBlock(doc, 'Descripción', p.texto);
+    drawSignatures(doc, [firmante.protocolo(p)], firmas);
+    recordEnd(doc);
   });
-  doc.moveDown(0.3);
 }
+
+function renderProcedimientos(doc, rows) {
+  const list = ordenar(rows, (r) => `${str(r.FechaPractica)} ${str(r.HoraPracticaInicio)}`);
+  sectionTitle(doc, 'Procedimientos / prácticas', list.length);
+  table(
+    doc,
+    [
+      { label: 'Fecha', width: 0.12, value: (p) => fmtFechaHora(p.FechaPractica, p.HoraPracticaInicio) },
+      { label: 'Código', width: 0.09, value: (p) => str(p.Practica) },
+      { label: 'Práctica', width: 0.33, value: (p) => str(p.PracticaDescripcion || p.Practica) },
+      { label: 'Cant.', width: 0.06, value: (p) => str(p.CantidadPractica), align: 'right' },
+      { label: 'Sector', width: 0.1, value: (p) => str(p.ValorSector) },
+      {
+        label: 'Profesionales',
+        width: 0.3,
+        value: (p) => (Array.isArray(p.ProfesionalesLista) && p.ProfesionalesLista.length ? p.ProfesionalesLista.join('\n') : str(p.Profesionales)),
+      },
+    ],
+    list,
+  );
+}
+
+function renderEvoluciones(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaEv)} ${str(r.HoraEv)}`);
+  sectionTitle(doc, 'Evoluciones médicas', list.length);
+  list.forEach((e) => {
+    recordHeader(
+      doc,
+      str(e.EspecialidadDescripcion || e.SectorDescripcion) || 'Evolución',
+      fmtFechaHora(e.FechaEv, e.HoraEv),
+    );
+    if (plain(e.Evolucion)) textBlock(doc, null, e.Evolucion);
+    else mutedLine(doc, 'Sin texto.');
+    if (valorControl(e.Glucemia)) fieldGrid(doc, [['Glucemia', e.Glucemia]], 1);
+    drawSignatures(doc, [firmante.evolucion(e)], firmas);
+    recordEnd(doc);
+  });
+}
+
+function renderEpicrisis(doc, rows, firmas) {
+  sectionTitle(doc, 'Epicrisis', rows.length);
+  rows.forEach((ep) => {
+    recordHeader(
+      doc,
+      'Epicrisis',
+      [fmtFechaHora(ep.Fecha || ep.fecha, ep.Hora || ep.hora), str(ep.SectorDescripcion || ep.sectorDescripcion)]
+        .filter(Boolean)
+        .join(' · '),
+    );
+    fieldGrid(doc, [['Diagnóstico', ep.Diagnostico || ep.diagnostico]], 1);
+    textBlock(doc, 'Diagnóstico (detalle)', ep.DiagnosticoText || ep.diagnosticoText);
+    textBlock(doc, 'Resumen de la internación', ep.Epicrisis || ep.epicrisis);
+    drawSignatures(doc, [firmante.epicrisis(ep)], firmas);
+    recordEnd(doc);
+  });
+}
+
+function renderLaboratorios(doc, rows) {
+  sectionTitle(doc, 'Laboratorio', rows.length);
+  rows.forEach((ex) => {
+    recordHeader(
+      doc,
+      str(ex.TipoEstudio) || 'Análisis',
+      [fmtFechaHora(ex.FechaExamen, ex.HoraExamen), ex.Protocolo ? `Protocolo ${ex.Protocolo}` : '', str(ex.Laboratorio)]
+        .filter(Boolean)
+        .join(' · '),
+    );
+    const det = Array.isArray(ex.detalles) ? ex.detalles : [];
+    if (det.length) {
+      table(
+        doc,
+        [
+          { label: 'Parámetro', width: 0.4, value: (d) => str(d.NombreParametro) },
+          { label: 'Resultado', width: 0.25, value: (d) => [str(d.Resultado), str(d.Unidad)].filter(Boolean).join(' ') },
+          { label: 'Referencia', width: 0.35, value: (d) => str(d.ValorReferencia) },
+        ],
+        det,
+      );
+    } else {
+      mutedLine(doc, 'Sin parámetros cargados.');
+    }
+    recordEnd(doc);
+  });
+}
+
+function renderControles(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaControl)} ${str(r.HoraControl)}`);
+  sectionTitle(doc, 'Controles de enfermería', list.length);
+  table(
+    doc,
+    [
+      { label: 'Fecha / hora', width: 0.11, value: (c) => fmtFechaHora(c.FechaControl, c.HoraControl) },
+      {
+        label: 'TA',
+        width: 0.08,
+        value: (c) => (valorControl(c.Maximo) ? `${valorControl(c.Maximo)}/${valorControl(c.Minimo) || '—'}` : ''),
+      },
+      { label: 'FC', width: 0.05, value: (c) => valorControl(c.Pulso), align: 'right' },
+      { label: 'FR', width: 0.05, value: (c) => valorControl(c.FrecuenciaRespiratoria), align: 'right' },
+      { label: 'T°', width: 0.06, value: (c) => valorControl(c.Axilar, 1) || valorControl(c.Rectal, 1), align: 'right' },
+      { label: 'Sat %', width: 0.06, value: (c) => valorControl(c.Saturometria), align: 'right' },
+      { label: 'HGT', width: 0.06, value: (c) => str(c.Hgt).trim(), align: 'right' },
+      { label: 'Peso', width: 0.06, value: (c) => valorControl(c.Peso, 1), align: 'right' },
+      { label: 'Observaciones', width: 0.27, value: (c) => str(c.Observaciones).trim() },
+      { label: 'Registró', width: 0.2, value: (c) => profesionalCelda(firmante.control(c)) },
+    ],
+    list,
+  );
+  drawSignatures(doc, list.map(firmante.control), firmas, { caption: 'Firmas de los responsables de los controles.' });
+  doc.moveDown(0.4);
+}
+
+function renderMedicacion(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaControl)} ${str(r.HoraControl)}`);
+  sectionTitle(doc, 'Medicación suministrada', list.length);
+  table(
+    doc,
+    [
+      { label: 'Fecha / hora', width: 0.12, value: (m) => fmtFechaHora(m.FechaControl, m.HoraControl) },
+      {
+        label: 'Medicamento',
+        width: 0.34,
+        value: (m) => {
+          const lines = [str(m.NombreMedicamento || m.DescripcionMedicamento)];
+          (m.adicionales || []).forEach((a) => {
+            const t = [str(a.NombreMedicamento || a.DescripcionMedicamento), [str(a.Cantidad), str(a.TipoUnidad)].filter(Boolean).join(' ')]
+              .filter(Boolean)
+              .join(' · ');
+            if (t) lines.push(`+ ${t}`);
+          });
+          return lines.filter(Boolean).join('\n');
+        },
+      },
+      { label: 'Cantidad', width: 0.1, value: (m) => [str(m.Cantidad), str(m.TipoUnidad)].filter(Boolean).join(' ') },
+      { label: 'Ind. Nº', width: 0.07, value: (m) => str(m.NroIndicacion), align: 'right' },
+      { label: 'Observaciones', width: 0.17, value: (m) => str(m.Observaciones).trim() },
+      { label: 'Suministró', width: 0.2, value: (m) => profesionalCelda(firmante.medicacion(m)) },
+    ],
+    list,
+  );
+  drawSignatures(doc, list.map(firmante.medicacion), firmas, { caption: 'Firmas de quienes suministraron la medicación.' });
+  doc.moveDown(0.4);
+}
+
+function renderDietas(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaDieta || r.FechaCarga)} ${str(r.HoraDieta || r.HoraCarga)}`);
+  sectionTitle(doc, 'Dietas', list.length);
+  table(
+    doc,
+    [
+      { label: 'Fecha / hora', width: 0.13, value: (d) => fmtFechaHora(d.FechaDieta || d.FechaCarga, d.HoraDieta || d.HoraCarga) },
+      { label: 'Dieta', width: 0.27, value: (d) => str(d.DescripcionDieta) },
+      { label: 'Estado', width: 0.1, value: (d) => (d.FechaDieta ? 'Suministrada' : 'Indicada') },
+      { label: 'Ind. Nº', width: 0.07, value: (d) => str(d.NroIndicacion), align: 'right' },
+      { label: 'Observaciones', width: 0.23, value: (d) => str(d.Observaciones).trim() },
+      { label: 'Registró', width: 0.2, value: (d) => profesionalCelda(firmante.dieta(d)) },
+    ],
+    list,
+  );
+  drawSignatures(doc, list.map(firmante.dieta), firmas);
+  doc.moveDown(0.4);
+}
+
+function renderBalance(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.Fecha)} ${str(r.Hora)}`);
+  sectionTitle(doc, 'Balance hídrico', list.length);
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const tot = list.reduce(
+    (acc, b) => ({ i: acc.i + num(b.TotalIngresos), e: acc.e + num(b.TotalEgresos), t: acc.t + num(b.Total) }),
+    { i: 0, e: 0, t: 0 },
+  );
+  table(
+    doc,
+    [
+      { label: 'Fecha / hora', width: 0.12, value: (b) => fmtFechaHora(b.Fecha, b.Hora) },
+      { label: 'Medicación / vía', width: 0.24, value: (b) => [str(b.Medicacion), str(b.Via)].filter(Boolean).join(' · ') },
+      { label: 'Ingresos (ml)', width: 0.1, value: (b) => str(b.TotalIngresos), align: 'right' },
+      { label: 'Egresos (ml)', width: 0.1, value: (b) => str(b.TotalEgresos), align: 'right' },
+      { label: 'Balance (ml)', width: 0.1, value: (b) => str(b.Total), align: 'right' },
+      { label: 'Sector', width: 0.1, value: (b) => str(b.Sector) },
+      { label: 'Registró', width: 0.24, value: (b) => profesionalCelda(firmante.balance(b)) },
+    ],
+    list,
+    { footer: ['Total', '', String(tot.i), String(tot.e), String(tot.t), '', ''] },
+  );
+  drawSignatures(doc, list.map(firmante.balance), firmas);
+  doc.moveDown(0.4);
+}
+
+function renderEvolucionEnfermeria(doc, rows, firmas) {
+  const list = ordenar(rows, (r) => `${str(r.FechaControl)} ${str(r.HoraControl)}`);
+  sectionTitle(doc, 'Evolución de enfermería', list.length);
+  list.forEach((e) => {
+    recordHeader(doc, 'Evolución de enfermería', fmtFechaHora(e.FechaControl, e.HoraControl));
+    if (plain(e.Observaciones)) textBlock(doc, null, e.Observaciones);
+    else mutedLine(doc, 'Sin texto.');
+    drawSignatures(doc, [firmante.evolucionEnf(e)], firmas);
+    recordEnd(doc);
+  });
+}
+
+function renderInsumos(doc, rows) {
+  const list = ordenar(rows, (r) => `${str(r.vigenteDesde)} ${str(r.horaCarga)}`);
+  sectionTitle(doc, 'Insumos', list.length);
+  table(
+    doc,
+    [
+      { label: 'Fecha / hora', width: 0.13, value: (r) => fmtFechaHora(r.vigenteDesde, r.horaCarga) },
+      { label: 'Insumo', width: 0.37, value: (r) => str(r.descripcion || r.medicamento).trim() },
+      { label: 'Cant.', width: 0.07, value: (r) => str(r.cantidad), align: 'right' },
+      { label: 'Observaciones', width: 0.21, value: (r) => str(r.observaciones).trim() },
+      { label: 'Cargó', width: 0.22, value: (r) => str(r.fullName) },
+    ],
+    list,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Adjuntos
+// ---------------------------------------------------------------------------
 
 async function prepareAdjuntosResueltos(adjuntosMeta) {
   const list = Array.isArray(adjuntosMeta) ? adjuntosMeta : [];
@@ -662,7 +1324,7 @@ async function prepareAdjuntosResueltos(adjuntosMeta) {
       const nombre = fetched.nombreArchivo || a.NombreArchivo || 'archivo';
       const ext = path.extname(nombre).toLowerCase();
       let kind = 'none';
-      let buffer = fetched.buffer;
+      const buffer = fetched.buffer;
       let prepared = null;
 
       if (buffer && buffer.length > 0) {
@@ -695,37 +1357,82 @@ async function prepareAdjuntosResueltos(adjuntosMeta) {
         buffer: prepared || buffer,
         error: fetched.error,
       };
-    })
+    }),
   );
   return out;
 }
 
-function bodyParagraph(doc, text) {
-  const w = contentWidth(doc);
-  const t = safeText(text);
-  if (!t) return;
-  ensureSpace(doc, 36);
-  doc.fontSize(8).font('Helvetica').fillColor('#1e293b').text(t, { width: w, lineGap: 1 });
-  doc.moveDown(0.25);
+function renderAdjuntos(doc, adjuntosResueltos, pdfAnnexBuffers) {
+  sectionTitle(doc, 'Adjuntos', adjuntosResueltos.length);
+  table(
+    doc,
+    [
+      { label: 'Archivo', width: 0.42, value: (a) => str(a.nombreArchivo) },
+      { label: 'Tipo', width: 0.2, value: (a) => str(a.meta?.TipoImagenNombre || a.ext.replace('.', '').toUpperCase()) },
+      { label: 'Cargado', width: 0.15, value: (a) => fmtFechaHora(a.meta?.FechaCarga) },
+      {
+        label: 'En este PDF',
+        width: 0.23,
+        value: (a) =>
+          a.kind === 'pdf'
+            ? 'Anexado al final'
+            : a.kind === 'image'
+              ? 'Página siguiente'
+              : a.kind === 'unsupported'
+                ? 'Formato no incrustable'
+                : 'No se pudo obtener',
+      },
+    ],
+    adjuntosResueltos,
+  );
+
+  adjuntosResueltos.forEach((adj) => {
+    if (adj.kind === 'pdf' && adj.buffer) {
+      pdfAnnexBuffers.push(adj.buffer);
+      return;
+    }
+    if (adj.kind !== 'image' || !adj.buffer) return;
+    doc.addPage();
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.text).text(str(adj.nombreArchivo), left(doc), doc.y, { width: cw(doc) });
+    doc.moveDown(0.3);
+    try {
+      const top = doc.y;
+      const fh = Math.max(80, bottomLimit(doc) - top);
+      doc.image(adj.buffer, left(doc), top, { fit: [cw(doc), fh], align: 'center', valign: 'center' });
+    } catch (e) {
+      mutedLine(doc, `No se pudo incrustar la imagen: ${e.message}`, C.danger);
+    }
+  });
 }
 
+// ---------------------------------------------------------------------------
+// Documento
+// ---------------------------------------------------------------------------
+
+const has = (arr) => Array.isArray(arr) && arr.length > 0;
+
 /**
- * @param {object} payload - resultado de exportarAdmisionSelectivo
+ * @param {object} payload resultado de exportarAdmisionSelectivo (+ `empresa` opcional)
  * @returns {Promise<Buffer>}
  */
 async function buildSelectiveExportPdf(payload) {
-  const adjuntosResueltos =
-    payload.adjuntos && payload.adjuntos.length ? await prepareAdjuntosResueltos(payload.adjuntos) : [];
-
+  const empresa = payload.empresa || null;
+  const [adjuntosResueltos, firmas] = await Promise.all([
+    has(payload.adjuntos) ? prepareAdjuntosResueltos(payload.adjuntos) : Promise.resolve([]),
+    resolverFirmas(todosLosFirmantes(payload)),
+  ]);
   const pdfAnnexBuffers = [];
+  const a = payload.paciente || payload.admision || null;
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
-      margin: MARGIN,
       size: 'A4',
+      margins: MARGINS,
+      bufferPages: true,
       info: {
-        Title: `Exportación visita ${payload.numeroVisita || ''}`,
-        Author: 'iMedicWS',
+        Title: `Historia clínica · Visita ${payload.numeroVisita || ''}`,
+        Subject: str(a?.ApellidoYNombre),
+        Author: str(empresa?.razonSocial || empresa?.descripcion) || 'iMedic',
       },
     });
 
@@ -754,425 +1461,57 @@ async function buildSelectiveExportPdf(payload) {
       }
     });
 
-    drawCoverBlock(doc, payload);
+    try {
+      drawInstitucion(doc, empresa, payload.numeroVisita);
+      drawPacienteCard(doc, a, payload.criterios);
 
-    if (payload.admision) {
-      sectionTitle(doc, 'Datos de admisión');
-      const a = payload.admision;
-      keyValRow2(doc, [
-        ['Paciente', str(a.ApellidoYNombre)],
-        ['DNI', str(a.NumeroDocumento)],
-        ['HC', str(a.NumeroHC)],
-        ['Fecha admisión', str(a.FechaAdmision)],
-        ['Hora', str(a.HoraAdmision)],
-        ['Id paciente', str(a.IdPaciente)],
-      ]);
-      doc.moveDown(0.3);
-    }
+      if (payload.admision) renderAdmision(doc, payload.admision);
+      if (has(payload.movimientos)) renderMovimientos(doc, payload.movimientos);
 
-    if (payload.historialClinico && payload.historialClinico.length) {
-      sectionTitle(doc, 'HC de ingreso');
-      payload.historialClinico.forEach((row, idx) => {
-        ensureSpace(doc, 72);
-        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(`Registro ${idx + 1} — ID ${str(row.IdHCIngreso)}`, {
-          width: contentWidth(doc),
-        });
-        doc.font('Helvetica');
-        keyValRow2(doc, [
-          ['Profesional', str(row.ProfesionalNombre)],
-          ['Sector', str(row.SectorDescripcion)],
-          ['Fecha', str(row.FechaFormateada || row.Fecha)],
-        ]);
-        if (safeText(row.MotivoConsulta)) {
-          ensureSpace(doc, 30);
-          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Motivo de consulta:', {
-            width: contentWidth(doc),
-          });
-          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(safeText(row.MotivoConsulta), {
-            width: contentWidth(doc),
-          });
-          doc.moveDown(0.2);
-        }
-        // Enfermedad actual: fila completa (sin columnas) como solicitó usuario.
-        if (safeText(row.EnfermedadActual)) {
-          ensureSpace(doc, 32);
-          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text('Enfermedad actual:', {
-            width: contentWidth(doc),
-          });
-          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(safeText(row.EnfermedadActual), {
-            width: contentWidth(doc),
-          });
-          doc.moveDown(0.2);
-        }
+      const medica = [
+        [payload.historialClinico, () => renderHci(doc, payload.historialClinico, firmas)],
+        [payload.indicaciones, () => renderIndicaciones(doc, payload.indicaciones, firmas)],
+        [payload.estudios, () => renderEstudios(doc, payload.estudios, firmas)],
+        [payload.interconsultas, () => renderInterconsultas(doc, payload.interconsultas, firmas)],
+        [payload.protocolos, () => renderProtocolos(doc, payload.protocolos, firmas)],
+        [payload.practicasPaciente, () => renderProcedimientos(doc, payload.practicasPaciente)],
+        [payload.evolucionesMedicas, () => renderEvoluciones(doc, payload.evolucionesMedicas, firmas)],
+        [payload.epicrisis, () => renderEpicrisis(doc, payload.epicrisis, firmas)],
+        [payload.practicas?.laboratorios, () => renderLaboratorios(doc, payload.practicas.laboratorios)],
+      ].filter(([rows]) => has(rows));
 
-        Object.entries(HCI_CAMPOS_TEXTO_LIBRE).forEach(([field, label]) => {
-          const text = safeText(row[field]);
-          if (!text) return;
-          ensureSpace(doc, 30);
-          doc.font('Helvetica-Bold').fontSize(8).fillColor('#475569').text(`${label}:`, {
-            width: contentWidth(doc),
-          });
-          doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(text, {
-            width: contentWidth(doc),
-          });
-          doc.moveDown(0.2);
-        });
+      const enfermeria = [
+        [payload.controles, () => renderControles(doc, payload.controles, firmas)],
+        [payload.medicamentos, () => renderMedicacion(doc, payload.medicamentos, firmas)],
+        [payload.evolucionesEnfermeria, () => renderEvolucionEnfermeria(doc, payload.evolucionesEnfermeria, firmas)],
+        [payload.balanceHidrico, () => renderBalance(doc, payload.balanceHidrico, firmas)],
+        [payload.dietas, () => renderDietas(doc, payload.dietas, firmas)],
+        [payload.insumos, () => renderInsumos(doc, payload.insumos)],
+      ].filter(([rows]) => has(rows));
 
-        const secciones = buildHcDisplaySections(row);
-        secciones.forEach((sec) => {
-          ensureSpace(doc, 26);
-          doc.font('Helvetica-Bold').fontSize(8).fillColor('#0369a1').text(sec.titulo, {
-            width: contentWidth(doc),
-          });
-          keyValRow2(
-            doc,
-            sec.campos.map((c) => [c.label, safeText(c.valor)])
-          );
-          doc.moveDown(0.15);
-        });
-        doc.moveDown(0.35);
-      });
-    }
-
-    if (payload.indicaciones && payload.indicaciones.length) {
-      renderIndicacionesGrid(doc, payload.indicaciones);
-    }
-
-    if (payload.estudios && payload.estudios.length) {
-      sectionTitle(doc, 'Estudios solicitados');
-      payload.estudios.forEach((ex, ei) => {
-        ensureSpace(doc, 40);
-        const titulo =
-          str(ex.PracticaDescripcion || ex.practicaDescripcion) ||
-          str(ex.PedidoEstudio || ex.pedidoEstudio) ||
-          `Pedido #${str(ex.IdPedido || ex.id || ei + 1)}`;
-        const fecha = str(ex.FechaPedido || ex.fechaPedido).slice(0, 19);
-        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(`${titulo} — ${fecha}`, {
-          width: contentWidth(doc),
-        });
-        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
-        const pedidoTxt = str(ex.PedidoEstudio || ex.pedidoEstudio);
-        if (pedidoTxt) {
-          doc.font('Helvetica-Bold').fontSize(8).text('Pedido', { width: contentWidth(doc) });
-          bodyParagraph(doc, pedidoTxt);
-        }
-        const resultado = str(ex.ResultadoEstudio || ex.resultadoEstudio);
-        if (resultado) {
-          doc.font('Helvetica-Bold').fontSize(8).text('Respuesta', { width: contentWidth(doc) });
-          bodyParagraph(doc, resultado.slice(0, 2000));
-        } else {
-          doc.font('Helvetica').fontSize(8).fillColor('#64748b').text('Sin respuesta cargada.', {
-            width: contentWidth(doc),
-          });
-          doc.fillColor('#1e293b');
-        }
-        doc.moveDown(0.15);
-      });
-    }
-
-    if (payload.interconsultas && payload.interconsultas.length) {
-      renderTextCards(
-        doc,
-        'Interconsultas',
-        payload.interconsultas.map((ic) => {
-          const destino = str(ic.Especialidad) || str(ic.SectorReceptorNombre);
-          const partes = [];
-          if (str(ic.MedicoSolicitanteNombre)) partes.push(`Solicita: ${str(ic.MedicoSolicitanteNombre)}`);
-          if (str(ic.Motivo)) partes.push(`Motivo: ${str(ic.Motivo)}`);
-          if (str(ic.Respuesta)) {
-            const fr = str(ic.FechaRespuesta);
-            partes.push(`Respuesta${fr ? ` (${fr})` : ''}: ${str(ic.Respuesta)}`);
-          }
-          return {
-            head: [`${str(ic.FechaSolicitud)} ${str(ic.HoraSolicitud)}`.trim(), destino, str(ic.Estado), str(ic.EstadoUrgencia)]
-              .filter(Boolean)
-              .join(' · '),
-            body: partes.join('\n\n'),
-          };
-        }),
-      );
-    }
-
-    if (payload.protocolos && payload.protocolos.length) {
-      sectionTitle(doc, 'Protocolos clínicos');
-      payload.protocolos.forEach((p) => {
-        ensureSpace(doc, 36);
-        const tipo = str(p.tipoDescripcion || p.tipoProtocolo || p.TipoEstudio) || 'Protocolo';
-        const nro =
-          p.numeroProtocolo != null ? String(p.numeroProtocolo) : str(p.Protocolo) || '—';
-        const fecha = str(p.fecha || p.FechaExamen).slice(0, 19);
-        doc
-          .font('Helvetica-Bold')
-          .fontSize(9)
-          .fillColor('#0f172a')
-          .text(`${tipo} · N° ${nro} — ${fecha}`, { width: contentWidth(doc) });
-        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
-        if (p.diagnosticoPre) bodyParagraph(doc, `Dx pre: ${str(p.diagnosticoPre)}`);
-        if (p.diagnosticoPos) bodyParagraph(doc, `Dx pos: ${str(p.diagnosticoPos)}`);
-        if (p.tecnica) bodyParagraph(doc, `Técnica: ${str(p.tecnica)}`);
-        if (Array.isArray(p.practicas) && p.practicas.length) {
-          const names = p.practicas
-            .map((x) => str(x.descripcion || x.codigoPractica))
-            .filter(Boolean)
-            .join(', ');
-          if (names) bodyParagraph(doc, `Prácticas: ${names}`);
-        }
-        doc.moveDown(0.1);
-      });
-    }
-
-    if (payload.practicasPaciente && payload.practicasPaciente.length) {
-      renderPracticasPacienteTable(doc, payload.practicasPaciente);
-    }
-
-    if (payload.evolucionesMedicas && payload.evolucionesMedicas.length) {
-      renderTextCards(
-        doc,
-        'Evoluciones médicas',
-        payload.evolucionesMedicas.map((e, ei) => ({
-          head: `#${ei + 1} · ${str(e.FechaEv)} ${str(e.HoraEv)} · ${str(e.ProfesionalNombreCompleto)}`,
-          body: e.Evolucion,
-        })),
-      );
-    }
-
-    if (payload.epicrisis && payload.epicrisis.length) {
-      sectionTitle(doc, 'Epicrisis');
-      payload.epicrisis.forEach((ep) => {
-        ensureSpace(doc, 40);
-        const fecha = str(ep.Fecha || ep.fecha).slice(0, 16);
-        const hora = str(ep.Hora || ep.hora);
-        const prof = str(ep.ProfesionalNombreCompleto || ep.profesionalNombreCompleto);
-        doc
-          .font('Helvetica-Bold')
-          .fontSize(9)
-          .fillColor('#0f172a')
-          .text(['Epicrisis', fecha, hora, prof].filter(Boolean).join(' — '), {
-            width: contentWidth(doc),
-          });
-        doc.font('Helvetica').fontSize(8).fillColor('#1e293b');
-        const dx = str(ep.Diagnostico || ep.diagnostico);
-        if (dx) bodyParagraph(doc, `Diagnóstico: ${dx}`);
-        const dxTxt = str(ep.DiagnosticoText || ep.diagnosticoText);
-        if (dxTxt) bodyParagraph(doc, dxTxt);
-        const texto = str(ep.Epicrisis || ep.epicrisis);
-        if (texto) bodyParagraph(doc, texto);
-        doc.moveDown(0.1);
-      });
-    }
-
-    if (payload.controles && payload.controles.length) {
-      renderSimpleTable(
-        doc,
-        'Controles',
-        [
-          { label: 'Fecha / hora', width: 0.13, value: (c) => `${str(c.FechaControl)} ${str(c.HoraControl).slice(0, 5)}` },
-          {
-            label: 'TA',
-            width: 0.08,
-            value: (c) => (valorControl(c.Maximo) ? `${valorControl(c.Maximo)}/${valorControl(c.Minimo) || '—'}` : ''),
-          },
-          { label: 'Pulso', width: 0.06, value: (c) => valorControl(c.Pulso) },
-          { label: 'FR', width: 0.05, value: (c) => valorControl(c.FrecuenciaRespiratoria) },
-          { label: 'Temp.', width: 0.06, value: (c) => valorControl(c.Axilar, 1) || valorControl(c.Rectal, 1) },
-          { label: 'Sat.', width: 0.05, value: (c) => valorControl(c.Saturometria) },
-          { label: 'HGT', width: 0.06, value: (c) => str(c.Hgt).trim() },
-          { label: 'Peso', width: 0.06, value: (c) => valorControl(c.Peso, 1) },
-          {
-            label: 'Profesional',
-            width: 0.17,
-            value: (c) => [str(c.ProfesionalApellido), str(c.ProfesionalNombres)].filter(Boolean).join(' '),
-          },
-          { label: 'Observaciones', width: 0.28, value: (c) => str(c.Observaciones).trim() },
-        ],
-        payload.controles,
-      );
-    }
-
-    if (payload.medicamentos && payload.medicamentos.length) {
-      renderMedicamentosTable(doc, payload.medicamentos);
-    }
-
-    if (payload.dietas && payload.dietas.length) {
-      renderIndicacionesGrid(doc, payload.dietas, 'Dietas');
-    }
-
-    if (payload.balanceHidrico && payload.balanceHidrico.length) {
-      renderSimpleTable(
-        doc,
-        'Balance hídrico',
-        [
-          { label: 'Fecha / hora', width: 0.14, value: (b) => `${str(b.Fecha)} ${str(b.Hora).slice(0, 5)}` },
-          { label: 'Medicación / vía', width: 0.26, value: (b) => [str(b.Medicacion), str(b.Via)].filter(Boolean).join(' · ') },
-          { label: 'Ingresos', width: 0.1, value: (b) => str(b.TotalIngresos) },
-          { label: 'Egresos', width: 0.1, value: (b) => str(b.TotalEgresos) },
-          { label: 'Balance', width: 0.1, value: (b) => str(b.Total) },
-          { label: 'Sector', width: 0.08, value: (b) => str(b.Sector) },
-          {
-            label: 'Profesional',
-            width: 0.22,
-            value: (b) => [str(b.ProfesionalApellido), str(b.ProfesionalNombres)].filter(Boolean).join(' '),
-          },
-        ],
-        payload.balanceHidrico,
-      );
-    }
-
-    if (payload.evolucionesEnfermeria && payload.evolucionesEnfermeria.length) {
-      renderTextCards(
-        doc,
-        'Evolución de enfermería',
-        payload.evolucionesEnfermeria.map((e, ei) => ({
-          head: `#${ei + 1} · ${str(e.FechaControl)} ${str(e.HoraControl)} · ${[
-            str(e.ProfesionalApellido),
-            str(e.ProfesionalNombres),
-          ]
-            .filter(Boolean)
-            .join(' ')}`,
-          body: e.Observaciones,
-        })),
-      );
-    }
-
-    if (payload.insumos && payload.insumos.length) {
-      renderSimpleTable(
-        doc,
-        'Insumos',
-        [
-          { label: 'Fecha / hora', width: 0.15, value: (r) => `${str(r.vigenteDesde)} ${str(r.horaCarga).slice(0, 5)}` },
-          { label: 'Insumo', width: 0.37, value: (r) => str(r.descripcion || r.medicamento).trim() },
-          { label: 'Cant.', width: 0.07, value: (r) => str(r.cantidad) },
-          { label: 'Profesional', width: 0.2, value: (r) => str(r.fullName) },
-          { label: 'Observaciones', width: 0.21, value: (r) => str(r.observaciones).trim() },
-        ],
-        payload.insumos,
-      );
-    }
-
-    if (payload.practicas && payload.practicas.laboratorios && payload.practicas.laboratorios.length) {
-      sectionTitle(doc, 'Laboratorio (análisis)');
-      payload.practicas.laboratorios.forEach((ex) => {
-        ensureSpace(doc, 48);
-        doc.font('Helvetica-Bold').fontSize(9).text(`${str(ex.TipoEstudio)} — ${str(ex.FechaExamen)} ${str(ex.HoraExamen)}`, {
-          width: contentWidth(doc),
-        });
-        doc.font('Helvetica').fontSize(8);
-        if (ex.Protocolo) doc.fillColor('#475569').text(`Protocolo: ${str(ex.Protocolo)}`, { width: contentWidth(doc) });
-        doc.fillColor('#1e293b');
-        if (ex.detalles && ex.detalles.length) {
-          const leftL = doc.page.margins.left;
-          const wL = contentWidth(doc);
-          const c2 = (wL - 8) / 2;
-          const det = ex.detalles.slice(0, 80);
-          for (let di = 0; di < det.length; di += 2) {
-            ensureSpace(doc, 14);
-            const rowY = doc.y;
-            const d0 = det[di];
-            const d1 = det[di + 1];
-            const line0 = `• ${str(d0.NombreParametro)}: ${str(d0.Resultado)} (ref. ${str(d0.ValorReferencia)})`;
-            doc.fontSize(6.8).fillColor('#1e293b').text(safeText(line0, 280), leftL, rowY, {
-              width: c2 - 4,
-              height: 12,
-              ellipsis: true,
-            });
-            if (d1) {
-              const line1 = `• ${str(d1.NombreParametro)}: ${str(d1.Resultado)} (ref. ${str(d1.ValorReferencia)})`;
-              doc.text(safeText(line1, 280), leftL + c2 + 6, rowY, { width: c2 - 4, height: 12, ellipsis: true });
-            }
-            doc.y = rowY + 13;
-          }
-          if (ex.detalles.length > 80) {
-            doc.fontSize(7.5).fillColor('#64748b').text(`… y ${ex.detalles.length - 80} parámetros más`, {
-              width: contentWidth(doc),
-            });
-          }
-        }
-        doc.moveDown(0.25);
-      });
-    }
-
-    if (adjuntosResueltos.length) {
-      const okAdjuntos = [];
-      const failedAdjuntos = [];
-      for (const adj of adjuntosResueltos) {
-        if (adj.kind === 'error') {
-          failedAdjuntos.push(adj);
-          continue;
-        }
-        okAdjuntos.push(adj);
+      if (medica.length) {
+        groupTitle(doc, 'Gestión médica');
+        medica.forEach(([, render]) => render());
+      }
+      if (enfermeria.length) {
+        groupTitle(doc, 'Gestión de enfermería');
+        enfermeria.forEach(([, render]) => render());
+      }
+      if (adjuntosResueltos.length) {
+        groupTitle(doc, 'Documentación');
+        renderAdjuntos(doc, adjuntosResueltos, pdfAnnexBuffers);
       }
 
-      if (failedAdjuntos.length) {
-        sectionTitle(doc, 'Adjuntos no incluidos');
-        ensureSpace(doc, 40);
-        doc
-          .font('Helvetica')
-          .fontSize(8)
-          .fillColor('#b91c1c')
-          .text(
-            `No se pudieron obtener ${failedAdjuntos.length} adjunto(s) (timeout o error de conexión al file server). No se agregaron páginas vacías.`,
-            { width: contentWidth(doc) },
-          );
-        doc.moveDown(0.25);
-        failedAdjuntos.forEach((adj) => {
-          const nombre = str(adj.nombreArchivo || 'Adjunto');
-          const id = adj.meta?.IdAdjunto != null ? ` · Id ${adj.meta.IdAdjunto}` : '';
-          const err = adj.error ? ` — ${safeText(adj.error, 120)}` : '';
-          doc.font('Helvetica').fontSize(7.5).fillColor('#7f1d1d').text(`• ${nombre}${id}${err}`, {
-            width: contentWidth(doc),
-          });
-        });
-        doc.moveDown(0.35);
-      }
+      const algo = medica.length || enfermeria.length || adjuntosResueltos.length || payload.admision || has(payload.movimientos);
+      if (!algo) mutedLine(doc, 'No hay registros para los bloques y el período elegidos.');
 
-      okAdjuntos.forEach((adj) => {
-        // PDFs: se anexan directo, sin página intermedia.
-        if (adj.kind === 'pdf' && adj.buffer) {
-          pdfAnnexBuffers.push(adj.buffer);
-          return;
-        }
-
-        doc.addPage();
-
-        const titulo = str(adj.nombreArchivo || 'Adjunto');
-        doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a').text(titulo, {
-          width: contentWidth(doc),
-        });
-        doc.moveDown(0.2);
-
-        if (adj.kind === 'image' && adj.buffer) {
-          try {
-            const left = doc.page.margins.left;
-            const top = doc.y;
-            const fw = contentWidth(doc);
-            const fh = Math.max(80, doc.page.height - doc.page.margins.bottom - top);
-            doc.image(adj.buffer, left, top, {
-              fit: [fw, fh],
-              align: 'center',
-              valign: 'center',
-            });
-          } catch (e) {
-            doc.font('Helvetica').fontSize(8).fillColor('#b91c1c').text(`No se pudo incrustar la imagen: ${e.message}`, {
-              width: contentWidth(doc),
-            });
-          }
-        } else if (adj.kind === 'unsupported') {
-          doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(
-            'Formato no incrustable en PDF; descargá el archivo desde el sistema con el IdAdjunto indicado.',
-            { width: contentWidth(doc) }
-          );
-        }
-      });
+      drawRunningChrome(doc, payload, empresa);
+      doc.end();
+    } catch (err) {
+      reject(err);
     }
-
-    doc.end();
   });
 }
-
-module.exports = {
-  buildSelectiveExportPdf,
-  buildMultiVisitExportPdf,
-};
 
 /**
  * Une varios PDFs de visitas en uno solo (carpeta / export general).
@@ -1199,3 +1538,8 @@ async function buildMultiVisitExportPdf(pdfBuffers) {
   }
   return Buffer.from(await mainDoc.save());
 }
+
+module.exports = {
+  buildSelectiveExportPdf,
+  buildMultiVisitExportPdf,
+};

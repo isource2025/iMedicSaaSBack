@@ -20,6 +20,8 @@ const interconsultasService = require('./interconsultas.service');
 const controlesFrecuentesService = require('./controlesFrecuentes.service');
 const balanceHidricoService = require('./balanceHidrico.service');
 const evolucionEnfermeriaService = require('./evolucionEnfermeria.service');
+const dietaControlService = require('./dietaControl.service');
+const visitaMovimientosService = require('./visitaMovimientos.service');
 const { jsonSafe } = require('../utils/jsonSafe');
 
 function getEpicrisisService() {
@@ -847,51 +849,151 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 	});
 }
 
-async function exportarAdmisionCompleta(numeroVisita) {
-  const visita = await obtenerResumenAdmision(numeroVisita);
-  if (!visita) return null;
+/** Todas las secciones de la historia de una visita (detalle y export usan la misma lista). */
+const VISITA_SECCIONES = [
+  'admision',
+  'hcIngreso',
+  'indicaciones',
+  'estudios',
+  'interconsultas',
+  'protocolos',
+  'practicas',
+  'evoluciones',
+  'epicrisis',
+  'laboratorios',
+  'controles',
+  'medicamentos',
+  'evolucionEnfermeria',
+  'balanceHidrico',
+  'dietas',
+  'insumos',
+  'movimientos',
+  'adjuntos',
+];
 
+/** Admisión con cobertura, médicos, ubicación y egreso (misma consulta que datos principales). */
+async function obtenerAdmisionDetallada(numeroVisita) {
+  const [resumen, completa] = await Promise.all([
+    obtenerResumenAdmision(numeroVisita),
+    settled(() => _consultarVisitaCompleta(numeroVisita), null),
+  ]);
+  if (!resumen) return null;
+  const out = { ...(completa || {}), ...resumen };
+  const ingreso = toYmd(out.FechaAdmision);
+  if (ingreso) {
+    const fin = toYmd(out.FechaEgreso) || new Date().toISOString().slice(0, 10);
+    const dias = Math.round((Date.parse(fin) - Date.parse(ingreso)) / 86400000);
+    out.DiasEstadia = Number.isFinite(dias) && dias >= 0 ? dias : null;
+  }
+  out.Egresada = Boolean(toYmd(out.FechaEgreso));
+  return out;
+}
+
+/**
+ * Carga cruda de cada bloque clínico de la visita. Una sola fuente para el detalle
+ * de admisión y para el PDF, así ambos muestran exactamente lo mismo.
+ * @param {number} numeroVisita
+ * @param {Set<string>} need secciones a cargar (claves de VISITA_SECCIONES)
+ */
+async function cargarDatosClinicosVisita(numeroVisita, need) {
   const today = new Date().toISOString().slice(0, 10);
+  const skip = Promise.resolve([]);
+  const load = (key, factory) => (need.has(key) ? settled(factory, []) : skip);
+  const needEstudios = need.has('estudios');
+
   const [
     historiaClinica,
-    indicacionesRaw,
-    practicasPaciente,
+    indicaciones,
+    practicas,
     medicamentos,
-    practicasLaboratorio,
     evolucionesMedicas,
     adjuntos,
     estudios,
     protocolos,
     epicrisis,
+    interconsultas,
+    controles,
+    balanceHidrico,
+    evolucionesEnfermeria,
+    insumos,
+    dietas,
+    movimientos,
+    laboratorios,
   ] = await Promise.all([
-    settled(() => obtenerHCIngresoPorVisita(numeroVisita), []),
-    settled(() => indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000), []),
-    settled(() => obtenerPracticasPorVisita(numeroVisita), []),
-    settled(() => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita), []),
-    settled(() => laboratoriosService.obtenerExamenesPorVisita(numeroVisita), []),
-    settled(() => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), []),
-    settled(() => adjuntosService.getAdjuntosPorVisita(numeroVisita), []),
-    settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []),
-    settled(() => protocolosService.listarPorVisita(numeroVisita), []),
-    settled(() => getEpicrisisService().listarPorVisita(numeroVisita), []),
+    load('hcIngreso', () => obtenerHCIngresoPorVisita(numeroVisita)),
+    // En la historia clínica también van las suspendidas (quedan marcadas como tales).
+    load('indicaciones', () =>
+      indicacionesService.getIndicacionesByVisita(numeroVisita, { limit: 5000, incluirSuspendidas: true }),
+    ),
+    load('practicas', () => obtenerPracticasPorVisita(numeroVisita)),
+    load('medicamentos', () => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita)),
+    load('evoluciones', () => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null)),
+    load('adjuntos', () => adjuntosService.getAdjuntosPorVisita(numeroVisita)),
+    needEstudios ? settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []) : skip,
+    load('protocolos', () => protocolosService.listarPorVisita(numeroVisita)),
+    load('epicrisis', () => getEpicrisisService().listarPorVisita(numeroVisita)),
+    load('interconsultas', () => interconsultasService.listarPorVisita(numeroVisita)),
+    load('controles', () => controlesFrecuentesService.obtenerControlesPorVisitaYFecha(numeroVisita, today, 'all')),
+    load('balanceHidrico', () => balanceHidricoService.obtenerPorVisita(numeroVisita)),
+    load('evolucionEnfermeria', () =>
+      evolucionEnfermeriaService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null),
+    ),
+    load('insumos', () => indicacionesService.getInsumosByVisitaAndDate(numeroVisita, today, { days: 'all' })),
+    load('dietas', () => dietaControlService.obtenerPorVisitaYFecha(numeroVisita, today, 'all')),
+    load('movimientos', () => visitaMovimientosService.obtenerMovimientosVisita(numeroVisita)),
+    load('laboratorios', () => laboratoriosService.obtenerExamenesPorVisita(numeroVisita)),
   ]);
-  const indicaciones = filterIndicacionesClinicas(asArray(indicacionesRaw));
+
+  return {
+    historiaClinica: asArray(historiaClinica),
+    indicaciones: filterIndicacionesClinicas(asArray(indicaciones)),
+    practicas: asArray(practicas),
+    medicamentos: asArray(medicamentos),
+    evolucionesMedicas: asArray(evolucionesMedicas),
+    adjuntos: asArray(adjuntos),
+    // Las interconsultas son pedidos tipo 33 pero tienen su propio bloque.
+    estudios: asArray(estudios).filter((e) => e.idTipoPedido !== interconsultasService.ID_TIPO_INTERCONSULTA),
+    protocolos: asArray(protocolos),
+    epicrisis: asArray(epicrisis),
+    interconsultas: asArray(interconsultas),
+    controles: asArray(controles),
+    balanceHidrico: asArray(balanceHidrico),
+    evolucionesEnfermeria: asArray(evolucionesEnfermeria),
+    insumos: asArray(insumos),
+    dietas: asArray(dietas),
+    movimientos: asArray(movimientos),
+    laboratorios: asArray(laboratorios),
+  };
+}
+
+async function exportarAdmisionCompleta(numeroVisita) {
+  const visita = await obtenerAdmisionDetallada(numeroVisita);
+  if (!visita) return null;
+
+  const d = await cargarDatosClinicosVisita(numeroVisita, new Set(VISITA_SECCIONES));
 
   return jsonSafe({
     generadoEn: new Date().toISOString(),
     admision: visita,
-    historialClinico: asArray(historiaClinica),
-    practicasPaciente: asArray(practicasPaciente),
+    historialClinico: d.historiaClinica,
+    practicasPaciente: d.practicas,
     practicas: {
-      laboratorios: asArray(practicasLaboratorio),
-      adjuntos: asArray(adjuntos),
+      laboratorios: d.laboratorios,
+      adjuntos: d.adjuntos,
     },
-    medicamentos: asArray(medicamentos),
-    indicaciones,
-    evolucionesMedicas: asArray(evolucionesMedicas),
-    estudios: asArray(estudios),
-    protocolos: asArray(protocolos),
-    epicrisis: asArray(epicrisis),
+    medicamentos: d.medicamentos,
+    indicaciones: d.indicaciones,
+    evolucionesMedicas: d.evolucionesMedicas,
+    estudios: d.estudios,
+    interconsultas: d.interconsultas,
+    protocolos: d.protocolos,
+    epicrisis: d.epicrisis,
+    controles: d.controles,
+    balanceHidrico: d.balanceHidrico,
+    evolucionesEnfermeria: d.evolucionesEnfermeria,
+    dietas: d.dietas,
+    insumos: d.insumos,
+    movimientos: d.movimientos,
   });
 }
 
@@ -1169,12 +1271,6 @@ function filterPorFecha(rows, getFecha, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => inDateRange(toYmd(getFecha(r)), fechaInicio, fechaFin, exportAll));
 }
 
-function esDieta(row) {
-  const tipo = String(row?.tipo ?? row?.TipoIndicacion ?? '').trim().toUpperCase();
-  const prompt = String(row?.promptCodigo ?? '').toUpperCase();
-  return tipo === 'D' || prompt.includes('DIET');
-}
-
 function filterAdjuntosMeta(rows, fechaInicio, fechaFin, exportAll) {
   return (rows || []).filter((r) => {
     const ymd = toYmd(r.FechaCarga) || toYmd(r.Fecha);
@@ -1199,7 +1295,7 @@ function slimLabRow(ex) {
  * @param {string[]} [opts.evolucionServicioIds] Servicio a incluir (preferido; vacío = todos)
  */
 async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
-  const visita = await obtenerResumenAdmision(numeroVisita);
+  const visita = await obtenerAdmisionDetallada(numeroVisita);
   if (!visita) return null;
 
   const sections = Array.isArray(opts.sections) ? opts.sections.map(String) : [];
@@ -1219,71 +1315,15 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     throw err;
   }
 
-  const need = {
-    hc: sections.includes('hcIngreso'),
-    ind: sections.includes('indicaciones'),
-    prac: sections.includes('practicas'),
-    med: sections.includes('medicamentos'),
-    evo: sections.includes('evoluciones'),
-    est: sections.includes('estudios'),
-    prot: sections.includes('protocolos'),
-    epi: sections.includes('epicrisis'),
-    adj: sections.includes('adjuntos'),
-    inter: sections.includes('interconsultas'),
-    ctrl: sections.includes('controles'),
-    dieta: sections.includes('dietas'),
-    bal: sections.includes('balanceHidrico'),
-    evoEnf: sections.includes('evolucionEnfermeria'),
-    ins: sections.includes('insumos'),
-  };
-
-  const today = new Date().toISOString().slice(0, 10);
-  const [
-    historiaClinica,
-    indicacionesRaw,
-    practicasRaw,
-    medicamentos,
-    evolucionesMedicas,
-    adjuntos,
-    estudiosRaw,
-    protocolosRaw,
-    epicrisisRaw,
-    interconsultasRaw,
-    controlesRaw,
-    balanceRaw,
-    evolucionesEnfermeriaRaw,
-    insumosRaw,
-  ] = await Promise.all([
-    need.hc ? settled(() => obtenerHCIngresoPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.ind || need.dieta
-      ? settled(() => indicacionesService.obtenerUltimasIndicacionesPorVisita(numeroVisita, 5000), [])
-      : Promise.resolve([]),
-    need.prac ? settled(() => obtenerPracticasPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.med ? settled(() => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.evo
-      ? settled(() => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), [])
-      : Promise.resolve([]),
-    need.adj ? settled(() => adjuntosService.getAdjuntosPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.est ? settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []) : Promise.resolve([]),
-    need.prot ? settled(() => protocolosService.listarPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.epi ? settled(() => getEpicrisisService().listarPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.inter ? settled(() => interconsultasService.listarPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.ctrl
-      ? settled(() => controlesFrecuentesService.obtenerControlesPorVisitaYFecha(numeroVisita, today, 'all'), [])
-      : Promise.resolve([]),
-    need.bal ? settled(() => balanceHidricoService.obtenerPorVisita(numeroVisita), []) : Promise.resolve([]),
-    need.evoEnf
-      ? settled(() => evolucionEnfermeriaService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null), [])
-      : Promise.resolve([]),
-    need.ins
-      ? settled(() => indicacionesService.getInsumosByVisitaAndDate(numeroVisita, today, { days: 'all' }), [])
-      : Promise.resolve([]),
-  ]);
-  const indicaciones = filterIndicacionesClinicas(asArray(indicacionesRaw));
+  const has = (s) => sections.includes(s);
+  const d = await cargarDatosClinicosVisita(numeroVisita, new Set(sections));
+  const porFecha = (rows, getFecha) => filterPorFecha(rows, getFecha, fechaInicio, fechaFin, exportAll);
 
   const out = {
     generadoEn: new Date().toISOString(),
     numeroVisita,
+    /** Encabezado del PDF: siempre presente, aunque no se marque "Datos de admisión". */
+    paciente: visita,
     criterios: {
       exportAll,
       fechaInicio: exportAll ? null : fechaInicio || null,
@@ -1294,28 +1334,29 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     },
   };
 
-  if (sections.includes('admision')) {
-    out.admision = visita;
+  if (has('admision')) {
+    // Copia: jsonSafe anula objetos repetidos y `paciente` es la misma fila.
+    out.admision = { ...visita };
   }
 
-  if (sections.includes('hcIngreso')) {
-    out.historialClinico = filterHc(historiaClinica, fechaInicio, fechaFin, exportAll);
+  if (has('hcIngreso')) {
+    out.historialClinico = filterHc(d.historiaClinica, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('practicas')) {
-    out.practicasPaciente = filterPracticasPaciente(practicasRaw, fechaInicio, fechaFin, exportAll);
+  if (has('practicas')) {
+    out.practicasPaciente = filterPracticasPaciente(d.practicas, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('indicaciones')) {
-    out.indicaciones = filterIndicaciones(indicaciones, fechaInicio, fechaFin, exportAll);
+  if (has('indicaciones')) {
+    out.indicaciones = filterIndicaciones(d.indicaciones, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('medicamentos')) {
-    out.medicamentos = filterMedicamentos(medicamentos, fechaInicio, fechaFin, exportAll);
+  if (has('medicamentos')) {
+    out.medicamentos = filterMedicamentos(d.medicamentos, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('evoluciones')) {
-    let ev = evolucionesMedicas || [];
+  if (has('evoluciones')) {
+    let ev = d.evolucionesMedicas;
     if (evolucionServicioIds.length > 0) {
       const servicioSet = new Set(evolucionServicioIds);
       ev = ev.filter((r) => servicioSet.has(getEvolucionServicioKey(r)));
@@ -1326,62 +1367,60 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     out.evolucionesMedicas = filterEvoluciones(ev, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('estudios')) {
-    // Las interconsultas son pedidos tipo 33 pero tienen su propio bloque.
-    out.estudios = filterEstudiosAd(
-      asArray(estudiosRaw).filter((e) => e.idTipoPedido !== interconsultasService.ID_TIPO_INTERCONSULTA),
-      fechaInicio,
-      fechaFin,
-      exportAll,
-    );
+  if (has('estudios')) {
+    out.estudios = filterEstudiosAd(d.estudios, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('protocolos')) {
-    out.protocolos = filterProtocolosClinicos(protocolosRaw, fechaInicio, fechaFin, exportAll);
+  if (has('protocolos')) {
+    out.protocolos = filterProtocolosClinicos(d.protocolos, fechaInicio, fechaFin, exportAll);
   }
 
-  if (sections.includes('epicrisis')) {
-    out.epicrisis = filterEpicrisis(epicrisisRaw, fechaInicio, fechaFin, exportAll);
+  if (has('epicrisis')) {
+    out.epicrisis = filterEpicrisis(d.epicrisis, fechaInicio, fechaFin, exportAll);
   }
 
-  if (need.inter) {
-    out.interconsultas = filterPorFecha(asArray(interconsultasRaw), (r) => r.FechaSolicitud, fechaInicio, fechaFin, exportAll);
+  if (has('interconsultas')) {
+    out.interconsultas = porFecha(d.interconsultas, (r) => r.FechaSolicitud);
   }
 
-  if (need.ctrl) {
-    out.controles = filterPorFecha(asArray(controlesRaw), (r) => r.FechaControl, fechaInicio, fechaFin, exportAll);
+  if (has('laboratorios')) {
+    out.practicas = { laboratorios: filterLabs(d.laboratorios, fechaInicio, fechaFin, exportAll) };
   }
 
-  if (need.dieta) {
-    // Copias: jsonSafe anula los objetos repetidos y estas filas también van en out.indicaciones.
-    out.dietas = filterIndicaciones(
-      asArray(indicacionesRaw).filter(esDieta).map((r) => structuredClone(r)),
-      fechaInicio,
-      fechaFin,
-      exportAll,
-    );
+  if (has('controles')) {
+    out.controles = porFecha(d.controles, (r) => r.FechaControl);
   }
 
-  if (need.bal) {
-    out.balanceHidrico = filterPorFecha(asArray(balanceRaw), (r) => r.Fecha, fechaInicio, fechaFin, exportAll);
+  if (has('dietas')) {
+    out.dietas = porFecha(d.dietas, (r) => r.FechaDieta || r.FechaCarga);
   }
 
-  if (need.evoEnf) {
-    out.evolucionesEnfermeria = filterPorFecha(
-      asArray(evolucionesEnfermeriaRaw),
-      (r) => r.FechaControl,
-      fechaInicio,
-      fechaFin,
-      exportAll,
-    );
+  if (has('balanceHidrico')) {
+    out.balanceHidrico = porFecha(d.balanceHidrico, (r) => r.Fecha);
   }
 
-  if (need.ins) {
-    out.insumos = filterPorFecha(asArray(insumosRaw), (r) => r.vigenteDesde, fechaInicio, fechaFin, exportAll);
+  if (has('evolucionEnfermeria')) {
+    out.evolucionesEnfermeria = porFecha(d.evolucionesEnfermeria, (r) => r.FechaControl);
   }
 
-  if (sections.includes('adjuntos')) {
-    const meta = filterAdjuntosMeta(adjuntos, fechaInicio, fechaFin, exportAll);
+  if (has('insumos')) {
+    out.insumos = porFecha(d.insumos, (r) => r.vigenteDesde);
+  }
+
+  if (has('movimientos')) {
+    // Un movimiento entra si su estadía [ingreso, egreso] se cruza con el rango.
+    out.movimientos = d.movimientos.filter((m) => {
+      if (exportAll || (!fechaInicio && !fechaFin)) return true;
+      const ini = toYmd(m.FechaAdmisionISO);
+      const fin = toYmd(m.FechaEgresoISO);
+      if (fechaFin && ini && ini > fechaFin) return false;
+      if (fechaInicio && fin && fin < fechaInicio) return false;
+      return true;
+    });
+  }
+
+  if (has('adjuntos')) {
+    const meta = filterAdjuntosMeta(d.adjuntos, fechaInicio, fechaFin, exportAll);
     out.adjuntos = meta.map((a) => ({
       IdAdjunto: a.IdAdjunto,
       NumeroVisita: a.NumeroVisita,
@@ -1418,6 +1457,15 @@ function _toIntOrZero(v) {
  * Datos principales de admisión (captura legacy) + catálogos para el modal.
  */
 async function obtenerDatosPrincipales(numeroVisita) {
+  const visita = await _consultarVisitaCompleta(numeroVisita);
+  if (!visita) return null;
+
+  const catalogos = await obtenerCatalogosAdmision(visita.Cliente);
+
+  return { visita, catalogos };
+}
+
+async function _consultarVisitaCompleta(numeroVisita) {
   const nv = Number(numeroVisita);
   if (!Number.isFinite(nv) || nv <= 0) return null;
 
@@ -1433,6 +1481,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         p.NumeroDocumento,
         p.NumeroHC,
         LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
+        LTRIM(RTRIM(ISNULL(sx.Descripcion, ''))) AS SexoDescripcion,
         CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
         CONVERT(VARCHAR(5), v.FECHAADMISIONS, 108) AS HoraAdmision,
         CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS FechaAdmisionDMY,
@@ -1504,6 +1553,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
         ${centro.select}
       FROM dbo.imVisita v
       INNER JOIN dbo.imPacientes p ON v.IDPACIENTE = p.IdPaciente
+      LEFT JOIN dbo.imSexo sx ON p.Sexo = sx.Valor
       LEFT JOIN dbo.imClasePaciente cp ON LTRIM(RTRIM(ISNULL(v.CLASEPACIENTE, ''))) = LTRIM(RTRIM(ISNULL(cp.Valor, '')))
       LEFT JOIN dbo.imTipoAdmision ta ON LTRIM(RTRIM(ISNULL(v.TIPOADMISION, ''))) = LTRIM(RTRIM(ISNULL(ta.Valor, '')))
       LEFT JOIN dbo.imLugarEpisodio le ON v.IdLugarEpisodio = le.IdLugarEpisodio
@@ -1540,12 +1590,7 @@ async function obtenerDatosPrincipales(numeroVisita) {
     [{ value: nv }],
   );
 
-  const visita = rows?.[0] || null;
-  if (!visita) return null;
-
-  const catalogos = await obtenerCatalogosAdmision(visita.Cliente);
-
-  return { visita, catalogos };
+  return rows?.[0] || null;
 }
 
 async function obtenerCatalogosAdmision(clienteId) {
@@ -1683,6 +1728,7 @@ async function actualizarDatosPrincipales(numeroVisita, body = {}) {
 }
 
 module.exports = {
+  VISITA_SECCIONES,
   buscarAdmisiones,
   obtenerPracticasPorVisita,
   exportarAdmisionCompleta,

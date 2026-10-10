@@ -1905,6 +1905,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 };
 
 module.exports = {
+    getIndicacionesByVisita,
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
     getByVisitaAndDate,

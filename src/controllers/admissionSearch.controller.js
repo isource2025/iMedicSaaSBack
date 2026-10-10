@@ -1,5 +1,7 @@
 const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
+const empresaService = require('../services/empresa.service');
+const visitaResumenIaService = require('../services/visitaResumenIa.service');
 const { jsonSafe } = require('../utils/jsonSafe');
 const {
   buildSelectiveExportPdf,
@@ -42,6 +44,8 @@ function sectionsRequireDateFilter(sections) {
     'insumos',
     'adjuntos',
     'evoluciones',
+    'laboratorios',
+    'movimientos',
   ]);
   return sections.some((s) => NEED_DATE.has(s));
 }
@@ -181,24 +185,30 @@ async function catalogosAdmision(req, res) {
   }
 }
 
-const EXPORT_SECTIONS = new Set([
-  'admision',
-  'hcIngreso',
-  'practicas',
-  'indicaciones',
-  'medicamentos',
-  'evoluciones',
-  'estudios',
-  'interconsultas',
-  'protocolos',
-  'epicrisis',
-  'controles',
-  'dietas',
-  'balanceHidrico',
-  'evolucionEnfermeria',
-  'insumos',
-  'adjuntos',
-]);
+const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
+
+/** Datos de la institución para el encabezado del PDF (no bloquea el export si falla). */
+async function empresaParaPdf(req) {
+  try {
+    return await empresaService.obtenerInfoEmpresa(req.idEmpresa ?? req.auth?.idEmpresa ?? null);
+  } catch (err) {
+    console.warn('[admission-search export] sin datos de empresa:', err?.message || err);
+    return null;
+  }
+}
+
+async function resumenIa(req, res) {
+  try {
+    const data = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error en resumen IA de visita:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Error al generar el resumen de la visita',
+    });
+  }
+}
 
 async function exportSelectivo(req, res) {
   try {
@@ -206,7 +216,7 @@ async function exportSelectivo(req, res) {
     if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'numeroVisita inv?lido',
+        message: 'numeroVisita inválido',
       });
     }
 
@@ -217,7 +227,7 @@ async function exportSelectivo(req, res) {
     if (sections.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Seleccion? al menos un tipo de dato para exportar',
+        message: 'Seleccioná al menos un tipo de dato para exportar',
       });
     }
 
@@ -231,27 +241,30 @@ async function exportSelectivo(req, res) {
     if (!exportAll && needDates && !fechaInicio && !fechaFin) {
       return res.status(400).json({
         success: false,
-        message: 'Indic? fecha desde y/o hasta, o activ? "Exportar todo"',
+        message: 'Indicá fecha desde y/o hasta, o elegí "Toda la visita"',
       });
     }
 
-    const payload = await admissionSearchService.exportarAdmisionSelectivo(numeroVisita, {
-      sections,
-      exportAll,
-      fechaInicio,
-      fechaFin,
-      evolucionServicioIds,
-      evolucionSectorIds,
-    });
+    const [payload, empresa] = await Promise.all([
+      admissionSearchService.exportarAdmisionSelectivo(numeroVisita, {
+        sections,
+        exportAll,
+        fechaInicio,
+        fechaFin,
+        evolucionServicioIds,
+        evolucionSectorIds,
+      }),
+      empresaParaPdf(req),
+    ]);
 
     if (!payload) {
       return res.status(404).json({
         success: false,
-        message: 'Admisi?n no encontrada',
+        message: 'Admisión no encontrada',
       });
     }
 
-    const pdfBuf = await buildSelectiveExportPdf(payload);
+    const pdfBuf = await buildSelectiveExportPdf({ ...payload, empresa });
     const fileName = `visita_${numeroVisita}_export_${new Date().toISOString().slice(0, 10)}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
@@ -263,10 +276,10 @@ async function exportSelectivo(req, res) {
         message: error.message,
       });
     }
-    console.error('Error en export selectivo de admisi?n:', error);
+    console.error('Error en export selectivo de admisión:', error);
     res.status(statusDeError(error)).json({
       success: false,
-      message: 'Error al generar la exportaci?n',
+      message: 'Error al generar la exportación',
     });
   }
 }
@@ -277,7 +290,7 @@ async function turnosActivosPaciente(req, res) {
     if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'idPaciente inv?lido',
+        message: 'idPaciente inválido',
       });
     }
     const data = await agendaService.buscarTurnosPorPaciente(idPaciente, { soloActivos: true });
@@ -298,6 +311,7 @@ module.exports = {
   actualizarDatosPrincipales,
   catalogosAdmision,
   exportSelectivo,
+  resumenIa,
   turnosActivosPaciente,
   exportGeneralPaciente,
 };
@@ -308,7 +322,7 @@ async function exportGeneralPaciente(req, res) {
     if (!Number.isFinite(idPaciente) || idPaciente <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'idPaciente inv?lido',
+        message: 'idPaciente inválido',
       });
     }
 
@@ -318,7 +332,7 @@ async function exportGeneralPaciente(req, res) {
     if (sections.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Seleccion? al menos un tipo de dato para exportar',
+        message: 'Seleccioná al menos un tipo de dato para exportar',
       });
     }
 
@@ -332,7 +346,7 @@ async function exportGeneralPaciente(req, res) {
     if (!exportAll && needDates && !fechaInicio && !fechaFin) {
       return res.status(400).json({
         success: false,
-        message: 'Indic? fecha desde y/o hasta, o activ? "Exportar todo"',
+        message: 'Indicá fecha desde y/o hasta, o elegí "Toda la visita"',
       });
     }
 
@@ -344,6 +358,7 @@ async function exportGeneralPaciente(req, res) {
       });
     }
 
+    const empresa = await empresaParaPdf(req);
     const pdfBuffers = [];
     for (const nv of visitas) {
       const payload = await admissionSearchService.exportarAdmisionSelectivo(nv, {
@@ -355,7 +370,7 @@ async function exportGeneralPaciente(req, res) {
         evolucionSectorIds,
       });
       if (!payload) continue;
-      pdfBuffers.push(await buildSelectiveExportPdf(payload));
+      pdfBuffers.push(await buildSelectiveExportPdf({ ...payload, empresa }));
     }
 
     const pdfBuf = await buildMultiVisitExportPdf(pdfBuffers);
@@ -373,7 +388,7 @@ async function exportGeneralPaciente(req, res) {
     console.error('Error en export general de paciente:', error);
     res.status(statusDeError(error)).json({
       success: false,
-      message: 'Error al generar la exportaci?n general',
+      message: 'Error al generar la exportación general',
     });
   }
 }

@@ -130,7 +130,7 @@ async function obtenerEvolucionEnfermeriaResumen(numeroVisita) {
       SELECT TOP 20
         CONVERT(varchar(10), DATEADD(day, NULLIF(FechaControl, 0), '1800-12-28'), 23) AS Fecha,
         CONVERT(varchar(5), DATEADD(ms, (NULLIF(HoraControl, 0) - 1) * 10, 0), 108) AS Hora,
-        LTRIM(RTRIM(Evolucion)) AS Evolucion
+        LTRIM(RTRIM(CAST(Observaciones AS nvarchar(max)))) AS Evolucion
       FROM dbo.imInterCtrlEvolucion
       WHERE NumeroVisita = @param0
       ORDER BY FechaControl DESC, HoraControl DESC
@@ -600,6 +600,8 @@ function asegurarDisclaimerEnTexto(texto, generadoConIA) {
 
 module.exports = {
 	generarBorrador,
+	reunirExpediente,
+	buildContextText,
 	SECTIONS_IA,
 	DISCLAIMER_IA,
 	asegurarDisclaimerEnTexto,

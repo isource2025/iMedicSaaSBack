@@ -35,6 +35,11 @@ router.put(
 	controller.actualizarDatosPrincipales,
 );
 router.post(
+	'/:numeroVisita/resumen-ia',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.resumenIa,
+);
+router.post(
 	'/:numeroVisita/export-selective',
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.exportSelectivo,
