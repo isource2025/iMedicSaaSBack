@@ -97,8 +97,38 @@ function signAccessToken(payload) {
 	return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRATION });
 }
 
-function cookieOptions(maxAgeMs) {
-	const secure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
+function requestIsHttps(req) {
+	if (!req) return false;
+	if (req.secure) return true;
+	const proto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+	return proto === 'https';
+}
+
+let avisoCookieHttp = false;
+
+/**
+ * COOKIE_SECURE=1/0 fuerza el flag. Sin forzar, en producción se marca Secure sólo si el
+ * pedido llegó por HTTPS: un browser descarta cookies Secure recibidas por http://
+ * (instalaciones on-premise detrás de un proxy sin TLS o sin X-Forwarded-Proto).
+ */
+function resolveSecure(req) {
+	const forced = String(process.env.COOKIE_SECURE || '').trim();
+	if (forced === '1') return true;
+	if (forced === '0') return false;
+	if (process.env.NODE_ENV !== 'production') return false;
+	const https = requestIsHttps(req);
+	if (!https && !avisoCookieHttp) {
+		avisoCookieHttp = true;
+		console.warn(
+			'[session] Pedido en producción sin HTTPS detectado: cookies sin Secure. ' +
+				'Si hay proxy con TLS, que envíe X-Forwarded-Proto: https.',
+		);
+	}
+	return https;
+}
+
+function cookieOptions(req, maxAgeMs) {
+	const secure = resolveSecure(req);
 	// Front y API en hosts distintos (Railway/Vercel): hace falta None+Secure.
 	// En local (http) usamos Lax; None sin Secure lo rechazan los browsers.
 	const raw = String(process.env.COOKIE_SAMESITE || '').toLowerCase();
@@ -115,17 +145,20 @@ function cookieOptions(maxAgeMs) {
 
 function setAuthCookies(res, accessToken, refreshToken) {
 	const maxRefresh = SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000;
-	res.cookie(COOKIE_ACCESS, accessToken, cookieOptions(maxRefresh));
-	res.cookie(COOKIE_REFRESH, refreshToken, { ...cookieOptions(maxRefresh), path: '/api/auth' });
+	res.cookie(COOKIE_ACCESS, accessToken, cookieOptions(res.req, maxRefresh));
+	res.cookie(COOKIE_REFRESH, refreshToken, {
+		...cookieOptions(res.req, maxRefresh),
+		path: '/api/auth',
+	});
 }
 
 function setAccessCookie(res, accessToken) {
 	const maxRefresh = SESSION_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000;
-	res.cookie(COOKIE_ACCESS, accessToken, cookieOptions(maxRefresh));
+	res.cookie(COOKIE_ACCESS, accessToken, cookieOptions(res.req, maxRefresh));
 }
 
 function clearAuthCookies(res) {
-	const base = cookieOptions();
+	const base = cookieOptions(res.req);
 	res.clearCookie(COOKIE_ACCESS, {
 		path: '/',
 		secure: base.secure,
@@ -236,7 +269,10 @@ async function touchSession(sessionId, opts = {}) {
 		for (const k of keys) ultimoTouchPersistido.delete(k);
 	}
 	const pool = await getAuthCentralPool();
-	await pool.query(`UPDATE AuthSessions SET LastActivityAt = NOW() WHERE SessionId = ?`, [key]);
+	await pool.query(`UPDATE AuthSessions SET LastActivityAt = ? WHERE SessionId = ?`, [
+		new Date(ahora),
+		key,
+	]);
 }
 
 function isIdleExpired(row, idleMinutes) {
@@ -307,8 +343,8 @@ async function rotateRefresh(sessionId, oldRefreshToken) {
 
 	const newRefresh = crypto.randomBytes(48).toString('hex');
 	await pool.query(
-		`UPDATE AuthSessions SET RefreshTokenHash = ?, LastActivityAt = NOW() WHERE SessionId = ?`,
-		[hashToken(newRefresh), String(sessionId)],
+		`UPDATE AuthSessions SET RefreshTokenHash = ?, LastActivityAt = ? WHERE SessionId = ?`,
+		[hashToken(newRefresh), new Date(), String(sessionId)],
 	);
 	return { sessionRow: row, refreshToken: newRefresh };
 }

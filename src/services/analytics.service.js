@@ -449,8 +449,9 @@ async function getSessionExpirationStats({ from, to, idEmpresa, role } = {}) {
 	try {
 		const sessionService = require('./session.service');
 		const idleMinutes = await sessionService.getIdleTimeoutMinutes(empresaFilter);
-		const activeWhere = ['Revoked = 0', 'LastActivityAt >= DATE_SUB(NOW(), INTERVAL ? MINUTE)'];
-		const activeParams = [idleMinutes];
+		// LastActivityAt se escribe con la hora de Node; comparar contra NOW() de MySQL falla si difieren las zonas.
+		const activeWhere = ['Revoked = 0', 'LastActivityAt >= ?'];
+		const activeParams = [new Date(Date.now() - idleMinutes * 60 * 1000)];
 		if (empresaFilter != null) {
 			activeWhere.push('IdEmpresa = ?');
 			activeParams.push(empresaFilter);

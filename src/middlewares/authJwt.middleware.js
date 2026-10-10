@@ -68,34 +68,52 @@ function assignAuthFromDecoded(req, decoded) {
 	req.sectores = sectoresFromDecoded(decoded);
 }
 
-function extractTokenFromRequest(req) {
-	if (req.cookies?.[COOKIE_ACCESS]) {
-		return String(req.cookies[COOKIE_ACCESS]).trim();
-	}
+/** Tokens candidatos en orden de preferencia: cookie httpOnly y luego header Bearer. */
+function extractTokenCandidates(req) {
+	const out = [];
+	const cookie = req.cookies?.[COOKIE_ACCESS] ? String(req.cookies[COOKIE_ACCESS]).trim() : '';
+	if (cookie) out.push(cookie);
 	const h = req.headers.authorization;
 	if (h && typeof h === 'string' && h.startsWith('Bearer ')) {
 		const t = h.slice(7).trim();
-		if (t) return t;
+		if (t && t !== cookie) out.push(t);
 	}
-	return null;
+	return out;
+}
+
+function extractTokenFromRequest(req) {
+	return extractTokenCandidates(req)[0] || null;
 }
 
 async function verifyBearerToken(req, res) {
-	const token = extractTokenFromRequest(req);
-	if (!token) {
+	const candidates = extractTokenCandidates(req);
+	if (candidates.length === 0) {
 		res.status(401).json({ success: false, mensaje: 'No autorizado' });
 		return null;
 	}
-	let decoded;
-	try {
-		decoded = jwt.verify(token, JWT_SECRET);
-	} catch {
+
+	// Una cookie vieja (otra sesión, proxy que la conserva) no debe tapar un Bearer válido.
+	let decoded = null;
+	let result = null;
+	for (const token of candidates) {
+		let d;
+		try {
+			d = jwt.verify(token, JWT_SECRET);
+		} catch {
+			continue;
+		}
+		const r = d.sessionId ? await sessionService.evaluateSession(d.sessionId) : { ok: true };
+		decoded = d;
+		result = r;
+		if (r.ok) break;
+	}
+
+	if (!decoded) {
 		res.status(401).json({ success: false, mensaje: 'Token inválido o expirado' });
 		return null;
 	}
 
 	if (decoded.sessionId) {
-		const result = await sessionService.evaluateSession(decoded.sessionId);
 		if (!result.ok) {
 			sessionService.clearAuthCookies(res);
 			if (result.reason === 'idle') {
