@@ -634,6 +634,66 @@ async function buscarImportacionPrevia(hash) {
 	return filas?.[0] || null;
 }
 
+/**
+ * Importaciones vigentes que dejaron cargado el importe de los renglones que
+ * dan SIN_CAMBIO, para poder decirle al operador en qué archivo ya está.
+ * Solo cuenta la última importación aplicada de cada IdDetalle y solo si su
+ * importe sigue siendo el del Excel.
+ */
+async function buscarImportacionesDeOrigen(filas) {
+	const porDetalle = new Map();
+	for (const f of filas) {
+		if (f.estado === ESTADOS.SIN_CAMBIO && f.idDetalle != null) porDetalle.set(f.idDetalle, f);
+	}
+	const ids = [...porDetalle.keys()];
+	if (!ids.length) return [];
+
+	const porImport = new Map();
+	for (let i = 0; i < ids.length; i += IDS_POR_CONSULTA) {
+		const lote = ids.slice(i, i + IDS_POR_CONSULTA);
+		const marcadores = lote.map((_, j) => `@p${j}`).join(', ');
+		const ultimas = await executeQuery(
+			`SELECT x.IdDetalle, x.ImporteNuevo,
+				c.IdImport, c.Archivo, c.Hoja, c.FechaHora, c.Usuario, c.IdOperador,
+				c.FilasArchivo, c.FilasAplicadas, c.FilasRechazadas, c.ImporteAplicado, c.Estado
+			 FROM (
+				SELECT det.IdDetalle, det.IdImport, det.ImporteNuevo,
+					ROW_NUMBER() OVER (PARTITION BY det.IdDetalle ORDER BY det.IdImport DESC) AS rn
+				FROM ${TABLA_IMPORT_DETALLE} det
+				WHERE det.Estado = '${ESTADOS.APLICADO}' AND det.IdDetalle IN (${marcadores})
+			 ) x
+			 JOIN ${TABLA_IMPORT} c ON c.IdImport = x.IdImport
+			 WHERE x.rn = 1 AND c.Estado = '${ESTADOS.APLICADO}'`,
+			lote.map((value) => ({ value, type: 'Int' })),
+		);
+
+		for (const u of ultimas || []) {
+			const fila = porDetalle.get(Number(u.IdDetalle));
+			if (!fila || !mismoImporte(u.ImporteNuevo, fila.importeExcel)) continue;
+			const id = Number(u.IdImport);
+			if (!porImport.has(id)) {
+				porImport.set(id, {
+					IdImport: id,
+					Archivo: u.Archivo,
+					Hoja: u.Hoja,
+					FechaHora: u.FechaHora,
+					Usuario: u.Usuario,
+					IdOperador: u.IdOperador,
+					FilasArchivo: u.FilasArchivo,
+					FilasAplicadas: u.FilasAplicadas,
+					FilasRechazadas: u.FilasRechazadas,
+					ImporteAplicado: u.ImporteAplicado,
+					Estado: u.Estado,
+					renglones: 0,
+				});
+			}
+			porImport.get(id).renglones += 1;
+		}
+	}
+
+	return [...porImport.values()].sort((a, b) => b.renglones - a.renglones || b.IdImport - a.IdImport);
+}
+
 async function previsualizar(buffer, nombreArchivo) {
 	const evaluacion = await evaluar(buffer, nombreArchivo);
 	const hash = hashArchivo(buffer);
@@ -641,6 +701,7 @@ async function previsualizar(buffer, nombreArchivo) {
 		...evaluacion,
 		hash,
 		importacionPrevia: await buscarImportacionPrevia(hash),
+		importacionesOrigen: await buscarImportacionesDeOrigen(evaluacion.filas),
 		aplicado: null,
 	};
 }
