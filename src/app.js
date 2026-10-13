@@ -91,6 +91,7 @@ const whatsappWebhookRoutes = require('./routes/whatsappWebhook.routes');
 const healthRoutes = require('./routes/health.routes');
 const almacenRoutes = require('./routes/almacen.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
+const asistente = require('./asistente');
 const { whatsappRawBody } = require('./middlewares/whatsappRawBody.middleware');
 
 // Importar conexión a la base de datos
@@ -263,6 +264,8 @@ app.use('/api/admin/bot', botAdminRoutes);
 app.use('/api/turnero', turneroRoutes);
 app.use('/api/almacen', almacenRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/asistente', asistente.routes);
+asistente.bindApp(app);
 
 // Ruta de prueba
 app.get('/', (req, res) => {

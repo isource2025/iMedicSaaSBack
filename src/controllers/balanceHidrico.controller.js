@@ -87,6 +87,8 @@ const crear = async (req, res) => {
 		if (profesional == null) return;
 
 		const body = req.body || {};
+		const { quitarAutorDelBody } = require('../utils/sessionIdentity');
+		quitarAutorDelBody(body);
 		const data = await balanceHidricoService.crear({
 			...body,
 			Profesional: profesional,
@@ -110,7 +112,10 @@ const actualizar = async (req, res) => {
 		if (Number.isNaN(id)) {
 			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
 		}
-		const data = await balanceHidricoService.actualizar(id, req.body || {});
+		const body = req.body || {};
+		const { quitarAutorDelBody } = require('../utils/sessionIdentity');
+		quitarAutorDelBody(body);
+		const data = await balanceHidricoService.actualizar(id, body);
 		if (!data) {
 			return res.status(404).json({ success: false, mensaje: 'Registro no encontrado' });
 		}

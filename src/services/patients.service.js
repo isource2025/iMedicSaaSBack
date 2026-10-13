@@ -899,7 +899,7 @@ const registrarEgresoPaciente = async (egresoData) => {
 		disposicionEgreso: egresoData.disposicionEgreso,
 		diagnostico: egresoData.diagnosticoEgreso || egresoData.diagnostico || null,
 		bedId: egresoData.bedId,
-		codOperador: egresoData.codOperador || egresoData.operadorEgreso,
+		codOperador: egresoData.codOperador,
 	});
 };
 

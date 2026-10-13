@@ -110,86 +110,85 @@ function resolverIdentificadorSesion(req, { autorEsMatricula }) {
 	return null;
 }
 
-function requirePropietario({
-	tabla,
-	pkCol,
-	autorCol,
-	pkParam = 'id',
-	failSafe = true,
-	autorEsMatricula = false,
-	permitirAdmin = true,
-}) {
-	return async (req, res, next) => {
-		try {
-			if (permitirAdmin && (await esAdminClinico(req))) {
-				return next();
-			}
+/**
+ * Misma regla que el middleware, sin `res`: la usa también el asistente para
+ * no ofrecer cambios que el backend va a rechazar.
+ * @returns {Promise<{ ok: true } | { ok: false, status: number, mensaje: string, codigoError?: string }>}
+ */
+async function verificarPropiedad(
+	req,
+	{ tabla, pkCol, autorCol, failSafe = true, autorEsMatricula = false, permitirAdmin = true },
+	pkRaw,
+) {
+	try {
+		if (permitirAdmin && (await esAdminClinico(req))) return { ok: true };
 
-			const pkRaw = req.params[pkParam];
-			if (!pkRaw) {
-				if (failSafe) return next();
-				return res.status(400).json({ success: false, mensaje: 'ID de registro requerido' });
-			}
-
-			let identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
-
-			// JWT legacy (Render) puede traer id pero no matricula: resolver desde imPersonal
-			if (identificadorSesion == null && autorEsMatricula && req.valorPersonal) {
-				const mRows = await executeQuery(
-					'SELECT Matricula FROM dbo.imPersonal WHERE Valor = @p0',
-					[{ value: Number(req.valorPersonal) }],
-				);
-				const m = mRows[0]?.Matricula;
-				const mNum = m != null && m !== '' ? Number(m) : NaN;
-				if (Number.isFinite(mNum) && mNum > 0) {
-					identificadorSesion = mNum;
-					req.matricula = mNum;
-				}
-			}
-
-			if (identificadorSesion == null) {
-				if (failSafe) return next();
-				return res.status(401).json({ success: false, mensaje: 'No autenticado' });
-			}
-
-			// Leer el registro para verificar propiedad
-			const rows = await executeQuery(
-				`SELECT ${autorCol} AS AutorCarga FROM dbo.${tabla} WHERE ${pkCol} = @p0`,
-				[{ value: Number(pkRaw) }],
-			);
-
-			if (!rows.length) {
-				// Registro no existe
-				if (failSafe) return next();
-				return res.status(404).json({ success: false, mensaje: 'Registro no encontrado' });
-			}
-
-			const autor = rows[0]?.AutorCarga;
-			if (autor == null) {
-				// Campo de autor nulo → failSafe decide
-				if (failSafe) return next();
-				return res.status(403).json({
-					success: false,
-					mensaje: 'No es posible verificar la propiedad del registro.',
-				});
-			}
-
-			if (coincideAutor(autor, identificadorSesion, req)) {
-				return next(); // es el autor, puede editar
-			}
-
-			// Otro usuario creó el registro → 403 legal
-			return res.status(403).json({
-				success: false,
-				mensaje: 'Por restricciones legales, no puede modificar registros creados por otro profesional.',
-				codigoError: 'REGISTRO_AJENO',
-			});
-		} catch (error) {
-			console.error('[propietario.middleware]', error);
-			if (failSafe) return next(); // ante error de BD, no bloqueamos
-			return res.status(500).json({ success: false, mensaje: 'Error al verificar propiedad del registro' });
+		if (!pkRaw) {
+			if (failSafe) return { ok: true };
+			return { ok: false, status: 400, mensaje: 'ID de registro requerido' };
 		}
+
+		let identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
+
+		// JWT legacy (Render) puede traer id pero no matricula: resolver desde imPersonal
+		if (identificadorSesion == null && autorEsMatricula && req.valorPersonal) {
+			const mRows = await executeQuery(
+				'SELECT Matricula FROM dbo.imPersonal WHERE Valor = @p0',
+				[{ value: Number(req.valorPersonal) }],
+			);
+			const m = mRows[0]?.Matricula;
+			const mNum = m != null && m !== '' ? Number(m) : NaN;
+			if (Number.isFinite(mNum) && mNum > 0) {
+				identificadorSesion = mNum;
+				req.matricula = mNum;
+			}
+		}
+
+		if (identificadorSesion == null) {
+			if (failSafe) return { ok: true };
+			return { ok: false, status: 401, mensaje: 'No autenticado' };
+		}
+
+		const rows = await executeQuery(
+			`SELECT ${autorCol} AS AutorCarga FROM dbo.${tabla} WHERE ${pkCol} = @p0`,
+			[{ value: Number(pkRaw) }],
+		);
+
+		if (!rows.length) {
+			if (failSafe) return { ok: true };
+			return { ok: false, status: 404, mensaje: 'Registro no encontrado' };
+		}
+
+		const autor = rows[0]?.AutorCarga;
+		if (autor == null) {
+			if (failSafe) return { ok: true };
+			return { ok: false, status: 403, mensaje: 'No es posible verificar la propiedad del registro.' };
+		}
+
+		if (coincideAutor(autor, identificadorSesion, req)) return { ok: true };
+
+		return {
+			ok: false,
+			status: 403,
+			mensaje: 'Por restricciones legales, no puede modificar registros creados por otro profesional.',
+			codigoError: 'REGISTRO_AJENO',
+		};
+	} catch (error) {
+		console.error('[propietario.middleware]', error);
+		if (failSafe) return { ok: true };
+		return { ok: false, status: 500, mensaje: 'Error al verificar propiedad del registro' };
+	}
+}
+
+function requirePropietario(opciones) {
+	const pkParam = opciones.pkParam || 'id';
+	return async (req, res, next) => {
+		const r = await verificarPropiedad(req, opciones, req.params[pkParam]);
+		if (r.ok) return next();
+		const body = { success: false, mensaje: r.mensaje };
+		if (r.codigoError) body.codigoError = r.codigoError;
+		return res.status(r.status).json(body);
 	};
 }
 
-module.exports = { requirePropietario, esAdminClinico };
+module.exports = { requirePropietario, verificarPropiedad, esAdminClinico, coincideAutor };

@@ -37,7 +37,9 @@ const respuesta = () => {
 const crear = async ({ idSectorSesion, IdSector }) => {
 	const req = {
 		valorPersonal: 8625,
+		matricula: 8625,
 		idSector: idSectorSesion,
+		auth: { usuario: { codOperador: 99, matricula: 8625 } },
 		body: {
 			IdVisita: 479176,
 			FechaEv: '2026-10-08',
@@ -45,7 +47,7 @@ const crear = async ({ idSectorSesion, IdSector }) => {
 			IdSector,
 			Evolucion: 'Paciente estable',
 			NumeroDocumento: '39387619',
-			Profecional: 8625,
+			Profecional: 25,
 		},
 	};
 	const res = respuesta();
@@ -64,6 +66,8 @@ test('profesional logueado en CIRA evolucionando a un paciente internado en QUR4
 	const { res, sectorGrabado } = await crear({ idSectorSesion: 'CIRA', IdSector: 'CIRA' });
 	assert.equal(res.statusCode, 201);
 	assert.equal(sectorGrabado, 'QUR4');
+	const insert = llamadas.find((l) => /INSERT INTO dbo\.imHCEvolucion/i.test(l.sql));
+	assert.equal(insert.params[6].value, 8625, 'Profecional es la matrícula de sesión, no el 25 del body');
 });
 
 test('la ubicación actual manda aunque el pedido traiga otro sector', async () => {

@@ -552,8 +552,12 @@ async function generarBorrador(numeroVisita) {
 		'Respondé JSON con: epicrisis (texto formateado con saltos de línea, máx ~4500 chars), diagnostico (CIE-10 ≤8 chars o vacío), diagnosticoText (dx libre).',
 	].join('\n');
 
+	let uso = null;
 	try {
 		const json = await botOpenai.chatJson({
+			onUsage: (u) => {
+				uso = u;
+			},
 			system,
 			messages: [
 				{
@@ -578,6 +582,7 @@ async function generarBorrador(numeroVisita) {
 			fuente: 'openai',
 			generadoConIA: true,
 			modelo: botOpenai.getModel(),
+			uso,
 			contextoChars: contextText.length,
 			disclaimer: DISCLAIMER_IA,
 			aviso: 'Borrador generado con IA a partir del expediente completo. Debe ser revisado por el profesional antes de guardar.',
@@ -586,6 +591,7 @@ async function generarBorrador(numeroVisita) {
 		const fallback = buildFallbackDraft(dossier, contextText);
 		fallback.fuente = 'plantilla_fallback';
 		fallback.aviso = `IA no disponible (${e.message}). Se usó borrador plantilla.`;
+		fallback.uso = uso;
 		return fallback;
 	}
 }

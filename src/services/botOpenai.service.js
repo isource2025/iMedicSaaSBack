@@ -155,10 +155,10 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 /**
  * Chat Completions con respuesta JSON estructurada (clasificación de intención, etc.).
  *
- * @param {{ system: string, messages?: Array<object>, temperature?: number, maxTokens?: number }} opts
+ * @param {{ system: string, messages?: Array<object>, temperature?: number, maxTokens?: number, onUsage?: (u: { modelo: string, usage: object }) => void }} opts
  * @returns {Promise<object>}
  */
-async function chatJson({ system, messages, temperature, maxTokens }) {
+async function chatJson({ system, messages, temperature, maxTokens, onUsage }) {
 	const apiKey = getApiKey();
 	if (!apiKey) {
 		const err = new Error('OPENAI_API_KEY no configurada');
@@ -189,6 +189,14 @@ async function chatJson({ system, messages, temperature, maxTokens }) {
 		err.statusCode = resp.status >= 400 && resp.status < 500 ? resp.status : 502;
 		err.openaiError = data?.error || null;
 		throw err;
+	}
+
+	if (typeof onUsage === 'function' && data.usage) {
+		try {
+			onUsage({ modelo: data.model || payload.model, usage: data.usage });
+		} catch (_) {
+			/* el consumo nunca debe romper la respuesta */
+		}
 	}
 
 	const raw = data.choices?.[0]?.message?.content?.trim();

@@ -785,7 +785,8 @@ const obtenerContextoClinicoVisita = async (req, res) => {
 };
 
 /**
- * Registra el egreso de un paciente
+ * Da de alta / registra el egreso de un paciente internado (libera la cama).
+ * No es un alta de ficha de paciente ni de personal.
  * @param {Object} req - Objeto de solicitud Express
  * @param {Object} res - Objeto de respuesta Express
  */

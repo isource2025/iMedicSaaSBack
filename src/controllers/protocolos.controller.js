@@ -1,9 +1,5 @@
 const protocolosService = require('../services/protocolos.service');
-
-function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
-}
+const { requireOperadorCarga, quitarAutorDelBody } = require('../utils/sessionIdentity');
 
 function _err(res, err) {
 	const code = err?.statusCode || 500;
@@ -107,10 +103,9 @@ async function listarPorVisita(req, res) {
 async function crear(req, res) {
 	try {
 		const body = req.body || {};
-		const idOperador =
-			body.idOperador != null && Number(body.idOperador) > 0
-				? Number(body.idOperador)
-				: Number(req.valorPersonal) || 0;
+		quitarAutorDelBody(body);
+		const idOperador = requireOperadorCarga(req, res);
+		if (idOperador == null) return;
 
 		const data = await protocolosService.crearProtocolo({
 			numeroVisita: Number(body.numeroVisita),
@@ -123,7 +118,7 @@ async function crear(req, res) {
 			fechaHoraFin: body.fechaHoraFin,
 			estado: body.estado,
 			idOperador,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: idOperador,
 			sector: body.sector,
 			practicas: body.practicas,
 			medicamentos: body.medicamentos,
@@ -146,6 +141,9 @@ async function actualizar(req, res) {
 			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
 		}
 		const body = req.body || {};
+		quitarAutorDelBody(body);
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await protocolosService.actualizarProtocolo(id, {
 			texto: body.texto,
 			tecnica: body.tecnica,
@@ -159,7 +157,7 @@ async function actualizar(req, res) {
 			practicas: body.practicas,
 			medicamentos: body.medicamentos,
 			profesionales: body.profesionales,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

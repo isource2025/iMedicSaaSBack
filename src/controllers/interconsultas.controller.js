@@ -2,10 +2,16 @@ const interconsultasService = require('../services/interconsultas.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
+const { resolveCodOperador } = require('../utils/sessionIdentity');
 
 function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+	const op = resolveCodOperador(req);
+	if (op == null) {
+		const e = new Error('Sesión sin CodOperador — no se puede registrar la acción clínica');
+		e.statusCode = 400;
+		throw e;
+	}
+	return op;
 }
 
 async function _matriculaSesion(req) {
@@ -150,7 +156,7 @@ async function crear(req, res) {
 
 		const data = await interconsultasService.crear({
 			idVisita,
-			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
+			matriculaSolicitante: matricula,
 			sectorSolicitante,
 			idSectorReceptor,
 			motivo,
@@ -176,7 +182,7 @@ async function tomar(req, res) {
 		const data = await interconsultasService.tomar({
 			idPedido,
 			matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -217,8 +223,8 @@ async function cumplir(req, res) {
 		const data = await interconsultasService.cumplir({
 			idPedido,
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
-			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			matriculaRealizador: matricula,
+			codOperador: _codOperadorSesion(req),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 		});
 		return res.json({ success: true, data });
@@ -244,7 +250,7 @@ async function actualizarRespuesta(req, res) {
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -268,7 +274,7 @@ async function actualizar(req, res) {
 			idPedido,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 			idSectorReceptor: body.idSectorReceptor ?? body.IdSectorReceptor,
 			motivo: body.motivo ?? body.Motivo ?? body.notas ?? body.NotasObservacion,
 			estadoUrgencia: body.estadoUrgencia ?? body.EstadoUrgencia,

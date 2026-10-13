@@ -732,10 +732,16 @@ async function crear(data) {
 				: Array.isArray(data.Sectores)
 					? data.Sectores
 					: [];
-			if (sectoresAlta.length) {
+			const serviciosAlta = Array.isArray(data.servicios)
+				? data.servicios
+				: Array.isArray(data.Servicios)
+					? data.Servicios
+					: [];
+			if (sectoresAlta.length || serviciosAlta.length) {
 				try {
 					await reemplazarAsignacionesPersonal(nuevoValor, {
-						sectores: sectoresAlta,
+						sectores: sectoresAlta.length ? sectoresAlta : undefined,
+						servicios: serviciosAlta.length ? serviciosAlta : undefined,
 						skipCloudSync: deferAuthSync,
 					});
 				} catch (asigErr) {
@@ -748,6 +754,13 @@ async function crear(data) {
 					await authCentralSync.syncUserLoginBundle(tenantIdPre, nuevoValor);
 				} catch (syncErr) {
 					console.warn('[personal.crear] syncUserLoginBundle:', syncErr?.message || syncErr);
+				}
+				if (serviciosAlta.length) {
+					try {
+						await authCentralSync.syncPersonalServicios(tenantIdPre, nuevoValor);
+					} catch (syncErr) {
+						console.warn('[personal.crear] syncPersonalServicios:', syncErr?.message || syncErr);
+					}
 				}
 			}
 
@@ -929,6 +942,22 @@ async function listarServicios() {
 		console.warn('[personal.listarServicios]', err?.message || err);
 		return [];
 	}
+}
+
+/** Servicios asignables al personal: solo el catálogo de la nube (imServicios de la empresa). */
+async function listarCatalogoServiciosNube() {
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId == null) return [];
+	const items = await require('./nubeTenant.service').listarServicios(tenantId);
+	return (items || [])
+		.map((s) => ({
+			valor: String(s.id || '').trim(),
+			descripcion: String(s.descripcion || '').trim(),
+		}))
+		.filter((s) => s.valor)
+		.sort((a, b) =>
+			String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
+		);
 }
 
 async function listarCatalogoSectores() {
@@ -1870,6 +1899,7 @@ module.exports = {
 	listarFunciones,
 	listarServicios,
 	listarCatalogoSectores,
+	listarCatalogoServiciosNube,
 	listarCategorias,
 	listarClases,
 	listarEmpresasCatalogo,

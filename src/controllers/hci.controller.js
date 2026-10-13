@@ -1,4 +1,5 @@
 const hciService = require('../services/hci.service');
+const { firmarSesion, quitarAutorDelBody } = require('../utils/sessionIdentity');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -111,7 +112,11 @@ exports.getByIdPaciente = async (req, res) => {
  */
 exports.crear = async (req, res) => {
   try {
-    const data = req.body;
+    const data = req.body || {};
+    quitarAutorDelBody(data);
+    const sesion = firmarSesion(req, res);
+    if (!sesion) return;
+    data.IdProfecional = sesion.codOperador;
     
     // Validar campos requeridos
     if (!data.NumeroVisita) {
@@ -145,7 +150,8 @@ exports.crear = async (req, res) => {
 exports.actualizar = async (req, res) => {
   try {
     const { id } = req.params;
-    const data = req.body;
+    const data = req.body || {};
+    quitarAutorDelBody(data);
     
     if (!id) {
       return res.status(400).json({

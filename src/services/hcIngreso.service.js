@@ -110,11 +110,19 @@ async function resolverCodOperadorSesion(auth) {
 
 async function aplicarAutorSesion(data, auth) {
     const next = { ...data };
-    const actual = normalizarNumero(next.IdProfecional);
-    if (actual <= 0 && auth) {
-        const cod = await resolverCodOperadorSesion(auth);
-        if (cod) next.IdProfecional = cod;
+    delete next.IdProfecional;
+    delete next.idProfecional;
+    delete next.OperadorCarga;
+    delete next.operadorCarga;
+    delete next.Profesional;
+    const cod = await resolverCodOperadorSesion(auth);
+    if (!cod) {
+        const e = new Error('Sesión sin CodOperador — no se puede registrar la acción clínica');
+        e.statusCode = 400;
+        throw e;
     }
+    next.IdProfecional = cod;
+    next.OperadorCarga = cod;
     return next;
 }
 

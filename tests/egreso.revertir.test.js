@@ -62,6 +62,9 @@ class FakeRequest {
 	async query(sqlText) {
 		const q = String(sqlText);
 		txLog.queries.push({ sql: q, inputs: { ...this.inputs } });
+		if (/FechaEgresoActual/.test(q)) {
+			return { rowsAffected: [1], recordset: [{ Camas: 0, FechaEgresoActual: 82000 }] };
+		}
 		if (/UPDATE dbo\.imHabitacionCamas/.test(q)) return { rowsAffected: [escenario.ocupacionAfecta] };
 		return { rowsAffected: [1] };
 	}
@@ -90,6 +93,9 @@ require.cache[dbPath] = {
 		executeQuery: async (sqlText, params = []) => {
 			const q = String(sqlText);
 			if (/AS DiagnosticoEgreso/.test(q)) return escenario.visita ? [escenario.visita] : [];
+			if (/FROM dbo\.imVisita\s+WHERE NumeroVisita = @p0/.test(q)) {
+				return escenario.visita ? [escenario.visita] : [];
+			}
 			if (/FROM imVisitaMovimiento\s+WHERE NumeroVisita = @p0\s+ORDER BY/.test(q)) {
 				return escenario.ultimo ? [escenario.ultimo] : [];
 			}
@@ -316,4 +322,41 @@ test('si justo otro ocupa la cama entre la consulta y la reversión, se deshace 
 	assert.equal(txLog.commit, 0);
 	assert.equal(txLog.rollback, 1);
 	assert.equal(updateVisita(), undefined, 'no llegó a limpiar la internación');
+});
+
+test('el egreso pisa Operador con el CodOperador de sesión, no el de internación', async () => {
+	escenario.visita = { ...escenario.visita, FechaEgreso: 0 };
+	escenario.ultimo = { ...escenario.ultimo, FechaEgreso: 0, Operador: '25' };
+	await servicio.actualizarUltimoMovimientoVisita(NV, {
+		fechaEgreso: '2026-10-12',
+		horaEgreso: '06:23',
+		disposicionEgreso: 1,
+		diagnostico: 'C50',
+		bedId: '02',
+		codOperador: 99,
+		operadorEgreso: 25,
+		Operador: 'EMERGENCIAS',
+	});
+	const mov = consultas(/UPDATE m\s+SET/)[0];
+	assert.ok(mov, 'actualiza el movimiento');
+	assert.match(mov.sql, /Operador = @op/);
+	assert.equal(mov.inputs.op, '99');
+	const vis = consultas(/OperadorEgreso = @op/)[0];
+	assert.ok(vis, 'actualiza OperadorEgreso');
+	assert.equal(vis.inputs.op, '99');
+	assert.equal(txLog.commit, 1);
+});
+
+test('sin CodOperador de sesión no se registra el egreso', async () => {
+	await assert.rejects(
+		servicio.actualizarUltimoMovimientoVisita(NV, {
+			fechaEgreso: '2026-10-12',
+			horaEgreso: '06:23',
+			disposicionEgreso: 1,
+			operadorEgreso: 25,
+			Operador: 'EMERGENCIAS',
+		}),
+		(err) => /CodOperador de sesión/.test(err.message),
+	);
+	assert.equal(txLog.begin, 0);
 });

@@ -42,9 +42,8 @@ const FILE_SERVER_FALLBACK_LOCAL =
   process.env.NODE_ENV !== 'production';
 
 function resolveUserId(req) {
-  const cod = req.auth?.usuario?.codOperador;
-  if (cod != null && Number.isFinite(Number(cod))) return Number(cod);
-  return req.valorPersonal || req.auth?.usuario?.id || null;
+  const { resolveCodOperador } = require('../utils/sessionIdentity');
+  return resolveCodOperador(req);
 }
 
 function isFileServerNetworkError(err) {

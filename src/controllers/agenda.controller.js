@@ -3,10 +3,16 @@ const feriadosService = require('../services/feriados.service');
 const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { idSectorSesion } = require('../utils/sectoresSesion');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const { resolveCodOperador } = require('../utils/sessionIdentity');
 
 function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+	const op = resolveCodOperador(req);
+	if (op == null) {
+		const e = new Error('Sesión sin CodOperador — no se puede registrar la acción clínica');
+		e.statusCode = 400;
+		throw e;
+	}
+	return op;
 }
 
 function _err(res, e) {

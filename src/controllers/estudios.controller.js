@@ -2,6 +2,7 @@ const estudiosService = require('../services/estudios.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
+const { resolveCodOperador } = require('../utils/sessionIdentity');
 
 async function _veTodosLosServicios(req) {
 	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
@@ -11,8 +12,13 @@ async function _veTodosLosServicios(req) {
 }
 
 function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+	const op = resolveCodOperador(req);
+	if (op == null) {
+		const e = new Error('Sesión sin CodOperador — no se puede registrar la acción clínica');
+		e.statusCode = 400;
+		throw e;
+	}
+	return op;
 }
 
 async function _matriculaSesion(req) {
@@ -134,7 +140,7 @@ async function crear(req, res) {
 		}
 		const data = await estudiosService.crearPedido({
 			idVisita: Number(body.idVisita),
-			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
+			matriculaSolicitante: matricula,
 			sectorSolicitante: idSectorSesion(req) || String(body.sectorSolicitante || '').trim(),
 			idTipoPedido: body.idTipoPedido,
 			idPractica: body.idPractica,
@@ -164,7 +170,7 @@ async function actualizar(req, res) {
 			idPedido,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req),
+			codOperador: _codOperadorSesion(req, res),
 			idTipoPedido: body.idTipoPedido,
 			idPractica: body.idPractica,
 			idSectorReceptor: body.idSectorReceptor,
@@ -192,7 +198,7 @@ async function eliminar(req, res) {
 			idPedido,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req),
+			codOperador: _codOperadorSesion(req, res),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -215,8 +221,8 @@ async function cumplir(req, res) {
 		const data = await estudiosService.cumplirPedido({
 			idPedido,
 			textoInforme: body.textoInforme,
-			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			matriculaRealizador: matricula,
+			codOperador: _codOperadorSesion(req, res),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 			codPractica: body.codPractica,
 		});
@@ -243,7 +249,7 @@ async function actualizarResultado(req, res) {
 			textoInforme: body.textoInforme || body.textoRespuesta || body.Respuesta,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req, res),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -265,7 +271,7 @@ async function tomar(req, res) {
 		const data = await estudiosService.tomarPedido({
 			idPedido,
 			matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req, res),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
