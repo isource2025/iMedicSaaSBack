@@ -225,7 +225,7 @@ const HERRAMIENTAS = Object.freeze([
 				},
 				fecha: { type: 'string', description: 'YYYY-MM-DD hasta donde mirar en las secciones por fecha. Default hoy.' },
 				dias: { type: 'integer', description: 'Días hacia atrás en las secciones por fecha. Default 7 (signos vitales 3).' },
-				todas: { type: 'boolean', description: 'true = toda la internación' },
+				todas: { type: 'boolean', description: 'true = toda la internación. Usalo (sin dias) para la evolución o tendencia de signos vitales.' },
 			},
 			required: ['secciones'],
 		},

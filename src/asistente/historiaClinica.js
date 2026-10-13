@@ -34,6 +34,8 @@ const SECCIONES = Object.freeze({
 		// Valor es el id del control; un 0 en pulso/TA/temperatura es «no medido», no un dato clínico.
 		omitir: ['Valor'],
 		sinCeros: true,
+		// Para un análisis vale más la evolución por día que los últimos controles sueltos.
+		parteResumen: 0.9,
 		resumen: {
 			tipo: 'numericos',
 			notas: 'Observaciones',
@@ -46,8 +48,25 @@ const SECCIONES = Object.freeze({
 				Axilar: 'Temp. axilar (°C)',
 				Rectal: 'Temp. rectal (°C)',
 				Saturometria: 'SatO2 (%)',
+				Hgt: 'Glucemia HGT (mg/dl)',
 			},
+			// Hgt se carga como texto («138MG/DL.», «HGT 80»).
+			textoNumerico: { Hgt: true },
+			porDia: { Pulso: 'FC', Maximo: 'TAS', Minimo: 'TAD', FrecuenciaRespiratoria: 'FR', Axilar: 'T', Saturometria: 'Sat', Hgt: 'HGT' },
+			fueraDeRango: {
+				Pulso: [50, 110],
+				Maximo: [90, 139],
+				Minimo: [50, 89],
+				FrecuenciaRespiratoria: [10, 24],
+				Axilar: [35.5, 37.7],
+				Saturometria: [94, null],
+				Hgt: [70, 180],
+			},
+			criterio: 'Fuera de rango: TAS <90 o >139, TAD <50 o >89, FC <50 o >110, FR <10 o >24, T <35.5 o >37.7, Sat <94, HGT <70 o >180.',
 		},
+		// Viaja con el resumen y no en el prompt: solo cuando hay signos que analizar.
+		comoUsar:
+			'Para analizar la evolución usá resumen.tendencia: ya trae por variable los días fuera de rango, el peor valor con fecha y el último día (respetá esos números y fechas, no los recalcules ni copies porDia o fueraDeRango enteros). Primero lo que estuvo fuera de rango, después lo que estuvo en rango, y cerrá con cómo está el último día. No digas «estable» ni «sin anomalías» si hubo valores fuera de rango. No concluyas respuesta al tratamiento, hidratación ni función de órganos, y no recomiendes conductas. Si hay aviso de que no hay registros recientes, decilo al principio.',
 	},
 	medicacion: {
 		titulo: 'Medicación suministrada',
@@ -203,7 +222,8 @@ function presentarSecciones(leidas, total) {
 			presupuesto,
 		);
 		const { aviso, ...resto } = s;
-		return { ...resto, ...vista, aviso };
+		const comoUsar = vista.resumen?.tendencia && sec.comoUsar;
+		return { ...resto, ...vista, aviso, ...(comoUsar ? { comoUsar } : {}) };
 	});
 }
 

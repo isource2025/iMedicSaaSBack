@@ -140,14 +140,122 @@ function resumenAgrupado(filas, cfg, fechaDe) {
 	return { totalItems: grupos.size, orden: 'items: por última vez, el más reciente primero', masFrecuentes, items };
 }
 
-/** Controles: por variable, último valor (con fecha), mínimo, máximo y cuántas veces se midió. */
+/** «138MG/DL.», «HGT 80», «165  MG / DL» → el primer número; null si no hay uno de 2 a 4 cifras. */
+function numeroEnTexto(v) {
+	const m = String(v ?? '').match(/\d+/);
+	return m && m[0].length >= 2 && m[0].length <= 4 ? Number(m[0]) : null;
+}
+
+/** [clave, valor] medidos de un control: los numéricos distintos de 0 y los de cfg.textoNumerico. */
+function lecturasDe(f, cfg, sec) {
+	const out = [];
+	for (const [k, v] of Object.entries(f)) {
+		if (cfg.textoNumerico?.[k]) {
+			const x = numeroEnTexto(v);
+			if (x != null) out.push([k, x]);
+			continue;
+		}
+		if (typeof v !== 'number' || !Number.isFinite(v) || v === 0) continue;
+		if (esRuido(k) || sec.omitir?.includes(k)) continue;
+		out.push([k, redondear(v)]);
+	}
+	return out;
+}
+
+function rango(min, max) {
+	return min === max ? min : `${min}–${max}`;
+}
+
+/** Por día (lo reciente primero): mínimo–máximo de cada variable con nombre corto. */
+function porDiaDe(filas, cfg, sec, fechaDe) {
+	const dias = new Map();
+	for (const f of filas) {
+		const dia = String(fechaDe(f) || '').slice(0, 10);
+		if (!dia) continue;
+		let d = dias.get(dia);
+		if (!d) dias.set(dia, (d = {}));
+		for (const [k, x] of lecturasDe(f, cfg, sec)) {
+			const corto = cfg.porDia[k];
+			if (!corto) continue;
+			const c = d[corto];
+			d[corto] = c ? [Math.min(c[0], x), Math.max(c[1], x)] : [x, x];
+		}
+	}
+	return [...dias]
+		.filter(([, d]) => Object.keys(d).length)
+		.map(([fecha, d]) => ({ fecha, ...Object.fromEntries(Object.entries(d).map(([k, [a, b]]) => [k, rango(a, b)])) }));
+}
+
+/** Controles con algún valor fuera de cfg.fueraDeRango ([mínimo normal, máximo normal]), lo reciente primero. */
+function fueraDeRangoDe(filas, cfg, sec, fechaDe) {
+	const lista = [];
+	const porVariable = {};
+	for (const f of filas) {
+		const cuando = fechaDe?.(f) || '';
+		const fuera = [];
+		for (const [k, x] of lecturasDe(f, cfg, sec)) {
+			const r = cfg.fueraDeRango[k];
+			const bajo = r?.[0] != null && x < r[0];
+			const alto = r?.[1] != null && x > r[1];
+			if (!bajo && !alto) continue;
+			fuera.push(`${cfg.porDia?.[k] || k} ${x}`);
+			const v = (porVariable[k] ||= { dias: new Set() });
+			v.dias.add(cuando.slice(0, 10));
+			if (alto && (!v.alto || x > v.alto.x)) v.alto = { x, cuando };
+			if (bajo && (!v.bajo || x < v.bajo.x)) v.bajo = { x, cuando };
+		}
+		if (fuera.length) lista.push(`${cuando}: ${fuera.join(', ')}`.trim());
+	}
+	return { lista, porVariable };
+}
+
+const DIA_MS = 24 * 60 * 60 * 1000;
+
+/** ['2026-02-14','2026-02-15','2026-02-16','2026-02-22'] → «del 2026-02-14 al 2026-02-16 y el 2026-02-22». */
+function tramos(dias) {
+	const orden = [...dias].filter(Boolean).sort();
+	const out = [];
+	for (const d of orden) {
+		const ultimo = out[out.length - 1];
+		if (ultimo && Date.parse(d) - Date.parse(ultimo[1]) <= DIA_MS) ultimo[1] = d;
+		else out.push([d, d]);
+	}
+	const txt = out.map(([a, b]) => (a === b ? `el ${a}` : `del ${a} al ${b}`));
+	return txt.length > 1 ? `${txt.slice(0, -1).join(', ')} y ${txt[txt.length - 1]}` : txt[0];
+}
+
+/**
+ * Una frase por variable, armada acá para que el modelo no saque cuentas: en qué días se
+ * salió de rango, el peor valor con fecha y cómo estuvo el último día con registros.
+ */
+function tendenciaDe(cfg, porVariable, porDia) {
+	const ultimoDia = porDia?.[0];
+	const out = {};
+	for (const [k, corto] of Object.entries(cfg.porDia)) {
+		const medido = porDia?.some((d) => d[corto] != null);
+		if (!medido) continue;
+		const v = porVariable[k];
+		const hoy = ultimoDia?.[corto] != null ? `; último día (${ultimoDia.fecha}): ${ultimoDia[corto]}` : '';
+		if (!v) {
+			out[corto] = `en rango todos los días${hoy}`;
+			continue;
+		}
+		const peor = [v.alto && `máximo ${v.alto.x} el ${v.alto.cuando}`, v.bajo && `mínimo ${v.bajo.x} el ${v.bajo.cuando}`].filter(Boolean).join(', ');
+		out[corto] = `fuera de rango ${tramos(v.dias)} (${peor})${hoy}`;
+	}
+	return out;
+}
+
+const MAX_FUERA_DE_RANGO = 12;
+
+/**
+ * Controles: por variable, último valor (con fecha), mínimo, máximo y cuántas veces se midió;
+ * con cfg.porDia, la evolución día por día, y con cfg.fueraDeRango, cuándo se salió de lo normal.
+ */
 function resumenNumerico(filas, cfg, sec, fechaDe) {
 	const valores = {};
 	for (const f of filas) {
-		for (const [k, v] of Object.entries(f)) {
-			if (typeof v !== 'number' || !Number.isFinite(v) || v === 0) continue;
-			if (esRuido(k) || sec.omitir?.includes(k)) continue;
-			const x = redondear(v);
+		for (const [k, x] of lecturasDe(f, cfg, sec)) {
 			const nombre = cfg.etiquetas?.[k] || k;
 			const c = valores[nombre];
 			if (!c) valores[nombre] = { ultimo: x, fecha: fechaDe?.(f) || undefined, min: x, max: x, n: 1 };
@@ -171,7 +279,21 @@ function resumenNumerico(filas, cfg, sec, fechaDe) {
 				.slice(0, 4)
 				.map((f) => ({ fecha: fechaDe?.(f) || undefined, texto: compactar(f[cfg.notas], 200) }))
 		: undefined;
-	return { ...(fechaUltimo ? { fechaUltimo } : {}), valores, ...(notas?.length ? { notas } : {}) };
+	const porDia = cfg.porDia && fechaDe ? porDiaDe(filas, cfg, sec, fechaDe) : undefined;
+	const fuera = cfg.fueraDeRango ? fueraDeRangoDe(filas, cfg, sec, fechaDe) : undefined;
+	return {
+		...(fechaUltimo ? { fechaUltimo } : {}),
+		valores,
+		...(fuera && porDia?.length ? { tendencia: tendenciaDe(cfg, fuera.porVariable, porDia), criterio: cfg.criterio } : {}),
+		...(porDia?.length ? { porDia } : {}),
+		...(fuera
+			? {
+					fueraDeRango: fuera.lista.length ? fuera.lista.slice(0, MAX_FUERA_DE_RANGO) : 'ninguno',
+					...(fuera.lista.length > MAX_FUERA_DE_RANGO ? { fueraDeRangoTotal: fuera.lista.length } : {}),
+				}
+			: {}),
+		...(notas?.length ? { notas } : {}),
+	};
 }
 
 function resumirFilas(filas, sec, fechaDe) {
@@ -186,7 +308,7 @@ function resumirFilas(filas, sec, fechaDe) {
 function recortarResumen(resumen, max) {
 	if (!resumen) return resumen;
 	for (let i = 0; i < 500 && largo(resumen) > max; i++) {
-		const listas = [resumen.items, resumen.notas].filter((l) => Array.isArray(l) && l.length > 1);
+		const listas = [resumen.items, resumen.notas, resumen.porDia, resumen.fueraDeRango].filter((l) => Array.isArray(l) && l.length > 1);
 		if (listas.length) {
 			listas.sort((a, b) => largo(b) - largo(a))[0].pop();
 			continue;

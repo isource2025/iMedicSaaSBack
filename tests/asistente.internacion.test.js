@@ -930,6 +930,29 @@ test('ver_historia_clinica: medicación y signos se resumen sobre TODOS los regi
 	assert.equal(ctx.resumido, true);
 });
 
+test('signos vitales: evolución por día, fuera de rango con fecha y glucemia desde texto', async () => {
+	const fila = (fecha, hora, extra) => ({ Valor: 1, FechaControl: fecha, HoraControl: hora, Pulso: 0, Maximo: 0, Minimo: 0, Axilar: 0, Saturometria: 0, Hgt: '', ...extra });
+	const signos = [];
+	for (let i = 0; i < 64; i++) signos.push(fila('2026-02-13', `${String(i % 24).padStart(2, '0')}:00`, { Pulso: 70, Maximo: 120, Minimo: 80, Axilar: 36.5, Saturometria: 97 }));
+	signos.push(fila('2026-02-17', '23:00', { Pulso: 90, Maximo: 171, Minimo: 99, Axilar: 36.5, Saturometria: 96 }));
+	signos.push(fila('2026-02-23', '11:00', { Hgt: '194 MG/DL' }));
+	signos.push(fila('2026-02-23', '16:00', { Hgt: 'HGT 86' }));
+	signos.push(fila('2026-02-23', '23:51', { Pulso: 68, Maximo: 110, Minimo: 80, Axilar: 36.2, Saturometria: 97 }));
+	stubHttp({ 'GET /api/controles-frecuentes/458887/byDate': { status: 200, body: { success: true, data: signos } } });
+	const ctx = ctxBase({ foco: focoSanabria(), permisos: PERMISOS_HC });
+	const out = await ejecutar('ver_historia_clinica', { secciones: ['signos_vitales'], todas: true }, ctx);
+	const r = out.secciones[0].resumen;
+	assert.deepEqual(r.porDia.map((d) => d.fecha), ['2026-02-23', '2026-02-17', '2026-02-13']);
+	assert.deepEqual(r.porDia[0], { fecha: '2026-02-23', FC: 68, TAS: 110, TAD: 80, T: 36.2, Sat: 97, HGT: '86–194' });
+	assert.equal(r.porDia[1].TAS, 171);
+	assert.deepEqual(r.fueraDeRango, ['2026-02-23 11:00: HGT 194', '2026-02-17 23:00: TAS 171, TAD 99']);
+	assert.equal(r.tendencia.TAS, 'fuera de rango el 2026-02-17 (máximo 171 el 2026-02-17 23:00); último día (2026-02-23): 110');
+	assert.equal(r.tendencia.HGT, 'fuera de rango el 2026-02-23 (máximo 194 el 2026-02-23 11:00); último día (2026-02-23): 86–194');
+	assert.equal(r.tendencia.FC, 'en rango todos los días; último día (2026-02-23): 68');
+	assert.equal(r.valores['Glucemia HGT (mg/dl)'].n, 2);
+	assert.match(r.criterio, /TAS <90 o >139/);
+});
+
 test('ver_historia_clinica sin secciones válidas no llama a nada', async () => {
 	stubHttp({});
 	const out = await ejecutar('ver_historia_clinica', { secciones: ['radiografias'] }, ctxBase({ foco: focoSanabria(), permisos: PERMISOS_HC }));
