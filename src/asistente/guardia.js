@@ -128,7 +128,7 @@ async function resumenInternacion(args, ctx) {
 	const sinPermiso = (codigo) => ({ error: `Sin permiso (${codigo}).` });
 	const [evoluciones, indicaciones, estudios, historia] = await Promise.all([
 		puede(ctx, 'INTERNACION.EVOLUCIONES.VER')
-			? clinica.verEvoluciones({ numeroVisita: nv, dias: args.dias ?? 3 }, conPresupuesto(ctx, 1500)).catch((e) => ({ error: e.message }))
+			? clinica.verEvoluciones({ numeroVisita: nv, dias: args.dias, diasDefault: 3 }, conPresupuesto(ctx, 1500)).catch((e) => ({ error: e.message }))
 			: sinPermiso('INTERNACION.EVOLUCIONES.VER'),
 		puede(ctx, 'INTERNACION.INDICACIONES.VER')
 			? clinica.verIndicaciones({ numeroVisita: nv }, ctx).catch((e) => ({ error: e.message }))

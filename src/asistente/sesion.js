@@ -172,6 +172,24 @@ function historialParaModelo(sesion) {
 		.map((m) => ({ role: m.role, content: m.content }));
 }
 
+const MAX_RESTAURAR = 8;
+
+/**
+ * La conversación vive en memoria: tras un reinicio del backend el front reenvía sus últimos
+ * mensajes y se retoma con eso (sin resultados de tools; si hace falta un dato, se vuelve a leer).
+ * Solo en una sesión vacía: nunca pisa lo que el servidor ya tiene.
+ */
+function restaurar(sesion, historial) {
+	if (!sesion || sesion.mensajes.length || !Array.isArray(historial)) return false;
+	const msgs = historial
+		.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+		.slice(-MAX_RESTAURAR);
+	for (const m of msgs) {
+		sesion.mensajes.push({ role: m.role, content: m.content.slice(0, MAX_ASISTENTE_HISTORIAL), ts: ahora(), restaurado: true });
+	}
+	return msgs.length > 0;
+}
+
 function resetStore() {
 	store.clear();
 }
@@ -188,6 +206,7 @@ module.exports = {
 	guardarFoco,
 	guardarAgente,
 	historialParaModelo,
+	restaurar,
 	resetStore,
 	TTL_MS,
 };

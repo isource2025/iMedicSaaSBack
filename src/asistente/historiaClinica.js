@@ -8,6 +8,40 @@ const httpInterno = require('./httpInterno');
 const clinica = require('./clinica');
 const resumir = require('./resumir');
 
+const CATEGORIAS_IMC = [
+	[18.5, 'bajo peso'],
+	[25, 'normopeso'],
+	[30, 'sobrepeso'],
+	[Infinity, 'obesidad'],
+];
+
+function numeroDe(v) {
+	const m = String(v ?? '').replace(',', '.').match(/\d+(?:\.\d+)?/);
+	return m ? Number(m[0]) : null;
+}
+
+/**
+ * IMC con el peso y la talla cargados («97 kg», «1.80 cm» o «180 cm»). Si el texto de la HC
+ * nombra otra categoría («IMC Normopeso» con 29,9), se avisa: el modelo copiaba lo escrito.
+ */
+function conImc(f) {
+	const peso = numeroDe(f.SV_PESOACTUAL);
+	let talla = numeroDe(f.SV_TALLA);
+	if (!peso || !talla) return f;
+	if (talla > 3) talla /= 100;
+	if (talla < 1 || talla > 2.5 || peso < 20 || peso > 400) return f;
+	const imc = Math.round((peso / (talla * talla)) * 10) / 10;
+	const categoria = CATEGORIAS_IMC.find(([max]) => imc < max)[1];
+	const escrito = String(f.SV_ESTADONUTRICIONAL || '').toLowerCase();
+	const otra = CATEGORIAS_IMC.map(([, c]) => c).find((c) => c !== categoria && escrito.includes(c));
+	// Primero: si el registro no entra, recortarAlTope borra los últimos campos.
+	return {
+		...(otra ? { avisoImc: `La HC dice «${String(f.SV_ESTADONUTRICIONAL).trim()}», pero con el peso y la talla cargados el IMC da ${imc} (${categoria}). Decilo.` } : {}),
+		imcCalculado: `${imc} (${categoria}) con ${peso} kg y ${talla} m`,
+		...f,
+	};
+}
+
 /** `porFecha`: el endpoint acepta date + days (days='all' = toda la internación). */
 const SECCIONES = Object.freeze({
 	hc_ingreso: {
@@ -17,6 +51,8 @@ const SECCIONES = Object.freeze({
 		seccionFront: 'hcIngreso',
 		maxTexto: 1500,
 		peso: 2,
+		enriquecer: conImc,
+		conservar: ['imcCalculado', 'avisoImc'],
 	},
 	laboratorios: {
 		titulo: 'Laboratorios',
@@ -182,6 +218,7 @@ async function leerSeccion(nombre, nv, args, ctx) {
 		return { seccion: nombre, titulo: sec.titulo, error: r.body?.mensaje || r.body?.message || `HTTP ${r.status}` };
 	}
 	let filas = resumir.recientesPrimero(resumir.filasDe(r.body));
+	if (sec.enriquecer) filas = filas.map(sec.enriquecer);
 	let fueraDePeriodo;
 	// Sin fecha ni días pedidos, un período por defecto vacío no significa «sin registros»: se traen los últimos.
 	if (!filas.length && query && query.days !== 'all' && !args.fecha && !args.dias) {

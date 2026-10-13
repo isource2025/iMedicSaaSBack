@@ -130,8 +130,9 @@ function resumenAgrupado(filas, cfg, fechaDe) {
 		if (cfg.sumar) g.cantidad += Number(f[cfg.sumar]) || 0;
 	}
 	const items = [...grupos.values()];
+	// items va por última vez: sin esto, el modelo toma el primero como «el más pedido».
 	const masFrecuentes =
-		items.length > 5
+		items.length > 1
 			? [...items]
 					.sort((a, b) => b.veces - a.veces)
 					.slice(0, 5)
@@ -352,7 +353,7 @@ function presentar(filas, sec, presupuesto = PRESUPUESTO_LECTURA) {
 	const resto = Math.max(MIN_TEXTO * 2, presupuesto - (resumen ? largo(resumen) : 0));
 	const corto = Math.min(maxTexto, TEXTO_ULTIMOS);
 	let textoPrimero = sec.maxTextoPrimero || (resumen ? corto : maxTexto);
-	let textoResto = resumen || sec.maxTextoPrimero ? corto : maxTexto;
+	let textoResto = sec.textoResto || (resumen || sec.maxTextoPrimero ? corto : maxTexto);
 	let registros;
 	for (;;) {
 		registros = caberEnChars(
@@ -363,7 +364,13 @@ function presentar(filas, sec, presupuesto = PRESUPUESTO_LECTURA) {
 			resto,
 		);
 		// Un solo registro largo (HC de ingreso, epicrisis) no se descarta: se acortan sus textos.
-		if (largo(registros) <= resto || Math.max(textoPrimero, textoResto) <= MIN_TEXTO) break;
+		// sinDescartar (las últimas N pedidas): tampoco se descartan registros; se acortan primero los viejos.
+		const entran = !sec.sinDescartar || registros.length >= Math.min(filas.length, MAX_FILAS);
+		if ((entran && largo(registros) <= resto) || Math.max(textoPrimero, textoResto) <= MIN_TEXTO) break;
+		if (sec.sinDescartar && textoResto > MIN_TEXTO) {
+			textoResto = Math.max(MIN_TEXTO, Math.floor(textoResto / 2));
+			continue;
+		}
 		textoPrimero = Math.max(MIN_TEXTO, Math.floor(textoPrimero / 2));
 		textoResto = Math.max(MIN_TEXTO, Math.floor(textoResto / 2));
 	}

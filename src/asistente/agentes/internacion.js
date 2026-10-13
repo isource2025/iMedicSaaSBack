@@ -11,6 +11,7 @@ const cargas = require('../cargasClinicas');
 const ficha = require('../ficha');
 const sesion = require('../sesion');
 const guardia = require('../guardia');
+const censo = require('../censo');
 
 const ID = 'INTERNACION';
 // ASISTENTE_INTERNACION_LISTO=0 lo apaga sin redeploy (vuelve a caer a Soporte).
@@ -55,11 +56,23 @@ async function buscarInternado(args, ctx) {
 	return out;
 }
 
+/**
+ * Una lectura con otra visita (la de la pantalla o la que nombró el modelo) deja a ese
+ * internado en foco: «lo mismo con las evoluciones» en el turno siguiente es de él.
+ */
+async function focoPorVisita(ctx, numeroVisita) {
+	if (Number(ctx.foco?.numeroVisita) === numeroVisita) return;
+	const filas = await censo.obtener(ctx.idEmpresa).catch(() => null);
+	const f = filas?.find((x) => Number(x.numeroVisita) === numeroVisita);
+	if (f) fijarFoco(ctx, censo.publica(f));
+}
+
 /** Completa numeroVisita con el foco; sin visita no se llama a la API. */
 function conVisita(fn) {
-	return (args, ctx) => {
+	return async (args, ctx) => {
 		const numeroVisita = clinica.numeroVisitaDe(args, ctx);
 		if (!numeroVisita) return { error: SIN_VISITA };
+		await focoPorVisita(ctx, numeroVisita);
 		return fn({ ...args, numeroVisita }, ctx);
 	};
 }
@@ -174,7 +187,8 @@ const HERRAMIENTAS = Object.freeze([
 	}),
 	def({
 		name: 'ver_evoluciones',
-		description: 'Evoluciones médicas de la visita hasta la fecha, con profesional y texto.',
+		description:
+			'Evoluciones médicas de la visita, con profesional y texto. Para analizar o resumir la evolución del paciente con sus evoluciones, usá esta tool con ultimas (no resumen_internacion).',
 		permiso: ['INTERNACION.EVOLUCIONES.VER'],
 		modulo: 'INTERNACION',
 		parameters: {
@@ -183,7 +197,11 @@ const HERRAMIENTAS = Object.freeze([
 			properties: {
 				numeroVisita: P_VISITA,
 				fecha: P_FECHA,
-				dias: { type: 'integer', description: 'Días hacia atrás desde la fecha. Default 7.' },
+				ultimas: {
+					type: 'integer',
+					description: 'Cantidad: las últimas N evoluciones cargadas, sin importar la fecha («las últimas 7» = 7). Máx. 10. Para un análisis, 7.',
+				},
+				dias: { type: 'integer', description: 'Solo si piden días («los últimos 3 días»). Default 7.' },
 				todas: { type: 'boolean', description: 'true = toda la internación' },
 			},
 		},
@@ -705,7 +723,7 @@ function instrucciones({ escribe = true } = {}) {
 		'- Estudios de esa visita: ver_estudios. “Hechos/cumplidos/realizados” → filtro hechos. Nunca uses una bandeja hospitalaria de pendientes para eso.',
 		'- Evoluciones: ver_evoluciones. Indicaciones: ver_indicaciones. Resumí, no pegues todo el texto. Si la tool trae «aviso», decilo tal cual.',
 		'- HC de ingreso, laboratorios, signos vitales, medicación suministrada, interconsultas, enfermería, balance, dieta, epicrisis, protocolos, procedimientos, insumos, adjuntos: ver_historia_clinica con esas secciones (varias en una llamada).',
-		'- Análisis / resumen clínico / «cómo está» o «cómo sigue» el internado: SOLO resumen_internacion con el nombre en termino (ya trae ficha, evoluciones, indicaciones, estudios y HC: no sumes buscar_internado ni ver_*). Basate solo en lo que devuelve; si una parte vino vacía o sin permiso, decilo. No agregues diagnósticos ni conductas que no estén registrados.',
+		'- Análisis de las evoluciones («analizá / resumí sus evoluciones», «las últimas 7»): ver_evoluciones con ultimas. Análisis / resumen clínico / «cómo está» o «cómo sigue» el internado: SOLO resumen_internacion con el nombre en termino (ya trae ficha, evoluciones, indicaciones, estudios y HC: no sumes buscar_internado ni ver_*). Basate solo en lo que devuelve; si una parte vino vacía o sin permiso, decilo. No agregues diagnósticos ni conductas que no estén registrados.',
 		'- Pase de guardia de un sector: pase_de_guardia. Quiénes están internados / cuántos hay / censo: listar_internados. Su texto ya le llega al usuario: no lo repitas.',
 		'- Llamá SOLO las tools/secciones de lo que se pidió: «evoluciones» → ver_evoluciones y nada más; «signos» → solo signos_vitales. Juntá varias fuentes únicamente si pide un análisis o resumen clínico general.',
 		'- En los resúmenes, items va ordenado por la última vez (no por cantidad); para «lo más usado» usá masFrecuentes. Si un valor mínimo o máximo es fisiológicamente imposible (ej. pulso 7), decí que parece un error de carga, sin interpretarlo.',

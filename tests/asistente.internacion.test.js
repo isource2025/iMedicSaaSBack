@@ -1042,6 +1042,48 @@ test('ver_evoluciones larga: nunca el corte genérico; resumen por profesional, 
 	assert.equal(ctx.resumido, true);
 });
 
+test('ver_evoluciones ultimas: cantidad sin importar la fecha, y de las copiadas solo lo que cambió', async () => {
+	const plantilla = (dia, ta, glu) =>
+		[
+			`Paciente de 46 años con pie diabético, cursa ${dia}° día de internación.`,
+			`TA: ${ta} mmHg`,
+			`GLUCEMIAS: ${glu}`,
+			'EXAMEN FISICO: lúcido, colaborador.',
+			'PIEL Y FANERAS: úlcera en hallux izquierdo de 2 cm.',
+			'APARATO RESPIRATORIO: buena entrada de aire bilateral.',
+			'INDICACIONES: control de signos vitales, glucemia, dieta para diabéticos.',
+		].join('\n');
+	const evs = [
+		{ IdHCEvolucion: 4, FechaEv: '2026-02-22', HoraEv: '18:29', Evolucion: plantilla(4, '110/70', '138-196'), ProfesionalNombreCompleto: 'DRA A' },
+		{ IdHCEvolucion: 3, FechaEv: '2026-02-21', HoraEv: '16:37', Evolucion: plantilla(3, '120/80', '130/165'), ProfesionalNombreCompleto: 'DRA B' },
+		{ IdHCEvolucion: 2, FechaEv: '2026-02-18', HoraEv: '17:41', Evolucion: 'pasa a sala de clínica médica', ProfesionalNombreCompleto: 'DRA C' },
+		{ IdHCEvolucion: 1, FechaEv: '2026-02-17', HoraEv: '00:01', Evolucion: 'ingresa por guardia', ProfesionalNombreCompleto: 'DRA D' },
+	];
+	stubHttp({ 'GET /api/evoluciones/458887/byDate': { status: 200, body: { success: true, data: evs } } });
+	const out = await ejecutar('ver_evoluciones', { ultimas: 3, dias: 7 }, ctxBase({ foco: focoSanabria() }));
+	assert.equal(llamadas[0].query.days, 'all', 'ultimas manda sobre dias');
+	assert.equal(out.registros.length, 3);
+	assert.match(out.periodo, /últimas 3 cargadas \(de 4/);
+	assert.match(out.registros[0].Evolucion, /EXAMEN FISICO/, 'la más reciente va entera');
+	assert.equal(out.registros[1].Evolucion, 'Paciente de 46 años con pie diabético, cursa 3° día de internación.\nTA: 120/80 mmHg\nGLUCEMIAS: 130/165');
+	assert.equal(out.registros[1].lineasIgualesALaSiguiente, 4);
+	assert.equal(out.registros[2].Evolucion, 'pasa a sala de clínica médica');
+	assert.match(out.formato, /solo lo que dicen distinto/);
+});
+
+test('resumen_internacion: sin evoluciones en el período por defecto trae las últimas', async () => {
+	stubHttp({
+		'GET /api/evoluciones/458887/byDate': (req) =>
+			req.query.days === 'all'
+				? { status: 200, body: { success: true, data: [{ FechaEv: '2026-02-22', Evolucion: 'Estable' }] } }
+				: { status: 200, body: { success: true, data: [] } },
+	});
+	const clinica = require('../src/asistente/clinica');
+	const out = await clinica.verEvoluciones({ numeroVisita: 458887, diasDefault: 3 }, ctxBase({ foco: focoSanabria() }));
+	assert.equal(out.total, 1);
+	assert.match(out.aviso, /No hay evoluciones en los últimos 3 días/);
+});
+
 test('ver_historia_clinica partida en varias llamadas del mismo turno: cada una siguiente recibe menos lugar', async () => {
 	const muchos = (n) => Array.from({ length: n }, (_, i) => ({ FechaControl: `2026-01-${String(1 + (i % 28)).padStart(2, '0')}`, Observaciones: `nota ${i} `.repeat(30), NombreMedicamento: `MED ${i % 9}`, Cantidad: 1 }));
 	stubHttp({

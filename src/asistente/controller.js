@@ -78,6 +78,20 @@ async function registrarMensaje(req, { prep, ctx, result, error, stream }) {
 	return resumen;
 }
 
+/** Foco que reenvía el front tras perder la sesión: solo si la visita sigue internada (censo). */
+async function restaurarFoco(conv, req) {
+	const nv = parseInt(req.body?.foco?.numeroVisita, 10);
+	if (conv.foco || !(nv > 0)) return;
+	const filas = await censo.obtener(req.idEmpresa).catch(() => null);
+	const f = filas?.find((x) => Number(x.numeroVisita) === nv);
+	if (f) sesion.guardarFoco(conv, require('./ficha').deInternacion(censo.publica(f)));
+}
+
+function focoParaCliente(conv) {
+	const f = conv?.foco;
+	return f?.numeroVisita ? { numeroVisita: Number(f.numeroVisita), paciente: f.paciente || null } : null;
+}
+
 async function prepararTurno(req) {
 	const mensaje = String(req.body?.mensaje || req.body?.texto || '').trim();
 	if (!mensaje) {
@@ -109,6 +123,10 @@ async function prepararTurno(req) {
 		valorPersonal: req.valorPersonal,
 		rutaActual,
 	});
+	if (req.body?.idConversacion && conv.id !== req.body.idConversacion) {
+		sesion.restaurar(conv, req.body?.historial);
+		await restaurarFoco(conv, req);
+	}
 	sesion.agregarMensaje(conv, 'user', mensaje);
 	const ruta = orquestador.resolver({
 		texto: mensaje,
@@ -358,7 +376,7 @@ async function mensaje(req, res) {
 		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv) || respuestaSocial(prep.mensaje, prep.conv);
 		const result = atajo || (await correrModelo({ ...prep, ctx }));
 		await registrarMensaje(req, { prep, ctx, result });
-		return res.json({ success: true, ...result, consumo: consumoParaCliente(ctx) });
+		return res.json({ success: true, ...result, foco: focoParaCliente(prep.conv), consumo: consumoParaCliente(ctx) });
 	} catch (err) {
 		if (ctx) await registrarMensaje(req, { prep, ctx, error: err });
 		const status = err.statusCode || 500;
@@ -416,7 +434,7 @@ async function mensajeStream(req, res) {
 				onEvento: (evt) => writeSse(res, evt.tipo || 'estado', evt),
 			}));
 		await registrarMensaje(req, { prep, ctx, result, stream: true });
-		writeSse(res, 'done', result);
+		writeSse(res, 'done', { ...result, foco: focoParaCliente(prep.conv) });
 		res.end();
 	} catch (err) {
 		if (ctx) await registrarMensaje(req, { prep, ctx, error: err, stream: true });

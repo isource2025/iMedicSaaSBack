@@ -436,9 +436,53 @@ const VISTA_EVOLUCIONES = Object.freeze({
 	resumen: { tipo: 'agrupar', por: ['ProfesionalNombreCompleto'] },
 });
 
+/** «Las últimas 7» para analizar: más lugar por evolución (ya vienen sin lo copiado de la siguiente). */
+const VISTA_SERIE = Object.freeze({
+	...VISTA_EVOLUCIONES,
+	maxTexto: 3500,
+	maxTextoPrimero: 3500,
+	textoResto: 1200,
+	sinDescartar: true,
+	resumen: undefined,
+});
+// Debajo del tope de limitarJson (9000) con el resto del resultado.
+const PRESUPUESTO_SERIE = 7600;
+const MAX_ULTIMAS = 10;
+const MIN_LINEAS_COPIADAS = 3;
+
+function lineasDe(texto) {
+	return String(texto || '')
+		.split(/\r?\n/)
+		.map((l) => l.replace(/\s+/g, ' ').trim())
+		.filter(Boolean);
+}
+
+/**
+ * Las evoluciones suelen copiar la anterior y cambiar unos datos: de cada una (salvo la más
+ * reciente) va solo lo que dice distinto de la siguiente, así entran varias y se ve qué cambió.
+ */
+function sinLoCopiado(filas) {
+	let algunaCopiada = false;
+	const out = filas.map((f, i) => {
+		if (i === 0) return f;
+		const siguiente = new Set(lineasDe(filas[i - 1].Evolucion).map((l) => l.toUpperCase()));
+		const lineas = lineasDe(f.Evolucion);
+		const propias = lineas.filter((l) => !siguiente.has(l.toUpperCase()));
+		const copiadas = lineas.length - propias.length;
+		if (copiadas < MIN_LINEAS_COPIADAS) return f;
+		algunaCopiada = true;
+		return { ...f, Evolucion: propias.join('\n') || '(igual a la siguiente)', lineasIgualesALaSiguiente: copiadas };
+	});
+	return { filas: out, algunaCopiada };
+}
+
 async function verEvoluciones(args, ctx) {
 	const nv = parseInt(args.numeroVisita, 10);
-	let query = { date: fechaValida(args.fecha), days: args.dias != null ? args.dias : 7 };
+	const ultimas = Math.min(MAX_ULTIMAS, Math.max(0, parseInt(args.ultimas, 10) || 0));
+	let query = {
+		date: fechaValida(args.fecha),
+		days: ultimas ? 'all' : args.dias != null ? args.dias : args.diasDefault || 7,
+	};
 	const leer = async (q) => {
 		const r = await api(ctx, 'GET', `/api/evoluciones/${nv}/byDate`, q);
 		if (r.status >= 400) return { error: r.body?.mensaje || `No se pudieron leer las evoluciones (HTTP ${r.status})`, status: r.status };
@@ -449,8 +493,8 @@ async function verEvoluciones(args, ctx) {
 	if (leido.error) return leido;
 	let { filas } = leido;
 	let aviso;
-	// Sin fecha ni días pedidos, una semana vacía no significa «sin evoluciones»: se traen las últimas.
-	if (!filas.length && args.fecha == null && args.dias == null) {
+	// Sin fecha ni días pedidos, un período por defecto vacío no significa «sin evoluciones»: se traen las últimas.
+	if (!filas.length && !ultimas && args.fecha == null && args.dias == null) {
 		const todo = await leer({ ...query, days: 'all' });
 		if (todo.filas?.length) {
 			filas = todo.filas;
@@ -458,11 +502,27 @@ async function verEvoluciones(args, ctx) {
 			query = { ...query, days: 'all' };
 		}
 	}
-	const periodo = query.days === 'all' ? 'toda la internación' : `${query.days} días hasta ${query.date}`;
+	const totalVisita = filas.length;
+	if (ultimas) filas = filas.slice(0, ultimas);
+	const serie = sinLoCopiado(filas);
+	const periodo = ultimas
+		? `las últimas ${filas.length} cargadas (de ${totalVisita} en la internación)`
+		: query.days === 'all'
+			? 'toda la internación'
+			: `${query.days} días hasta ${query.date}`;
+	const vista = ultimas
+		? resumir.presentar(serie.filas, VISTA_SERIE, Math.max(PRESUPUESTO_SERIE, resumir.presupuestoDelTurno(ctx)))
+		: resumir.presentar(serie.filas, VISTA_EVOLUCIONES, resumir.presupuestoDelTurno(ctx));
 	const out = {
 		numeroVisita: nv,
 		periodo,
-		...resumir.presentar(filas, VISTA_EVOLUCIONES, resumir.presupuestoDelTurno(ctx)),
+		...vista,
+		...(serie.algunaCopiada
+			? {
+					formato:
+						'La primera (más reciente) va entera. De las demás va solo lo que dicen distinto de la evolución siguiente (más nueva); lineasIgualesALaSiguiente cuenta lo copiado. Para la evolución del paciente, compará esos cambios de una a otra (signos, glucemias, balance, examen, plan).',
+				}
+			: {}),
 		aviso: filas.length ? aviso : `No hay evoluciones en ${periodo}.`,
 		enPantalla:
 			filas.length && ctx?.pantalla?.seccion === 'evoluciones'
