@@ -645,10 +645,12 @@ async function _profesionalesPorPracticas(valoresPractica) {
         fprof.Matricula,
         fprof.Funcion,
         fn.Descripcion AS FuncionDescripcion,
-        LTRIM(RTRIM(per.ApellidoNombre)) AS ProfesionalNombre
+        LTRIM(RTRIM(per.ApellidoNombre)) AS ProfesionalNombre,
+        per.Valor AS IdPersonal,
+        per.Matricula AS MatriculaPersonal
       FROM dbo.imFacProfesionales fprof
       OUTER APPLY (
-        SELECT TOP 1 p.ApellidoNombre
+        SELECT TOP 1 p.ApellidoNombre, p.Valor, p.Matricula
         FROM dbo.imPersonal p
         WHERE p.Valor = fprof.Matricula OR p.Matricula = fprof.Matricula
         ORDER BY CASE WHEN p.Valor = fprof.Matricula THEN 0 ELSE 1 END
@@ -670,6 +672,8 @@ async function _profesionalesPorPracticas(valoresPractica) {
 		map.get(valor).push({
 			nombre,
 			matricula: Number(r.Matricula) || null,
+			idPersonal: Number(r.IdPersonal) || null,
+			matriculaPersonal: Number(r.MatriculaPersonal) || null,
 			funcion: Number(r.Funcion) || null,
 			funcionDescripcion: funcion || null,
 			etiqueta,
@@ -804,6 +808,9 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 		const solicitante = (nroInforme > 0 && solicitantes.get(nroInforme)) || null;
 
 		const realizadoresNombres = profFact.map((p) => p.etiqueta);
+		const firmantes = profFact
+			.filter((p) => p.idPersonal)
+			.map((p) => ({ nombre: p.nombre, matricula: p.matriculaPersonal, valor: p.idPersonal }));
 		// Fallback: médico del turno solo si no hay profesionales en la práctica
 		if (!realizadoresNombres.length && medicoTurno?.nombre) {
 			const solMat = solicitante?.matricula != null ? Number(solicitante.matricula) : null;
@@ -811,6 +818,7 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 				solMat != null && Number(medicoTurno.matricula) === solMat;
 			if (!solicitante || !mismoQueSolicita) {
 				realizadoresNombres.push(medicoTurno.nombre);
+				firmantes.push({ nombre: medicoTurno.nombre, matricula: medicoTurno.matricula });
 			}
 		}
 
@@ -843,6 +851,7 @@ async function obtenerPracticasPorVisita(numeroVisita) {
 			MatriculaMedicoTurno: medicoTurno?.matricula ?? null,
 			SolicitanteNombre: solicitante?.nombre || null,
 			Realizadores: realizadoresNombres,
+			Firmantes: firmantes,
 			Profesionales: partes.join(' · '),
 			ProfesionalesLista: partes,
 		};
