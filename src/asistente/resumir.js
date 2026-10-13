@@ -18,8 +18,13 @@ function presupuestoDelTurno(ctx) {
 	return Math.max(MIN_LECTURA, Math.min(PRESUPUESTO_LECTURA, PRESUPUESTO_TURNO - usado));
 }
 
+/** Largo de lo leído sin comoResponder / comoUsar (instrucciones fijas, no datos). */
+function largoDatos(out) {
+	return JSON.stringify(out ?? null, (k, v) => (k === 'comoResponder' || k === 'comoUsar' ? undefined : v)).length;
+}
+
 function consumirDelTurno(ctx, out) {
-	if (ctx) ctx.lecturaUsada = (ctx.lecturaUsada || 0) + JSON.stringify(out ?? null).length;
+	if (ctx) ctx.lecturaUsada = (ctx.lecturaUsada || 0) + largoDatos(out);
 }
 const MAX_FILAS = 60;
 const MIN_TEXTO = 120;
@@ -247,6 +252,27 @@ function tendenciaDe(cfg, porVariable, porDia) {
 	return out;
 }
 
+/**
+ * Las filas de la tabla «Tendencias» ya armadas: con la tendencia en frases, el modelo prefería
+ * transcribir otra serie (los signos escritos en las evoluciones) aunque se le pidieran los controles.
+ */
+function tablaTendenciasDe(cfg, porVariable, porDia) {
+	if (!porDia?.length) return undefined;
+	const filas = [];
+	for (const [k, corto] of Object.entries(cfg.porDia)) {
+		const dias = porDia.filter((d) => d[corto] != null);
+		if (!dias.length) continue;
+		const ultimo = dias[0];
+		const primero = dias[dias.length - 1];
+		const evolucion =
+			primero === ultimo ? `${ultimo[corto]} (${ultimo.fecha})` : `${primero[corto]} (${primero.fecha}) → ${ultimo[corto]} (${ultimo.fecha})`;
+		const v = porVariable[k];
+		const peor = v && [v.alto && `máx. ${v.alto.x} el ${v.alto.cuando}`, v.bajo && `mín. ${v.bajo.x} el ${v.bajo.cuando}`].filter(Boolean).join(', ');
+		filas.push(`| ${corto} | ${evolucion} | ${v ? `fuera de rango ${tramos(v.dias)} (${peor})` : 'en rango todos los días'} |`);
+	}
+	return filas.length ? ['| Parámetro | Evolución (rango del día) | Lectura |', '|---|---|---|', ...filas].join('\n') : undefined;
+}
+
 const MAX_FUERA_DE_RANGO = 12;
 
 /**
@@ -285,7 +311,13 @@ function resumenNumerico(filas, cfg, sec, fechaDe) {
 	return {
 		...(fechaUltimo ? { fechaUltimo } : {}),
 		valores,
-		...(fuera && porDia?.length ? { tendencia: tendenciaDe(cfg, fuera.porVariable, porDia), criterio: cfg.criterio } : {}),
+		...(fuera && porDia?.length
+			? {
+					tendencia: tendenciaDe(cfg, fuera.porVariable, porDia),
+					tablaTendencias: tablaTendenciasDe(cfg, fuera.porVariable, porDia),
+					criterio: cfg.criterio,
+				}
+			: {}),
 		...(porDia?.length ? { porDia } : {}),
 		...(fuera
 			? {
@@ -308,6 +340,13 @@ function resumirFilas(filas, sec, fechaDe) {
 /** Saca del final de la lista más larga del resumen hasta que entre. */
 function recortarResumen(resumen, max) {
 	if (!resumen) return resumen;
+	// La tendencia ya resume porDia, fueraDeRango y valores: se descartan enteros antes que ella.
+	if (resumen.tendencia) {
+		for (const k of ['porDia', 'fueraDeRango', 'notas', 'valores']) {
+			if (largo(resumen) <= max) break;
+			delete resumen[k];
+		}
+	}
 	for (let i = 0; i < 500 && largo(resumen) > max; i++) {
 		const listas = [resumen.items, resumen.notas, resumen.porDia, resumen.fueraDeRango].filter((l) => Array.isArray(l) && l.length > 1);
 		if (listas.length) {
@@ -392,14 +431,21 @@ function presentar(filas, sec, presupuesto = PRESUPUESTO_LECTURA) {
  * registros de la sección más grande; si queda un solo registro, sus últimos campos.
  */
 function recortarAlTope(secciones, tope) {
+	// Resúmenes que ya no se achican pero tienen tendencia: se conservan y se recortan los registros.
+	const minimos = new Set();
 	for (let i = 0; i < 500 && largo(secciones) > tope; i++) {
-		const mayor = secciones.filter((s) => s.registros?.length || s.resumen).sort((a, b) => largo(b) - largo(a))[0];
+		const mayor = secciones
+			.filter((s) => s.registros?.length || (s.resumen && !minimos.has(s)))
+			.sort((a, b) => largo(b) - largo(a))[0];
 		if (!mayor) return;
 		mayor.resumido = true;
-		if (mayor.resumen && largo(mayor.resumen) > largo(mayor.registros || [])) {
+		if (mayor.resumen && !minimos.has(mayor) && largo(mayor.resumen) > largo(mayor.registros || [])) {
 			const antes = largo(mayor.resumen);
 			recortarResumen(mayor.resumen, antes - 200);
-			if (largo(mayor.resumen) >= antes) delete mayor.resumen;
+			if (largo(mayor.resumen) >= antes) {
+				if (mayor.resumen.tendencia) minimos.add(mayor);
+				else delete mayor.resumen;
+			}
 			continue;
 		}
 		if (mayor.registros.length > 1) {
@@ -419,8 +465,10 @@ function recortarAlTope(secciones, tope) {
 module.exports = {
 	PRESUPUESTO_LECTURA,
 	PRESUPUESTO_TURNO,
+	MIN_LECTURA,
 	presupuestoDelTurno,
 	consumirDelTurno,
+	largoDatos,
 	MAX_FILAS,
 	compactar,
 	filasDe,

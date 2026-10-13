@@ -8,6 +8,7 @@ const autoria = require('./autoria');
 const resumir = require('./resumir');
 const censo = require('./censo');
 const fechas = require('./fechas');
+const { COMO_RESPONDER, signosDeEvoluciones } = require('./analisisClinico');
 
 const SECCIONES = Object.freeze({
 	'hcIngreso': 'Historia clínica de ingreso',
@@ -432,7 +433,8 @@ const VISTA_EVOLUCIONES = Object.freeze({
 	maxTextoPrimero: 1500,
 	parteResumen: 0.25,
 	conservar: ['IdHCEvolucion', '_propio'],
-	omitir: ['IdSector', 'NumeroDocumento', 'Profecional', 'IdPersonal', 'ValorEspecialidad', 'Matricula'],
+	// Glucemia es el último HGT de enfermería previo (lo muestra la pantalla), no lo que dice la evolución.
+	omitir: ['IdSector', 'NumeroDocumento', 'Profecional', 'IdPersonal', 'ValorEspecialidad', 'Matricula', 'Glucemia'],
 	resumen: { tipo: 'agrupar', por: ['ProfesionalNombreCompleto'] },
 });
 
@@ -445,9 +447,10 @@ const VISTA_SERIE = Object.freeze({
 	sinDescartar: true,
 	resumen: undefined,
 });
-// Debajo del tope de limitarJson (9000) con el resto del resultado.
-const PRESUPUESTO_SERIE = 7600;
+// Debajo del tope de limitarJson (9000) con el resto del resultado y comoResponder.
+const PRESUPUESTO_SERIE = 7600 - COMO_RESPONDER.length;
 const MAX_ULTIMAS = 10;
+const MAX_SERIE = 15;
 const MIN_LINEAS_COPIADAS = 3;
 
 function lineasDe(texto) {
@@ -493,13 +496,17 @@ async function verEvoluciones(args, ctx) {
 	if (leido.error) return leido;
 	let { filas } = leido;
 	let aviso;
+	let ultimaFecha;
 	// Sin fecha ni días pedidos, un período por defecto vacío no significa «sin evoluciones»: se traen las últimas.
-	if (!filas.length && !ultimas && args.fecha == null && args.dias == null) {
+	// Con período pedido se respeta, pero se dice de cuándo es la última.
+	if (!filas.length && !ultimas && query.days !== 'all') {
 		const todo = await leer({ ...query, days: 'all' });
-		if (todo.filas?.length) {
+		if (todo.filas?.length && args.fecha == null && args.dias == null) {
 			filas = todo.filas;
 			aviso = `No hay evoluciones en los últimos ${query.days} días; se muestran las más recientes de la internación.`;
 			query = { ...query, days: 'all' };
+		} else if (todo.filas?.length) {
+			ultimaFecha = resumir.fechadorDe(todo.filas)?.(todo.filas[0])?.slice(0, 10);
 		}
 	}
 	const totalVisita = filas.length;
@@ -510,12 +517,22 @@ async function verEvoluciones(args, ctx) {
 		: query.days === 'all'
 			? 'toda la internación'
 			: `${query.days} días hasta ${query.date}`;
-	const vista = ultimas
-		? resumir.presentar(serie.filas, VISTA_SERIE, Math.max(PRESUPUESTO_SERIE, resumir.presupuestoDelTurno(ctx)))
-		: resumir.presentar(serie.filas, VISTA_EVOLUCIONES, resumir.presupuestoDelTurno(ctx));
+	// Con la tendencia de los controles de enfermería leída en el turno, esa manda: el modelo
+	// toma la última serie que recibe aunque se le diga cuál usar.
+	if (ctx?.signosEnCurso) await ctx.signosEnCurso;
+	const signosEnEvoluciones = ctx?.tendenciaSignos
+		? 'Para los signos, la tendencia de signos_vitales (controles de enfermería) que ya leíste.'
+		: signosDeEvoluciones(filas.slice(0, args.enResumen ? 7 : MAX_ULTIMAS), resumir.fechadorDe(filas));
+	const lugarSignos = signosEnEvoluciones ? JSON.stringify(signosEnEvoluciones).length : 0;
+	// Pocas evoluciones (o las últimas N): todas, sin lo copiado, para poder seguir la evolución.
+	const comoSerie = !args.enResumen && (ultimas || filas.length <= MAX_SERIE);
+	const vista = comoSerie
+		? resumir.presentar(serie.filas, VISTA_SERIE, Math.max(PRESUPUESTO_SERIE, resumir.presupuestoDelTurno(ctx)) - lugarSignos)
+		: resumir.presentar(serie.filas, VISTA_EVOLUCIONES, Math.max(resumir.MIN_LECTURA, resumir.presupuestoDelTurno(ctx) - lugarSignos));
 	const out = {
 		numeroVisita: nv,
 		periodo,
+		signosEnEvoluciones,
 		...vista,
 		...(serie.algunaCopiada
 			? {
@@ -523,7 +540,8 @@ async function verEvoluciones(args, ctx) {
 						'La primera (más reciente) va entera. De las demás va solo lo que dicen distinto de la evolución siguiente (más nueva); lineasIgualesALaSiguiente cuenta lo copiado. Para la evolución del paciente, compará esos cambios de una a otra (signos, glucemias, balance, examen, plan).',
 				}
 			: {}),
-		aviso: filas.length ? aviso : `No hay evoluciones en ${periodo}.`,
+		comoResponder: filas.length > 1 && !args.enResumen ? COMO_RESPONDER : undefined,
+		aviso: filas.length ? aviso : `No hay evoluciones en ${periodo}.${ultimaFecha ? ` La última es del ${ultimaFecha}: con ultimas se ven.` : ''}`,
 		enPantalla:
 			filas.length && ctx?.pantalla?.seccion === 'evoluciones'
 				? 'La sección muestra solo el día del calendario y el período elegido («Hoy» por defecto). Si el usuario no ve una, que cambie el día o el período («Semana», «Todas»).'

@@ -41,6 +41,7 @@ const permisosService = require(src('services/permisos.service'));
 const autoria = require(src('asistente/autoria'));
 const orquestador = require(src('asistente/agentes/orquestador'));
 const hc = require(src('asistente/historiaClinica'));
+const resumir = require(src('asistente/resumir'));
 
 const PERMISOS = [
 	'INTERNACION.CAMAS.VER',
@@ -908,7 +909,8 @@ test('ver_historia_clinica: medicación y signos se resumen sobre TODOS los regi
 	});
 	const ctx = ctxBase({ foco: focoSanabria(), permisos: PERMISOS_HC });
 	const out = await ejecutar('ver_historia_clinica', { secciones: ['medicacion', 'signos_vitales'], todas: true }, ctx);
-	assert.ok(JSON.stringify(out).length <= hc.TOPE_TOTAL + 300);
+	assert.ok(resumir.largoDatos(out) <= hc.TOPE_TOTAL + 300);
+	assert.match(out.comoResponder, /## Síntesis[\s\S]*## Tendencias[\s\S]*## Alertas[\s\S]*## Para considerar/);
 
 	const med = out.secciones[0];
 	assert.equal(med.resumido, true);
@@ -978,7 +980,8 @@ test('ver_historia_clinica: lo más reciente primero y siempre bajo el tope aunq
 		ctx,
 	);
 	assert.equal(out.truncado, undefined, 'no pasó por el recorte genérico');
-	assert.ok(JSON.stringify(out).length <= hc.TOPE_TOTAL + 300);
+	assert.ok(resumir.largoDatos(out) <= hc.TOPE_TOTAL + 300);
+	assert.ok(JSON.stringify(out).length <= 9000, 'con comoResponder, debajo del tope de limitarJson');
 	const signos = out.secciones.find((s) => s.seccion === 'signos_vitales');
 	assert.equal(signos.hasta, '2026-01-30');
 	assert.equal(signos.total, 30);
@@ -991,7 +994,7 @@ test('ver_historia_clinica: lo más reciente primero y siempre bajo el tope aunq
 	assert.ok(out.secciones.every((s) => s.registros.length >= 1 || s.resumen));
 });
 
-test('ver_historia_clinica: período por defecto vacío trae los últimos registros y lo avisa; con días pedidos, no', async () => {
+test('ver_historia_clinica: período por defecto vacío trae los últimos registros y lo avisa; con días pedidos, solo dice de cuándo es el último', async () => {
 	const porDias = (req) =>
 		req.query?.days === 'all'
 			? { status: 200, body: { success: true, data: [{ FechaControl: '2026-02-23', Observaciones: 'diuresis 4200' }] } }
@@ -1008,8 +1011,8 @@ test('ver_historia_clinica: período por defecto vacío trae los últimos regist
 	stubHttp({ 'GET /api/controles-frecuentes/458887/byDate': porDias });
 	const conDias = await ejecutar('ver_historia_clinica', { secciones: ['signos_vitales'], dias: 2 }, ctx);
 	assert.equal(conDias.secciones[0].registros.length, 0);
-	assert.match(conDias.secciones[0].aviso, /Sin registros/);
-	assert.equal(llamadas.length, 1);
+	assert.match(conDias.secciones[0].aviso, /Sin registros .* El último es del 2026-02-23: con todas: true se ven\./);
+	assert.deepEqual(llamadas.map((l) => l.query.days), [2, 'all']);
 });
 
 test('ver_evoluciones larga: nunca el corte genérico; resumen por profesional, la última con más texto, ids y _propio', async () => {
@@ -1029,7 +1032,7 @@ test('ver_evoluciones larga: nunca el corte genérico; resumen por profesional, 
 	const ctx = ctxBase({ foco: focoSanabria() });
 	const out = await ejecutar('ver_evoluciones', { todas: true }, ctx);
 	assert.equal(out.muestra, undefined, 'no pasó por el recorte genérico');
-	assert.ok(JSON.stringify(out).length <= 4000, `ve ${JSON.stringify(out).length} chars`);
+	assert.ok(resumir.largoDatos(out) <= 4000, `ve ${resumir.largoDatos(out)} chars`);
 	assert.equal(out.total, 40);
 	assert.equal(out.resumido, true);
 	assert.equal(out.resumen.totalItems, 2);
@@ -1069,6 +1072,20 @@ test('ver_evoluciones ultimas: cantidad sin importar la fecha, y de las copiadas
 	assert.equal(out.registros[1].lineasIgualesALaSiguiente, 4);
 	assert.equal(out.registros[2].Evolucion, 'pasa a sala de clínica médica');
 	assert.match(out.formato, /solo lo que dicen distinto/);
+	assert.match(out.comoResponder, /copiloto clínico/);
+});
+
+test('ver_evoluciones con días pedidos y sin evoluciones: dice de cuándo es la última, sin traerlas', async () => {
+	stubHttp({
+		'GET /api/evoluciones/458887/byDate': (req) =>
+			req.query.days === 'all'
+				? { status: 200, body: { success: true, data: [{ FechaEv: '2026-02-22', HoraEv: '18:29', Evolucion: 'Estable' }] } }
+				: { status: 200, body: { success: true, data: [] } },
+	});
+	const out = await ejecutar('ver_evoluciones', { dias: 7 }, ctxBase({ foco: focoSanabria() }));
+	assert.equal(out.registros.length, 0);
+	assert.match(out.aviso, /La última es del 2026-02-22: con ultimas se ven\./);
+	assert.equal(out.comoResponder, undefined);
 });
 
 test('resumen_internacion: sin evoluciones en el período por defecto trae las últimas', async () => {

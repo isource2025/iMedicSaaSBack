@@ -7,6 +7,7 @@
 const httpInterno = require('./httpInterno');
 const clinica = require('./clinica');
 const resumir = require('./resumir');
+const { COMO_RESPONDER } = require('./analisisClinico');
 
 const CATEGORIAS_IMC = [
 	[18.5, 'bajo peso'],
@@ -102,7 +103,7 @@ const SECCIONES = Object.freeze({
 		},
 		// Viaja con el resumen y no en el prompt: solo cuando hay signos que analizar.
 		comoUsar:
-			'Para analizar la evolución usá resumen.tendencia: ya trae por variable los días fuera de rango, el peor valor con fecha y el último día (respetá esos números y fechas, no los recalcules ni copies porDia o fueraDeRango enteros). Primero lo que estuvo fuera de rango, después lo que estuvo en rango, y cerrá con cómo está el último día. No digas «estable» ni «sin anomalías» si hubo valores fuera de rango. No concluyas respuesta al tratamiento, hidratación ni función de órganos, y no recomiendes conductas. Si hay aviso de que no hay registros recientes, decilo al principio.',
+			'Estos son los controles de enfermería (todos los registros). Si pidió signos o controles de enfermería, la tabla de Tendencias es resumen.tablaTendencias tal cual (sin cambiar valores ni fechas; podés sumar filas de glucemia o balance de otras fuentes) y las Alertas salen de su columna Lectura; no uses signosEnEvoluciones. Para analizar la evolución usá resumen.tendencia: ya trae por variable los días fuera de rango, el peor valor con fecha y el último día (respetá esos números y fechas, no los recalcules ni copies porDia o fueraDeRango enteros). Primero lo que estuvo fuera de rango, después lo que estuvo en rango, y cerrá con cómo está el último día. No digas «estable» ni «sin anomalías» si hubo valores fuera de rango. Respuesta al tratamiento, hidratación o función de órganos no son datos registrados: si los inferís, van en «Para considerar». Si hay aviso de que no hay registros recientes, decilo al principio.',
 	},
 	medicacion: {
 		titulo: 'Medicación suministrada',
@@ -220,23 +221,28 @@ async function leerSeccion(nombre, nv, args, ctx) {
 	let filas = resumir.recientesPrimero(resumir.filasDe(r.body));
 	if (sec.enriquecer) filas = filas.map(sec.enriquecer);
 	let fueraDePeriodo;
-	// Sin fecha ni días pedidos, un período por defecto vacío no significa «sin registros»: se traen los últimos.
-	if (!filas.length && query && query.days !== 'all' && !args.fecha && !args.dias) {
+	let ultimo;
+	// Un período vacío no significa «sin registros»: sin fecha ni días pedidos se traen los últimos;
+	// con período pedido se respeta, pero se dice de cuándo es el último.
+	if (!filas.length && query && query.days !== 'all') {
 		const todo = await pedir({ ...query, days: 'all' });
 		const filasTodo = todo.status < 400 ? resumir.recientesPrimero(resumir.filasDe(todo.body)) : [];
-		if (filasTodo.length) {
-			filas = filasTodo;
+		if (filasTodo.length && !args.fecha && !args.dias) {
+			filas = sec.enriquecer ? filasTodo.map(sec.enriquecer) : filasTodo;
 			fueraDePeriodo = `No hay registros en los últimos ${query.days} días; se muestran los más recientes de la internación.`;
 			query = { ...query, days: 'all' };
+		} else if (filasTodo.length) {
+			ultimo = resumir.fechadorDe(filasTodo)?.(filasTodo[0]);
 		}
 	}
 	const periodo = query ? (query.days === 'all' ? 'toda la internación' : `${query.days} días hasta ${query.date}`) : 'toda la internación';
+	const vacio = `Sin registros de ${sec.titulo.toLowerCase()} (${periodo}).${ultimo ? ` El último es del ${ultimo.slice(0, 10)}: con todas: true se ven.` : ''}`;
 	return {
 		seccion: nombre,
 		titulo: sec.titulo,
 		periodo,
 		filas,
-		aviso: filas.length ? fueraDePeriodo : `Sin registros de ${sec.titulo.toLowerCase()} (${periodo}).`,
+		aviso: filas.length ? fueraDePeriodo : vacio,
 	};
 }
 
@@ -259,12 +265,21 @@ function presentarSecciones(leidas, total) {
 			presupuesto,
 		);
 		const { aviso, ...resto } = s;
-		const comoUsar = vista.resumen?.tendencia && sec.comoUsar;
-		return { ...resto, ...vista, aviso, ...(comoUsar ? { comoUsar } : {}) };
+		return { ...resto, ...vista, aviso };
 	});
 }
 
-async function verHistoriaClinica(args, ctx) {
+/**
+ * Con signos vitales deja la lectura en ctx.signosEnCurso: ver_evoluciones del mismo paso corre en
+ * paralelo y la espera para saber si ya hay tendencia de enfermería (ver clinica.verEvoluciones).
+ */
+function verHistoriaClinica(args, ctx) {
+	const p = leerHistoriaClinica(args, ctx);
+	if (ctx && [].concat(args.secciones || []).includes('signos_vitales')) ctx.signosEnCurso = p.catch(() => null);
+	return p;
+}
+
+async function leerHistoriaClinica(args, ctx) {
 	const nv = parseInt(args.numeroVisita, 10);
 	const pedidas = [...new Set((Array.isArray(args.secciones) ? args.secciones : [args.secciones]).map(String))];
 	const validas = pedidas.filter((s) => SECCIONES[s]);
@@ -290,11 +305,17 @@ async function verHistoriaClinica(args, ctx) {
 	const desconocidas = pedidas.filter((s) => !SECCIONES[s]);
 	if (desconocidas.length) avisos.push(`Secciones que no existen: ${desconocidas.join(', ')}.`);
 	resumir.recortarAlTope(secciones, presupuesto + MARGEN_TOPE);
+	// Instrucción y no datos: va después del recorte para no quitarle lugar a los registros.
+	for (const s of secciones) if (s.resumen?.tendencia && SECCIONES[s.seccion].comoUsar) s.comoUsar = SECCIONES[s.seccion].comoUsar;
+	const conTendencia = secciones.some((s) => s.resumen?.tendencia);
+	if (conTendencia && ctx) ctx.tendenciaSignos = true;
+	const analizable = conTendencia || secciones.filter((s) => s.total > 0).length > 1;
 	const out = {
 		numeroVisita: nv,
 		secciones,
 		resumido: secciones.some((s) => s.resumido) || undefined,
 		aviso: avisos.length ? avisos.join(' ') : undefined,
+		comoResponder: analizable && !args.enResumen ? COMO_RESPONDER : undefined,
 		link: clinica.linkSeccion(nv, SECCIONES[elegidas[0]].seccionFront),
 	};
 	resumir.consumirDelTurno(ctx, out);

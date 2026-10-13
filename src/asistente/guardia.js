@@ -8,6 +8,7 @@ const hc = require('./historiaClinica');
 const resumir = require('./resumir');
 const censo = require('./censo');
 const ficha = require('./ficha');
+const { COMO_RESPONDER } = require('./analisisClinico');
 
 const MAX_PASE = 30;
 const MAX_LISTA = 60;
@@ -128,7 +129,7 @@ async function resumenInternacion(args, ctx) {
 	const sinPermiso = (codigo) => ({ error: `Sin permiso (${codigo}).` });
 	const [evoluciones, indicaciones, estudios, historia] = await Promise.all([
 		puede(ctx, 'INTERNACION.EVOLUCIONES.VER')
-			? clinica.verEvoluciones({ numeroVisita: nv, dias: args.dias, diasDefault: 3 }, conPresupuesto(ctx, 1500)).catch((e) => ({ error: e.message }))
+			? clinica.verEvoluciones({ numeroVisita: nv, dias: args.dias, diasDefault: 3, enResumen: true }, conPresupuesto(ctx, 1500)).catch((e) => ({ error: e.message }))
 			: sinPermiso('INTERNACION.EVOLUCIONES.VER'),
 		puede(ctx, 'INTERNACION.INDICACIONES.VER')
 			? clinica.verIndicaciones({ numeroVisita: nv }, ctx).catch((e) => ({ error: e.message }))
@@ -136,7 +137,7 @@ async function resumenInternacion(args, ctx) {
 		puede(ctx, 'INTERNACION.ESTUDIOS.VER')
 			? clinica.verEstudios({ numeroVisita: nv, filtro: 'todos' }, ctx).catch((e) => ({ error: e.message }))
 			: sinPermiso('INTERNACION.ESTUDIOS.VER'),
-		hc.verHistoriaClinica({ numeroVisita: nv, secciones: SECCIONES_RESUMEN }, conPresupuesto(ctx, 1800)).catch((e) => ({ error: e.message })),
+		hc.verHistoriaClinica({ numeroVisita: nv, secciones: SECCIONES_RESUMEN, enResumen: true }, conPresupuesto(ctx, 1800)).catch((e) => ({ error: e.message })),
 	]);
 
 	const out = {
@@ -148,6 +149,7 @@ async function resumenInternacion(args, ctx) {
 		historiaClinica: (historia?.secciones || []).map(sinLink),
 		resumido: Boolean(evoluciones?.resumido || historia?.resumido) || undefined,
 		aviso: r.aviso,
+		comoResponder: COMO_RESPONDER,
 		link: clinica.linkSeccion(nv, 'evoluciones'),
 	};
 	resumir.consumirDelTurno(ctx, out);
