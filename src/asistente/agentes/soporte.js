@@ -11,7 +11,7 @@ const HERRAMIENTAS = Object.freeze([
 	def({
 		name: 'buscar_en_manual',
 		description:
-			'Busca en el manual de iMedic cómo se hace una tarea o dónde está una pantalla. Usala cuando pregunten "cómo", "dónde" o "para qué sirve".',
+			'Busca en el manual de iMedic cómo se hace una tarea, dónde está una pantalla o por qué algo no aparece. Devuelve artículos con comoLlegar, pasos, problemas frecuentes y si el usuario tiene acceso. Usala cuando pregunten "cómo", "dónde", "para qué sirve" o "no aparece".',
 		permiso: null,
 		modulo: 'SOPORTE',
 		plataforma: true,
@@ -19,7 +19,11 @@ const HERRAMIENTAS = Object.freeze([
 			type: 'object',
 			additionalProperties: false,
 			properties: {
-				pregunta: { type: 'string', description: 'Qué quiere hacer o encontrar el usuario' },
+				pregunta: {
+					type: 'string',
+					description:
+						'Lo que dijo el usuario, con sus palabras. No le agregues un tema que no nombró: si dice «acá», el buscador ya sabe qué pantalla tiene abierta.',
+				},
 			},
 			required: ['pregunta'],
 		},
@@ -133,7 +137,12 @@ function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID] } =
 			: '',
 		'',
 		'## Ayuda y soporte (siempre disponible)',
-		'- “¿Cómo hago…?” / “¿dónde queda…?” / “¿qué es…?”: buscar_en_manual. Contestá con los pasos del artículo; si no hay artículo, decilo y no inventes pasos ni botones.',
+		'- Toda duda de uso del sistema (cómo se hace, dónde está, qué es, contraseña, sesión, menú): llamá buscar_en_manual ANTES de responder. Nunca contestes de memoria ni mandes a «soporte» sin buscar.',
+		'- “No aparece”, “se me borró”, “no lo encuentro”: buscar_en_manual (casi siempre es el filtro de fecha/período). diagnosticar es para errores y botones que no deja usar. Si podés leer el dato (ver_*) y existe, decile cuándo se cargó y que en la pantalla cambie el día del calendario o el período («Semana», «Todas»).',
+		'- “¿Cómo hago…?” / “¿dónde queda…?” / “¿qué es…?”: buscar_en_manual. Contestá con «comoLlegar» y los «pasos» del artículo, con los nombres de botones tal cual (entre «»). Si no hay artículo, decilo y no inventes pasos ni botones.',
+		'- Si el usuario describe un problema que coincide con un «problemas[].sintoma» del artículo, dale esa causa y la solución.',
+		'- accesible:false = el usuario no tiene permiso para esa pantalla: decíselo y quién se lo habilita, además de los pasos.',
+		'- Si el artículo dice que algo no existe o está por implementar, decilo claro; no sugieras un atajo inventado.',
 		'- “No me deja”, “no veo el botón”, “me da error”, “está en gris”, “no tengo acceso”: diagnosticar con lo que intentaba hacer. Decí la causa concreta que devuelve (permiso que falta y quién lo habilita, el error que vio y qué significa) y el próximo paso. No adivines la causa sin llamarla.',
 		'- Si en la pantalla hay errores recientes o avisos, usalos para entender el problema; no los leas en voz alta si no vienen al caso.',
 		'- Pantallas a las que llega este usuario: listar_pantallas.',

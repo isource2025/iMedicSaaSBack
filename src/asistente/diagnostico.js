@@ -3,10 +3,17 @@
  * con sus permisos reales y con los errores que vio en pantalla. Determinístico:
  * el modelo solo explica lo que sale de acá.
  */
-const { MODULOS } = require('../utils/permisos');
+const { MODULOS, todosLosCodigos } = require('../utils/permisos');
 const descripciones = require('../utils/permisosDescripciones');
+const manual = require('./manual');
 
 const MAX_CANDIDATOS = 4;
+
+let codigosMatriz = null;
+function existeEnMatriz(codigo) {
+	if (!codigosMatriz) codigosMatriz = new Set(todosLosCodigos().map((c) => c.codigo));
+	return codigosMatriz.has(codigo);
+}
 
 function norm(s) {
 	return String(s || '')
@@ -164,6 +171,13 @@ function explicarError({ status, mensaje } = {}) {
 	const conocido = CONOCIDOS.find((c) => c.re.test(m));
 	const codigo = m.match(CODIGO_PERMISO)?.[1] || null;
 	if (conocido) return { causa: conocido.causa, explicacion: conocido.explicacion, permiso: codigo };
+	if (codigo && !existeEnMatriz(codigo)) {
+		return {
+			causa: 'permiso_inexistente',
+			explicacion: `El servidor pide ${codigo}, que no existe en la Matriz de permisos: ningún rol lo puede otorgar. Es una falla del sistema.`,
+			permiso: codigo,
+		};
+	}
 	if (codigo) {
 		return {
 			causa: 'permiso',
@@ -171,6 +185,7 @@ function explicarError({ status, mensaje } = {}) {
 			permiso: codigo,
 		};
 	}
+	if (status === undefined || status === null || status === '') return { causa: null, explicacion: null, permiso: null };
 	return { ...explicarStatus(status), permiso: null };
 }
 
@@ -197,7 +212,7 @@ function diagnosticar(args, ctx) {
 		errores.unshift({ origen: 'usuario', mensaje: String(args.error).slice(0, 300), ...explicarError({ mensaje: args.error }) });
 	}
 
-	const porError = errores.map((e) => e.permiso).filter(Boolean);
+	const porError = errores.filter((e) => e.causa !== 'permiso_inexistente').map((e) => e.permiso).filter(Boolean);
 	const vistos = new Set();
 	const lista = [];
 	for (const codigo of porError) {
@@ -222,8 +237,9 @@ function diagnosticar(args, ctx) {
 	const ajeno = errores.some((e) => e.causa === 'registro_ajeno');
 	let conclusion;
 	if (ajeno) conclusion = 'registro_ajeno';
+	else if (errores.some((e) => e.causa === 'permiso_inexistente')) conclusion = 'permiso_inexistente';
 	else if (delError.some((p) => !p.tiene)) conclusion = 'falta_permiso';
-	else if (errores.length && errores[0].causa !== 'permiso') conclusion = errores[0].causa;
+	else if (errores[0]?.causa && errores[0].causa !== 'permiso') conclusion = errores[0].causa;
 	else if (!lista.length) conclusion = 'sin_coincidencia';
 	else if (!lista.some((p) => p.tiene)) conclusion = 'falta_permiso';
 	else conclusion = 'tiene_los_permisos';
@@ -232,7 +248,9 @@ function diagnosticar(args, ctx) {
 		falta_permiso: quienHabilita(ctx),
 		registro_ajeno: 'No es un problema de permisos: pedile al profesional que lo cargó que lo corrija, o a un administrador clínico.',
 		tiene_los_permisos:
-			'Tiene los permisos. Si igual no le deja: puede ser un registro de otro profesional, una visita egresada o un dato obligatorio vacío. Buscá el artículo del manual o pedile el mensaje exacto del error.',
+			'Tiene los permisos. Si igual no le deja: puede ser un registro de otro profesional, una visita egresada o un dato obligatorio vacío; si «no aparece» o «se borró», casi siempre es el filtro de fecha/período («Hoy»). Buscá el artículo del manual o pedile el mensaje exacto del error.',
+		permiso_inexistente:
+			'No lo resuelve un administrador de la clínica: hay que avisar a soporte técnico de iMedic con la pantalla y el mensaje. Si existe, ofrecé el camino alternativo del manual.',
 		sin_coincidencia: 'No reconocí la acción en la matriz de permisos: preguntale qué pantalla y qué botón usaba.',
 	};
 
@@ -245,7 +263,16 @@ function diagnosticar(args, ctx) {
 		errores: errores.length ? errores.slice(0, 5) : undefined,
 		alertas: ctx?.pantalla?.alertas?.length ? ctx.pantalla.alertas : undefined,
 		deshabilitados: ctx?.pantalla?.deshabilitados?.length ? ctx.pantalla.deshabilitados : undefined,
+		manual: articuloRelacionado(accion, ctx),
 	};
+}
+
+/** Artículo con los problemas frecuentes de esa acción en esa pantalla (filtro de período, autoría…). */
+function articuloRelacionado(accion, ctx) {
+	if (!accion) return undefined;
+	const hits = manual.buscar(accion, 1, { ruta: ctx?.pantalla?.url || ctx?.req?.body?.rutaActual });
+	const [a] = manual.paraModelo(hits, 1800);
+	return a?.problemas?.length ? { titulo: a.titulo, path: a.path, problemas: a.problemas } : undefined;
 }
 
 module.exports = { diagnosticar, candidatos, explicarError, explicarStatus };

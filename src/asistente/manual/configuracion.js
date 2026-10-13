@@ -1,0 +1,203 @@
+/**
+ * Manual: inicio, personal, roles y permisos, perfil, usuarios, catálogos y temas generales
+ * (login, sesión, menú, barra flotante, asistente IA y problemas frecuentes).
+ */
+module.exports = [
+	{
+		id: 'inicio',
+		titulo: 'Inicio (panel de control)',
+		path: '/dashboard',
+		modulo: 'DASHBOARD',
+		comoLlegar: 'Menú: Inicio.',
+		permisos: ['DASHBOARD.INICIO.VER'],
+		tags: ['inicio', 'panel', 'panel de control', 'resumen', 'tablero', 'home', 'actividad reciente'],
+		texto:
+			'Resumen del hospital con tarjetas «Análisis de Camas», «Análisis de Pacientes» y «Actividad Ambulatoria» (cada una abre su análisis), «Actividad Reciente» y accesos a pedidos pendientes, camas libres, agenda del día y consumo de IA.',
+		problemas: [{ sintoma: 'Al entrar me lleva a Mi Perfil y no al Inicio', causa: 'El rol no tiene DASHBOARD.INICIO.VER.' }],
+	},
+	{
+		id: 'personal',
+		titulo: 'Personal (alta de profesionales y usuarios)',
+		path: '/dashboard/personal',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'Menú: Configuración → Personal.',
+		permisos: ['CONFIGURACION.PERSONAL.VER', 'CONFIGURACION.PERSONAL.CREAR', 'CONFIGURACION.PERSONAL.EDITAR'],
+		tags: ['personal', 'alta de personal', 'nuevo medico', 'medico nuevo', 'nuevo enfermero', 'enfermero nuevo', 'profesional nuevo', 'alta un medico', 'alta de un medico', 'crear usuario', 'usuario de acceso', 'matricula', 'firma digital', 'sectores del usuario', 'asignar rol', 'roles del usuario'],
+		texto: 'Fichas del personal del hospital, su usuario de acceso, roles, sectores, firma y códigos de facturación.',
+		pasos: [
+			'Alta: «+ Agregar personal» → pestañas «Datos Personales» («DNI», «Apellido y Nombre», botón «RENAPER»), «Datos Profesionales», «Acceso y roles», «Sectores», «Firma» → «Guardar».',
+			'Usuario: en «Acceso y roles» marcá «Crear usuario de acceso al sistema» → «Usuario», «Contraseña», «Confirmar» y al menos un rol.',
+			'Cambiar roles: menú de la fila → «Roles del usuario» → marcá roles y el «Rol principal» → «Guardar». Los permisos de varios roles se suman.',
+			'Sectores del usuario: menú → «Sectores».',
+			'«Actualizar desde base física» trae cambios del sistema local del hospital.',
+		],
+		problemas: [
+			{ sintoma: '«Marcá al menos un rol»', causa: 'Todo usuario necesita un rol.' },
+			{ sintoma: '«La contraseña debe tener al menos 4 caracteres» / «Las contraseñas no coinciden»', causa: 'Reglas de contraseña.' },
+			{ sintoma: '«DNI inválido» / «Matrícula inválida» / «No puede ser futura»', causa: 'Revisá los datos de la ficha.' },
+		],
+	},
+	{
+		id: 'matriz-permisos',
+		titulo: 'Matriz de permisos (roles)',
+		path: '/dashboard/configuracion/permisos',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'Menú: Configuración → Matriz de permisos.',
+		permisos: ['CONFIGURACION.ROLES.VER', 'CONFIGURACION.ROLES.CREAR', 'CONFIGURACION.ROLES.EDITAR'],
+		tags: ['permisos', 'permiso', 'rol', 'roles', 'crear rol', 'nuevo rol', 'duplicar rol', 'habilitar permiso', 'dar permiso', 'matriz', 'acceso'],
+		texto:
+			'Roles de la clínica y los permisos de cada uno. Los roles del sistema son de solo lectura: se duplican para armar uno a medida. Los cambios le llegan al usuario en su próxima carga (unos minutos).',
+		pasos: [
+			'Crear: «+ Nuevo rol» → «Nombre» (mínimo 3 letras), «Partir de» → «Crear rol».',
+			'Editar: elegí un rol propio → marcá los permisos («Buscar permiso o módulo…») → «Guardar cambios».',
+			'Rol del sistema: «Duplicar» y editá la copia.',
+			'Pestaña «Usuarios» muestra quién tiene el rol; «Historial» los cambios.',
+		],
+		problemas: [
+			{ sintoma: '«Rol del sistema: sólo lectura…»', causa: 'Usá «Duplicar».' },
+			{ sintoma: '«No podés otorgar un permiso que no tenés»', causa: 'Solo se otorgan permisos que el propio usuario tiene.' },
+			{ sintoma: '«La creación de roles personalizados todavía no está habilitada para esta clínica.»', causa: 'Hay que pedirlo a soporte de iMedic.' },
+			{ sintoma: 'Ya le di el permiso y sigue sin poder', causa: 'Tarda unos minutos o hasta que recargue la página / vuelva a iniciar sesión.' },
+		],
+	},
+	{
+		id: 'consumo-ia',
+		titulo: 'Consumo IA',
+		path: '/dashboard/configuracion/consumo-ia',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'Menú: Configuración → Consumo IA (o tarjeta en Inicio).',
+		permisos: ['CONFIGURACION.CONSUMO_IA.VER'],
+		tags: ['consumo ia', 'costo ia', 'tokens', 'gasto asistente', 'uso de ia'],
+		texto: 'Costo real del asistente y de la epicrisis IA por período, usuario, herramienta y mensaje, con proyección mensual.',
+	},
+	{
+		id: 'perfil',
+		titulo: 'Mi Perfil y cambiar contraseña',
+		path: '/dashboard/profile',
+		modulo: 'USUARIO',
+		comoLlegar: 'Menú: Mi Perfil (siempre visible).',
+		permisos: ['USUARIO.PERFIL.VER'],
+		tags: ['perfil', 'mi perfil', 'contrasena', 'cambiar contrasena', 'clave', 'cambiar clave', 'mis datos', 'mi produccion'],
+		texto: 'Pestañas «Mis Datos» (solo lectura), «Mi Producción» (con USUARIO.PRODUCCION.VER) y «Seguridad».',
+		pasos: ['Contraseña: «Seguridad» → «Contraseña actual», «Contraseña nueva» (mínimo 4 caracteres), «Repetir contraseña nueva» → «Cambiar contraseña».'],
+		problemas: [
+			{ sintoma: '«La contraseña nueva tiene que ser distinta de la actual»', causa: 'Elegí otra.' },
+			{ sintoma: '«La confirmación no coincide con la contraseña nueva»', causa: 'Las dos nuevas tienen que ser iguales.' },
+			{ sintoma: 'Quiero corregir mis datos personales', causa: '«Mis Datos» no se edita: lo hace un administrador en Configuración → Personal.' },
+		],
+	},
+	{
+		id: 'admin-usuarios',
+		titulo: 'Administración de usuarios',
+		path: '/dashboard/admin/users',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'No está en el menú: link directo. Lo habitual es usar Configuración → Personal.',
+		permisos: [],
+		tags: ['usuarios', 'nuevo usuario', 'resetear contrasena', 'blanquear clave', 'cambiar contrasena de otro', 'asignar sector'],
+		texto:
+			'Listado de usuarios con «Nuevo Usuario», «Cambiar Contraseña» de un usuario y «Gestionar Sectores». Para crear usuarios, blanquear contraseñas o asignar sectores usá Configuración → Personal («Cuenta de acceso», «Sectores»).',
+		problemas: [
+			{
+				sintoma: '«Permiso requerido: CONFIGURACION.USUARIOS…»',
+				causa: 'Ese permiso no existe en la Matriz, así que ningún rol lo puede otorgar: hacelo desde Configuración → Personal o derivá a soporte técnico.',
+			},
+		],
+	},
+	{
+		id: 'sectores',
+		titulo: 'Sectores',
+		path: '/dashboard/settings/sectores',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'No está en el menú: link directo.',
+		permisos: [],
+		tags: ['sector', 'sectores', 'nuevo sector', 'crear sector', 'ambulatorio', 'internacion'],
+		texto: 'Alta y edición de sectores: «Nuevo sector» → «Código», «Descripción», «Ambulatorio (A)» / «Internación (I)» / «Ambos (T)» → «Agregar».',
+		problemas: [
+			{
+				sintoma: '«Permiso requerido: CONFIGURACION.SECTORES…» al guardar',
+				causa: 'Ese permiso no existe en la Matriz, así que ningún rol lo puede otorgar: derivá a soporte técnico.',
+			},
+		],
+	},
+	{
+		id: 'servicios',
+		titulo: 'Servicios médicos',
+		path: '/dashboard/settings/servicios',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'No está en el menú: link directo.',
+		permisos: [],
+		tags: ['servicio', 'servicios', 'servicio medico', 'nuevo servicio', 'crear servicio'],
+		texto: 'Catálogo de servicios médicos: «Nuevo servicio» → «Código», «Descripción» → «Agregar».',
+		problemas: [
+			{
+				sintoma: '«Permiso requerido: CONFIGURACION.SECTORES…» al guardar',
+				causa: 'Ese permiso no existe en la Matriz, así que ningún rol lo puede otorgar: derivá a soporte técnico.',
+			},
+		],
+	},
+	{
+		id: 'login',
+		titulo: 'Iniciar sesión, empresa y sector',
+		path: '/dashboard',
+		modulo: 'GENERAL',
+		comoLlegar: 'Pantalla inicial del sistema.',
+		permisos: [],
+		tags: ['login', 'ingresar', 'iniciar sesion', 'no puedo entrar', 'usuario o contrasena incorrectos', 'olvide mi contrasena', 'empresa', 'sector', 'cambiar de sector'],
+		texto:
+			'«Usuario» y «Contraseña» → «Ingresar». Si el usuario trabaja en varias empresas o sectores, se elige en «Seleccionar empresa» / «Seleccionar sector». Para cambiar de sector hay que cerrar sesión y volver a entrar.',
+		problemas: [
+			{ sintoma: '«Usuario o contraseña incorrectos»', causa: 'Revisá mayúsculas; si no la recordás, un administrador la cambia.' },
+			{ sintoma: '«¿Olvidó su contraseña?» no hace nada', causa: 'No hay recuperación automática: la blanquea un administrador (Personal o Administración de usuarios).' },
+			{ sintoma: '«Error de conexión…»', causa: 'Problema de red o del servidor; reintentá en unos minutos.' },
+		],
+	},
+	{
+		id: 'sesion',
+		titulo: 'Sesión vencida o cerrada por inactividad',
+		path: '/dashboard',
+		modulo: 'GENERAL',
+		comoLlegar: '—',
+		permisos: [],
+		tags: ['sesion', 'sesion finalizada', 'se cerro la sesion', 'me saco', 'inactividad', 'vencio', 'expiro', 'me deslogueo'],
+		texto:
+			'Tras 30 minutos sin actividad (puede variar por clínica) aparece «Sesión finalizada — Por inactividad, cerramos tu sesión para proteger la información clínica.» → «Iniciar sesión». Lo que no se guardó se pierde.',
+	},
+	{
+		id: 'menu',
+		titulo: 'No veo un menú o una pantalla',
+		path: '/dashboard',
+		modulo: 'GENERAL',
+		comoLlegar: 'Menú lateral izquierdo.',
+		permisos: [],
+		tags: ['no veo el menu', 'no aparece el menu', 'menu', 'falta una opcion', 'pantalla en blanco', 'no tengo acceso', 'sin rol', 'barra lateral'],
+		texto:
+			'El menú muestra solo lo que permiten tus roles. Sin rol solo ves Inicio, Mi Perfil y Cerrar sesión. Algunas pantallas (Producción del Hospital, Administración de usuarios, Sectores, Servicios, análisis de camas/pacientes/turnos) no están en el menú y se abren por link o desde Inicio.',
+		problemas: [
+			{ sintoma: 'Convenios, Estadísticas, Ocupación o Tabla de Turnos dan página no encontrada', causa: 'Esas opciones del menú todavía no tienen pantalla.' },
+			{ sintoma: 'Falta una opción que antes veía', causa: 'Cambiaron tus roles o permisos; consultá con quien administra la Matriz de permisos.' },
+		],
+	},
+	{
+		id: 'barra-flotante',
+		titulo: 'Barra de acciones rápidas (derecha)',
+		path: '/dashboard',
+		modulo: 'GENERAL',
+		comoLlegar: 'Pestaña en el borde derecho: «Mostrar acciones rápidas».',
+		permisos: [],
+		tags: ['notificaciones', 'campanita', 'acciones rapidas', 'barra derecha', 'pedidos libres'],
+		texto:
+			'«Notificaciones» (pedidos de estudios e interconsultas libres de tu servicio), «Buscar paciente» y el Asistente IA. En la ficha de una cama suma «Reporte de enfermería», «Resultados de laboratorio» y «Archivos adjuntos».',
+	},
+	{
+		id: 'asistente',
+		titulo: 'Cómo usar el asistente IA',
+		path: '/dashboard',
+		modulo: 'GENERAL',
+		comoLlegar: 'Botón «IA» abajo a la derecha o Ctrl+Shift+K.',
+		permisos: [],
+		tags: ['asistente', 'ia', 'inteligencia artificial', 'chat', 'confirmar y guardar', 'aplicar en el campo', 'dictar'],
+		texto:
+			'Responde dudas, busca datos y prepara cargas. Nunca guarda solo: muestra una tarjeta «Revisá antes de guardar» con «Confirmar y guardar» o «Cancelar». Los textos para un formulario abierto llegan como «Aplicar en el campo» y después hay que guardar el formulario como siempre.',
+		problemas: [{ sintoma: '«El campo ya no está en pantalla…»', causa: 'Abrí el formulario y pedilo de nuevo.' }],
+	},
+];

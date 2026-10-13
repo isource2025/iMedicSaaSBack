@@ -164,7 +164,7 @@ Tools (5):
 
 | Tool | CRUD | Efecto |
 |---|---|---|
-| `buscar_en_manual` | R | Artículos de `manual.js` |
+| `buscar_en_manual` | R | Artículos del manual (`manual/*.js`): cómo llegar, pasos, problemas frecuentes y si el usuario tiene acceso |
 | `listar_pantallas` | R | Rutas permitidas al usuario |
 | `diagnosticar` | R | Por qué no puede hacer algo: permisos reales vs. la acción, errores recientes y botones deshabilitados de su pantalla |
 | `navegar` | C | Link `/dashboard/…` (bloquea super-admin) |
@@ -176,9 +176,31 @@ Determinístico: el modelo solo explica lo que devuelve.
 
 - **Errores primero:** si un error de la pantalla trae `Permiso requerido: X.Y.Z` (lo manda `requirePermiso`), ese es el permiso. Mensajes conocidos (registro ajeno, sesión vencida, visita egresada, duplicado) tienen su explicación; si no, se explica por status (401/403/404/409/400/5xx/sin respuesta).
 - **Si no hay error:** la acción («exportar la tabla de internación») se puntúa contra la matriz (`utils/permisos` + `permisosDescripciones`) por tema (submódulo, sinónimos) y verbo (ver, cargar, egresar, trasladar, exportar…). Solo quedan los empatados arriba.
-- **Conclusión:** `falta_permiso`, `tiene_los_permisos`, `registro_ajeno`, `sesion`, `servidor`, `sin_coincidencia`… con `proximoPaso` (quién lo habilita: el propio usuario si tiene `CONFIGURACION.ROLES.EDITAR`, si no un administrador en la Matriz de permisos).
+- **Conclusión:** `falta_permiso`, `tiene_los_permisos`, `registro_ajeno`, `permiso_inexistente`, `sesion`, `servidor`, `sin_coincidencia`… con `proximoPaso` (quién lo habilita: el propio usuario si tiene `CONFIGURACION.ROLES.EDITAR`, si no un administrador en la Matriz de permisos).
+- **`permiso_inexistente`:** el 403 pide un código que no está en la matriz (hoy `CONFIGURACION.USUARIOS.*` en `/api/users` y `CONFIGURACION.SECTORES.*` en alta/edición de sectores y servicios). Ningún rol lo puede tener: va a soporte técnico, no al admin de la clínica.
+- **Manual:** adjunta los «problemas frecuentes» del artículo que corresponde a la acción y la pantalla (filtro de período, autoría…).
+- El texto libre del usuario sin status no se interpreta como falla de red.
 
-El manual (`manual.js`) sigue chico (19 artículos, ~2.900 caracteres para 41 pantallas): es la fase 2.
+### Manual (`manual.js` + `manual/*.js`)
+
+Contenido en `src/asistente/manual/`, un archivo por área (`internacion`, `historiaClinica`, `admision`, `turnos`, `almacenFacturacion`, `configuracion`): 64 artículos relevados del código del front, con las etiquetas tal cual aparecen. Esquema:
+
+```js
+{ id, titulo, path, seccion?, modulo, comoLlegar, permisos: ['MOD.SUB.ACCION'], tags, texto, pasos?: [], problemas?: [{ sintoma, causa }] }
+```
+
+Incluye lo que **no** existe o no anda, para que el asistente no invente atajos: «Cambiar turno» (próx.), «¿Olvidó su contraseña?» sin recuperación, Rendiciones a medio implementar, sin pantalla para cambiar el estado de una cama, opciones del menú sin página (Convenios, Estadísticas, Ocupación, Tabla de Turnos), pantallas fuera del menú.
+
+Motor (`manual.js`):
+
+- **BM25** sobre título y tags (peso 3), síntomas (2), texto, pasos, causas y cómo llegar (1). Normaliza tildes, saca palabras vacías (incluye muletillas de queja: «deja», «anda», «acá») y usa raíces («evoluciones» ≈ «evolucionar»).
+- **Sinónimos** del usuario → términos del manual (clave → contraseña, alta → egreso, reprogramar → cambiar turno, doy → asignar…), a medio peso. Frases de tags («dar turno», «ver camas») suman aparte.
+- **Pantalla actual:** si el usuario tiene abierta una sección de la ficha (`?seccion=dieta`), ese artículo gana las preguntas genéricas («cómo cargo acá», «no me deja»).
+- **`accesible`:** marca (no oculta) los artículos de pantallas a las que el usuario no tiene permiso, con los permisos que piden.
+- **`paraModelo`:** primero y segundo con pasos y problemas, el resto resumido, tope ~3.500 caracteres.
+- `buscar_en_manual` busca con la pregunta del modelo **y** con el mensaje literal del usuario, intercalados (el modelo a veces reescribe «cómo cargo acá» como «cómo cargar una evolución»).
+
+`tests/asistente.manual.test.js` falla si una pantalla real queda sin artículo, si un artículo apunta a una ruta o sección que no existe en el front, o si nombra un permiso que no está en la matriz; también fija el ranking de 18 preguntas reales.
 
 **Probar (cuando haya BD de copia, no Vidal):**
 
@@ -390,7 +412,8 @@ iMedicSaaSBack/src/asistente/
   ficha.js sesion.js pendientes.js
   prompt.js httpInterno.js autoria.js marca.js
   manifiesto.js     índice (oculto al chat)
-  manual.js         artículos de Soporte
+  manual.js         buscador del manual (BM25, raíces, sinónimos, pantalla actual)
+  manual/*.js       artículos por área
   routes.js loop.js openai.js consumo.js
 
 iMedicSaaSBack/scripts/asistente_soporte.js
@@ -426,11 +449,15 @@ node scripts/asistente_evals.js --veces=3    # estabilidad
 node scripts/asistente_evals.js --caso=sanabria
 ```
 
-Casos: «no me deja guardar» con 403 en pantalla, «cómo cargo una evolución», «qué es una epicrisis», «llevame al mapa de camas», exportar sin permiso, Sanabria desde el inicio + estudios hechos, «cómo sigue Sanabria», el incidente Umbert/Miranda, evolución a Meza (tarjeta, sin «cargué») y un turno (módulo no activo).
+Casos: «no me deja guardar» con 403 en pantalla, «cómo cargo una evolución», «qué es una epicrisis», «llevame al mapa de camas», exportar sin permiso, Sanabria desde el inicio + estudios hechos, «cómo sigue Sanabria», el incidente Umbert/Miranda, evolución a Meza (tarjeta, sin «cargué») y un turno (módulo no activo). Manual: reprogramar un turno (no existe: cancelar y dar otro), contraseña olvidada (la blanquea un administrador), «se me borró la evolución» (existe; la oculta el filtro de período), «cómo cargo acá» en Dietas y un 403 con permiso inexistente (soporte técnico).
+
+El arnés imita al front: `pantalla.seccion` sale del `?seccion=` de la ruta.
 
 Correrlas antes de tocar prompts, reglas del orquestador o descripciones de tools. Al agregar un incidente, sumarlo como caso.
 
 12/10/2026 (gpt-4o-mini): 10/10; con `--veces=3`, 29/30. La que falló: la ficha de Sanabria sin el número de visita (el modelo resume la ficha a su manera; se resuelve haciendo que el servidor la arme).
+
+12/10/2026, con el manual nuevo (15 casos): `--veces=3`, 45/45 (~USD 0,04). La ficha de Sanabria sigue pudiendo fallar alguna vez hasta la fase 4.
 
 ## 16. Pruebas ya hechas (Soporte)
 

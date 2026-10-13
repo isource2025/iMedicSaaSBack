@@ -423,6 +423,10 @@ async function verEvoluciones(args, ctx) {
 		periodo,
 		...resumir.presentar(filas, VISTA_EVOLUCIONES, resumir.presupuestoDelTurno(ctx)),
 		aviso: filas.length ? aviso : `No hay evoluciones en ${periodo}.`,
+		enPantalla:
+			filas.length && ctx?.pantalla?.seccion === 'evoluciones'
+				? 'La sección muestra solo el día del calendario y el período elegido («Hoy» por defecto). Si el usuario no ve una, que cambie el día o el período («Semana», «Todas»).'
+				: undefined,
 		link: linkSeccion(nv, 'evoluciones'),
 	};
 	resumir.consumirDelTurno(ctx, out);

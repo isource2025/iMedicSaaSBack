@@ -67,6 +67,17 @@ const ESTUDIOS_SANABRIA = [
 	},
 ];
 
+/** Cargada ayer: si «se borró», es el filtro «Hoy» de la pantalla. */
+const EVOLUCIONES_SANABRIA = [
+	{
+		IdHCEvolucion: 9001,
+		Fecha: '2026-10-11',
+		Hora: '10:30',
+		ProfesionalNombreCompleto: 'EVAL USUARIO',
+		Evolucion: 'Paciente estable, afebril. Buena mecánica ventilatoria. Continúa antibiótico.',
+	},
+];
+
 function respuestaApi(req) {
 	const p = req.path;
 	let m = p.match(/^\/api\/patients\/visitas\/(\d+)\/contexto-clinico$/);
@@ -90,7 +101,8 @@ function respuestaApi(req) {
 	}
 	m = p.match(/^\/api\/solicitudes-estudios\/visita\/(\d+)$/);
 	if (m) return { status: 200, body: { data: Number(m[1]) === 458887 ? ESTUDIOS_SANABRIA : [] } };
-	if (/^\/api\/evoluciones\/\d+\/byDate$/.test(p)) return { status: 200, body: { data: [] } };
+	m = p.match(/^\/api\/evoluciones\/(\d+)\/byDate$/);
+	if (m) return { status: 200, body: { data: Number(m[1]) === 458887 ? EVOLUCIONES_SANABRIA : [] } };
 	if (/^\/api\/indicaciones\/(\d+\/byDate|ultimas\/\d+)$/.test(p)) return { status: 200, body: { data: [] } };
 	return { status: 404, body: { mensaje: `Sin dato de prueba para ${req.method} ${p}` } };
 }
@@ -190,6 +202,70 @@ const CASOS = [
 		],
 	},
 	{
+		id: 'manual-reprogramar',
+		descripcion: 'Función que no existe («Cambiar turno» próx.): lo dice y da el camino real',
+		turnos: [
+			{
+				mensaje: 'cómo reprogramo un turno?',
+				ruta: '/dashboard/turnos/agenda',
+				espera: { tools: ['buscar_en_manual'], texto: [/cancel/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'manual-olvide-clave',
+		descripcion: '«¿Olvidó su contraseña?» no tiene recuperación: la blanquea un administrador',
+		turnos: [
+			{
+				mensaje: 'olvidé mi contraseña, cómo la recupero?',
+				ruta: '/dashboard/profile',
+				espera: { tools: ['buscar_en_manual'], texto: [/administrador/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'manual-se-borro',
+		descripcion: '«Se me borró»: la evolución existe, la oculta el filtro de período',
+		turnos: [
+			{
+				mensaje: 'se me borró la evolución que cargué ayer',
+				ruta: '/dashboard/visita/458887?seccion=evoluciones',
+				espera: {
+					texto: [/per[ií]odo|«?Hoy»?|calendario|filtro|Semana|Todas/i],
+					noTexto: [/no hay evoluciones/i],
+					noTools: ['preparar_evolucion'],
+					pendientes: 0,
+				},
+			},
+		],
+	},
+	{
+		id: 'manual-seccion-abierta',
+		descripcion: 'Pregunta genérica en Dietas: responde con los pasos de Dietas',
+		turnos: [
+			{
+				mensaje: 'cómo cargo acá?',
+				ruta: '/dashboard/visita/458887?seccion=dieta',
+				espera: { tools: ['buscar_en_manual'], texto: [/Agregar dieta/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'soporte-permiso-inexistente',
+		descripcion: '403 con un código que no está en la matriz: soporte técnico, no el admin',
+		permisos: matriz.permisosDeRol('ADMIN'),
+		turnos: [
+			{
+				mensaje: 'no me deja crear un sector nuevo',
+				ruta: '/dashboard/settings/sectores',
+				pantalla: {
+					errores: [{ metodo: 'POST', path: '/api/sectores', status: 403, mensaje: 'Permiso requerido: CONFIGURACION.SECTORES.CREAR', haceSeg: 20 }],
+				},
+				espera: { tools: ['diagnosticar'], texto: [/soporte/i], pendientes: 0 },
+			},
+		],
+	},
+	{
 		id: 'sanabria-desde-inicio',
 		descripcion: 'Caso Sanabria sin estar en el mapa de camas, y estudios hechos',
 		turnos: [
@@ -275,7 +351,13 @@ function argumento(nombre, def) {
 
 function reqFalso({ mensaje, ruta, pantalla, idConversacion, permisos }) {
 	return {
-		body: { mensaje, rutaActual: ruta, idConversacion, pantalla: { url: ruta, ...(pantalla || {}) }, debug: true },
+		body: {
+			mensaje,
+			rutaActual: ruta,
+			idConversacion,
+			pantalla: { url: ruta, seccion: new URLSearchParams(String(ruta).split('?')[1] || '').get('seccion'), ...(pantalla || {}) },
+			debug: true,
+		},
 		headers: { authorization: 'Bearer eval' },
 		ip: '127.0.0.1',
 		idEmpresa: 1,

@@ -5,7 +5,7 @@ const manual = require('./manual');
 
 function responderSinModelo({ texto, permisos, rutaActual }) {
 	const q = String(texto || '').trim();
-	const hits = manual.buscar(q, 3);
+	const hits = manual.buscar(q, 3, { ruta: rutaActual, permisos });
 	const pantallas = manual.pantallasDesdePermisos(permisos);
 	const relacionadas = q
 		? pantallas.filter((p) => {

@@ -38,6 +38,20 @@ function armarUrl(path, query) {
 	return qs ? `${base}?${qs}` : base;
 }
 
+function intercalar(a, b) {
+	const out = [];
+	const vistos = new Set();
+	for (let i = 0; i < Math.max(a.length, b.length); i++) {
+		for (const x of [a[i], b[i]]) {
+			if (x && !vistos.has(x.id)) {
+				vistos.add(x.id);
+				out.push(x);
+			}
+		}
+	}
+	return out;
+}
+
 function agregarLink(ctx, href, etiqueta) {
 	if (!href || !pathConocido(href)) return;
 	if (ctx.navegaciones.some((n) => n.href === href)) return;
@@ -127,10 +141,23 @@ async function resolverYFoco(args, ctx) {
 
 async function ejecutarPlataforma(nombre, args, ctx) {
 	if (nombre === 'buscar_en_manual') {
-		const hits = manual.buscar(args.pregunta || '', 5);
+		const tiene = typeof ctx.tienePermiso === 'function' ? (c) => ctx.tienePermiso(ctx.permisos || [], c) : undefined;
+		const opts = { ruta: ctx.pantalla?.url || ctx.req?.body?.rutaActual, permisos: ctx.permisos, tienePermiso: tiene };
+		const pregunta = String(args.pregunta || '');
+		const literal = String(ctx.req?.body?.mensaje || '').slice(0, 300);
+		// El modelo a veces reescribe la pregunta («cómo cargo acá» → «cómo cargar una evolución»): se intercala con lo que dijo el usuario.
+		const hits =
+			literal && literal !== pregunta
+				? intercalar(manual.buscar(literal, 4, opts), manual.buscar(pregunta, 4, opts)).slice(0, 4)
+				: manual.buscar(pregunta, 4, opts);
 		return hits.length
-			? { articulos: hits }
-			: { articulos: [], aviso: 'No encontré un artículo. Probá listar_pantallas.' };
+			? {
+					articulos: manual.paraModelo(hits),
+					nota: hits.some((h) => h.accesible === false)
+						? 'accesible:false = el usuario no tiene el permiso de esa pantalla: explicale quién se lo habilita (diagnosticar).'
+						: undefined,
+				}
+			: { articulos: [], aviso: 'No hay un artículo para eso: no inventes pasos ni botones. Probá listar_pantallas o preguntale qué pantalla usa.' };
 	}
 	if (nombre === 'listar_pantallas') {
 		const lista = manual.pantallasDesdePermisos(ctx.permisos);

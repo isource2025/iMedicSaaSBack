@@ -1,195 +1,260 @@
 /**
- * Manual operativo de la plataforma. Se indexa en memoria (sin vectores).
- * El modelo busca acá para responder "cómo hago X".
+ * Manual operativo de la plataforma: el contenido vive en ./manual/*.js (un archivo por área)
+ * y acá se indexa en memoria con BM25 sobre raíces de palabras y sinónimos.
+ * El modelo busca acá para responder "cómo hago X", "dónde está Y" o "por qué no me deja".
  */
 const { MODULOS } = require('../utils/permisos');
+const { tienePermiso: tienePermisoBase } = require('../services/permisos.service');
 const rutasFront = require('./rutasFront');
 
-const ARTICULOS = [
-	{
-		id: 'inicio',
-		titulo: 'Panel de inicio',
-		path: '/dashboard',
-		modulo: 'DASHBOARD',
-		tags: ['inicio', 'dashboard', 'resumen', 'métricas', 'ocupacion'],
-		texto: 'El inicio muestra un resumen de ocupación, turnos y actividad. Se abre desde el logo o Dashboard en el menú lateral.',
-	},
-	{
-		id: 'pacientes',
-		titulo: 'Listado de pacientes',
-		path: '/dashboard/patients',
-		modulo: 'ADMISION',
-		tags: ['paciente', 'padron', 'dni', 'historia', 'alta paciente', 'editar paciente'],
-		texto: 'En Admisión → Pacientes se busca por nombre, documento o HC. Desde ahí se crea, edita o abre la ficha. La foto se carga en el formulario de alta/edición.',
-	},
-	{
-		id: 'buscar-hc',
-		titulo: 'Consultar historia clínica',
-		path: '/dashboard/admission/search',
-		modulo: 'ADMISION',
-		tags: ['historia clinica', 'hc', 'visita', 'admision', 'buscar internacion', 'carpeta'],
-		texto: 'Admisión → Consultar Historia Clínica busca visitas por DNI, nombre o fechas. Al abrir una visita se ve el detalle y se puede exportar. El botón flotante de carpeta también busca pacientes.',
-	},
-	{
-		id: 'nueva-admision',
-		titulo: 'Nueva admisión',
-		path: '/dashboard/admission/new',
-		modulo: 'ADMISION',
-		tags: ['admitir', 'internar', 'ingreso', 'nueva admision', 'cama'],
-		texto: 'Admisión → Nueva Admisión inicia un ingreso. Hay que identificar al paciente (o darlo de alta), completar datos de la visita y, si corresponde, asignar cama.',
-	},
-	{
-		id: 'tabla-admisiones',
-		titulo: 'Tabla de admisiones',
-		path: '/dashboard/admission/tables',
-		modulo: 'ADMISION',
-		tags: ['tabla', 'exportar admisiones', 'listado visitas'],
-		texto: 'Admisión → Tabla lista internaciones/admisiones para exportar o revisar en lote.',
-	},
-	{
-		id: 'camas',
-		titulo: 'Gestión de camas',
-		path: '/dashboard/beds',
-		modulo: 'INTERNACION',
-		tags: ['cama', 'ocupacion', 'sector', 'mapa', 'internacion', 'estado cama'],
-		texto: 'Internación → Camas muestra el mapa por sector. Se filtra por estado. Click en una cama abre el detalle clínico. El estado (libre, ocupada, etc.) se cambia desde la cama si se tiene permiso GESTIONAR.',
-	},
-	{
-		id: 'detalle-cama',
-		titulo: 'Detalle de cama / visita',
-		path: '/dashboard/beds',
-		modulo: 'INTERNACION',
-		tags: ['evolucion', 'indicacion', 'epicrisis', 'signos', 'enfermeria', 'interconsulta', 'estudio'],
-		texto: 'Dentro de una cama ocupada están las secciones clínicas: historia, indicaciones, evoluciones, enfermería, signos vitales, medicación, dieta, balance hídrico, estudios, protocolos, procedimientos, movimientos, adjuntos y epicrisis. Cada una pide su permiso.',
-	},
-	{
-		id: 'traslados',
-		titulo: 'Traslados y egreso',
-		path: '/dashboard/beds',
-		modulo: 'INTERNACION',
-		tags: ['traslado', 'cambiar cama', 'egreso', 'alta', 'intercambio'],
-		texto: 'Mover de cama, intercambiar o egresar se hace desde la cama (Movimientos). Hace falta INTERNACION.MOVIMIENTOS.TRASLADAR o GESTIONAR. El egreso no se puede deshacer sin permiso de gestión.',
-	},
-	{
-		id: 'agenda',
-		titulo: 'Agenda de turnos',
-		path: '/dashboard/turnos/agenda',
-		modulo: 'TURNOS',
-		tags: ['turno', 'agenda', 'cita', 'reservar', 'horario', 'profesional'],
-		texto: 'Turnos → Agenda muestra la grilla del profesional. Se elige fecha, servicio o especialidad y se asigna un slot. Los médicos suelen ver solo su matrícula.',
-	},
-	{
-		id: 'admin-turnos',
-		titulo: 'Administración de turnos',
-		path: '/dashboard/turnos/admin',
-		modulo: 'TURNOS',
-		tags: ['cancelar turno', 'reagendar', 'admin turnos', 'sobreturno'],
-		texto: 'Turnos → Admin lista turnos para gestionar (ver, editar, cancelar) según permiso TURNOS.ADMIN.',
-	},
-	{
-		id: 'config-agenda',
-		titulo: 'Configuración de agenda',
-		path: '/dashboard/turnos/configuracion',
-		modulo: 'TURNOS',
-		tags: ['horario atencion', 'cupo', 'recurso', 'configurar agenda'],
-		texto: 'Turnos → Configuración define horarios, recursos y cupos. Pedí TURNOS.CONFIGURACION.EDITAR para cambiarlos.',
-	},
-	{
-		id: 'bandeja-pedidos',
-		titulo: 'Bandeja de pedidos',
-		path: '/dashboard/bandeja-pedidos',
-		modulo: 'INTERNACION',
-		tags: ['estudio', 'interconsulta', 'pedido', 'bandeja'],
-		texto: 'La bandeja junta pedidos de estudios e interconsultas libres para aceptar. También se llega desde el botón de notificaciones.',
-	},
-	{
-		id: 'almacen',
-		titulo: 'Almacén y stock',
-		path: '/dashboard/almacen',
-		modulo: 'ALMACEN',
-		tags: ['stock', 'deposito', 'articulo', 'proveedor', 'orden provision', 'insumo'],
-		texto: 'Almacén tiene pestañas: stock, artículos, proveedores, solicitudes, órdenes, actas, movimientos y configuración. El ajuste de stock pide ALMACEN.STOCK.GESTIONAR.',
-	},
-	{
-		id: 'facturacion',
-		titulo: 'Facturación',
-		path: '/dashboard/billing/rendiciones',
-		modulo: 'FACTURACION',
-		tags: ['rendicion', 'liquidacion', 'convenio', 'obra social', 'factura'],
-		texto: 'Facturación cubre rendiciones y liquidaciones. Las tablas y exports piden FACTURACION.*.EXPORTAR.',
-	},
-	{
-		id: 'personal',
-		titulo: 'Personal',
-		path: '/dashboard/personal',
-		modulo: 'CONFIGURACION',
-		tags: ['usuario', 'medico', 'matricula', 'empleado', 'cuenta', 'firma'],
-		texto: 'Configuración → Personal da de alta profesionales, asigna sectores/servicios, crea cuenta de login y carga firma para PDFs.',
-	},
-	{
-		id: 'permisos',
-		titulo: 'Matriz de permisos',
-		path: '/dashboard/configuracion/permisos',
-		modulo: 'CONFIGURACION',
-		tags: ['rol', 'permiso', 'acceso', 'matriz'],
-		texto: 'Solo ADMIN/SUPER_ADMIN. Ahí se crean roles personalizados y se marcan códigos MODULO.SUBMODULO.ACCION. Los cambios no se aplican a roles de sistema.',
-	},
-	{
-		id: 'consumo-ia',
-		titulo: 'Consumo IA',
-		path: '/dashboard/configuracion/consumo-ia',
-		modulo: 'CONFIGURACION',
-		tags: ['consumo', 'costo', 'tokens', 'openai', 'gasto', 'ia', 'dashboard de consumo'],
-		texto: 'Configuración → Consumo IA muestra el costo real del asistente: total del período, proyección mensual, totalizador por usuario y detalle por mensaje. Pide CONFIGURACION.CONSUMO_IA.VER (ADMIN y SUPER_ADMIN lo tienen).',
-	},
-	{
-		id: 'perfil',
-		titulo: 'Mi perfil',
-		path: '/dashboard/profile',
-		modulo: 'USUARIO',
-		tags: ['password', 'contraseña', 'perfil', 'datos personales'],
-		texto: 'Mi Perfil permite ver datos de la sesión y cambiar la contraseña propia.',
-	},
-	{
-		id: 'asistente',
-		titulo: 'Asistente de la plataforma',
-		path: '/dashboard',
-		modulo: 'DASHBOARD',
-		tags: ['chat', 'bot', 'ayuda', 'asistente'],
-		texto: 'El asistente (botón de chat en la barra flotante derecha) responde cómo usar iMedic y puede consultar o proponer acciones que tu usuario ya tiene permitidas. Las acciones que modifican datos piden confirmación en pantalla.',
-	},
-];
+const ARTICULOS = Object.freeze(
+	[
+		require('./manual/internacion'),
+		require('./manual/historiaClinica'),
+		require('./manual/admision'),
+		require('./manual/turnos'),
+		require('./manual/almacenFacturacion'),
+		require('./manual/configuracion'),
+	].flat(),
+);
+
+const STOP = new Set(
+	(
+		'a al algo como con cual cuando de del desde donde el ella en es esa ese esta este esto hace hacer hay ' +
+		'la las le les lo los mas me mi mis muy no o para pero por porque puedo que quiero se si sin sobre su sus ' +
+		'te tengo tu un una uno y ya yo necesito tenes podes deberia sirve ver usar uso haces hago ' +
+		'deja dejo anda andan funciona funcionan aca aqui ahi alla'
+	).split(' '),
+);
+
+/** Palabras del usuario → términos que usa el manual. */
+const SINONIMOS = {
+	internar: 'admision ingreso',
+	ingresar: 'admision ingreso',
+	alta: 'egreso',
+	externar: 'egreso',
+	cita: 'turno',
+	doy: 'dar asignar',
+	dar: 'asignar',
+	sacar: 'asignar',
+	reprogramar: 'cambiar turno',
+	reagendar: 'cambiar turno',
+	mover: 'traslado',
+	pasar: 'traslado',
+	clave: 'contrasena',
+	password: 'contrasena',
+	pass: 'contrasena',
+	rol: 'permiso',
+	acceso: 'permiso',
+	habilitar: 'permiso',
+	usuario: 'personal usuario',
+	medicamento: 'medicacion',
+	remedio: 'medicacion',
+	droga: 'medicacion',
+	placa: 'rx estudio',
+	radiografia: 'rx estudio',
+	analisis: 'laboratorio',
+	resultado: 'laboratorio estudio',
+	deslogueo: 'sesion',
+	desloguea: 'sesion',
+	echo: 'sesion',
+	pdf: 'exportar imprimir',
+	imprimir: 'pdf',
+	borrar: 'eliminar',
+	borre: 'eliminar',
+	borro: 'eliminar desaparecio',
+	desaparecio: 'no aparece periodo',
+	nota: 'evolucion',
+	presion: 'signos vitales control',
+	fiebre: 'temperatura control',
+	comida: 'dieta',
+	insumo: 'insumos stock',
+	pedido: 'solicitud bandeja',
+	whatsapp: 'conversaciones bot',
+	horario: 'configuracion agenda horarios',
+	licencia: 'ausencia',
+	vacaciones: 'ausencia licencia',
+	medico: 'profesional',
+	doctor: 'profesional medico',
+	enfermera: 'enfermeria',
+	enfermero: 'enfermeria',
+};
 
 function normalizar(s) {
 	return String(s || '')
 		.toLowerCase()
 		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '');
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/ñ/g, 'n');
 }
 
-function score(art, q) {
-	const nq = normalizar(q);
-	if (!nq) return 0;
+const SUFIJOS = [
+	'aciones', 'iciones', 'amientos', 'imientos', 'amiento', 'imiento', 'ciones', 'acion', 'icion', 'cion',
+	'ando', 'iendo', 'adas', 'ados', 'idas', 'idos', 'ada', 'ado', 'ida', 'ido', 'ar', 'er', 'ir', 'es', 'as', 'os', 'a', 'e', 'o', 's',
+];
+
+/** Raíz aproximada: saca un sufijo flexivo y corta a 5 letras ("evoluciones", "evolucionar" → "evolu"). */
+function raiz(palabra) {
+	let w = palabra;
+	for (const s of SUFIJOS) {
+		if (w.length - s.length >= 3 && w.endsWith(s)) {
+			w = w.slice(0, -s.length);
+			break;
+		}
+	}
+	return w.slice(0, 5);
+}
+
+function palabras(s) {
+	return normalizar(s)
+		.split(/[^a-z0-9]+/)
+		.filter((w) => w.length >= 2 && !STOP.has(w));
+}
+
+function tokens(s) {
+	return palabras(s).map(raiz);
+}
+
+const PESO = { titulo: 3, tags: 3, sintoma: 2, texto: 1, pasos: 1, causa: 1, comoLlegar: 1 };
+
+function camposDe(a) {
+	const problemas = a.problemas || [];
+	return {
+		titulo: a.titulo,
+		tags: (a.tags || []).join(' '),
+		texto: a.texto,
+		pasos: (a.pasos || []).join(' '),
+		sintoma: problemas.map((p) => p.sintoma).join(' '),
+		causa: problemas.map((p) => p.causa).join(' '),
+		comoLlegar: a.comoLlegar,
+	};
+}
+
+function construirIndice(articulos) {
+	const docs = articulos.map((a) => {
+		const tf = new Map();
+		let largo = 0;
+		for (const [campo, txt] of Object.entries(camposDe(a))) {
+			const peso = PESO[campo] || 1;
+			for (const t of tokens(txt)) {
+				tf.set(t, (tf.get(t) || 0) + peso);
+				largo += peso;
+			}
+		}
+		const frases = (a.tags || []).map(normalizar).filter((t) => t.includes(' '));
+		return { a, tf, largo, frases };
+	});
+	const df = new Map();
+	for (const d of docs) for (const t of d.tf.keys()) df.set(t, (df.get(t) || 0) + 1);
+	const promedio = docs.reduce((s, d) => s + d.largo, 0) / Math.max(1, docs.length);
+	return { docs, df, promedio, n: docs.length };
+}
+
+let indice = null;
+function idx() {
+	if (!indice) indice = construirIndice(ARTICULOS);
+	return indice;
+}
+
+/** Términos de la pregunta con su peso: los propios valen 1, los sinónimos 0.5. */
+function terminosDe(pregunta) {
+	const out = new Map();
+	const sumar = (t, w) => out.set(t, Math.max(out.get(t) || 0, w));
+	for (const w of palabras(pregunta)) {
+		sumar(raiz(w), 1);
+		const extra = SINONIMOS[w];
+		if (extra) for (const t of tokens(extra)) sumar(t, 0.5);
+	}
+	return out;
+}
+
+const K1 = 1.2;
+const B = 0.75;
+
+function bm25(doc, terminos, { df, promedio, n }) {
 	let s = 0;
-	if (normalizar(art.titulo).includes(nq)) s += 8;
-	if (art.tags.some((t) => normalizar(t).includes(nq) || nq.includes(normalizar(t)))) s += 6;
-	if (normalizar(art.texto).includes(nq)) s += 3;
-	if (normalizar(art.path).includes(nq)) s += 2;
-	const palabras = nq.split(/\s+/).filter((w) => w.length > 2);
-	for (const w of palabras) {
-		if (normalizar(art.titulo).includes(w)) s += 2;
-		if (art.tags.some((t) => normalizar(t).includes(w))) s += 2;
-		if (normalizar(art.texto).includes(w)) s += 1;
+	for (const [t, w] of terminos) {
+		const f = doc.tf.get(t);
+		if (!f) continue;
+		const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
+		s += w * idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * doc.largo) / promedio)));
 	}
 	return s;
 }
 
-function buscar(pregunta, limite = 4) {
-	const ranked = ARTICULOS.map((a) => ({ ...a, score: score(a, pregunta) }))
-		.filter((a) => a.score > 0)
-		.sort((a, b) => b.score - a.score)
-		.slice(0, limite);
-	return ranked.map(({ score: _s, ...rest }) => rest);
+/** "/dashboard/beds/12?seccion=evoluciones" → { base: '/dashboard/beds', seccion: 'evoluciones' }. */
+function pantallaDe(ruta) {
+	const [p, qs = ''] = String(ruta || '').split('?');
+	let base = p.replace(/\/+$/, '') || '';
+	if (/^\/dashboard\/(?:beds\/\d+|visita\/\d+)$/.test(base)) base = '/dashboard/beds';
+	const seccion = new URLSearchParams(qs).get('seccion') || null;
+	return { base, seccion };
+}
+
+function accesible(art, { permisos, tienePermiso } = {}) {
+	if (!art.permisos?.length) return true;
+	if (typeof tienePermiso === 'function') return art.permisos.some((c) => tienePermiso(c));
+	if (Array.isArray(permisos)) return art.permisos.some((c) => tienePermisoBase(permisos, c));
+	return null;
+}
+
+/**
+ * Busca artículos por relevancia. Prioriza la pantalla actual (opts.ruta) y marca
+ * `accesible` según los permisos del usuario (no filtra: el usuario puede preguntar
+ * por algo que todavía no tiene habilitado).
+ */
+function buscar(pregunta, limite = 4, opts = {}) {
+	const ix = idx();
+	const terminos = terminosDe(pregunta);
+	const { base, seccion } = pantallaDe(opts.ruta);
+	if (!terminos.size && !seccion) return [];
+	const q = normalizar(pregunta);
+	const ranked = [];
+	for (const d of ix.docs) {
+		let s = bm25(d, terminos, ix);
+		const enSeccion = Boolean(seccion) && d.a.path === base && d.a.seccion === seccion;
+		if (!s && !enSeccion) continue;
+		s += d.frases.filter((f) => q.includes(f)).length * 1.5;
+		// La sección abierta responde las preguntas genéricas («cómo cargo», «no me deja»).
+		if (enSeccion) s = s * 3 + 1;
+		else if (base && d.a.path === base) s *= 1.2;
+		ranked.push({ a: d.a, s });
+	}
+	ranked.sort((x, y) => y.s - x.s);
+	const tope = ranked[0]?.s || 0;
+	return ranked
+		.filter((r) => r.s >= tope * 0.35)
+		.slice(0, limite)
+		.map(({ a }) => {
+			const acc = accesible(a, opts);
+			return acc === null ? { ...a } : { ...a, accesible: acc };
+		});
+}
+
+/** Versión compacta para el modelo: el primero completo, el resto resumido, dentro de un tope de caracteres. */
+function paraModelo(articulos, maxChars = 3500) {
+	const out = [];
+	let usados = 0;
+	for (const [i, a] of articulos.entries()) {
+		const item = {
+			id: a.id,
+			titulo: a.titulo,
+			comoLlegar: a.comoLlegar,
+			path: a.path + (a.seccion ? `?seccion=${a.seccion}` : ''),
+			texto: a.texto,
+		};
+		if (a.accesible !== undefined) item.accesible = a.accesible;
+		if (a.accesible === false) item.permisos = a.permisos;
+		if (i < 2) {
+			if (a.pasos?.length) item.pasos = a.pasos;
+			if (a.problemas?.length) item.problemas = a.problemas;
+		}
+		const largo = JSON.stringify(item).length;
+		if (out.length && usados + largo > maxChars) break;
+		out.push(item);
+		usados += largo;
+	}
+	return out;
 }
 
 function pantallasDesdePermisos(permisos) {
@@ -199,12 +264,7 @@ function pantallasDesdePermisos(permisos) {
 		if (mod.id === 'PLATAFORMA' && ![...set].some((p) => p.startsWith('PLATAFORMA.'))) continue;
 		for (const sub of mod.submodulos) {
 			if (!sub.path || !rutasFront.existe(sub.path)) continue;
-			const codigoVer = `${mod.id}.${sub.id}.VER`;
-			const codigoCrear = `${mod.id}.${sub.id}.CREAR`;
-			const visible =
-				set.has(codigoVer) ||
-				set.has(codigoCrear) ||
-				[...set].some((p) => p.startsWith(`${mod.id}.${sub.id}.`));
+			const visible = [...set].some((p) => p.startsWith(`${mod.id}.${sub.id}.`));
 			if (!visible) continue;
 			out.push({
 				modulo: mod.label,
@@ -219,5 +279,7 @@ function pantallasDesdePermisos(permisos) {
 module.exports = {
 	ARTICULOS,
 	buscar,
+	paraModelo,
 	pantallasDesdePermisos,
+	_interno: { normalizar, raiz, tokens, terminosDe, pantallaDe },
 };
