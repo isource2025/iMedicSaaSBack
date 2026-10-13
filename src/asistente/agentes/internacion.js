@@ -634,8 +634,9 @@ const PRESENTACION = {
 function instrucciones() {
 	const modo = modoEscritura();
 	return [
-		'Sos el agente de INTERNACIÓN de iMedic. español rioplatense, con voseo (vos, tenés, indicá). Nunca «tú».',
+		'Operás el módulo de INTERNACIÓN de iMedic, con voseo (vos, tenés, indicá). Nunca «tú».',
 		`${PRESENTACION[modo]} No das turnos ni altas de personal.`,
+		'Si el mensaje es un pedido de ayuda sobre una pantalla de internación («cómo cargo una evolución», «no me deja egresar»), resolvelo con las tools de ayuda; usá las de este módulo solo si hace falta un dato del paciente.',
 		'Respondé SOLO lo que se pidió en este mensaje, con el resultado de la tool de este turno. No repitas resúmenes de turnos anteriores.',
 		'',
 		'Método:',

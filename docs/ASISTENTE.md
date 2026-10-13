@@ -14,7 +14,9 @@ Un chat dentro del dashboard (botón flotante). Opera con la **sesión JWT** del
 
 **Lo que falló y se abandonó:** un solo agente genérico (`buscar_codigo` / `llamar_api` / manifiesto). El modelo listaba endpoints o iba a `/pendientes` en vez de `GET …/visita/:id`. Eso se vio con Sanabria (visita 458887): pedía estudios hechos y devolvía la bandeja hospitalaria.
 
-**Modelo actual:** orquestador barato + un especialista por módulo. El chat no elige agente.
+**Modelo actual:** Soporte como **capa base en todos los turnos** + **paquetes por módulo** que el orquestador suma según el mensaje, la pantalla, el foco y el turno anterior. El chat no elige agente.
+
+Antes era «un mensaje = un especialista»: si el router se equivocaba, el usuario quedaba sin las tools que necesitaba. Medido el 12/10/2026, sin pantalla de contexto: «no me deja guardar la evolución», «me da error al cargar un estudio», «qué es una epicrisis» iban a Internación (sin manual), y «dónde está Sanabria» iba a Soporte (sin `buscar_internado`). Con paquetes, el peor error de ruteo es cargar tools de más, nunca de menos.
 
 ---
 
@@ -22,7 +24,7 @@ Un chat dentro del dashboard (botón flotante). Opera con la **sesión JWT** del
 
 | Agente | `LISTO` | Qué hace hoy |
 |---|---|---|
-| **SOPORTE** | **sí** | Manual, pantallas, navegar, escribir en campo. CRUD + chat vivo testeados (`scripts/asistente_soporte.js`). |
+| **SOPORTE** (capa base) | **sí** | Manual, pantallas, navegar, escribir en campo y `diagnosticar` («no me deja / me da error»). Va en todos los turnos. |
 | **INTERNACION** | **no** | 6 tools implementadas y testeadas con mocks (`tests/asistente.internacion.test.js`). Falta correr `scripts/asistente_internacion.js` en copia. Hasta entonces cae a Soporte con aviso. |
 | ADMISION | no | Solo regla de ruteo |
 | TURNOS | no | Solo regla de ruteo |
@@ -41,11 +43,12 @@ Hasta que Internación no ponga `LISTO = true` y pase su script de consola, **no
 Usuario  →  POST /api/asistente/mensaje
                 │
                 ├─ JWT + tenant + permisos
-                ├─ orquestador.resolver(texto, pantalla, agente sticky)
-                │     ├─ si el módulo está LISTO → ese agente
-                │     └─ si no → SOPORTE + aviso
+                ├─ orquestador.resolver(texto, pantalla, foco, paquetes del turno anterior)
+                │     ├─ paquetes = SOPORTE + módulos LISTO detectados
+                │     ├─ ayuda = ¿es «cómo / qué es / no me deja / error»?
+                │     └─ avisos = módulos pedidos que todavía no operan
                 │
-                └─ loop OpenAI (gpt-4o-mini) solo con las tools de ESE agente
+                └─ loop OpenAI (gpt-4o-mini) con las tools de esos paquetes
                        │
                        ├─ GET / mutaciones pendientes
                        │     httpInterno (Bearer de la sesión) → rutas Express reales
@@ -57,9 +60,10 @@ Usuario  →  POST /api/asistente/mensaje
 
 | Pieza | Archivo | Rol |
 |---|---|---|
-| Orquestador | `src/asistente/agentes/orquestador.js` | Clasifica **sin LLM**. Sticky. Fallback si el módulo no está listo. |
-| Agente | `src/asistente/agentes/<modulo>.js` | `ID`, `LISTO`, `HERRAMIENTAS`, `instrucciones()` |
-| Catálogo | `src/asistente/catalogo.js` | El chat **solo** ve tools del agente activo. |
+| Orquestador | `src/asistente/agentes/orquestador.js` | Arma los paquetes del turno **sin LLM** y compone las instrucciones (capa de Soporte + sección por módulo). |
+| Paquete | `src/asistente/agentes/<modulo>.js` | `ID`, `LISTO`, `HERRAMIENTAS`, `instrucciones()` |
+| Catálogo | `src/asistente/catalogo.js` | Une las tools de los paquetes del turno, sin duplicados y respetando las escrituras que bloquea cada uno. |
+| Diagnóstico | `src/asistente/diagnostico.js` | `diagnosticar`: acción del usuario → permisos de la matriz que tiene/no tiene + errores recientes de su pantalla explicados. |
 | Kernel | `sesion.js`, `pendientes.js`, `ficha.js`, `autoria.js`, `marca.js`, `httpInterno.js` | Sesión, foco, Confirmar, autoría JWT, marca IA |
 | Loop | `loop.js` + `controller.js` | Modelo → tools → modelo. Máx. ~10 iteraciones. |
 | Clínico (servidor) | `clinica.js` | `buscarInternacion`, `prepararEgreso`, `verEvoluciones`, etc. Lo usa el agente de Internación. |
@@ -68,11 +72,11 @@ Usuario  →  POST /api/asistente/mensaje
 | Lectura de la HC | `historiaClinica.js` | 13 secciones de la historia clínica para análisis, con el permiso de cada una y por debajo del límite de tamaño. |
 | Front | `iMedicSaaSFront/.../Asistente/` | FAB, stream, tarjetas, `pantalla.ts` (campos + internados visibles) |
 
-**Un mensaje = un especialista.** Nunca dos agentes en paralelo.
+**Un mensaje = Soporte + los paquetes del turno.** Un solo loop, un solo prompt compuesto.
 
-**Sticky:** si el último turno fue Soporte y el usuario dice “y en el inicio qué veo”, no se re-clasifica a otro módulo. Si dice “egresar a Gómez”, las reglas ganan y piden Internación.
+**Sticky:** si el mensaje no nombra ningún módulo («y los de ayer?»), siguen los paquetes del turno anterior; un paciente en foco también mantiene Internación.
 
-**Soporte primero:** “cómo hago…”, “llevame…”, “qué pantallas…” van a Soporte aunque la frase tenga “cama” o “agenda”.
+**Ayuda:** “cómo hago…”, “qué es…”, “no me deja…”, “me da error…” marcan el turno como ayuda: el prompt pide responder eso primero, pero las tools del módulo siguen disponibles si hace falta un dato del paciente.
 
 ---
 
@@ -143,32 +147,38 @@ Cada tool declara `permiso` (código de la matriz). Si el usuario no lo tiene, l
 
 ## 6. Orquestador — reglas
 
-Orden:
+`resolver()` devuelve `{ id, pedido, ayuda, paquetes, avisos }`:
 
-1. `SOPORTE_PRIMERO` (cómo / llevame / pantallas / manual).
-2. Regex por módulo (internación, admisión, turnos, …).
-3. Sticky del `conv.agente` si ese agente está listo.
-4. Módulo de la ruta (`/dashboard/beds` → INTERNACION, `/dashboard/patients` → ADMISION, …).
-5. Default `SOPORTE`.
+1. **Paquetes:** siempre `SOPORTE`, más los módulos que nombra el mensaje (regex por módulo, incluidas «dónde está Sanabria», «cómo sigue Gómez», «el de la 105»), el de la ruta, y —si el mensaje no nombra ninguno— los del turno anterior y el del paciente en foco. Solo entran los `LISTO`.
+2. **Ayuda:** regex de intención (`AYUDA`). Ojo: `\b` de JS no toma «ó» como letra; para palabras con tilde al final se usa `FIN`.
+3. **Avisos:** módulos que el mensaje pide como acción y no están `LISTO` («dame un turno»). Si es ayuda no hay aviso: se explica desde el manual.
+4. **`id`/`pedido`:** el módulo principal (Soporte si es ayuda). Va en la respuesta como `agente`; `paquetes` va aparte.
 
-Si el pedido es INTERNACION y `LISTO === false` → responde Soporte y el prompt dice que ese módulo todavía no está activo.
-
-Al agregar un agente: exportarlo en `orquestador.AGENTES` y prender `LISTO` **solo** cuando el script de consola del módulo cierra en verde.
+Al agregar un módulo: exportarlo en `orquestador.AGENTES` y prender `LISTO` **solo** cuando el script de consola del módulo y las evals cierran en verde.
 
 ---
 
-## 7. Módulo SOPORTE (cerrado)
+## 7. Capa SOPORTE (siempre cargada)
 
-Tools (4):
+Tools (5):
 
 | Tool | CRUD | Efecto |
 |---|---|---|
 | `buscar_en_manual` | R | Artículos de `manual.js` |
 | `listar_pantallas` | R | Rutas permitidas al usuario |
+| `diagnosticar` | R | Por qué no puede hacer algo: permisos reales vs. la acción, errores recientes y botones deshabilitados de su pantalla |
 | `navegar` | C | Link `/dashboard/…` (bloquea super-admin) |
 | `escribir_en_campo` | U | Inserción pendiente → Aplicar. Cancelar = D |
 
-No opera HC. Si piden Sanabria / egreso / estudios, explica que eso es Internación (aún no activo).
+### `diagnosticar` (`diagnostico.js`)
+
+Determinístico: el modelo solo explica lo que devuelve.
+
+- **Errores primero:** si un error de la pantalla trae `Permiso requerido: X.Y.Z` (lo manda `requirePermiso`), ese es el permiso. Mensajes conocidos (registro ajeno, sesión vencida, visita egresada, duplicado) tienen su explicación; si no, se explica por status (401/403/404/409/400/5xx/sin respuesta).
+- **Si no hay error:** la acción («exportar la tabla de internación») se puntúa contra la matriz (`utils/permisos` + `permisosDescripciones`) por tema (submódulo, sinónimos) y verbo (ver, cargar, egresar, trasladar, exportar…). Solo quedan los empatados arriba.
+- **Conclusión:** `falta_permiso`, `tiene_los_permisos`, `registro_ajeno`, `sesion`, `servidor`, `sin_coincidencia`… con `proximoPaso` (quién lo habilita: el propio usuario si tiene `CONFIGURACION.ROLES.EDITAR`, si no un administrador en la Matriz de permisos).
+
+El manual (`manual.js`) sigue chico (19 artículos, ~2.900 caracteres para 41 pantallas): es la fase 2.
 
 **Probar (cuando haya BD de copia, no Vidal):**
 
@@ -324,7 +334,8 @@ No: una tool por pantalla, una tool por handler, ni devolver el manifiesto al mo
 ## 10. Front
 
 - `AsistenteFab.tsx`: chat, stream, navegación, tarjetas Confirmar/Aplicar.
-- `pantalla.ts`: manda campos `c1…`, internados visibles, visita/cama (`data-asistente-*`).
+- `pantalla.ts`: manda campos `c1…`, internados visibles, visita/cama (`data-asistente-*`), y para diagnosticar: `errores` (últimos 5 errores de la API de los últimos 15 min), `alertas` (`role="alert"`) y `deshabilitados` (botones en gris, con su `title`).
+- `erroresRecientes.ts`: buffer en memoria que alimentan el interceptor de `services/axios.ts` y `apiFetch` (`utils/authFetch.ts`). Path sin host ni query y con los números como `:id` (no viaja un DNI ni una visita); excluye `/asistente`. `contexto.pantallaDeBody` lo vuelve a sanear en el backend.
 - `LoaderIa.tsx`: frases por nombre de tool.
 - Consumo: `/dashboard/configuracion/consumo-ia`.
 
@@ -339,7 +350,7 @@ Al agregar tools, sumar etiqueta en `NOMBRES_HERRAMIENTA` / `FRASES_HERRAMIENTA`
 | `ASISTENTE_OPENAI_API_KEY` / `OPENAI_API_KEY` | Cliente |
 | `ASISTENTE_OPENAI_MODEL` / `OPENAI_MODEL` | Default `gpt-4o-mini` |
 | `ASISTENTE_MAX_ITER` | Default 10 |
-| `ASISTENTE_MAX_TOOLS` | Default 24 (Soporte usa 4) |
+| `ASISTENTE_MAX_TOOLS` | Default 32 (Soporte 5 + Internación hasta 20) |
 | `ASISTENTE_TRAZA` | `1` = traza siempre |
 | `ASISTENTE_INTERNACION_ESCRITURA` | sin definir = lectura + altas del menú médico; `1` = todo el CRUD; `0` = solo lectura |
 
@@ -405,7 +416,23 @@ Cada módulo: implementar → test consola CRUD + log → entregar frases al usu
 
 ---
 
-## 15. Pruebas ya hechas (Soporte)
+## 15. Evals: conversaciones de referencia
+
+`scripts/asistente_evals.js` corre conversaciones contra el **modelo real** pasando por `controller.mensaje`, con la base (`models/db`) y la API (`httpInterno`) simuladas en memoria. No abre conexiones SQL (borra `DB_*` del entorno) y rechaza cualquier escritura. Cada caso verifica tools llamadas / no llamadas, argumentos, texto, tarjetas y navegación.
+
+```bash
+node scripts/asistente_evals.js              # todos, una vez (~USD 0,01)
+node scripts/asistente_evals.js --veces=3    # estabilidad
+node scripts/asistente_evals.js --caso=sanabria
+```
+
+Casos: «no me deja guardar» con 403 en pantalla, «cómo cargo una evolución», «qué es una epicrisis», «llevame al mapa de camas», exportar sin permiso, Sanabria desde el inicio + estudios hechos, «cómo sigue Sanabria», el incidente Umbert/Miranda, evolución a Meza (tarjeta, sin «cargué») y un turno (módulo no activo).
+
+Correrlas antes de tocar prompts, reglas del orquestador o descripciones de tools. Al agregar un incidente, sumarlo como caso.
+
+12/10/2026 (gpt-4o-mini): 10/10; con `--veces=3`, 29/30. La que falló: la ficha de Sanabria sin el número de visita (el modelo resume la ficha a su manera; se resuelve haciendo que el servidor la arme).
+
+## 16. Pruebas ya hechas (Soporte)
 
 `node scripts/asistente_soporte.js` (12/10/2026), backend `127.0.0.1:5006`:
 

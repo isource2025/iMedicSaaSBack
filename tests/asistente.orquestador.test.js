@@ -31,7 +31,7 @@ test('sticky: sin cambio de tema se queda en el agente activo listo', () => {
 	);
 });
 
-test('Soporte selecciona exactamente 4 tools', () => {
+test('Soporte selecciona exactamente 5 tools', () => {
 	const names = catalogo
 		.seleccionar({
 			permisos: ['ADMISION.PACIENTES.VER'],
@@ -39,5 +39,8 @@ test('Soporte selecciona exactamente 4 tools', () => {
 			tienePermiso: permisosService.tienePermiso,
 		})
 		.map((h) => h.name);
-	assert.deepEqual(names.sort(), ['buscar_en_manual', 'escribir_en_campo', 'listar_pantallas', 'navegar'].sort());
+	assert.deepEqual(
+		names.sort(),
+		['buscar_en_manual', 'diagnosticar', 'escribir_en_campo', 'listar_pantallas', 'navegar'].sort(),
+	);
 });

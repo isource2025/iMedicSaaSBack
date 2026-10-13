@@ -68,7 +68,7 @@ const OCULTAS = Object.freeze([
 
 const HERRAMIENTAS = Object.freeze([...orquestador.todasHerramientas(), ...AVANZADAS, ...OCULTAS]);
 
-const MAX_TOOLS = Number(process.env.ASISTENTE_MAX_TOOLS || 24);
+const MAX_TOOLS = Number(process.env.ASISTENTE_MAX_TOOLS || 32);
 
 function permitido(h, permisos, check) {
 	if (!h.permiso) return true;
@@ -105,25 +105,41 @@ function bloqueadaPorAgente(h) {
 	return Object.values(orquestador.AGENTES).some((a) => (a.HERRAMIENTAS || []).includes(h) && escrituraBloqueada(h, a));
 }
 
+/**
+ * Tools del turno. `paquetes` (Soporte + módulos) manda sobre `agente`, que queda
+ * para pedir las de un solo agente.
+ */
 function seleccionar({
 	permisos,
 	agente = 'SOPORTE',
+	paquetes,
 	moduloActual,
 	tienePermiso,
 	puedeSql = false,
 	soloLectura = false,
 }) {
 	const check = typeof tienePermiso === 'function' ? tienePermiso : () => false;
-	const spec = orquestador.porId(agente) || orquestador.porId('SOPORTE');
-	const base = spec?.HERRAMIENTAS || [];
-	const permitidas = base.filter(
-		(h) =>
-			!h.descubrimiento &&
-			permitido(h, permisos, check) &&
-			(!h.sql || puedeSql) &&
-			!(soloLectura && esEscritura(h)) &&
-			!escrituraBloqueada(h, spec),
-	);
+	const ids = Array.isArray(paquetes) && paquetes.length ? paquetes : [agente];
+	let specs = ids.map((id) => orquestador.porId(id)).filter(Boolean);
+	if (!specs.length) specs = [orquestador.porId('SOPORTE')];
+	const vistas = new Set();
+	const permitidas = [];
+	for (const spec of specs) {
+		for (const h of spec.HERRAMIENTAS || []) {
+			if (vistas.has(h.name)) continue;
+			vistas.add(h.name);
+			const bloqueada = specs.some((s) => (s.HERRAMIENTAS || []).includes(h) && escrituraBloqueada(h, s));
+			if (
+				!h.descubrimiento &&
+				permitido(h, permisos, check) &&
+				(!h.sql || puedeSql) &&
+				!(soloLectura && esEscritura(h)) &&
+				!bloqueada
+			) {
+				permitidas.push(h);
+			}
+		}
+	}
 	return permitidas.slice(0, MAX_TOOLS);
 }
 

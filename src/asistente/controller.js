@@ -107,11 +107,13 @@ async function prepararTurno(req) {
 		texto: mensaje,
 		moduloRuta: moduloActual,
 		agenteActivo: conv.agente,
+		paquetesActivos: conv.paquetes,
+		foco: conv.foco,
 	});
-	sesion.guardarAgente(conv, ruta.id);
+	sesion.guardarAgente(conv, ruta.id, ruta.paquetes);
 	const herramientas = catalogo.seleccionar({
 		permisos,
-		agente: ruta.id,
+		paquetes: ruta.paquetes,
 		moduloActual,
 		tienePermiso: permisosService.tienePermiso,
 		puedeSql,
@@ -222,10 +224,9 @@ async function correrModelo({
 				identidad: autoria.identidad(ctx.req),
 				esAdmin: await autoria.esAdmin(ctx.req),
 				agente: rutaAgente?.id || 'SOPORTE',
+				paquetes: rutaAgente?.paquetes,
 				avisoModulo: rutaAgente?.aviso || null,
-				instrucciones: (rutaAgente?.agente || orquestador.porId('SOPORTE')).instrucciones({
-					avisoModulo: rutaAgente?.aviso || null,
-				}),
+				instrucciones: orquestador.instrucciones(rutaAgente || {}),
 			}),
 		},
 		...sinUltimoUser,
@@ -261,6 +262,7 @@ async function correrModelo({
 		consultas: ctx.consultas,
 		inserciones: ctx.inserciones,
 		agente: rutaAgente?.id || 'SOPORTE',
+		paquetes: rutaAgente?.paquetes || ['SOPORTE'],
 		idConversacion: conv.id,
 		modo: 'ia',
 		...(incluirTraza(ctx) ? { traza: ctx.traza } : {}),

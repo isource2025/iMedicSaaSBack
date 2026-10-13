@@ -129,9 +129,10 @@ function guardarFoco(sesion, ficha) {
 	sesion.actualizado = ahora();
 }
 
-function guardarAgente(sesion, agente) {
+function guardarAgente(sesion, agente, paquetes) {
 	if (!sesion || !agente) return;
 	sesion.agente = String(agente);
+	if (Array.isArray(paquetes)) sesion.paquetes = paquetes.map(String);
 	sesion.actualizado = ahora();
 }
 

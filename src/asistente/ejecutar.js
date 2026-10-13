@@ -15,6 +15,7 @@ const resolver = require('./resolver');
 const consultar = require('./consultar');
 const ficha = require('./ficha');
 const sesion = require('./sesion');
+const diagnostico = require('./diagnostico');
 
 const PATH_PERMITIDO = /^\/dashboard(\/|$)/;
 
@@ -157,6 +158,7 @@ async function ejecutarPlataforma(nombre, args, ctx) {
 		return { ok: true, href, motivo: args.motivo || null };
 	}
 	if (nombre === 'escribir_en_campo') return prepararInsercion(args, ctx);
+	if (nombre === 'diagnosticar') return diagnostico.diagnosticar(args, ctx);
 	if (nombre === 'consultar') return consultar.consultar(args, ctx);
 	if (nombre === 'resolver_contexto') return resolverYFoco(args, ctx);
 	if (nombre === 'buscar_codigo') return codigo.buscar(args);

@@ -99,6 +99,23 @@ function pantallaDeBody(raw) {
 		? raw.internadosVisibles.slice(0, 40).map(internadoDe).filter(Boolean)
 		: [];
 	const internado = internadoDe(raw.internado) || internadosVisibles[0] || null;
+	const errores = Array.isArray(raw.errores)
+		? raw.errores.slice(0, 5).flatMap((e) => {
+				const path = txt(e?.path, 120);
+				if (!/^\/[\w\-/:.]*$/.test(path)) return [];
+				const status = Number(e.status);
+				const metodo = txt(e.metodo, 6).toUpperCase();
+				return [
+					{
+						metodo: /^(GET|POST|PUT|PATCH|DELETE)$/.test(metodo) ? metodo : 'GET',
+						path,
+						status: Number.isInteger(status) && status >= 0 && status < 600 ? status : 0,
+						mensaje: txt(e.mensaje, 200),
+						haceSeg: Math.max(0, Math.min(86400, Number(e.haceSeg) || 0)),
+					},
+				];
+			})
+		: [];
 	return {
 		url: txt(raw.url, 300),
 		titulo: txt(raw.titulo, 120),
@@ -111,6 +128,9 @@ function pantallaDeBody(raw) {
 		campos,
 		internado,
 		internadosVisibles,
+		errores,
+		alertas: lista(raw.alertas, 5, 200),
+		deshabilitados: lista(raw.deshabilitados, 10, 140),
 	};
 }
 
