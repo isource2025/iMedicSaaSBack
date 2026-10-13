@@ -626,6 +626,88 @@ async function obtenerArchivoRequisito(numeroVisita, valorRequisito) {
 	};
 }
 
+/** "CARNET DE OBRA SOCIAL - FRENTE - 1.JPG" → "CARNET DE OBRA SOCIAL - FRENTE" */
+function descripcionDesdeArchivo(nombreArchivo) {
+	return texto(nombreArchivo)
+		.replace(/\.[^.]+$/, '')
+		.replace(/\s*-\s*\d+$/, '')
+		.trim();
+}
+
+/**
+ * Documentos escaneados del paciente en todas sus visitas (imVisitaRequisitos).
+ * Clarion repite la misma ruta en cada visita que hereda un documento personal:
+ * se deja solo la presentación más reciente de cada archivo.
+ */
+async function documentosDelPaciente(idPaciente) {
+	const id = enteroOCero(idPaciente);
+	if (!id) throw errorHttp('idPaciente inválido', 400);
+
+	const rows = await executeQuery(
+		`
+		SELECT
+			vr.NumeroVisita,
+			vr.Valor,
+			vr.FechaPresentacion,
+			LTRIM(RTRIM(ISNULL(r.Descripcion, ''))) AS Descripcion,
+			LTRIM(RTRIM(ISNULL(r.AplicableAlPacienteOVisita, ''))) AS Aplicable,
+			LTRIM(RTRIM(vr.PatchDestino)) AS PatchDestino
+		FROM dbo.imVisitaRequisitos vr
+		LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = vr.NumeroVisita
+		LEFT JOIN dbo.imRequisitos r ON r.Valor = vr.Valor
+		WHERE LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) <> ''
+		  AND (vr.IdPaciente = @p0 OR v.IDPACIENTE = @p0)
+		ORDER BY vr.FechaPresentacion DESC, vr.NumeroVisita DESC
+		`,
+		[{ value: id, type: 'Int' }],
+	);
+
+	const vistos = new Set();
+	const documentos = [];
+	for (const r of rows || []) {
+		const clave = texto(r.PatchDestino).toUpperCase();
+		if (vistos.has(clave)) continue;
+		vistos.add(clave);
+		const nombreArchivo = nombreDeRuta(r.PatchDestino);
+		documentos.push({
+			numeroVisita: Number(r.NumeroVisita) || 0,
+			valor: Number(r.Valor) || 0,
+			descripcion: r.Descripcion || descripcionDesdeArchivo(nombreArchivo) || 'Documento',
+			aplicable: r.Aplicable,
+			fecha: clarionAIsoCalendario(r.FechaPresentacion),
+			nombreArchivo,
+		});
+	}
+	return documentos;
+}
+
+/** Como obtenerArchivoRequisito, pero solo si la visita es del paciente indicado. */
+async function obtenerArchivoDocumentoPaciente(idPaciente, numeroVisita, valorRequisito) {
+	const id = enteroOCero(idPaciente);
+	const nv = enteroOCero(numeroVisita);
+	const valor = enteroOCero(valorRequisito);
+	if (!id || !nv) throw errorHttp('Datos del documento inválidos', 400);
+
+	const rows = await executeQuery(
+		`
+		SELECT TOP 1 LTRIM(RTRIM(ISNULL(vr.PatchDestino, ''))) AS PatchDestino
+		FROM dbo.imVisitaRequisitos vr
+		LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = vr.NumeroVisita
+		WHERE vr.NumeroVisita = @p0 AND vr.Valor = @p1
+		  AND (vr.IdPaciente = @p2 OR v.IDPACIENTE = @p2)
+		`,
+		[
+			{ value: nv, type: 'Int' },
+			{ value: valor, type: 'TinyInt' },
+			{ value: id, type: 'Int' },
+		],
+	);
+
+	const ruta = texto(rows?.[0]?.PatchDestino);
+	if (!ruta) return null;
+	return { ruta, nombreArchivo: nombreDeRuta(ruta) || 'archivo' };
+}
+
 /** Agrega un requisito a una visita ya creada (idempotente por la PK). */
 async function agregarRequisito(numeroVisita, valorRequisito, idPaciente) {
 	const nv = enteroOCero(numeroVisita);
@@ -834,6 +916,8 @@ module.exports = {
 	listarRequisitos,
 	obtenerUltimaVisita,
 	obtenerArchivoRequisito,
+	documentosDelPaciente,
+	obtenerArchivoDocumentoPaciente,
 	crearAdmision,
 	listarRequisitosVisita,
 	agregarRequisito,
