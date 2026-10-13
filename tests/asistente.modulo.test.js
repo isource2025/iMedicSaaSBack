@@ -121,6 +121,20 @@ test('system prompt no pide tenant al modelo', () => {
 	});
 	assert.match(p, /idEmpresa/);
 	assert.match(p, /cama abierta: 9/);
-	assert.match(p, /navegar/);
+	assert.doesNotMatch(p, /Tools de este turno/, 'los nombres ya viajan en las definiciones de tools');
 	assert.match(p, /SOPORTE/);
+});
+
+test('system prompt: lo fijo primero y lo del mensaje al final (caché de prefijo)', () => {
+	const base = { rol: 'MEDICO', instrucciones: 'INSTRUCCIONES FIJAS', permisosResumen: 'INTERNACION: CAMAS VER' };
+	const a = construirSystemPrompt({ ...base, rutaActual: '/dashboard/beds', notasTurno: 'Este mensaje es un pedido de AYUDA' });
+	const b = construirSystemPrompt({ ...base, rutaActual: '/dashboard/turnos' });
+	const comun = (x, y) => {
+		let i = 0;
+		while (i < x.length && x[i] === y[i]) i++;
+		return i;
+	};
+	assert.ok(a.indexOf('INTERNACION: CAMAS VER') < comun(a, b), 'permisos dentro del prefijo común');
+	assert.ok(a.indexOf('pedido de AYUDA') > a.indexOf('INTERNACION: CAMAS VER'));
+	assert.ok(a.indexOf('Pantalla:') > a.indexOf('pedido de AYUDA'));
 });

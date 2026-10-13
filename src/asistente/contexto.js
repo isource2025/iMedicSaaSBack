@@ -135,17 +135,43 @@ function pantallaDeBody(raw) {
 }
 
 /** Permisos agrupados por módulo, para que el modelo sepa qué puede y qué no. */
+let accionesMatriz;
+/** «MOD.SUB» → cantidad de acciones que define la matriz (para escribir «todas»). */
+function accionesDeMatriz() {
+	if (!accionesMatriz) {
+		accionesMatriz = new Map();
+		for (const { codigo } of matriz.todosLosCodigos()) {
+			const [m, s] = String(codigo).split('.');
+			const k = `${m}.${s}`;
+			accionesMatriz.set(k, (accionesMatriz.get(k) || 0) + 1);
+		}
+	}
+	return accionesMatriz;
+}
+
+/** Una línea por módulo: «INTERNACION: CAMAS VER · EVOLUCIONES todas». */
 function resumenPermisos(permisos) {
-	const grupos = new Map();
+	const modulos = new Map();
 	for (const p of permisos || []) {
 		const partes = String(p).split('.');
-		const clave = partes.length >= 3 ? `${partes[0]}.${partes[1]}` : partes[0];
+		const mod = partes[0];
+		const sub = partes.length >= 3 ? partes[1] : '';
 		const accion = partes.length >= 3 ? partes.slice(2).join('.') : partes[1] || 'todo';
-		if (!grupos.has(clave)) grupos.set(clave, new Set());
-		grupos.get(clave).add(accion);
+		if (!modulos.has(mod)) modulos.set(mod, new Map());
+		const subs = modulos.get(mod);
+		if (!subs.has(sub)) subs.set(sub, new Set());
+		subs.get(sub).add(accion);
 	}
-	return [...grupos.entries()]
-		.map(([clave, acciones]) => `${clave}: ${[...acciones].join('/')}`)
+	const total = accionesDeMatriz();
+	return [...modulos.entries()]
+		.map(([mod, subs]) => {
+			const partes = [...subs.entries()].map(([sub, acciones]) => {
+				const completas = sub && acciones.size > 1 && acciones.size >= (total.get(`${mod}.${sub}`) || Infinity);
+				const txt = completas ? 'todas' : [...acciones].join('/');
+				return sub ? `${sub} ${txt}` : txt;
+			});
+			return `${mod}: ${partes.join(' · ')}`;
+		})
 		.join('\n')
 		.slice(0, 8000);
 }

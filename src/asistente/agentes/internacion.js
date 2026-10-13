@@ -10,6 +10,7 @@ const hc = require('../historiaClinica');
 const cargas = require('../cargasClinicas');
 const ficha = require('../ficha');
 const sesion = require('../sesion');
+const guardia = require('../guardia');
 
 const ID = 'INTERNACION';
 // ASISTENTE_INTERNACION_LISTO=0 lo apaga sin redeploy (vuelve a caer a Soporte).
@@ -73,6 +74,9 @@ async function resolverVisita(args, ctx) {
 	const bus = await clinica.buscarInternacion({ termino }, ctx);
 	let lista = bus.internaciones || [];
 	if (!lista.length) return { error: bus.aviso || `No hay un internado que coincida con «${termino}».` };
+	if (bus.aproximado) {
+		return { pedir: 'cual', aviso: `${bus.aviso} Confirmá el paciente antes de cargar nada.`, internaciones: lista };
+	}
 	const nv = parseInt(args.numeroVisita, 10);
 	if (Number.isFinite(nv) && nv > 0) {
 		lista = lista.filter((i) => Number(i.numeroVisita) === nv);
@@ -226,6 +230,49 @@ const HERRAMIENTAS = Object.freeze([
 			required: ['secciones'],
 		},
 		run: conVisita(hc.verHistoriaClinica),
+	}),
+	def({
+		name: 'resumen_internacion',
+		description:
+			'Resumen clínico del internado en UNA llamada: ficha, días de internación, evoluciones recientes, indicaciones, estudios (pendientes y últimos hechos), HC de ingreso, signos vitales, laboratorios e interconsultas. Para «cómo está/sigue», «resumime», «análisis». Busca al paciente sola: no llames antes buscar_internado ni después ver_*.',
+		permiso: ['INTERNACION.EVOLUCIONES.VER', 'INTERNACION.INDICACIONES.VER', 'INTERNACION.ESTUDIOS.VER'],
+		modulo: 'INTERNACION',
+		parameters: {
+			type: 'object',
+			additionalProperties: false,
+			properties: {
+				termino: P_TERMINO,
+				numeroVisita: P_VISITA,
+				dias: { type: 'integer', description: 'Días de evoluciones hacia atrás. Default 3.' },
+			},
+		},
+		run: guardia.resumenInternacion,
+	}),
+	def({
+		name: 'pase_de_guardia',
+		description:
+			'Pase de guardia de un sector: por cama, paciente, día de internación, diagnóstico, última evolución y estudios pendientes. El texto ya se le muestra al usuario.',
+		permiso: ['INTERNACION.CAMAS.VER'],
+		modulo: 'INTERNACION',
+		parameters: {
+			type: 'object',
+			additionalProperties: false,
+			properties: { sector: { type: 'string', description: 'Código o nombre del sector, como lo dijo el usuario. Omitilo si no lo dijo.' } },
+		},
+		run: guardia.paseDeGuardia,
+	}),
+	def({
+		name: 'listar_internados',
+		description:
+			'Censo de internados: sin sector, cuántos hay por sector; con sector, la lista por cama (paciente, visita, día, diagnóstico). El texto ya se le muestra al usuario.',
+		permiso: ['INTERNACION.CAMAS.VER'],
+		modulo: 'INTERNACION',
+		parameters: {
+			type: 'object',
+			additionalProperties: false,
+			properties: { sector: { type: 'string', description: 'Código o nombre del sector, si lo dijo' } },
+		},
+		run: guardia.listarInternados,
 	}),
 	def({
 		name: 'preparar_egreso',
@@ -625,14 +672,25 @@ function reglasDeModo(modo) {
 	return [...REGLAS_ALTAS, ...REGLAS_ESCRITURA];
 }
 
+/** Turno de consulta: las tools y reglas de carga no viajan; habilitar_cargas las trae si hacen falta. */
+const REGLA_CARGAS_A_PEDIDO =
+	'- Si el usuario pide cargar, egresar, trasladar, asignar cama, revertir, editar o borrar algo y no tenés esa tool, llamá habilitar_cargas (sin decirle nada) y seguí con la tool que corresponda.';
+
+/** Reglas que devuelve habilitar_cargas cuando las tools de carga se suman a mitad del turno. */
+function reglasDeCarga() {
+	return reglasDeModo(modoEscritura()).join('\n');
+}
+
 const PRESENTACION = {
 	lectura: 'Consultás camas, visitas y HC de internados (solo lectura).',
 	altas: 'Consultás la HC de internados y preparás cargas del menú médico (evoluciones, HC de ingreso, indicaciones no medicamentosas, estudios, interconsultas, protocolos, epicrisis) que el usuario confirma en una tarjeta.',
 	todo: 'Operás camas, visitas y HC de internados: ver, cargar del menú médico, trasladar, asignar cama, egresar, revertir egreso y editar/borrar evoluciones.',
 };
 
-function instrucciones() {
+/** escribe=false: turno de consulta, sin las reglas de carga (ver REGLA_CARGAS_A_PEDIDO). */
+function instrucciones({ escribe = true } = {}) {
 	const modo = modoEscritura();
+	const reglas = escribe || modo === 'lectura' ? reglasDeModo(modo) : [REGLA_CARGAS_A_PEDIDO];
 	return [
 		'Operás el módulo de INTERNACIÓN de iMedic, con voseo (vos, tenés, indicá). Nunca «tú».',
 		`${PRESENTACION[modo]} No das turnos ni altas de personal.`,
@@ -647,12 +705,13 @@ function instrucciones() {
 		'- Estudios de esa visita: ver_estudios. “Hechos/cumplidos/realizados” → filtro hechos. Nunca uses una bandeja hospitalaria de pendientes para eso.',
 		'- Evoluciones: ver_evoluciones. Indicaciones: ver_indicaciones. Resumí, no pegues todo el texto. Si la tool trae «aviso», decilo tal cual.',
 		'- HC de ingreso, laboratorios, signos vitales, medicación suministrada, interconsultas, enfermería, balance, dieta, epicrisis, protocolos, procedimientos, insumos, adjuntos: ver_historia_clinica con esas secciones (varias en una llamada).',
-		'- Análisis / resumen clínico del internado: juntá ficha, evoluciones, indicaciones, estudios y ver_historia_clinica (hc_ingreso, laboratorios, signos_vitales, medicacion, interconsultas). Basate solo en lo que devuelven las tools; si una sección vino vacía o sin permiso, decilo. No agregues diagnósticos ni conductas que no estén registrados.',
+		'- Análisis / resumen clínico / «cómo está» o «cómo sigue» el internado: SOLO resumen_internacion con el nombre en termino (ya trae ficha, evoluciones, indicaciones, estudios y HC: no sumes buscar_internado ni ver_*). Basate solo en lo que devuelve; si una parte vino vacía o sin permiso, decilo. No agregues diagnósticos ni conductas que no estén registrados.',
+		'- Pase de guardia de un sector: pase_de_guardia. Quiénes están internados / cuántos hay / censo: listar_internados. Su texto ya le llega al usuario: no lo repitas.',
 		'- Llamá SOLO las tools/secciones de lo que se pidió: «evoluciones» → ver_evoluciones y nada más; «signos» → solo signos_vitales. Juntá varias fuentes únicamente si pide un análisis o resumen clínico general.',
 		'- En los resúmenes, items va ordenado por la última vez (no por cantidad); para «lo más usado» usá masFrecuentes. Si un valor mínimo o máximo es fisiológicamente imposible (ej. pulso 7), decí que parece un error de carga, sin interpretarlo.',
 		'- Si una sección viene con resumido: true, trae un resumen calculado de TODOS sus registros (resumen) más los últimos (registros): alcanza para responder; usalo como dato real y citá cantidades y fechas tal cual. Una sola llamada con todas las secciones que hagan falta: NO repitas la llamada por sección para ampliar. Solo si el usuario pide más detalle de algo puntual, llamá esa sección sola o con un período (fecha/dias). No escribas vos un aviso de «resumen»: el chat ya lo agrega.',
 		'- Historial de camas / traslados / cuándo ingresó a cada sector: ver_movimientos.',
-		...reglasDeModo(modo),
+		...reglas,
 		'- Si algo no tiene tool, decí que el asistente todavía no lo hace. Nunca digas que el usuario no tiene permiso sin haber llamado la tool y recibido «Sin permiso».',
 		'- Abrir la HC: navegar a /dashboard/visita/<numeroVisita> con query { seccion }.',
 		'- No escribas URLs ni links: el chat ya muestra el botón para abrir la pantalla.',
@@ -660,4 +719,4 @@ function instrucciones() {
 	].join('\n');
 }
 
-module.exports = { ID, LISTO, HERRAMIENTAS, instrucciones, modoEscritura, escrituraHabilitada };
+module.exports = { ID, LISTO, HERRAMIENTAS, instrucciones, reglasDeCarga, modoEscritura, escrituraHabilitada };

@@ -6,6 +6,7 @@ const { executeQuery } = require('../models/db');
 const httpInterno = require('./httpInterno');
 const autoria = require('./autoria');
 const resumir = require('./resumir');
+const censo = require('./censo');
 
 const SECCIONES = Object.freeze({
 	'hcIngreso': 'Historia clínica de ingreso',
@@ -322,6 +323,21 @@ async function internadoDesdeCama(ctx, idCama) {
 	}
 }
 
+function conLink(i) {
+	return { ...censo.publica(i), link: linkSeccion(i.numeroVisita, 'indicaciones') };
+}
+
+/** null = sin censo (sin empresa o falló la query): se usa la búsqueda SQL de siempre. */
+async function buscarEnCenso(claves, ctx) {
+	if (!ctx?.idEmpresa) return null;
+	try {
+		return censo.buscar(await censo.obtener(ctx.idEmpresa), claves);
+	} catch (err) {
+		console.warn('[asistente] censo:', err.message);
+		return null;
+	}
+}
+
 /** Busca internaciones ACTIVAS (cama ocupada) por nombre / DNI / visita. */
 async function buscarInternacion(args, ctx) {
 	const termino = String(args.termino || '').trim();
@@ -339,12 +355,20 @@ async function buscarInternacion(args, ctx) {
 	}
 	const matchPantalla = dePantalla.filter((i) => coincideInternado(i, claves));
 
+	const delCenso = await buscarEnCenso(claves, ctx);
+	if (delCenso?.exactos.length) {
+		const internaciones = delCenso.exactos.slice(0, 15).map(conLink);
+		return { total: internaciones.length, internaciones };
+	}
+
 	let internaciones = [];
-	try {
-		internaciones = await queryOcupados(claves);
-	} catch (err) {
-		if (matchPantalla.length) internaciones = matchPantalla.filter((i) => !i.egresada);
-		else throw err;
+	if (!delCenso) {
+		try {
+			internaciones = await queryOcupados(claves);
+		} catch (err) {
+			if (matchPantalla.length) internaciones = matchPantalla.filter((i) => !i.egresada);
+			else throw err;
+		}
 	}
 	if (internaciones.length) {
 		return { total: internaciones.length, internaciones };
@@ -370,6 +394,18 @@ async function buscarInternacion(args, ctx) {
 			internaciones: incluirEgresadas ? egresadas : [],
 			egresadas,
 			aviso: `${e.paciente || 'Ese paciente'} (visita ${e.numeroVisita}) ya está egresado. No hay internación activa.`,
+		};
+	}
+	if (delCenso?.aproximados.length && !claves.dni && !claves.numeroVisita) {
+		const aprox = delCenso.aproximados.map(conLink);
+		return {
+			total: aprox.length,
+			internaciones: aprox,
+			aproximado: true,
+			aviso:
+				aprox.length === 1
+					? `No hay un internado «${termino}» exacto; el más parecido es ${aprox[0].paciente}.`
+					: `No hay un internado «${termino}» exacto. Los más parecidos: ${aprox.map((i) => i.paciente).join(', ')}. Preguntá cuál.`,
 		};
 	}
 	return { total: 0, internaciones: [] };
@@ -926,4 +962,5 @@ module.exports = {
 	hoyIso,
 	fechaValida,
 	horaValida,
+	api,
 };

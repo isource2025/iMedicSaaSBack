@@ -367,8 +367,9 @@ test('llamar_api rechaza credenciales en el body', async () => {
 
 test('resumen de permisos agrupa por submódulo y no corta módulos', () => {
 	const r = contexto.resumenPermisos(require('../src/utils/permisos').permisosDeRol('ADMIN'));
-	assert.match(r, /CONFIGURACION\.PERSONAL: VER\/CREAR/);
-	assert.match(r, /INTERNACION\.EVOLUCIONES: /);
+	assert.match(r, /^CONFIGURACION: .*PERSONAL (todas|VER\/CREAR)/m);
+	assert.match(r, /^INTERNACION: .*EVOLUCIONES /m);
+	assert.equal(r.split('\n').filter((l) => l.startsWith('INTERNACION:')).length, 1);
 });
 
 test('llamar_api: escritura queda pendiente y respeta permisos', async () => {

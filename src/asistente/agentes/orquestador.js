@@ -161,18 +161,26 @@ function clasificar(opts = {}) {
 	return resolver(opts).pedido;
 }
 
-/** Instrucciones del turno: capa de Soporte + la de cada paquete cargado. */
-function instrucciones(ruta = {}) {
+function notasDelTurno(ruta = {}) {
+	return soporte.notasDelTurno({ avisos: ruta.avisos || (ruta.aviso ? [ruta.aviso] : []), ayuda: Boolean(ruta.ayuda) });
+}
+
+/**
+ * Instrucciones del turno: capa de Soporte + la de cada paquete cargado.
+ * conNotas=false deja afuera lo que cambia por mensaje (notasDelTurno), para el prefijo cacheable.
+ * ruta.escribe=false: turno de consulta, los paquetes omiten sus reglas de carga.
+ */
+function instrucciones(ruta = {}, { conNotas = true } = {}) {
 	const paquetes = ruta.paquetes?.length ? ruta.paquetes : [BASE];
 	const extras = paquetes.filter((id) => id !== BASE).map(porId).filter(Boolean);
+	const notas = conNotas ? notasDelTurno(ruta) : '';
 	return [
-		soporte.instrucciones({
-			avisos: ruta.avisos || (ruta.aviso ? [ruta.aviso] : []),
-			ayuda: Boolean(ruta.ayuda),
-			paquetes,
-		}),
-		...extras.map((ag) => `\n## Módulo ${ag.ID}\n${ag.instrucciones()}`),
-	].join('\n');
+		soporte.instrucciones({ paquetes, conNotas: false }),
+		...extras.map((ag) => `\n## Módulo ${ag.ID}\n${ag.instrucciones({ escribe: ruta.escribe !== false })}`),
+		notas ? `\n## Este mensaje\n${notas}` : '',
+	]
+		.filter(Boolean)
+		.join('\n');
 }
 
 module.exports = {
@@ -184,6 +192,7 @@ module.exports = {
 	clasificar,
 	resolver,
 	instrucciones,
+	notasDelTurno,
 	porId,
 	listos,
 	estado,

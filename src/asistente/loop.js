@@ -16,23 +16,38 @@ function parseArgs(raw) {
 }
 
 /**
+ * Un resultado con `respuestaDirecta` (texto ya armado) no necesita que el modelo lo
+ * redacte: si todas las tools de la iteración la traen, se responde con eso y se ahorra
+ * la segunda llamada. Al modelo le queda el resultado sin ese texto, y el texto como respuesta suya.
+ */
+function separarDirecta(resultado) {
+	if (!resultado || typeof resultado !== 'object' || typeof resultado.respuestaDirecta !== 'string') {
+		return { directa: null, paraModelo: resultado };
+	}
+	const { respuestaDirecta, ...resto } = resultado;
+	return { directa: respuestaDirecta.trim() || null, paraModelo: resto };
+}
+
+/**
  * @param {{
  *   messages: object[],
- *   tools: object[],
+ *   tools: object[] | (() => object[]),
  *   ejecutar: (nombre: string, args: object, call: object) => Promise<any>,
  *   chat: (opts: object) => Promise<{ content: string|null, toolCalls: object[] }>,
  *   maxIter?: number,
  *   onEvento?: (evt: object) => void,
  * }} opts
+ * tools como función: se vuelve a leer en cada iteración (una tool puede habilitar otras).
  */
 async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }) {
 	const limite = Math.max(1, Number(maxIter) || MAX_ITER_DEFAULT);
 	const invocadas = [];
 	const emit = typeof onEvento === 'function' ? onEvento : () => {};
+	const toolsActuales = typeof tools === 'function' ? tools : () => tools;
 
 	for (let i = 0; i < limite; i++) {
 		emit({ tipo: 'iteracion', n: i + 1, max: limite });
-		const salida = await chat({ messages, tools, toolChoice: 'auto' });
+		const salida = await chat({ messages, tools: toolsActuales(), toolChoice: 'auto' });
 
 		if (!salida.toolCalls.length) {
 			return {
@@ -50,6 +65,7 @@ async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }
 			tool_calls: salida.toolCalls,
 		});
 
+		const directas = [];
 		for (const call of salida.toolCalls) {
 			const nombre = call.function?.name || 'desconocida';
 			const args = parseArgs(call.function?.arguments);
@@ -62,11 +78,20 @@ async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }
 				resultado = { error: err.message || 'Error ejecutando herramienta' };
 			}
 			emit({ tipo: 'herramienta', nombre, estado: resultado?.error ? 'error' : 'ok' });
+			const { directa, paraModelo } = separarDirecta(resultado);
+			directas.push(directa);
 			messages.push({
 				role: 'tool',
 				tool_call_id: call.id,
-				content: JSON.stringify(resultado ?? {}),
+				content: JSON.stringify(paraModelo ?? {}),
 			});
+		}
+
+		if (directas.length && directas.every(Boolean)) {
+			const texto = [salida.content, ...directas].filter(Boolean).join('\n\n');
+			messages.push({ role: 'assistant', content: texto });
+			emit({ tipo: 'respuesta_directa' });
+			return { texto, invocadas, messages, finishReason: 'directa', usage: salida.usage || null };
 		}
 	}
 
@@ -79,7 +104,7 @@ async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }
 				content: 'Respondé con la información disponible. No llames más herramientas.',
 			},
 		],
-		tools,
+		tools: toolsActuales(),
 		toolChoice: 'none',
 	});
 

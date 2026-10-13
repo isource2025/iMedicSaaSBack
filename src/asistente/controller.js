@@ -18,8 +18,14 @@ const clinica = require('./clinica');
 const consumo = require('./consumo');
 const reporte = require('./reporteConsumo');
 const orquestador = require('./agentes/orquestador');
+const censo = require('./censo');
+const intencionMod = require('./intencion');
+const directas = require('./directas');
+const internacion = require('./agentes/internacion');
 
 const MAX_ITER = Number(process.env.ASISTENTE_MAX_ITER || 10);
+
+const CAMBIA_CENSO = new Set(['preparar_egreso', 'trasladar_cama', 'asignar_cama', 'revertir_egreso']);
 
 function ipDe(req) {
 	return String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
@@ -111,13 +117,22 @@ async function prepararTurno(req) {
 		foco: conv.foco,
 	});
 	sesion.guardarAgente(conv, ruta.id, ruta.paquetes);
-	const herramientas = catalogo.seleccionar({
+	const intencion = intencionMod.clasificar({ texto: mensaje, ayuda: ruta.ayuda, cargaEnCurso: Boolean(conv.cargaEnCurso) });
+	ruta.escribe = intencion.escribe;
+	const opcionesCatalogo = {
 		permisos,
 		paquetes: ruta.paquetes,
 		moduloActual,
 		tienePermiso: permisosService.tienePermiso,
 		puedeSql,
-	});
+	};
+	const herramientas = catalogo.seleccionar(opcionesCatalogo);
+	// Turno de consulta: sin tools de carga. Carga de un tipo conocido: solo las de ese tipo.
+	const herramientasTurno = !intencion.escribe
+		? catalogo.seleccionar({ ...opcionesCatalogo, soloLectura: true })
+		: intencion.cargas
+			? herramientas.filter((h) => !catalogo.esEscritura(h) || intencion.cargas.includes(h.name))
+			: herramientas;
 
 	return {
 		mensaje,
@@ -126,10 +141,56 @@ async function prepararTurno(req) {
 		moduloActual,
 		entidades,
 		herramientas,
+		herramientasTurno,
+		intencion,
 		conv,
 		puedeSql,
 		pantalla,
 		rutaAgente: ruta,
+	};
+}
+
+/** Las tools de carga pesan: en un turno de consulta viaja esta en su lugar y las trae si hacen falta. */
+const HABILITAR_CARGAS = Object.freeze({
+	type: 'function',
+	function: {
+		name: 'habilitar_cargas',
+		description: 'Trae las tools para cargar, egresar, trasladar, editar o borrar. Llamala solo si el usuario lo pide y no tenés la tool.',
+		parameters: { type: 'object', properties: {} },
+	},
+});
+
+/** `parcial`: las del turno + habilitar_cargas si quedaron tools de carga afuera; `todas`, después de llamarla. */
+function toolsDelTurno({ herramientas, herramientasTurno }) {
+	const todas = herramientas.map(catalogo.aOpenAi);
+	const turno = herramientasTurno || herramientas;
+	const parcial = herramientas.length > turno.length ? [...turno.map(catalogo.aOpenAi), HABILITAR_CARGAS] : todas;
+	return { todas, parcial };
+}
+
+const SALUDO = /^(?:hola|buen[oa]s(?:\s+(?:d[ií]as|tardes|noches))?|hey|qu[eé]\s+tal)(?:\s+(?:asistente|imedic))?[\s!.¡]*$/i;
+const GRACIAS = /^(?:(?:ok|okey|listo|genial|perfecto|bueno|dale|joya|b[aá]rbaro)[\s,!.]*)?(?:muchas\s+)?gracias(?:\s+(?:asistente|imedic))?[\s!.]*$/i;
+const CHAU = /^(?:chau|adi[oó]s|hasta\s+luego|nos\s+vemos)[\s!.]*$/i;
+
+/** Mensajes sociales: no gastan una llamada al modelo. */
+function respuestaSocial(mensaje, conv) {
+	const t = String(mensaje || '').trim();
+	let texto = null;
+	if (SALUDO.test(t)) texto = '¡Hola! ¿En qué te ayudo?';
+	else if (GRACIAS.test(t)) texto = '¡De nada! Si necesitás algo más, decime.';
+	else if (CHAU.test(t)) texto = '¡Hasta luego!';
+	if (!texto) return null;
+	sesion.agregarMensaje(conv, 'assistant', texto, { modo: 'local' });
+	return {
+		texto,
+		herramientas: [],
+		navegaciones: [],
+		pendientes: [],
+		consultas: [],
+		inserciones: [],
+		agente: conv.agente || 'SOPORTE',
+		idConversacion: conv.id,
+		modo: 'local',
 	};
 }
 
@@ -183,6 +244,8 @@ async function correrModelo({
 	moduloActual,
 	entidades,
 	herramientas,
+	herramientasTurno,
+	intencion,
 	conv,
 	puedeSql,
 	pantalla,
@@ -218,7 +281,6 @@ async function correrModelo({
 					...entidades,
 					focoTexto: ctx.foco ? require('./ficha').textoDe(ctx.foco) : '',
 				},
-				herramientas,
 				pantalla,
 				permisosResumen: contexto.resumenPermisos(permisos),
 				identidad: autoria.identidad(ctx.req),
@@ -226,7 +288,8 @@ async function correrModelo({
 				agente: rutaAgente?.id || 'SOPORTE',
 				paquetes: rutaAgente?.paquetes,
 				avisoModulo: rutaAgente?.aviso || null,
-				instrucciones: orquestador.instrucciones(rutaAgente || {}),
+				instrucciones: orquestador.instrucciones(rutaAgente || {}, { conNotas: false }),
+				notasTurno: orquestador.notasDelTurno(rutaAgente || {}),
 			}),
 		},
 		...sinUltimoUser,
@@ -235,10 +298,21 @@ async function correrModelo({
 		{ role: 'user', content: mensaje },
 	];
 
+	const tools = toolsDelTurno({ herramientas, herramientasTurno });
+	ctx.todasLasCargas = false;
+	ctx.intencion = intencion || {};
+	ctx.mensaje = mensaje;
 	const out = await agenteLoop({
 		messages,
-		tools: herramientas.map(catalogo.aOpenAi),
-		ejecutar: (nombre, args) => ejecutarMod.ejecutar(nombre, args, ctx),
+		tools: () => (ctx.todasLasCargas ? tools.todas : tools.parcial),
+		ejecutar: async (nombre, args) => {
+			if (nombre === 'habilitar_cargas') {
+				ctx.todasLasCargas = true;
+				ctx.traza?.push({ nombre, args: {}, resultado: { habilitado: true } });
+				return { habilitado: true, aviso: 'Ya tenés las tools de carga: llamá la que corresponda.', reglas: internacion.reglasDeCarga() };
+			}
+			return directas.aplicar(nombre, await ejecutarMod.ejecutar(nombre, args, ctx), ctx);
+		},
 		chat: consumo.medirChat((opts) => openai.chatConHerramientas(opts), ctx.medidor),
 		maxIter: MAX_ITER,
 		onEvento,
@@ -246,6 +320,10 @@ async function correrModelo({
 	sesion.guardarOpenai(conv, out.messages);
 
 	const usadas = out.invocadas.map((i) => i.nombre);
+	conv.cargaEnCurso = usadas.some((n) => {
+		const def = catalogo.porNombre(n);
+		return Boolean(def && catalogo.esEscritura(def));
+	});
 	const texto =
 		sinLinksInternos(out.texto) ||
 		'No pude completar eso ahora. Probá de nuevo o pedime que te lleve a la pantalla.';
@@ -275,7 +353,7 @@ async function mensaje(req, res) {
 	try {
 		prep = await prepararTurno(req);
 		ctx = armarCtx(req, prep.permisos, prep.pantalla, prep.entidades, prep.conv);
-		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv);
+		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv) || respuestaSocial(prep.mensaje, prep.conv);
 		const result = atajo || (await correrModelo({ ...prep, ctx }));
 		await registrarMensaje(req, { prep, ctx, result });
 		return res.json({ success: true, ...result, consumo: consumoParaCliente(ctx) });
@@ -327,7 +405,7 @@ async function mensajeStream(req, res) {
 		prep = await prepararTurno(req);
 		ctx = armarCtx(req, prep.permisos, prep.pantalla, prep.entidades, prep.conv);
 		writeSse(res, 'estado', { fase: 'pensando' });
-		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv);
+		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv) || respuestaSocial(prep.mensaje, prep.conv);
 		const result =
 			atajo ||
 			(await correrModelo({
@@ -404,6 +482,7 @@ async function confirmar(req, res) {
 			ip: ipDe(req),
 		});
 		const ok = resp.status < 400 && !recorte.error;
+		if (ok && CAMBIA_CENSO.has(item.herramienta)) censo.invalidar(req.idEmpresa);
 		const motivo = recorte.error || `HTTP ${resp.status}`;
 		const conv = sesion.obtener(req.body?.idConversacion, req.idEmpresa, req.valorPersonal);
 		sesion.anotarAccion(

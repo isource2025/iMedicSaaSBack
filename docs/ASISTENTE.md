@@ -243,7 +243,7 @@ Todas resuelven al paciente por `termino` (el nombre manda) o por el foco, recha
 
 Procedimientos no tienen alta propia: salen del protocolo.
 
-### Tools (15, CRUD sobre la internación)
+### Tools (18, CRUD sobre la internación + lecturas compuestas)
 
 Las de lectura usan la visita en foco si no se pasa `numeroVisita` (`clinica.numeroVisitaDe`: args → foco → ruta → pantalla). Las de escritura, con `termino`, resuelven **por nombre** (el nombre manda sobre la visita de pantalla) y dejan al paciente en foco. Todas las escrituras quedan como tarjeta **Confirmar**; la ruta real valida permisos y autoría al confirmar.
 
@@ -264,6 +264,11 @@ Las de lectura usan la visita en foco si no se pasa `numeroVisita` (`clinica.num
 | `revertir_egreso` | D (deshacer) | `internacionCrud.prepararRevertirEgreso` | `GET …/revertir-egreso` (vista previa: conflictos, a qué cama vuelve) → `POST`. Solo admin. |
 | `eliminar_evolucion` | D | `internacionCrud.prepararEliminarEvolucion` | `DELETE /api/evoluciones/:id`; la tarjeta muestra el texto que se borra. Solo propias. |
 | `navegar` | — | la de Soporte | `/dashboard/visita/:id?seccion=` |
+| `resumen_internacion` | R | `guardia.resumenInternacion` | «Cómo está / resumime»: ficha, días, evoluciones (3 días), indicaciones, estudios (pendientes + 5 últimos hechos), HC de ingreso, signos, laboratorios e interconsultas **en una sola tool**, en paralelo y con presupuesto por parte. Cada parte respeta su permiso. Busca al paciente sola. |
+| `pase_de_guardia` | R | `guardia.paseDeGuardia` | Por sector (código o nombre): cama, paciente, día, Dx, última evolución (48 h) y estudios pendientes. Texto armado en el servidor (`respuestaDirecta`), 2 GET por paciente (hasta 30, de a 4). Sin sector → lista de sectores. |
+| `listar_internados` | R | `guardia.listarInternados` | Censo: sin sector, cuántos por sector; con sector, tabla por cama. Sin HTTP: sale del censo en memoria. |
+
+**Censo (`censo.js`):** una query trae todas las camas ocupadas con visita activa, y queda en memoria 60 s por `idEmpresa` (`ASISTENTE_CENSO_TTL_MS`). Los pedidos simultáneos comparten la misma query. Se invalida al confirmar egreso, traslado, asignación o revertir. `buscarInternacion` busca ahí primero: exacto (todas las palabras contenidas, DNI o visita) → sin más SQL. Si no hay exacto y tampoco una visita egresada que coincida, devuelve los **más parecidos** (Levenshtein ≤1, o ≤2 desde 7 letras) con `aproximado: true` y un aviso («el más parecido es …»). Las **cargas** con nombre aproximado no arman tarjeta: piden confirmar el paciente. Si el censo falla, se usa la búsqueda SQL de siempre.
 
 Fuera de alcance por ahora: intercambiar camas entre dos pacientes, editar el último movimiento, indicar **medicación**, cargar signos/balance/enfermería desde el chat.
 
@@ -372,11 +377,40 @@ Al agregar tools, sumar etiqueta en `NOMBRES_HERRAMIENTA` / `FRASES_HERRAMIENTA`
 | `ASISTENTE_OPENAI_API_KEY` / `OPENAI_API_KEY` | Cliente |
 | `ASISTENTE_OPENAI_MODEL` / `OPENAI_MODEL` | Default `gpt-4o-mini` |
 | `ASISTENTE_MAX_ITER` | Default 10 |
-| `ASISTENTE_MAX_TOOLS` | Default 32 (Soporte 5 + Internación hasta 20) |
+| `ASISTENTE_MAX_TOOLS` | Default 32 (Soporte 5 + Internación hasta 23) |
+| `ASISTENTE_CENSO_TTL_MS` | Vida del censo de internados en memoria. Default 60000 |
 | `ASISTENTE_TRAZA` | `1` = traza siempre |
 | `ASISTENTE_INTERNACION_ESCRITURA` | sin definir = lectura + altas del menú médico; `1` = todo el CRUD; `0` = solo lectura |
 
 Orquestador: 0 tokens. Turno sticky de lectura: 1 chat + 1–2 HTTP internos.
+
+### Ahorro de tokens y llamadas
+
+Cada mensaje cuesta lo que pesan las definiciones de tools + el system prompt, multiplicado por las llamadas al modelo. Para que los créditos rindan:
+
+- **Intención por reglas (`intencion.js`, 0 tokens):**
+  - En un turno de **consulta** no viajan las tools de carga ni sus reglas (unos 2.300 tokens menos por llamada). Va `habilitar_cargas` en su lugar: si el modelo la llama, el loop le suma las tools en la iteración siguiente (`tools` como función en `loop.js`) y le devuelve las reglas de carga.
+  - En un turno de **carga** van solo las tools del tipo que nombra el pedido; lo dictado después de «:» no cuenta. Por ejemplo, «evolucioná a X: pedí rx» manda solo las de evolución.
+  - Si el turno anterior usó una tool de carga (`conv.cargaEnCurso`: se contesta un motivo o un paciente), van todas.
+- **Respuesta directa (`loop.js` + `directas.js`):** si todas las tools de una iteración devuelven `respuestaDirecta`, ese texto es la respuesta y no hay segunda llamada al modelo. El modelo ve el resultado sin ese texto, y el texto queda como respuesta suya en el historial. Se usa en estos casos:
+  - la tarjeta de una carga simple, salvo que el mensaje mencione medicación, porque ahí el modelo tiene que explicar que no se indica desde el chat;
+  - la ficha cuando el pedido es solo «dónde está X» y hay un único resultado;
+  - `navegar` cuando el pedido es solo «llevame a…»;
+  - siempre en `pase_de_guardia` y `listar_internados`.
+- **Atajos locales (`controller.respuestaSocial`):** «hola», «gracias» y «chau» se responden sin modelo, igual que el «sí» con una tarjeta pendiente.
+- **Prompt cacheable (`prompt.js`):** OpenAI cobra a mitad de precio un prefijo idéntico de 1.024 tokens o más. Por eso el orden es: instrucciones fijas → reglas → rol y permisos → identidad → notas del mensaje (`orquestador.notasDelTurno`: ayuda o módulo no habilitado) → fecha y pantalla. Se sacó la línea «Tools de este turno», que repetía nombres que ya van en las definiciones.
+- **Permisos compactos (`contexto.resumenPermisos`):** una línea por módulo y «todas» cuando el usuario tiene la matriz completa del submódulo.
+- **Historial:** las respuestas de turnos anteriores viajan recortadas a 2.000 caracteres (un pase de guardia largo no se reenvía entero en cada mensaje); los resultados de tools, a 700.
+
+Medido con las evals (`--veces=3`, mismos 15 casos):
+
+| | Antes (12/10) | Después (13/10) |
+|---|---|---|
+| USD por mensaje | 0,00085 | 0,00066 |
+| Tokens de entrada por mensaje | 9.781 | 6.343 (78 % desde caché) |
+| Llamadas al modelo por mensaje | 1,94 | 1,83 |
+
+Con los 21 casos (fase 3 incluida): USD 0,00062 por mensaje y 90 % de caché. Pase de guardia, censo, «dónde está X» y una carga dictada salen con 1 llamada; un saludo, con 0.
 
 ---
 
@@ -408,6 +442,10 @@ iMedicSaaSBack/src/asistente/
   internacionCrud.js  camas, traslados, revertir egreso, editar/borrar evolución
   cargasClinicas.js   altas del menú médico (HC ingreso, indicación, estudios, interconsulta, protocolo, epicrisis)
   historiaClinica.js  lectura de las demás secciones de la HC (ver_historia_clinica)
+  guardia.js        resumen_internacion, pase_de_guardia, listar_internados
+  censo.js          internados en memoria por empresa + búsqueda tolerante a errores de tipeo
+  intencion.js      consulta / carga / ubicar / navegar (qué tools viajan)
+  directas.js       cuándo una tool responde sin segunda llamada al modelo
   resumir.js        presupuesto de chars y resúmenes determinísticos de lecturas largas
   ficha.js sesion.js pendientes.js
   prompt.js httpInterno.js autoria.js marca.js
@@ -458,6 +496,16 @@ Correrlas antes de tocar prompts, reglas del orquestador o descripciones de tool
 12/10/2026 (gpt-4o-mini): 10/10; con `--veces=3`, 29/30. La que falló: la ficha de Sanabria sin el número de visita (el modelo resume la ficha a su manera; se resuelve haciendo que el servidor la arme).
 
 12/10/2026, con el manual nuevo (15 casos): `--veces=3`, 45/45 (~USD 0,04). La ficha de Sanabria sigue pudiendo fallar alguna vez hasta la fase 4.
+
+13/10/2026, fase 3 + ahorro (21 casos): `--veces=3`, 63/63 (~USD 0,04). Casos nuevos (`f3-*`):
+- carga sin verbo de carga («ponele en la evolución…»), que pasa por `habilitar_cargas`;
+- apellido mal escrito («Sanabira»);
+- pase de guardia de UTI;
+- censo de Clínica Médica 1;
+- resumen clínico en una tool;
+- saludo y gracias sin modelo.
+
+`maxLlamadas` controla cuántas veces se llamó al modelo, y `algunaDe` acepta más de una tool válida. Para comparar costo con la línea base sin los casos nuevos: `--excluir=f3`. La salida imprime «Por mensaje» (USD, llamadas, tokens, % de caché) y «Entrada» (en qué se van los tokens).
 
 ## 16. Pruebas ya hechas (Soporte)
 

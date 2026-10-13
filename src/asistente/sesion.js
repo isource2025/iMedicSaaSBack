@@ -83,6 +83,8 @@ const MAX_TOOL_CHARS = 4000;
  * La respuesta del asistente queda entera; si hace falta el dato, se vuelve a llamar la tool.
  */
 const MAX_TOOL_CHARS_HISTORIAL = 700;
+/** Respuestas largas (pase de guardia, listas) viajan en cada turno siguiente: con el comienzo alcanza. */
+const MAX_ASISTENTE_HISTORIAL = 2000;
 const MARCA_RECORTE = ' …[resultado de un turno anterior, recortado: si hace falta, volvé a llamar la tool]';
 
 function recortarMsgOpenai(m) {
@@ -90,7 +92,7 @@ function recortarMsgOpenai(m) {
 	const copy = { role: m.role };
 	if (m.content != null) {
 		const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-		const max = m.role === 'tool' ? MAX_TOOL_CHARS_HISTORIAL : MAX_TOOL_CHARS;
+		const max = m.role === 'tool' ? MAX_TOOL_CHARS_HISTORIAL : m.role === 'assistant' ? MAX_ASISTENTE_HISTORIAL : MAX_TOOL_CHARS;
 		copy.content = c.length > max ? `${c.slice(0, max)}${m.role === 'tool' ? MARCA_RECORTE : '…'}` : c;
 	} else if (m.role === 'assistant') {
 		copy.content = m.content ?? null;

@@ -72,22 +72,26 @@ function bloqueIdentidad(identidad, esAdmin) {
 	].join('\n');
 }
 
+/**
+ * Orden pensado para la caché de prompts de OpenAI (prefijo idéntico = tokens a mitad de precio):
+ * primero lo fijo (instrucciones, reglas), después lo del usuario (permisos, identidad) y al
+ * final lo que cambia por mensaje (notas, fecha, pantalla).
+ */
 function construirSystemPrompt({
 	rol,
 	rutaActual,
 	moduloActual,
 	entidades,
-	herramientas,
 	pantalla,
 	permisosResumen,
 	identidad,
 	esAdmin,
 	instrucciones,
+	notasTurno,
 	agente,
 	paquetes,
 	avisoModulo,
 }) {
-	const nombres = (herramientas || []).map((h) => h.name).join(', ');
 	const extras = [];
 	if (entidades?.idCama) extras.push(`cama abierta: ${entidades.idCama}`);
 	if (entidades?.numeroVisita) extras.push(`visita abierta: ${entidades.numeroVisita}`);
@@ -95,20 +99,20 @@ function construirSystemPrompt({
 	return [
 		instrucciones || 'Sos el asistente de iMedic. español rioplatense.',
 		'',
-		'Permisos de este usuario:',
-		permisosResumen ? permisosResumen : '(sin permisos asignados)',
 		'- Un 403 o “Sin permiso” de una tool se dice. No adelantes un “no tenés permiso” sin haberla llamado.',
 		'- No pedís ni usás idEmpresa. No cargás usuario/contraseña ni editás roles.',
 		'- Markdown simple, conciso.',
+		'',
+		`Rol: ${rol || 'desconocido'}. Permisos de este usuario:`,
+		permisosResumen ? permisosResumen : '(sin permisos asignados)',
 		bloqueIdentidad(identidad, esAdmin),
+		notasTurno ? `\n## Este mensaje\n${notasTurno}` : '',
 		'',
 		`Hoy: ${fechaHoy()} (${hoyIso()}).`,
-		`Rol: ${rol || 'desconocido'}.`,
 		`Agente: ${agente || 'SOPORTE'}${paquetes?.length > 1 ? ` · módulos cargados: ${paquetes.join(', ')}` : ''}${avisoModulo ? ` · pedido era ${avisoModulo}` : ''}.`,
 		`Pantalla: ${rutaActual || 'desconocida'}${moduloActual ? ` · ${moduloActual}` : ''}.`,
 		extras.length ? `Contexto: ${extras.join('; ')}.` : '',
 		bloquePantalla(pantalla),
-		`Tools de este turno: ${nombres || 'ninguna'}.`,
 	]
 		.filter(Boolean)
 		.join('\n');

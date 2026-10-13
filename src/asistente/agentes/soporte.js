@@ -121,20 +121,29 @@ const NOMBRE_MODULO = {
  * @param {{ avisos?: string[], avisoModulo?: string, ayuda?: boolean, paquetes?: string[] }} opts
  * avisos: módulos que el pedido nombra y todavía no operan desde el chat.
  */
-function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID] } = {}) {
+/** Lo que cambia mensaje a mensaje: va al final del prompt para no romper la caché del prefijo. */
+function notasDelTurno({ avisos, avisoModulo, ayuda = false } = {}) {
 	const pendientes = [...new Set([...(avisos || []), ...(avisoModulo ? [avisoModulo] : [])])];
-	const conModulos = paquetes.filter((p) => p !== ID);
 	return [
-		'Sos el asistente de iMedic. español rioplatense, con voseo (vos, tenés, indicá). Nunca «tú».',
-		conModulos.length
-			? `Ayudás a usar el sistema y, en este turno, también operás: ${conModulos.map((m) => NOMBRE_MODULO[m] || m).join(', ')}.`
-			: 'Ayudás a usar el sistema: cómo se hace una tarea, qué pantalla abrir, para qué sirve y por qué algo no anda.',
 		ayuda
 			? 'Este mensaje es un pedido de AYUDA (cómo se hace, dónde está, qué es, algo que no anda). Respondé eso primero; no hagas la acción clínica salvo que la pida explícitamente.'
 			: '',
 		pendientes.length
 			? `El pedido toca ${pendientes.map((m) => NOMBRE_MODULO[m] || m).join(', ')}: eso todavía no se opera desde el chat. Explicá cómo se hace en la pantalla (buscar_en_manual) y ofrecé abrirla. No inventes que lo hiciste.`
 			: '',
+	]
+		.filter(Boolean)
+		.join('\n');
+}
+
+function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID], conNotas = true } = {}) {
+	const conModulos = paquetes.filter((p) => p !== ID);
+	return [
+		'Sos el asistente de iMedic. español rioplatense, con voseo (vos, tenés, indicá). Nunca «tú».',
+		conModulos.length
+			? `Ayudás a usar el sistema y, en este turno, también operás: ${conModulos.map((m) => NOMBRE_MODULO[m] || m).join(', ')}.`
+			: 'Ayudás a usar el sistema: cómo se hace una tarea, qué pantalla abrir, para qué sirve y por qué algo no anda.',
+		conNotas ? notasDelTurno({ avisos, avisoModulo, ayuda }) : '',
 		'',
 		'## Ayuda y soporte (siempre disponible)',
 		'- Toda duda de uso del sistema (cómo se hace, dónde está, qué es, contraseña, sesión, menú): llamá buscar_en_manual ANTES de responder. Nunca contestes de memoria ni mandes a «soporte» sin buscar.',
@@ -156,4 +165,4 @@ function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID] } =
 		.join('\n');
 }
 
-module.exports = { ID, LISTO, HERRAMIENTAS, instrucciones };
+module.exports = { ID, LISTO, HERRAMIENTAS, instrucciones, notasDelTurno };

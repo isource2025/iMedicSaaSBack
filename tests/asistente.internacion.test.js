@@ -11,13 +11,21 @@ const src = (p) => path.join(__dirname, '..', 'src', p);
 process.env.ASISTENTE_INTERNACION_ESCRITURA = '1';
 
 let filasDb = [];
+// Por defecto el censo "falla" y se prueba la búsqueda SQL; los tests del censo lo cargan.
+let filasCenso = null;
 const dbPath = require.resolve(src('models/db.js'));
 require.cache[dbPath] = {
 	id: dbPath,
 	filename: dbPath,
 	loaded: true,
 	exports: {
-		executeQuery: async (sql, params = []) => (typeof filasDb === 'function' ? filasDb(sql, params) : filasDb),
+		executeQuery: async (sql, params = []) => {
+			if (/asistente:censo/.test(sql)) {
+				if (!filasCenso) throw new Error('censo no disponible en este test');
+				return filasCenso;
+			}
+			return typeof filasDb === 'function' ? filasDb(sql, params) : filasDb;
+		},
 		getRequestPool: async () => ({}),
 		sql: {},
 	},
@@ -123,9 +131,12 @@ test('el agente expone el CRUD completo y todas las tools tienen implementación
 			'editar_evolucion',
 			'eliminar_evolucion',
 			'listar_camas_libres',
+			'listar_internados',
 			'navegar',
+			'pase_de_guardia',
 			'preparar_egreso',
 			'preparar_evolucion',
+			'resumen_internacion',
 			'revertir_egreso',
 			'trasladar_cama',
 			'ver_estudios',
@@ -150,7 +161,10 @@ test('el agente expone el CRUD completo y todas las tools tienen implementación
 const LECTURAS = [
 	'buscar_internado',
 	'listar_camas_libres',
+	'listar_internados',
 	'navegar',
+	'pase_de_guardia',
+	'resumen_internacion',
 	'ver_estudios',
 	'ver_evoluciones',
 	'ver_historia_clinica',

@@ -37,6 +37,7 @@ const porVisita = (nv) => INTERNADOS.find((i) => i.numeroVisita === Number(nv));
 
 /** Imita el WHERE de clinica.whereClaves: DNI o visita exactos, o todos los LIKE del nombre. */
 function filasInternados(sql, params) {
+	if (/asistente:censo/.test(sql)) return INTERNADOS.map((i) => ({ ...i, ingresoIso: '2026-10-01' }));
 	if (!/imHabitacionCamas/i.test(sql) || /FechaEgreso AS int\), 0\) > 0/i.test(sql)) return [];
 	const likes = params.filter((p) => typeof p.value === 'string' && p.value.startsWith('%')).map((p) => p.value.slice(1, -1).toLowerCase());
 	const exactos = params.filter((p) => !String(p.value).startsWith('%')).map((p) => String(p.value));
@@ -276,6 +277,7 @@ const CASOS = [
 					tools: ['buscar_internado'],
 					args: { buscar_internado: (a) => /sanabria/i.test(a.termino || '') },
 					texto: [/458887/, /QUR2|QUIRURGICO/i],
+					maxLlamadas: 1,
 				},
 			},
 			{
@@ -297,7 +299,7 @@ const CASOS = [
 			{
 				mensaje: 'cómo sigue Sanabria?',
 				ruta: '/dashboard',
-				espera: { tools: ['buscar_internado'], noTools: ['buscar_en_manual'] },
+				espera: { algunaDe: ['buscar_internado', 'resumen_internacion'], noTools: ['buscar_en_manual'] },
 			},
 		],
 	},
@@ -325,8 +327,77 @@ const CASOS = [
 					pendientes: 1,
 					pendienteDe: /MEZA/,
 					noTexto: [/\bcargu[eé]\b|se ha registrado|registr[eé]\b|qued[oó] cargad/i],
+					maxLlamadas: 1,
 				},
 			},
+		],
+	},
+	{
+		id: 'f3-carga-sin-verbo',
+		descripcion: 'Carga dicha sin verbo de carga: la consulta no trae las tools de carga, habilitar_cargas las suma',
+		turnos: [
+			{
+				mensaje: 'qué evoluciones tiene Sanabria?',
+				ruta: '/dashboard',
+				espera: { tools: ['ver_evoluciones'], noTools: ['habilitar_cargas'], pendientes: 0 },
+			},
+			{
+				mensaje: 'ponele en la evolución de hoy: estable, sin dolor, tolera vía oral',
+				ruta: '/dashboard',
+				espera: { tools: ['preparar_evolucion'], pendientes: 1, pendienteDe: /SANABRIA/ },
+			},
+		],
+	},
+	{
+		id: 'f3-tipeo',
+		descripcion: 'Apellido mal escrito: el censo encuentra al más parecido y lo aclara',
+		turnos: [
+			{
+				mensaje: 'dónde está Sanabira',
+				ruta: '/dashboard',
+				espera: { tools: ['buscar_internado'], texto: [/SANABRIA/, /parecid/i], maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-pase',
+		descripcion: 'Pase de guardia de un sector: armado en el servidor, una sola llamada al modelo',
+		turnos: [
+			{
+				mensaje: 'armame el pase de guardia de terapia intensiva',
+				ruta: '/dashboard/beds',
+				espera: { tools: ['pase_de_guardia'], texto: [/MIRANDA/, /Cama 03/], pendientes: 0, maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-listar',
+		descripcion: 'Censo de un sector',
+		turnos: [
+			{
+				mensaje: 'qué pacientes hay internados en clínica médica 1?',
+				ruta: '/dashboard',
+				espera: { tools: ['listar_internados'], texto: [/MEZA/], noTexto: [/SANABRIA/], maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-resumen',
+		descripcion: 'Resumen clínico en una sola tool',
+		turnos: [
+			{
+				mensaje: 'resumime cómo está Sanabria',
+				ruta: '/dashboard',
+				espera: { tools: ['resumen_internacion'], noTools: ['ver_historia_clinica'], texto: [/neumon|TC|tomograf|afebril/i], maxLlamadas: 2 },
+			},
+		],
+	},
+	{
+		id: 'f3-saludo',
+		descripcion: 'Saludo y gracias: sin llamar al modelo',
+		turnos: [
+			{ mensaje: 'hola', ruta: '/dashboard', espera: { texto: [/ayudo/], maxLlamadas: 0 } },
+			{ mensaje: 'ok gracias!', ruta: '/dashboard', espera: { texto: [/nada/], maxLlamadas: 0 } },
 		],
 	},
 	{
@@ -391,6 +462,11 @@ function revisar(espera, r) {
 	const usadas = (r.traza || []).map((t) => t.nombre);
 	for (const t of espera.tools || []) if (!usadas.includes(t)) fallas.push(`no llamó ${t}`);
 	for (const t of espera.noTools || []) if (usadas.includes(t)) fallas.push(`llamó ${t}`);
+	if (espera.algunaDe && !espera.algunaDe.some((t) => usadas.includes(t))) fallas.push(`no llamó ninguna de ${espera.algunaDe.join(', ')}`);
+	const llamadasModelo = r.consumo?.llamadas || 0;
+	if (espera.maxLlamadas != null && llamadasModelo > espera.maxLlamadas) {
+		fallas.push(`${llamadasModelo} llamadas al modelo (máx. ${espera.maxLlamadas})`);
+	}
 	for (const [nombre, ok] of Object.entries(espera.args || {})) {
 		const llamadas = (r.traza || []).filter((t) => t.nombre === nombre);
 		if (llamadas.length && !llamadas.some((t) => ok(t.args || {}))) fallas.push(`${nombre} con args inesperados: ${JSON.stringify(llamadas.map((t) => t.args))}`);
@@ -419,9 +495,40 @@ async function correrCaso(caso) {
 		}
 		idConversacion = cuerpo.idConversacion;
 		const { fallas, usadas } = revisar(t.espera || {}, cuerpo);
-		salida.push({ mensaje: t.mensaje, fallas, usadas, texto: cuerpo.texto, paquetes: cuerpo.paquetes, costo: cuerpo.consumo?.costoUsd });
+		salida.push({ mensaje: t.mensaje, fallas, usadas, texto: cuerpo.texto, paquetes: cuerpo.paquetes, costo: cuerpo.consumo?.costoUsd, consumo: cuerpo.consumo });
 	}
 	return salida;
+}
+
+function nuevoGasto() {
+	return { turnos: 0, llamadas: 0, entrada: 0, cacheadas: 0, salida: 0, usd: 0, partes: {} };
+}
+
+function acumular(g, c) {
+	if (!c) return;
+	g.turnos += 1;
+	g.llamadas += c.llamadas || 0;
+	g.entrada += c.tokens?.entrada || 0;
+	g.cacheadas += c.tokens?.cacheadas || 0;
+	g.salida += c.tokens?.salida || 0;
+	g.usd += c.costoUsd || 0;
+	for (const [k, v] of Object.entries(c.composicionEntrada || {})) g.partes[k] = (g.partes[k] || 0) + (v.tokens || 0);
+}
+
+/** Dónde se va la plata: lo que se optimiza se mide acá. */
+function imprimirGasto(g) {
+	if (!g.turnos) return;
+	const p = (n) => Math.round(n / g.turnos);
+	console.log(
+		`Por mensaje: USD ${(g.usd / g.turnos).toFixed(5)} · ${(g.llamadas / g.turnos).toFixed(2)} llamadas · ${p(g.entrada)} tokens in (${Math.round((g.cacheadas / Math.max(1, g.entrada)) * 100)}% cache) · ${p(g.salida)} out`,
+	);
+	const total = Object.values(g.partes).reduce((s, x) => s + x, 0) || 1;
+	console.log(
+		`Entrada: ${Object.entries(g.partes)
+			.sort((a, b) => b[1] - a[1])
+			.map(([k, v]) => `${k} ${Math.round((v / total) * 100)}% (${p(v)})`)
+			.join(' · ')}`,
+	);
 }
 
 async function main() {
@@ -433,12 +540,14 @@ async function main() {
 
 	const veces = Math.max(1, Number(argumento('veces', 1)) || 1);
 	const filtro = argumento('caso', '');
-	const casos = CASOS.filter((c) => !filtro || c.id.includes(filtro));
+	const excluir = argumento('excluir', '');
+	const casos = CASOS.filter((c) => (!filtro || c.id.includes(filtro)) && (!excluir || !c.id.includes(excluir)));
 	console.log(`Modelo ${openai.getModel()} · ${casos.length} casos × ${veces}\n`);
 
 	let ok = 0;
 	let total = 0;
 	let costo = 0;
+	const gasto = nuevoGasto();
 	const inestables = [];
 	for (const caso of casos) {
 		let verdes = 0;
@@ -447,7 +556,10 @@ async function main() {
 			const turnos = await correrCaso(caso);
 			const fallo = turnos.some((t) => t.fallas.length);
 			if (!fallo) verdes += 1;
-			for (const t of turnos) costo += Number(t.costo) || 0;
+			for (const t of turnos) {
+				costo += Number(t.costo) || 0;
+				acumular(gasto, t.consumo);
+			}
 			const marca = fallo ? '✘' : '✔';
 			console.log(`${marca} ${caso.id}${veces > 1 ? ` (#${n})` : ''} — ${caso.descripcion}`);
 			for (const t of turnos) {
@@ -462,6 +574,7 @@ async function main() {
 		if (verdes && verdes < veces) inestables.push(`${caso.id} ${verdes}/${veces}`);
 	}
 	console.log(`\n${ok}/${total} en verde · costo ≈ USD ${costo.toFixed(4)}`);
+	imprimirGasto(gasto);
 	if (inestables.length) console.log(`Inestables: ${inestables.join(', ')}`);
 	process.exit(ok === total ? 0 : 1);
 }
