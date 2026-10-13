@@ -1,5 +1,6 @@
 const auditoria = require('../services/auditoria.service');
 const costos = require('./costos');
+const { getTenantId } = require('../context/tenantContext');
 
 const HEADER_ORIGEN = 'x-imedic-asistente';
 
@@ -61,4 +62,30 @@ async function registrarConsumoIa({ req, accion, idEntidad, modelo, usage, extra
 	});
 }
 
-module.exports = { registrarUso, registrarConsumoIa, origenDe, HEADER_ORIGEN };
+/** Bot de WhatsApp: usa la misma key de OpenAI y no tiene usuario ni req. */
+async function registrarConsumoBot({ modelo, usage, capa }) {
+	const idEmpresa = Number(getTenantId()) || Number(process.env.BOT_EMPRESA_ID) || null;
+	if (!usage || !idEmpresa) return false;
+	const c = costos.costoDe(usage, modelo);
+	return auditoria.registrarSeguro({
+		idEmpresa,
+		modulo: 'ASISTENTE',
+		entidad: 'CONSUMO_IA',
+		idEntidad: null,
+		accion: 'BOT_WHATSAPP',
+		actor: null,
+		ip: null,
+		detalle: {
+			origen: 'bot',
+			capa: capa || null,
+			consumo: {
+				modelo: c.precio.modelo,
+				llamadas: 1,
+				tokens: { entrada: c.entrada, cacheadas: c.cacheadas, salida: c.salida, total: c.total },
+				costoUsd: costos.redondear(c.usd),
+			},
+		},
+	});
+}
+
+module.exports = { registrarUso, registrarConsumoIa, registrarConsumoBot, origenDe, HEADER_ORIGEN };

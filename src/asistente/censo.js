@@ -125,6 +125,13 @@ function buscar(filas, claves) {
 			exactos.push(f);
 			continue;
 		}
+		if (claves.cama) {
+			// Con cama, las palabras que acompañan son el sector («la 3 de UTI»), no el nombre.
+			const sector = normalizar(`${f.sector || ''} ${f.sectorDescripcion || ''}`);
+			const enSector = (claves.tokens || []).every((t) => sector.includes(normalizar(t)));
+			if (enSector && normalizar(f.cama).replace(/^0+(?=\d)/, '') === claves.cama) exactos.push(f);
+			continue;
+		}
 		if (!claves.tokens?.length) continue;
 		const puntos = claves.tokens.map((t) => puntajePalabra(normalizar(t), f._palabras));
 		if (puntos.some((p) => p === 0)) continue;

@@ -2,6 +2,7 @@ const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
 const empresaService = require('../services/empresa.service');
 const visitaResumenIaService = require('../services/visitaResumenIa.service');
+const asistenteAuditoria = require('../asistente/auditoria');
 const { jsonSafe } = require('../utils/jsonSafe');
 const {
   buildSelectiveExportPdf,
@@ -199,7 +200,16 @@ async function empresaParaPdf(req) {
 
 async function resumenIa(req, res) {
   try {
-    const data = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
+    const { uso, ...data } = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
+    if (uso) {
+      await asistenteAuditoria.registrarConsumoIa({
+        req,
+        accion: 'RESUMEN_VISITA_IA',
+        idEntidad: req.params.numeroVisita,
+        modelo: uso.modelo,
+        usage: uso.usage,
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en resumen IA de visita:', error);

@@ -24,6 +24,14 @@ function isConfigured() {
 	return Boolean(getApiKey());
 }
 
+/** chat / chatConHerramientas son del bot: su consumo va a Consumo IA (chatJson lo registra quien la llama). */
+function registrarConsumo(data, payload, capa) {
+	if (!data?.usage) return;
+	require('../asistente/auditoria')
+		.registrarConsumoBot({ modelo: data.model || payload.model, usage: data.usage, capa })
+		.catch(() => {});
+}
+
 /**
  * @param {{ system: string, messages: Array<{ role: 'user'|'assistant', content: string }> }} opts
  * @returns {Promise<string>}
@@ -59,6 +67,7 @@ async function chat({ system, messages }) {
 		err.openaiError = data?.error || null;
 		throw err;
 	}
+	registrarConsumo(data, payload, 'chat');
 
 	const text = data.choices?.[0]?.message?.content?.trim();
 	if (!text) {
@@ -131,6 +140,7 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 		err.openaiError = data?.error || null;
 		throw err;
 	}
+	registrarConsumo(data, payload, 'chatConHerramientas');
 
 	const choice = data.choices?.[0] || {};
 	const msg = choice.message || {};

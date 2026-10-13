@@ -360,6 +360,17 @@ const CASOS = [
 		],
 	},
 	{
+		id: 'f3-por-cama',
+		descripcion: 'Ubicar por número de cama y sector',
+		turnos: [
+			{
+				mensaje: 'quién está en la cama 03 de terapia intensiva?',
+				ruta: '/dashboard/beds',
+				espera: { algunaDe: ['buscar_internado', 'listar_internados'], texto: [/MIRANDA/], maxLlamadas: 2 },
+			},
+		],
+	},
+	{
 		id: 'f3-pase',
 		descripcion: 'Pase de guardia de un sector: armado en el servidor, una sola llamada al modelo',
 		turnos: [
@@ -519,6 +530,9 @@ function acumular(g, c) {
 function imprimirGasto(g) {
 	if (!g.turnos) return;
 	const p = (n) => Math.round(n / g.turnos);
+	console.log(
+		`Total de la corrida (para comparar con el dashboard de OpenAI): ${g.llamadas} requests · ${g.entrada + g.salida} tokens · USD ${g.usd.toFixed(4)}`,
+	);
 	console.log(
 		`Por mensaje: USD ${(g.usd / g.turnos).toFixed(5)} · ${(g.llamadas / g.turnos).toFixed(2)} llamadas · ${p(g.entrada)} tokens in (${Math.round((g.cacheadas / Math.max(1, g.entrada)) * 100)}% cache) · ${p(g.salida)} out`,
 	);

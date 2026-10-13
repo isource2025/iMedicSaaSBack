@@ -127,6 +127,17 @@ test('censo: búsqueda exacta, por DNI, y tolerante a errores de tipeo', () => {
 	assert.equal(censo.buscar(filas, claves('gomez')).exactos.length, 2);
 });
 
+test('censo: por número de cama, con o sin sector', () => {
+	const filas = CENSO.map((f) => ({ ...f, _palabras: censo.normalizar(f.paciente).split(' ') }));
+	const claves = (t) => clinica.extraerClavesBusqueda(t);
+	assert.deepEqual(censo.buscar(filas, claves('105')).exactos.map((f) => f.paciente), ['SANABRIA ELIZABETH']);
+	assert.deepEqual(censo.buscar(filas, claves('el de la 105')).exactos.map((f) => f.paciente), ['SANABRIA ELIZABETH']);
+	assert.deepEqual(censo.buscar(filas, claves('cama 03')).exactos.map((f) => f.paciente), ['GOMEZ ANA']);
+	assert.deepEqual(censo.buscar(filas, claves('cama 3 de terapia')).exactos.map((f) => f.paciente), ['GOMEZ ANA']);
+	assert.equal(censo.buscar(filas, claves('cama 3 de quirurgico')).exactos.length, 0);
+	assert.equal(claves('458887').cama, null, 'una visita no es una cama');
+});
+
 test('buscarInternacion usa el censo: exacto sin SQL extra, aproximado con aviso', async () => {
 	const ctx = ctxBase();
 	const exacto = await clinica.buscarInternacion({ termino: 'sanabria' }, ctx);

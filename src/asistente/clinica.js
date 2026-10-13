@@ -158,11 +158,14 @@ function extraerClavesBusqueda(termino) {
 		const mVis = q.match(/\b(\d{4,6})\b/);
 		if (mVis && !dni) numeroVisita = Number(mVis[1]);
 	}
+	// «105», «cama 3», «la de la 12»: solo el censo sabe buscar por cama.
+	const mCama = !dni && !numeroVisita && (q.match(/^(?:(?:el|la|del)\s+de\s+la\s+)?(?:cama\s+)?(\d{1,3}[a-z]?)$/) || q.match(/\bcama\s+(\d{1,3}[a-z]?)\b/));
+	const cama = mCama ? mCama[1].replace(/^0+(?=\d)/, '') : null;
 	const tokens = q
 		.replace(/\d+/g, ' ')
 		.split(' ')
-		.filter((t) => t.length >= 3 && !STOP_BUSCA.has(t));
-	return { dni, numeroVisita, tokens, q };
+		.filter((t) => t.length >= 3 && !STOP_BUSCA.has(t) && !(cama && t === 'cama'));
+	return { dni, numeroVisita, cama, tokens, q };
 }
 
 function coincideInternado(i, claves) {
@@ -344,7 +347,7 @@ async function buscarInternacion(args, ctx) {
 	if (termino.length < 2) return { error: 'Escribí al menos 2 caracteres' };
 	const incluirEgresadas = Boolean(args.incluirEgresadas);
 	const claves = extraerClavesBusqueda(termino);
-	if (!claves.dni && !claves.numeroVisita && !claves.tokens.length) {
+	if (!claves.dni && !claves.numeroVisita && !claves.cama && !claves.tokens.length) {
 		return { error: 'Indicá apellido y nombre, DNI o número de visita' };
 	}
 

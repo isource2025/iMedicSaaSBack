@@ -412,6 +412,24 @@ Medido con las evals (`--veces=3`, mismos 15 casos):
 
 Con los 21 casos (fase 3 incluida): USD 0,00062 por mensaje y 90 % de caché. Pase de guardia, censo, «dónde está X» y una carga dictada salen con 1 llamada; un saludo, con 0.
 
+### Medido vs. dashboard de OpenAI
+
+`costos.costoDe` se contrastó contra el `usage` crudo de OpenAI: da exacto, con caché incluida. Hay tres razones por las que el dashboard puede mostrar más que el reporte de Consumo IA:
+
+- El dashboard agrupa por día UTC: a la noche (hora de Argentina) ya está sumando el día siguiente.
+- Las evals (`scripts/asistente_evals.js`) pegan a la API real. Cada corrida imprime «Total de la corrida» (requests, tokens y USD) para restarla.
+- Hay otros consumidores con la misma `OPENAI_API_KEY`. Desde el 13/10 todos quedan en imAuditoria como `CONSUMO_IA`:
+
+| Acción | Quién |
+|---|---|
+| `EPICRISIS_IA` | Epicrisis con IA |
+| `RESUMEN_VISITA_IA` | Resumen de visita (`/admission-search/.../resumen-ia`) |
+| `BOT_WHATSAPP` | Bot de WhatsApp (`botOpenai.chat` y `chatConHerramientas`), con `actor` nulo y la empresa de `BOT_EMPRESA_ID` si no hay tenant |
+
+Para separar el asistente en la facturación, conviene darle su propia `ASISTENTE_OPENAI_API_KEY` en un proyecto de OpenAI aparte. Hasta entonces, el dashboard deja agrupar por API key o por modelo («Group by»).
+
+Catálogo de casos de uso con frases de ejemplo y llamadas por caso: `docs/ASISTENTE_CASOS_DE_USO.md`.
+
 ---
 
 ## 12. Seguridad y BD
