@@ -2973,7 +2973,7 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 		`SELECT TOP 1
 		        t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.Horallegada, t.HoraIngreso, t.HoraSalida,
 		        t.Sector, t.Observaciones, t.Status, t.TipoTurno, t.NumeroVisita, t.Especialidad,
-		        t.IdClasificacionTriage, t.Profesional, t.NumeroDocumento,
+		        t.IdClasificacionTriage, t.Profesional, t.NumeroDocumento, t.IDPaciente,
 		        t.CodOperador, t.FechaCarga, t.HoraCarga,
 		        t.OperadorLlegada, t.OperadorIngreso,
 		        op.Apellido AS OpAsigApellido, op.Nombres AS OpAsigNombres,
@@ -2998,31 +2998,6 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 	const hs = Number(r.HoraSalida) || 0;
 	const numeroVisita = Number(r.NumeroVisita) || 0;
 	const extras = _slotExtrasFromTurno(r);
-
-	const racStats = await executeQuery(
-		`SELECT
-			(SELECT COUNT(*) FROM dbo.imInterCtrlFrecuente WHERE IdTurno = @p0) AS controles,
-			(SELECT COUNT(*) FROM dbo.imInterCtrlMedicamento WHERE IdTurno = @p0) AS medicacion`,
-		[{ value: id, type: 'Int' }],
-	);
-	const racControles = Number(racStats[0]?.controles) || 0;
-	const racMedicacion = Number(racStats[0]?.medicacion) || 0;
-
-	const tieneAtencion =
-		st === STATUS_ATENDIDO ||
-		hs > 0 ||
-		numeroVisita > 0 ||
-		Boolean(extras.horaLlegada) ||
-		Boolean(extras.horaIngreso) ||
-		extras.idClasificacionTriage != null ||
-		racControles > 0 ||
-		racMedicacion > 0;
-
-	if (!tieneAtencion) {
-		const e = new Error('El turno aún no tiene datos de atención registrados');
-		e.statusCode = 404;
-		throw e;
-	}
 
 	let diagnostico = null;
 	let hc = null;
@@ -3225,6 +3200,7 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 			especialidad: Number(r.Especialidad) || 0,
 		},
 		paciente: {
+			idPaciente: Number(r.IDPaciente) || null,
 			nombre: r.PacienteNombre
 				? repararTextoClarionAnsi(String(r.PacienteNombre).trim())
 				: null,
