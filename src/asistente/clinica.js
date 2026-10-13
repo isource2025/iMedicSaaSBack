@@ -7,6 +7,7 @@ const httpInterno = require('./httpInterno');
 const autoria = require('./autoria');
 const resumir = require('./resumir');
 const censo = require('./censo');
+const fechas = require('./fechas');
 
 const SECCIONES = Object.freeze({
 	'hcIngreso': 'Historia clínica de ingreso',
@@ -39,8 +40,9 @@ function horaAhora() {
 	return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** El modelo ve las fechas como 23/02/2026 y puede devolverlas así. */
 function fechaValida(f) {
-	return typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : hoyIso();
+	return fechas.aIso(f) || hoyIso();
 }
 
 function horaValida(h) {

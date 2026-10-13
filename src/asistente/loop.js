@@ -36,13 +36,16 @@ function separarDirecta(resultado) {
  *   chat: (opts: object) => Promise<{ content: string|null, toolCalls: object[] }>,
  *   maxIter?: number,
  *   onEvento?: (evt: object) => void,
+ *   formatear?: (resultado: any) => any,
  * }} opts
  * tools como función: se vuelve a leer en cada iteración (una tool puede habilitar otras).
+ * formatear: lo que ve el modelo de cada resultado (no cambia lo que recibe el llamador).
  */
-async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }) {
+async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento, formatear }) {
 	const limite = Math.max(1, Number(maxIter) || MAX_ITER_DEFAULT);
 	const invocadas = [];
 	const emit = typeof onEvento === 'function' ? onEvento : () => {};
+	const paraElModelo = typeof formatear === 'function' ? formatear : (x) => x;
 	const toolsActuales = typeof tools === 'function' ? tools : () => tools;
 
 	for (let i = 0; i < limite; i++) {
@@ -83,7 +86,7 @@ async function agenteLoop({ messages, tools, ejecutar, chat, maxIter, onEvento }
 			messages.push({
 				role: 'tool',
 				tool_call_id: call.id,
-				content: JSON.stringify(paraModelo ?? {}),
+				content: JSON.stringify(paraElModelo(paraModelo ?? {}) ?? {}),
 			});
 		}
 

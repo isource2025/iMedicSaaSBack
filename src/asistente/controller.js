@@ -22,6 +22,7 @@ const censo = require('./censo');
 const intencionMod = require('./intencion');
 const directas = require('./directas');
 const internacion = require('./agentes/internacion');
+const fechas = require('./fechas');
 
 const MAX_ITER = Number(process.env.ASISTENTE_MAX_ITER || 10);
 
@@ -316,6 +317,7 @@ async function correrModelo({
 		chat: consumo.medirChat((opts) => openai.chatConHerramientas(opts), ctx.medidor),
 		maxIter: MAX_ITER,
 		onEvento,
+		formatear: fechas.paraModelo,
 	});
 	sesion.guardarOpenai(conv, out.messages);
 
