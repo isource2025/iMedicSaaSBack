@@ -25,7 +25,7 @@ Antes era «un mensaje = un especialista»: si el router se equivocaba, el usuar
 | Agente | `LISTO` | Qué hace hoy |
 |---|---|---|
 | **SOPORTE** (capa base) | **sí** | Manual, pantallas, navegar, escribir en campo y `diagnosticar` («no me deja / me da error»). Va en todos los turnos. |
-| **INTERNACION** | **no** | 6 tools implementadas y testeadas con mocks (`tests/asistente.internacion.test.js`). Falta correr `scripts/asistente_internacion.js` en copia. Hasta entonces cae a Soporte con aviso. |
+| **INTERNACION** | **sí** (`ASISTENTE_INTERNACION_LISTO=0` lo apaga) | 24 tools: ubicar (nombre, DNI, visita o cama), censo y pase de guardia, resumen y lecturas, cargas del menú médico y movimientos (estos con `ASISTENTE_INTERNACION_ESCRITURA=1`). Testeado con mocks y evals. **Falta correr `scripts/asistente_internacion.js` en una copia de la BD y la prueba de un usuario.** |
 | ADMISION | no | Solo regla de ruteo |
 | TURNOS | no | Solo regla de ruteo |
 | ALMACEN | no | Solo regla de ruteo |
@@ -33,7 +33,7 @@ Antes era «un mensaje = un especialista»: si el router se equivocaba, el usuar
 | PERSONAL | no | Solo regla de ruteo |
 | Super Admin | — | **No hay ni va a haber** agente |
 
-Hasta que Internación no ponga `LISTO = true` y pase su script de consola, **no se prueba contra la BD del hospital**.
+Hasta que Internación pase su script de consola en una copia, **no se prueba contra la BD del hospital**.
 
 ---
 
