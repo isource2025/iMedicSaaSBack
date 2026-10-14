@@ -66,7 +66,7 @@ const MODULOS = Object.freeze([
 		label: 'Turnos',
 		submodulos: [
 			{ id: 'AGENDA',        label: 'Agenda',           path: '/dashboard/turnos/agenda',        acciones: [...CRUD] },
-			{ id: 'ADMIN',         label: 'Admin de Turnos',  path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
+			{ id: 'ADMIN',         label: 'Gestión de turnos', path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
 			{ id: 'EXCEPCIONES',   label: 'Excepciones',      path: '/dashboard/turnos/excepciones',   acciones: [...CRUD] },
 			{ id: 'CONFIGURACION', label: 'Configuración',    path: '/dashboard/turnos/configuracion', acciones: [ACCIONES.VER, ACCIONES.EDITAR, ACCIONES.GESTIONAR] },
 			{ id: 'TABLA',         label: 'Tabla de Turnos',  path: '/dashboard/turnos/tabla',         acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },

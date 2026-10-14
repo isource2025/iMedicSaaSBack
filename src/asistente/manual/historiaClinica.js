@@ -67,7 +67,7 @@ module.exports = [
 			'Cargar: «Agregar indicación» → «Tipo de Indicación», «Medicación» (o el ítem del catálogo), «Cantidad», «Tipo unidad», «Frecuencia», «Solicitado para el día», «Profesional que indica» → guardar. «Agregar Adicional» suma indicaciones hijas.',
 			'Suspender: «Dejar sin efecto» → confirmar. Las suspendidas se ven con el switch «Ver sin efecto».',
 			'Repetir las de otro día: «Volver a Indicar» → elegir → «Reindicar N indicación(es)».',
-			'Aplicar (enfermería): «Aplicar indicación» → «Fecha / Hora Control» o «Fecha / Hora Cumplido» → «Aplicar».',
+			'Aplicar (enfermería): «Aplicar indicación» → «Fecha / Hora Control» (en controles, «del Control») o «Fecha / Hora Cumplido» → «Aplicar».',
 			'Editar / eliminar: íconos «Editar indicación» / «Eliminar indicación» → «Confirmar Eliminación».',
 		],
 		problemas: [
@@ -215,7 +215,7 @@ module.exports = [
 		path: '/dashboard/beds',
 		seccion: 'laboratorios',
 		modulo: 'INTERNACION',
-		comoLlegar: 'Ficha de la cama → «Laboratorios», o ícono «Resultados de Laboratorio» en el mapa.',
+		comoLlegar: 'Mapa de camas → ícono «Resultados de Laboratorio» en la cama. En la ficha, «Laboratorios» (Carga documental) solo aparece para roles de carga, no para médicos ni enfermería.',
 		permisos: ['INTERNACION.ESTUDIOS.VER'],
 		tags: ['laboratorio', 'laboratorios', 'analisis', 'resultados de laboratorio', 'examen'],
 		texto: 'Resultados de laboratorio de la visita.',

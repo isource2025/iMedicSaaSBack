@@ -52,7 +52,9 @@ module.exports = [
 		pasos: [
 			'Gestión Médica: «H.C. de Ingreso», «Indicaciones», «Estudios», «Interconsultas», «Protocolos», «Procedimientos», «Evoluciones», «Epicrisis».',
 			'Gestión Enfermería: «Controles», «Medicación Suministrada», «Dietas», «Balance Hídrico», «Evolución de Enfermería», «Insumos».',
-			'Otras: «Laboratorios», «Archivos adjuntos», «Movimientos», «Informe de Evolución», «Exportar detalle».',
+			'Carga documental (solo roles de carga, no médicos ni enfermería): «Laboratorios», «Archivos adjuntos».',
+			'Otras Funciones: «Movimientos», «Informe de Evolución», «Exportar detalle».',
+			'Médicos y enfermería ven los laboratorios desde el mapa: ícono «Resultados de Laboratorio» en la cama.',
 			'Para volver al mapa: «Cerrar».',
 		],
 		problemas: [

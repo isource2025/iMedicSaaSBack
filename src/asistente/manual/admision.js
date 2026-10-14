@@ -62,20 +62,29 @@ module.exports = [
 	},
 	{
 		id: 'consultar-hc',
-		titulo: 'Consultar Historia Clínica (buscar visitas)',
+		titulo: 'Consultar Historia Clínica (Búsqueda de admisiones)',
 		path: '/dashboard/admission/search',
 		modulo: 'ADMISION',
-		comoLlegar: 'Menú: «Consultar Historia Clínica» (primer nivel).',
+		comoLlegar: 'Menú: «Consultar Historia Clínica» (primer nivel). La pantalla se titula «Búsqueda de admisiones».',
 		permisos: ['ADMISION.BUSQUEDA.VER'],
-		tags: ['historia clinica', 'hc', 'buscar visita', 'buscar admision', 'carpeta', 'visitas anteriores', 'exportar pdf', 'egresados'],
-		texto: 'Búsqueda de admisiones por visita o carpeta de paciente, con detalle y exportación a PDF.',
-		pasos: [
-			'Elegí «Por visita» o «Carpeta de paciente».',
-			'Escribí en «Nombre, DNI o nº de visita», elegí «Período» («Semana», «Mes», «Año») → «Buscar».',
-			'Tocá el número de admisión para ver la historia clínica; «Exportar PDF» desde la barra.',
-			'«Modificar» abre la edición de la admisión.',
+		tags: [
+			'historia clinica', 'hc', 'buscar visita', 'buscar admision', 'busqueda de admisiones', 'carpeta', 'carpeta de paciente',
+			'visitas anteriores', 'exportar pdf', 'egresados', 'continuar carga clinica', 'ver hc completa',
 		],
-		problemas: [{ sintoma: '«Sin resultados»', causa: 'Probá con otro período o con el DNI completo.' }],
+		texto:
+			'Aunque el menú dice «Consultar Historia Clínica», la pantalla es la «Búsqueda de admisiones»: primero se busca la visita (o la carpeta del paciente con todas sus visitas) y recién al abrir una se ve la historia clínica. El detalle de la visita («Visita #N») es completo: «Resumen» y las secciones de Internación, Gestión médica, Enfermería y Documentación (HC de ingreso, indicaciones, evoluciones, estudios, laboratorios, protocolos, epicrisis, controles, medicación, dietas, balance, movimientos, egreso, adjuntos). Desde ahí es solo lectura; para cargar algo está «Continuar carga clínica», que abre la ficha editable de esa visita.',
+		pasos: [
+			'Elegí «Por visita» (una internación o atención) o «Carpeta de paciente» (todas las visitas de esa persona).',
+			'Escribí en «Nombre, DNI o nº de visita», elegí «Período» («Semana», «Mes», «Año») → «Buscar».',
+			'Tocá el número de visita: se abre «Visita #N» con el «Resumen» y las secciones a la izquierda.',
+			'«Exportar PDF» descarga la HC de esa visita. «Continuar carga clínica» abre la ficha para cargar evoluciones, indicaciones, etc.',
+			'«Modificar» (en la fila) no es la HC: abre la edición de la admisión (datos administrativos, ubicación, egreso).',
+		],
+		problemas: [
+			{ sintoma: '«Sin resultados»', causa: 'El período filtra por fecha de admisión: probá «Año» o con el DNI completo.' },
+			{ sintoma: 'Esperaba ver la HC directo y aparece una búsqueda', causa: 'Es la búsqueda de admisiones: buscá al paciente y abrí la visita. Si ya está internado, es más corto ir por el mapa de camas o por /dashboard/visita/<número>.' },
+			{ sintoma: 'No puedo cargar nada en la HC desde acá', causa: 'El detalle es de consulta: usá «Continuar carga clínica».' },
+		],
 	},
 	{
 		id: 'buscar-paciente-rapido',
