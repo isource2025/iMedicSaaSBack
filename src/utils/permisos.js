@@ -326,7 +326,7 @@ const PLANTILLAS = Object.freeze({
 
 	// ──────────────────────────────────────────────────────────────────────
 	// ADMINISTRATIVO — ve todo (incl. clínica), gestiona pacientes/admisiones/
-	// agenda. Internación es SOLO lectura (sin camas, movimientos ni export). ≠ ADMIN.
+	// camas/agenda. Sin escritura médica ni de enfermería. ≠ ADMIN.
 	// ──────────────────────────────────────────────────────────────────────
 	ADMINISTRATIVO: Object.freeze([
 		..._soloVer('TURNOS'),
@@ -342,6 +342,14 @@ const PLANTILLAS = Object.freeze({
 		..._todas('ADMISION', 'PACIENTES'),
 		'ADMISION.NUEVA.CREAR',
 		'ADMISION.TABLA.EXPORTAR',
+
+		'INTERNACION.CAMAS.CREAR',
+		'INTERNACION.CAMAS.EDITAR',
+		'INTERNACION.CAMAS.ELIMINAR',
+		'INTERNACION.CAMAS.GESTIONAR',
+		'INTERNACION.MOVIMIENTOS.TRASLADAR',
+		'INTERNACION.MOVIMIENTOS.GESTIONAR',
+		'INTERNACION.TABLA.EXPORTAR',
 
 		'TURNOS.AGENDA.CREAR',
 		'TURNOS.AGENDA.EDITAR',
