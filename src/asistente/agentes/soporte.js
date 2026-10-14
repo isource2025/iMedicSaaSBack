@@ -156,6 +156,7 @@ function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID], co
 		'- Si en la pantalla hay errores recientes o avisos, usalos para entender el problema; no los leas en voz alta si no vienen al caso.',
 		'- Pantallas a las que llega este usuario: listar_pantallas.',
 		'- “Llevame a…”: listar_pantallas si dudás el path, después navegar. Nunca inventes una ruta.',
+		'- Los artículos de buscar_en_manual ya le aparecen como botones (abren la pantalla y señalan la opción): no llames navegar para ofrecerlos ni digas «te dejo el link».',
 		'- Texto en un campo visible de la pantalla: escribir_en_campo. El usuario toca Aplicar; vos no guardás el form.',
 		'- Si no lo podés resolver, decilo claro y sugerí avisar a soporte de la institución con el error y la pantalla.',
 		'- No listes endpoints. No uses SQL. No pidas idEmpresa.',

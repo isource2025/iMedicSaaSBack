@@ -169,21 +169,33 @@ function notasDelTurno(ruta = {}) {
  * Instrucciones del turno: capa de Soporte + la de cada paquete cargado.
  * conNotas=false deja afuera lo que cambia por mensaje (notasDelTurno), para el prefijo cacheable.
  * ruta.escribe=false: turno de consulta, los paquetes omiten sus reglas de carga.
+ * Pedido de ayuda sin carga: los paquetes van en su versión corta (instruccionesAyuda).
  */
 function instrucciones(ruta = {}, { conNotas = true } = {}) {
 	const paquetes = ruta.paquetes?.length ? ruta.paquetes : [BASE];
 	const extras = paquetes.filter((id) => id !== BASE).map(porId).filter(Boolean);
 	const notas = conNotas ? notasDelTurno(ruta) : '';
+	const ayuda = soloAyuda(ruta);
+	const deModulo = (ag) =>
+		ayuda && typeof ag.instruccionesAyuda === 'function'
+			? ag.instruccionesAyuda()
+			: ag.instrucciones({ escribe: ruta.escribe !== false });
 	return [
 		soporte.instrucciones({ paquetes, conNotas: false }),
-		...extras.map((ag) => `\n## Módulo ${ag.ID}\n${ag.instrucciones({ escribe: ruta.escribe !== false })}`),
+		...extras.map((ag) => `\n## Módulo ${ag.ID}\n${deModulo(ag)}`),
 		notas ? `\n## Este mensaje\n${notas}` : '',
 	]
 		.filter(Boolean)
 		.join('\n');
 }
 
+/** Ayuda sin carga: los módulos viajan livianos y habilitar_modulo trae el resto. */
+function soloAyuda(ruta = {}) {
+	return Boolean(ruta.ayuda) && ruta.escribe === false;
+}
+
 module.exports = {
+	soloAyuda,
 	AGENTES,
 	BASE,
 	RUTA_A_AGENTE,

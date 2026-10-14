@@ -186,3 +186,42 @@ test('errores, avisos y botones deshabilitados de la pantalla: saneados y en el 
 	assert.match(prompt, /Avisos visibles: «No se pudo guardar»/);
 	assert.match(prompt, /Botones deshabilitados: Egresar/);
 });
+
+test('ayuda sin carga: Internación viaja liviana (tools de verificación y reglas cortas)', { skip: !internacionLista() }, () => {
+	const ruta = orquestador.resolver({ texto: '¿cómo cargo una evolución?', moduloRuta: 'INTERNACION' });
+	ruta.escribe = false;
+	assert.equal(orquestador.soloAyuda(ruta), true);
+	const opts = { permisos: MEDICO, paquetes: ruta.paquetes, tienePermiso: permisosService.tienePermiso, soloLectura: true };
+	const nombres = catalogo.seleccionar({ ...opts, ayuda: true }).map((h) => h.name);
+	assert.ok(nombres.includes('buscar_en_manual') && nombres.includes('diagnosticar'));
+	assert.ok(nombres.includes('ver_evoluciones') && nombres.includes('buscar_internado'));
+	assert.ok(!nombres.includes('ver_historia_clinica') && !nombres.includes('resumen_internacion'));
+	assert.ok(catalogo.seleccionar(opts).some((h) => h.name === 'ver_historia_clinica'));
+	const corto = orquestador.instrucciones(ruta, { conNotas: false });
+	const largo = orquestador.instrucciones({ ...ruta, ayuda: false }, { conNotas: false });
+	assert.match(corto, /habilitar_modulo/);
+	assert.ok(corto.length < largo.length / 2);
+	assert.equal(orquestador.soloAyuda({ ...ruta, escribe: true }), false);
+});
+
+test('buscar_en_manual deja botones a la pantalla y señala la opción', async () => {
+	const ctx = ctxDiag({ req: { rolNombre: 'MEDICO', headers: {}, body: { mensaje: 'cómo traslado a un paciente de cama', rutaActual: '/dashboard' } } });
+	await ejecutar('buscar_en_manual', { pregunta: 'trasladar paciente de cama' }, ctx);
+	const traslado = ctx.navegaciones.find((n) => n.resaltar === 'Cambiar Cama');
+	assert.ok(traslado, JSON.stringify(ctx.navegaciones));
+	assert.equal(traslado.path, '/dashboard/beds');
+	assert.ok(ctx.navegaciones.length <= 2);
+});
+
+test('buscar_en_manual con una visita abierta: el botón abre esa sección de la ficha', async () => {
+	const ruta = '/dashboard/visita/458887';
+	const ctx = ctxDiag({
+		entidades: { numeroVisita: 458887 },
+		req: { rolNombre: 'MEDICO', headers: {}, body: { mensaje: 'cómo cargo una evolución', rutaActual: ruta } },
+	});
+	await ejecutar('buscar_en_manual', { pregunta: 'cargar evolución' }, ctx);
+	assert.ok(
+		ctx.navegaciones.some((n) => n.href === '/dashboard/visita/458887?seccion=evoluciones'),
+		JSON.stringify(ctx.navegaciones),
+	);
+});

@@ -199,6 +199,10 @@ Motor (`manual.js`):
 - **`accesible`:** marca (no oculta) los artículos de pantallas a las que el usuario no tiene permiso, con los permisos que piden.
 - **`paraModelo`:** primero y segundo con pasos y problemas, el resto resumido, tope ~3.500 caracteres.
 - `buscar_en_manual` busca con la pregunta del modelo **y** con el mensaje literal del usuario, intercalados (el modelo a veces reescribe «cómo cargo acá» como «cómo cargar una evolución»).
+- **Botones (`botonesDelManual` en `ejecutar.js`):** de los 2 primeros artículos accesibles sale un botón en `navegaciones`, sin que el modelo llame `navegar`:
+  - Abre `path`. Si el artículo es de una sección de la ficha y hay una visita abierta o en foco, abre `/dashboard/visita/<nv>?seccion=<seccion>`. Sin visita, lleva al mapa con «elegí el paciente».
+  - `resaltar`: la opción que hay que tocar, tomada del campo `boton` del artículo o, si no lo tiene, del primer «…» de `comoLlegar` (por ejemplo «Cambiar Cama»). El front la busca por texto, `aria-label` o `title` (`resaltarOpcion` en `pantalla.ts`) y la señala con un pulso. Si ya estás en esa pantalla, el botón dice «Mostrarme «X»» y no navega.
+  - Si la opción no aparece en 6–8 s, no pasa nada.
 
 `tests/asistente.manual.test.js` falla si una pantalla real queda sin artículo, si un artículo apunta a una ruta o sección que no existe en el front, o si nombra un permiso que no está en la matriz; también fija el ranking de 18 preguntas reales.
 
@@ -393,6 +397,8 @@ Cada mensaje cuesta lo que pesan las definiciones de tools + el system prompt, m
 
 - **Intención por reglas (`intencion.js`, 0 tokens):**
   - En un turno de **consulta** no viajan las tools de carga ni sus reglas (unos 2.300 tokens menos por llamada). Va `habilitar_cargas` en su lugar: si el modelo la llama, el loop le suma las tools en la iteración siguiente (`tools` como función en `loop.js`) y le devuelve las reglas de carga.
+  - En un pedido de **ayuda** sin carga (`orquestador.soloAyuda`), cada módulo viaja liviano. De Internación van solo sus `HERRAMIENTAS_AYUDA` (`buscar_internado`, `ver_evoluciones`, `ver_indicaciones`), para verificar «se me borró» o «no aparece», y unas reglas cortas (`instruccionesAyuda`). Con eso, una pregunta de uso en una pantalla de internación pasa de unos 4.270 a unos 2.370 tokens de entrada por llamada, y de 7.800–8.400 a 4.400–5.100 por mensaje en las evals.
+    - Si la regla de ayuda se equivoca («por qué está con fiebre X»), el modelo llama `habilitar_modulo`. El loop le suma las tools de consulta y le devuelve las reglas completas del módulo; ese mensaje cuesta una llamada más.
   - En un turno de **carga** van solo las tools del tipo que nombra el pedido; lo dictado después de «:» no cuenta. Por ejemplo, «evolucioná a X: pedí rx» manda solo las de evolución.
   - Si el turno anterior usó una tool de carga (`conv.cargaEnCurso`: se contesta un motivo o un paciente), van todas.
 - **Respuesta directa (`loop.js` + `directas.js`):** si todas las tools de una iteración devuelven `respuestaDirecta`, ese texto es la respuesta y no hay segunda llamada al modelo. El modelo ve el resultado sin ese texto, y el texto queda como respuesta suya en el historial. Se usa en estos casos:

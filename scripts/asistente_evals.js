@@ -304,6 +304,17 @@ const CASOS = [
 		],
 	},
 	{
+		id: 'ayuda-falsa-clinica',
+		descripcion: '«Por qué está con fiebre» pasa por la regla de ayuda: habilitar_modulo trae las tools clínicas',
+		turnos: [
+			{
+				mensaje: 'por qué está con fiebre Sanabria?',
+				ruta: '/dashboard/beds',
+				espera: { algunaDe: ['resumen_internacion', 'ver_historia_clinica'] },
+			},
+		],
+	},
+	{
 		id: 'umbert-en-pantalla-de-miranda',
 		descripcion: 'Incidente 12/10: egreso pedido por nombre con otro paciente en pantalla (modo altas: no habilitado)',
 		turnos: [

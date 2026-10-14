@@ -107,7 +107,7 @@ function bloqueadaPorAgente(h) {
 
 /**
  * Tools del turno. `paquetes` (Soporte + módulos) manda sobre `agente`, que queda
- * para pedir las de un solo agente.
+ * para pedir las de un solo agente. `ayuda`: de cada módulo, solo su HERRAMIENTAS_AYUDA.
  */
 function seleccionar({
 	permisos,
@@ -117,6 +117,7 @@ function seleccionar({
 	tienePermiso,
 	puedeSql = false,
 	soloLectura = false,
+	ayuda = false,
 }) {
 	const check = typeof tienePermiso === 'function' ? tienePermiso : () => false;
 	const ids = Array.isArray(paquetes) && paquetes.length ? paquetes : [agente];
@@ -125,8 +126,9 @@ function seleccionar({
 	const vistas = new Set();
 	const permitidas = [];
 	for (const spec of specs) {
+		const deAyuda = ayuda && spec.ID !== 'SOPORTE' && Array.isArray(spec.HERRAMIENTAS_AYUDA) ? spec.HERRAMIENTAS_AYUDA : null;
 		for (const h of spec.HERRAMIENTAS || []) {
-			if (vistas.has(h.name)) continue;
+			if (vistas.has(h.name) || (deAyuda && !deAyuda.includes(h.name))) continue;
 			vistas.add(h.name);
 			const bloqueada = specs.some((s) => (s.HERRAMIENTAS || []).includes(h) && escrituraBloqueada(h, s));
 			if (

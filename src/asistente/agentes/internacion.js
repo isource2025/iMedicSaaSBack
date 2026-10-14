@@ -737,4 +737,25 @@ function instrucciones({ escribe = true } = {}) {
 	].join('\n');
 }
 
-module.exports = { ID, LISTO, HERRAMIENTAS, instrucciones, reglasDeCarga, modoEscritura, escrituraHabilitada };
+/** Pedido de ayuda: viajan estas para verificar un dato («se me borró», «no aparece»); el resto, con habilitar_modulo. */
+const HERRAMIENTAS_AYUDA = Object.freeze(['buscar_internado', 'ver_evoluciones', 'ver_indicaciones']);
+
+function instruccionesAyuda() {
+	return [
+		'Mensaje de ayuda: del módulo de internación solo tenés buscar_internado, ver_evoluciones y ver_indicaciones, para verificar si un dato existe y cuándo se cargó.',
+		'- Si en realidad pide datos clínicos de un paciente (resumen, HC, signos, estudios, pase de guardia, internados) o cargar algo, llamá habilitar_modulo (sin decirle nada) y seguí.',
+		'- Nombrá al paciente como lo devuelve la tool. No inventes datos ni presentes como registrado lo que no está.',
+	].join('\n');
+}
+
+module.exports = {
+	ID,
+	LISTO,
+	HERRAMIENTAS,
+	HERRAMIENTAS_AYUDA,
+	instrucciones,
+	instruccionesAyuda,
+	reglasDeCarga,
+	modoEscritura,
+	escrituraHabilitada,
+};

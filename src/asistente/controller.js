@@ -152,6 +152,9 @@ async function prepararTurno(req) {
 		: intencion.cargas
 			? herramientas.filter((h) => !catalogo.esEscritura(h) || intencion.cargas.includes(h.name))
 			: herramientas;
+	const herramientasAyuda = orquestador.soloAyuda(ruta)
+		? catalogo.seleccionar({ ...opcionesCatalogo, soloLectura: true, ayuda: true })
+		: null;
 
 	return {
 		mensaje,
@@ -161,6 +164,7 @@ async function prepararTurno(req) {
 		entidades,
 		herramientas,
 		herramientasTurno,
+		herramientasAyuda,
 		intencion,
 		conv,
 		puedeSql,
@@ -179,12 +183,28 @@ const HABILITAR_CARGAS = Object.freeze({
 	},
 });
 
-/** `parcial`: las del turno + habilitar_cargas si quedaron tools de carga afuera; `todas`, después de llamarla. */
-function toolsDelTurno({ herramientas, herramientasTurno }) {
+const HABILITAR_MODULO = Object.freeze({
+	type: 'function',
+	function: {
+		name: 'habilitar_modulo',
+		description: 'Trae las tools de consulta clínica del módulo (HC, resumen, signos, estudios, pase, internados). Llamala solo si el pedido es sobre datos de un paciente y no tenés la tool.',
+		parameters: { type: 'object', properties: {} },
+	},
+});
+
+/**
+ * `parcial`: las del turno + habilitar_cargas si quedaron tools de carga afuera; `todas`, después de llamarla.
+ * `ayuda` (pedido de ayuda): Soporte + las de verificación de cada módulo + habilitar_modulo, que pasa a `parcial`.
+ */
+function toolsDelTurno({ herramientas, herramientasTurno, herramientasAyuda }) {
 	const todas = herramientas.map(catalogo.aOpenAi);
 	const turno = herramientasTurno || herramientas;
 	const parcial = herramientas.length > turno.length ? [...turno.map(catalogo.aOpenAi), HABILITAR_CARGAS] : todas;
-	return { todas, parcial };
+	const ayuda =
+		herramientasAyuda && herramientasAyuda.length < turno.length
+			? [...herramientasAyuda.map(catalogo.aOpenAi), HABILITAR_MODULO]
+			: null;
+	return { todas, parcial, ayuda };
 }
 
 const SALUDO = /^(?:hola|buen[oa]s(?:\s+(?:d[ií]as|tardes|noches))?|hey|qu[eé]\s+tal)(?:\s+(?:asistente|imedic))?[\s!.¡]*$/i;
@@ -264,6 +284,7 @@ async function correrModelo({
 	entidades,
 	herramientas,
 	herramientasTurno,
+	herramientasAyuda,
 	intencion,
 	conv,
 	puedeSql,
@@ -317,14 +338,28 @@ async function correrModelo({
 		{ role: 'user', content: mensaje },
 	];
 
-	const tools = toolsDelTurno({ herramientas, herramientasTurno });
+	const tools = toolsDelTurno({ herramientas, herramientasTurno, herramientasAyuda });
 	ctx.todasLasCargas = false;
+	ctx.moduloCompleto = !tools.ayuda;
 	ctx.intencion = intencion || {};
 	ctx.mensaje = mensaje;
 	const out = await agenteLoop({
 		messages,
-		tools: () => (ctx.todasLasCargas ? tools.todas : tools.parcial),
+		tools: () => (ctx.todasLasCargas ? tools.todas : ctx.moduloCompleto ? tools.parcial : tools.ayuda),
 		ejecutar: async (nombre, args) => {
+			if (nombre === 'habilitar_modulo') {
+				ctx.moduloCompleto = true;
+				ctx.traza?.push({ nombre, args: {}, resultado: { habilitado: true } });
+				return {
+					habilitado: true,
+					aviso: 'Ya tenés las tools del módulo: llamá la que corresponda.',
+					reglas: (rutaAgente?.paquetes || [])
+						.map(orquestador.porId)
+						.filter((ag) => ag && ag.ID !== orquestador.BASE)
+						.map((ag) => ag.instrucciones({ escribe: false }))
+						.join('\n'),
+				};
+			}
 			if (nombre === 'habilitar_cargas') {
 				ctx.todasLasCargas = true;
 				ctx.traza?.push({ nombre, args: {}, resultado: { habilitado: true } });

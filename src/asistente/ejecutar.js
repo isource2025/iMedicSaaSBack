@@ -52,10 +52,43 @@ function intercalar(a, b) {
 	return out;
 }
 
-function agregarLink(ctx, href, etiqueta) {
+function agregarLink(ctx, href, etiqueta, resaltar) {
 	if (!href || !pathConocido(href)) return;
-	if (ctx.navegaciones.some((n) => n.href === href)) return;
-	ctx.navegaciones.push({ path: href.split('?')[0], href, motivo: etiqueta || null });
+	if (ctx.navegaciones.some((n) => n.href === href && (n.resaltar || null) === (resaltar || null))) return;
+	const item = { path: href.split('?')[0], href, motivo: etiqueta || null };
+	if (resaltar) item.resaltar = resaltar;
+	ctx.navegaciones.push(item);
+}
+
+const MAX_BOTONES_MANUAL = 2;
+
+function visitaAbierta(ctx, ruta) {
+	const m = /^\/dashboard\/(?:visita|beds)\/(\d+)/.exec(String(ruta || ''));
+	return ctx.entidades?.numeroVisita || ctx.foco?.numeroVisita || (m ? m[1] : null);
+}
+
+/**
+ * Botones de los artículos que devolvió el manual: abren la pantalla (o la sección de la
+ * ficha abierta) y señalan la primera opción que nombra «comoLlegar».
+ */
+function botonesDelManual(ctx, hits, ruta) {
+	if (!Array.isArray(ctx?.navegaciones)) return;
+	const actual = String(ruta || '').split('?')[0];
+	const nv = visitaAbierta(ctx, ruta);
+	let n = 0;
+	for (const a of hits) {
+		if (n >= MAX_BOTONES_MANUAL) break;
+		if (a.accesible === false || !a.path) continue;
+		const opcion = a.boton || /«([^»]{2,40})»/.exec(a.comoLlegar || '')?.[1] || null;
+		let href = a.path;
+		let resaltar = a.seccion ? null : opcion;
+		if (a.seccion && nv) href = `/dashboard/visita/${nv}?seccion=${encodeURIComponent(a.seccion)}`;
+		const aca = href.split('?')[0] === actual && !href.includes('?');
+		if (aca && !resaltar) continue;
+		if (!pathConocido(href)) continue;
+		agregarLink(ctx, href, a.seccion && !nv ? `${a.titulo}: elegí el paciente` : a.titulo, resaltar);
+		n++;
+	}
 }
 
 function crearPendiente(ctx, { herramienta, args, http, resumen, detalle, link, generativo }) {
@@ -150,6 +183,7 @@ async function ejecutarPlataforma(nombre, args, ctx) {
 			literal && literal !== pregunta
 				? intercalar(manual.buscar(literal, 4, opts), manual.buscar(pregunta, 4, opts)).slice(0, 4)
 				: manual.buscar(pregunta, 4, opts);
+		botonesDelManual(ctx, hits, opts.ruta);
 		return hits.length
 			? {
 					articulos: manual.paraModelo(hits),
