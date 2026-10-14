@@ -76,7 +76,7 @@ const obtenerCamaPorId = async (req, res) => {
 const actualizarEstadoCama = async (req, res) => {
 	try {
 		const id = req.params.id; // Usar el ID tal como viene, sin convertir a entero
-		const { estado } = req.body;
+		const valorEstado = req.body?.valorEstado ?? req.body?.estado;
 
 		if (!id) {
 			return res
@@ -84,16 +84,7 @@ const actualizarEstadoCama = async (req, res) => {
 				.json({ success: false, mensaje: 'ID inválido o no proporcionado' });
 		}
 
-		const estadosValidos = ['disponible', 'ocupada', 'mantenimiento'];
-		if (!estadosValidos.includes(estado)) {
-			return res.status(400).json({ success: false, mensaje: 'Estado no válido' });
-		}
-
-		const camaActualizada = await bedsService.actualizarEstadoCama(id, estado);
-		if (!camaActualizada) {
-			return res.status(404).json({ success: false, mensaje: 'Cama no encontrada' });
-		}
-
+		const camaActualizada = await bedsService.actualizarEstadoCama(id, valorEstado);
 		res.json({ success: true, data: camaActualizada });
 	} catch (error) {
 		console.error('Error al actualizar estado de cama:', error);

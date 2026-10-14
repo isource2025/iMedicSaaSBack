@@ -18,13 +18,18 @@ module.exports = [
 			'Para encontrar a alguien usá el buscador «Buscar por nombre, DNI, HC o admisión...».',
 			'Tocá una cama ocupada para abrir su ficha clínica.',
 			'En la tarjeta de una cama ocupada están los íconos «Reporte de Enfermería», «Resultados de Laboratorio», «Archivos adjuntos», «Cambiar Cama» y «Egreso del Paciente».',
+			'En una cama vacía, el botón «Cambiar estado» (esquina inferior derecha) permite pasarla a otro estado del catálogo (cerrada, reparación, aislada, desocupada, etc.).',
 		],
 		problemas: [
-			{ sintoma: 'Tocar la cama no abre nada', causa: 'Solo las camas ocupadas abren la ficha. En una libre aparece «Asignar internado sin cama».' },
+			{ sintoma: 'Tocar la cama no abre nada', causa: 'Solo las camas ocupadas abren la ficha. En una desocupada aparece «Asignar internado sin cama».' },
 			{ sintoma: '«No se encontraron camas con los filtros seleccionados»', causa: 'Los filtros de sector/estado/servicio dejan la grilla vacía: limpialos.' },
 			{
 				sintoma: 'Quiero cambiar el estado de una cama (bloqueada, reparación, limpieza)',
-				causa: 'Desde iMedic web no hay una pantalla para cambiar el estado de una cama: solo se ve y se filtra. Lo hace quien administra las camas en el sistema de origen.',
+				causa: 'Solo se puede en camas sin paciente, con el botón «Cambiar estado» de la tarjeta, y requiere el permiso INTERNACION.CAMAS.GESTIONAR. «Ocupada» no se elige a mano: se llega asignando un paciente.',
+			},
+			{
+				sintoma: 'No aparece el «+» para asignar paciente',
+				causa: 'Solo se puede asignar en camas en estado desocupada. Si está en otro estado (cerrada, reparación, etc.), primero cambiala a desocupada con «Cambiar estado».',
 			},
 		],
 	},
