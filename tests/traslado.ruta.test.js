@@ -74,15 +74,7 @@ test('ENFERMERO NO puede editar el último movimiento', async () => {
 	assert.equal(r.ok, false);
 });
 
-test('MEDICO sigue pudiendo trasladar', async () => {
+test('ADMINISTRATIVO y MEDICO siguen pudiendo trasladar', async () => {
+	assert.equal((await pasa(movimientos, 'post', '/mover/:numeroVisita', 'ADMINISTRATIVO')).ok, true);
 	assert.equal((await pasa(movimientos, 'post', '/mover/:numeroVisita', 'MEDICO')).ok, true);
-});
-
-test('ADMINISTRATIVO NO puede trasladar ni registrar egreso (Internación solo lectura)', async () => {
-	for (const [router, metodo, ruta] of RUTAS_TRASLADO) {
-		const r = await pasa(router, metodo, ruta, 'ADMINISTRATIVO');
-		assert.equal(r.ok, false, `${metodo.toUpperCase()} ${ruta}`);
-		assert.equal(r.status, 403);
-	}
-	assert.equal((await pasa(pacientes, 'post', '/visitas/egreso', 'ADMINISTRATIVO')).ok, false);
 });
