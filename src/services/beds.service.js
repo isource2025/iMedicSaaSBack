@@ -316,81 +316,63 @@ const obtenerCamaPorId = async (id) => {
 	}
 };
 
+const ESTADO_CAMA_OCUPADA = 'O';
+
+function errorNegocio(statusCode, mensaje) {
+	const error = new Error(mensaje);
+	error.statusCode = statusCode;
+	return error;
+}
+
 /**
- * Actualizar el estado de una cama
- * @param {number} id - ID de la cama
- * @param {'disponible' | 'ocupada' | 'mantenimiento'} estado - Nuevo estado
- * @returns {Promise<Object>} Cama actualizada
+ * Cambia el estado de una cama vacía (sin visita) a otro del catálogo imEstadoCama.
+ * Ocupada no se setea a mano: sólo se llega asignando un paciente.
+ * @param {string} id - ID compuesto sector-cama
+ * @param {string} valorEstado - Valor de imEstadoCama (U, C, R, I, ...)
+ * @returns {Promise<{ id: string, valorEstado: string, estadoDescripcion: string }>}
  */
-const actualizarEstadoCama = async (id, estado) => {
+const actualizarEstadoCama = async (id, valorEstado) => {
 	const parsed = parseBedCompositeId(id);
-	const ValorSector = parsed.sector || null;
-	const ValorHabitacionCama = parsed.cama;
+	const valor = String(valorEstado || '').trim().toUpperCase();
 
-	// Mapear estados descriptivos a valores de la tabla imEstadoCama
-	let valorEstado;
-	switch (estado) {
-		case 'disponible':
-			valorEstado = 'U'; // Libre
-			break;
-		case 'ocupada':
-			valorEstado = 'O'; // Ocupada
-			break;
-		case 'mantenimiento':
-			valorEstado = 'M'; // Mantenimiento
-			break;
-		default:
-			valorEstado = estado; // Usar el valor directamente si no es uno de los predefinidos
+	if (!parsed.id) throw errorNegocio(400, 'ID de cama inválido');
+	if (!valor) throw errorNegocio(400, 'Estado no válido');
+	if (valor === ESTADO_CAMA_OCUPADA) {
+		throw errorNegocio(400, 'Una cama sólo pasa a ocupada al asignarle un paciente');
 	}
 
-	if (!parsed.id) {
-		throw new Error('ValorSector es obligatorio para actualizar el estado de una cama');
-	}
+	const estados = await obtenerEstadosCama();
+	const destino = estados.find((e) => String(e.valor || '').trim().toUpperCase() === valor);
+	if (!destino) throw errorNegocio(400, `El estado "${valor}" no existe en el catálogo de estados de cama`);
 
-	console.log(`Actualizando cama ID ${id} (sector ${ValorSector}) a estado: ${estado}, valor en DB: ${valorEstado}`);
-
+	const filtroCama = `LTRIM(RTRIM(CAST(ValorSector AS VARCHAR(50)))) + '-' +
+          LTRIM(RTRIM(CAST(ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param0))`;
 	const consulta = `
     UPDATE imHabitacionCamas
     SET ValorEstadoCama = @param1
-	WHERE LTRIM(RTRIM(CAST(ValorSector AS VARCHAR(50)))) + '-' +
-          LTRIM(RTRIM(CAST(ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param0));
+    WHERE ${filtroCama}
+      AND ISNULL(NumeroVisita, 0) = 0
+      AND ISNULL(ValorEstadoCama, '') <> '${ESTADO_CAMA_OCUPADA}';
 
-    SELECT 
-      hc.*,
-      p.ApellidoYNombre as NombrePaciente,
-      p.Sexo as SexoPaciente,
-      sx.Descripcion as DescripcionSexo,
-      c.RazonSocial as RazonSocialCliente,
-      sm.Descripcion as ServicioMedicoDescripcion
-    FROM 
-      imHabitacionCamas hc
-    LEFT JOIN 
-      imVisita v ON hc.NumeroVisita = v.NumeroVisita
-    LEFT JOIN 
-      imPacientes p ON v.IdPaciente = p.IdPaciente
-    LEFT JOIN
-      imSexo sx ON p.Sexo = sx.Valor
-    LEFT JOIN
-      imClientes c ON v.Cliente = c.Valor
-    LEFT JOIN
-      imServiciosMedicos sm ON v.ServicioHospital = sm.Valor
-    WHERE LTRIM(RTRIM(CAST(hc.ValorSector AS VARCHAR(50)))) + '-' +
-          LTRIM(RTRIM(CAST(hc.ValorHabitacionCama AS VARCHAR(50)))) = LTRIM(RTRIM(@param0));
+    SELECT @@ROWCOUNT AS actualizadas;
   `;
-
 	const parametros = [
 		{ value: parsed.id, type: 'VarChar' },
-		{ value: valorEstado },
+		{ value: String(destino.valor).trim(), type: 'VarChar' },
 	];
 
-	try {
-		const resultado = normalizarFilas(await executeQuery(consulta, parametros));
-		return resultado.length > 0 ? resultado[0] : null;
-	} catch (error) {
-		console.error('Error al actualizar estado de cama:', error);
-		console.error('Parámetros:', JSON.stringify(parametros));
-		throw error;
+	const [fila] = (await executeQuery(consulta, parametros)) || [];
+	if (Number(fila?.actualizadas) > 0) {
+		return {
+			id: parsed.id,
+			valorEstado: String(destino.valor).trim(),
+			estadoDescripcion: String(destino.descripcion || '').trim(),
+		};
 	}
+
+	const cama = await obtenerCamaPorId(parsed.id);
+	if (!cama) throw errorNegocio(404, 'Cama no encontrada');
+	throw errorNegocio(409, 'La cama tiene un paciente asignado: no se puede cambiar su estado');
 };
 
 function _col(row, ...names) {
