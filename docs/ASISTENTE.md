@@ -375,7 +375,9 @@ Al agregar tools, sumar etiqueta en `NOMBRES_HERRAMIENTA` / `FRASES_HERRAMIENTA`
 
 | Variable | Uso |
 |---|---|
-| `ASISTENTE_OPENAI_API_KEY` / `OPENAI_API_KEY` | Cliente |
+| `ASISTENTE_OPENAI_API_KEY` / `OPENAI_API_KEY` | Cliente del asistente y del bot |
+| `OPENAI_API_KEY_EPICRISIS` | Solo epicrisis IA (proyecto OpenAI aparte). Sin esta key, la epicrisis cae a plantilla |
+| `OPENAI_MODEL_EPICRISIS` | Modelo de la epicrisis. Si falta, usa `OPENAI_MODEL` |
 | `ASISTENTE_OPENAI_MODEL` / `OPENAI_MODEL` | Default `gpt-4o-mini` |
 | `ASISTENTE_MAX_ITER` | Default 10 |
 | `ASISTENTE_MAX_TOOLS` | Default 32 (Soporte 5 + Internación hasta 23) |
@@ -423,7 +425,7 @@ Con los 21 casos (fase 3 incluida): USD 0,00062 por mensaje y 90 % de caché. Pa
 
 | Acción | Quién |
 |---|---|
-| `EPICRISIS_IA` | Epicrisis con IA |
+| `EPICRISIS_IA` | Epicrisis con IA (`OPENAI_API_KEY_EPICRISIS`, proyecto aparte) |
 | `RESUMEN_VISITA_IA` | Resumen de visita (`/admission-search/.../resumen-ia`) |
 | `BOT_WHATSAPP` | Bot de WhatsApp (`botOpenai.chat` y `chatConHerramientas`), con `actor` nulo y la empresa de `BOT_EMPRESA_ID` si no hay tenant |
 

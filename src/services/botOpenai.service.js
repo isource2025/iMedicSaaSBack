@@ -13,6 +13,15 @@ function getModel() {
 	return String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
 }
 
+/** Proyecto OpenAI aparte: la epicrisis no comparte la key del asistente ni del bot. */
+function getEpicrisisApiKey() {
+	return String(process.env.OPENAI_API_KEY_EPICRISIS || '').trim();
+}
+
+function getEpicrisisModel() {
+	return String(process.env.OPENAI_MODEL_EPICRISIS || process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
+}
+
 function openAiFetch(url, options) {
 	return fetch(url, {
 		...options,
@@ -22,6 +31,10 @@ function openAiFetch(url, options) {
 
 function isConfigured() {
 	return Boolean(getApiKey());
+}
+
+function isEpicrisisConfigured() {
+	return Boolean(getEpicrisisApiKey());
 }
 
 /** chat / chatConHerramientas son del bot: su consumo va a Consumo IA (chatJson lo registra quien la llama). */
@@ -165,11 +178,11 @@ async function chatConHerramientas({ messages, tools, toolChoice = 'auto', tempe
 /**
  * Chat Completions con respuesta JSON estructurada (clasificación de intención, etc.).
  *
- * @param {{ system: string, messages?: Array<object>, temperature?: number, maxTokens?: number, onUsage?: (u: { modelo: string, usage: object }) => void }} opts
+ * @param {{ system: string, messages?: Array<object>, temperature?: number, maxTokens?: number, apiKey?: string, model?: string, onUsage?: (u: { modelo: string, usage: object }) => void }} opts
  * @returns {Promise<object>}
  */
-async function chatJson({ system, messages, temperature, maxTokens, onUsage }) {
-	const apiKey = getApiKey();
+async function chatJson({ system, messages, temperature, maxTokens, onUsage, apiKey: apiKeyOverride, model: modelOverride }) {
+	const apiKey = String(apiKeyOverride || getApiKey()).trim();
 	if (!apiKey) {
 		const err = new Error('OPENAI_API_KEY no configurada');
 		err.statusCode = 503;
@@ -177,7 +190,7 @@ async function chatJson({ system, messages, temperature, maxTokens, onUsage }) {
 	}
 
 	const payload = {
-		model: getModel(),
+		model: String(modelOverride || getModel()).trim(),
 		messages: [{ role: 'system', content: system }, ...(messages || [])],
 		temperature: temperature != null ? temperature : 0.1,
 		max_tokens: maxTokens != null ? maxTokens : 400,
@@ -227,7 +240,10 @@ async function chatJson({ system, messages, temperature, maxTokens, onUsage }) {
 module.exports = {
 	getApiKey,
 	getModel,
+	getEpicrisisApiKey,
+	getEpicrisisModel,
 	isConfigured,
+	isEpicrisisConfigured,
 	chat,
 	chatConHerramientas,
 	chatJson,

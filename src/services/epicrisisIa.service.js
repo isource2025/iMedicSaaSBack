@@ -417,7 +417,7 @@ function buildFallbackDraft(dossier, contextText) {
 		diagnosticoText: takeText(ultimaTxt || p.ObservacionesVisita || '', 500),
 		fuente: 'plantilla',
 		generadoConIA: false,
-		aviso: 'OPENAI_API_KEY no configurada: se generó un borrador plantilla con datos de la internación.',
+		aviso: 'OPENAI_API_KEY_EPICRISIS no configurada: se generó un borrador plantilla con datos de la internación.',
 		contextoChars: contextText.length,
 		disclaimer: DISCLAIMER_IA,
 	};
@@ -524,7 +524,7 @@ async function generarBorrador(numeroVisita) {
 
 	const contextText = buildContextText(dossier);
 
-	if (!botOpenai.isConfigured()) {
+	if (!botOpenai.isEpicrisisConfigured()) {
 		return buildFallbackDraft(dossier, contextText);
 	}
 
@@ -555,6 +555,8 @@ async function generarBorrador(numeroVisita) {
 	let uso = null;
 	try {
 		const json = await botOpenai.chatJson({
+			apiKey: botOpenai.getEpicrisisApiKey(),
+			model: botOpenai.getEpicrisisModel(),
 			onUsage: (u) => {
 				uso = u;
 			},
@@ -581,7 +583,7 @@ async function generarBorrador(numeroVisita) {
 				.slice(0, 8000),
 			fuente: 'openai',
 			generadoConIA: true,
-			modelo: botOpenai.getModel(),
+			modelo: botOpenai.getEpicrisisModel(),
 			uso,
 			contextoChars: contextText.length,
 			disclaimer: DISCLAIMER_IA,
