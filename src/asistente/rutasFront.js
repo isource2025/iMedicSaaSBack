@@ -20,6 +20,7 @@ const RUTAS = Object.freeze([
 	'/dashboard/billing/rendiciones',
 	'/dashboard/billing/tables',
 	'/dashboard/configuracion/consumo-ia',
+	'/dashboard/configuracion/institucion',
 	'/dashboard/configuracion/permisos',
 	'/dashboard/patients',
 	'/dashboard/patients/analytics',

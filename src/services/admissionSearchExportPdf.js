@@ -116,7 +116,8 @@ const firmante = {
   evolucion: (r) => ({ nombre: str(r.ProfesionalNombreCompleto), matricula: r.Matricula, valor: r.IdPersonal }),
   epicrisis: (r) => ({
     nombre: str(r.ProfesionalNombreCompleto || r.profesionalNombreCompleto),
-    matricula: r.Profecional,
+    matricula: r.Matricula ?? r.Profecional,
+    valor: r.IdPersonal,
   }),
   estudioRealizador: (r) =>
     str(r.RealizadorNombre || r.realizadorNombre).trim()
@@ -144,6 +145,7 @@ const firmante = {
   dieta: (r) => ({ nombre: str(r.ProfesionalFullName || r.OperadorFullName), matricula: r.Matricula }),
   balance: (r) => ({ nombre: joinNombre(r.ProfesionalApellido, r.ProfesionalNombres), matricula: r.Matricula }),
   evolucionEnf: (r) => ({ nombre: joinNombre(r.ProfesionalApellido, r.ProfesionalNombres), matricula: r.Matricula }),
+  practica: (r) => (Array.isArray(r.Firmantes) ? r.Firmantes : []),
   // Insumos solo traen el operador de carga (CodOperador): se muestra el nombre, sin buscar firma.
   insumo: (r) => ({ nombre: str(r.fullName) }),
 };
@@ -153,9 +155,11 @@ function todosLosFirmantes(p) {
   const add = (rows, fn) => {
     for (const r of rows || []) {
       const s = fn(r);
-      if (s) out.push(s);
+      if (Array.isArray(s)) out.push(...s);
+      else if (s) out.push(s);
     }
   };
+  add(p.practicasPaciente, firmante.practica);
   add(p.historialClinico, firmante.hci);
   add(p.indicaciones, firmante.indicacion);
   add(p.evolucionesMedicas, firmante.evolucion);
@@ -1092,7 +1096,7 @@ function renderProtocolos(doc, rows, firmas) {
   });
 }
 
-function renderProcedimientos(doc, rows) {
+function renderProcedimientos(doc, rows, firmas) {
   const list = ordenar(rows, (r) => `${str(r.FechaPractica)} ${str(r.HoraPracticaInicio)}`);
   sectionTitle(doc, 'Procedimientos / prácticas', list.length);
   table(
@@ -1111,6 +1115,9 @@ function renderProcedimientos(doc, rows) {
     ],
     list,
   );
+  drawSignatures(doc, list.flatMap(firmante.practica), firmas, {
+    caption: 'Firmas de los profesionales que realizaron las prácticas.',
+  });
 }
 
 function renderEvoluciones(doc, rows, firmas) {
@@ -1474,7 +1481,7 @@ async function buildSelectiveExportPdf(payload) {
         [payload.estudios, () => renderEstudios(doc, payload.estudios, firmas)],
         [payload.interconsultas, () => renderInterconsultas(doc, payload.interconsultas, firmas)],
         [payload.protocolos, () => renderProtocolos(doc, payload.protocolos, firmas)],
-        [payload.practicasPaciente, () => renderProcedimientos(doc, payload.practicasPaciente)],
+        [payload.practicasPaciente, () => renderProcedimientos(doc, payload.practicasPaciente, firmas)],
         [payload.evolucionesMedicas, () => renderEvoluciones(doc, payload.evolucionesMedicas, firmas)],
         [payload.epicrisis, () => renderEpicrisis(doc, payload.epicrisis, firmas)],
         [payload.practicas?.laboratorios, () => renderLaboratorios(doc, payload.practicas.laboratorios)],

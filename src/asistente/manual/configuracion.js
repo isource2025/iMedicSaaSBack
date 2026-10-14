@@ -71,6 +71,28 @@ module.exports = [
 		texto: 'Costo real del asistente y de la epicrisis IA por período, usuario, herramienta y mensaje, con proyección mensual.',
 	},
 	{
+		id: 'institucion',
+		titulo: 'Institución (logo de los PDFs)',
+		path: '/dashboard/configuracion/institucion',
+		modulo: 'CONFIGURACION',
+		comoLlegar: 'Menú: Configuración → Institución.',
+		permisos: ['CONFIGURACION.INSTITUCION.VER', 'CONFIGURACION.INSTITUCION.EDITAR'],
+		tags: ['logo', 'logo del hospital', 'logo de la clinica', 'membrete', 'encabezado pdf', 'header pdf', 'institucion', 'datos de la institucion', 'diseno pdf', 'editor de pdf', 'color de los pdf', 'plantilla pdf'],
+		texto:
+			'Datos de la institución (razón social, CUIT, condición IVA, ingresos brutos, domicilio, teléfono, email) y su logo, que encabezan todos los PDFs (historia clínica, evoluciones, epicrisis, etc.). Muestra en vivo cómo queda el encabezado.',
+		pasos: [
+			'Logo: «Subir logo» → elegí un PNG, JPG o WEBP (fondo transparente queda mejor) → se guarda solo. «Quitar» vuelve al monograma con las iniciales.',
+			'Datos: corregí los campos → mirá la vista previa → «Guardar cambios» («Descartar» vuelve a lo guardado).',
+			'Pestaña «Diseño de PDF»: elegí plantilla (Moderna, Clásica, Sobria), color de marca, tipografía, qué datos de la institución y del paciente mostrar (vacíos con guion, solo cargados o ninguno) y el pie → «Guardar diseño». «Restablecer predeterminado» vuelve al original. Aplica a todos los PDFs.',
+		],
+		problemas: [
+			{ sintoma: '«Falta instalar la columna Logo en Empresas…»', causa: 'Falta una migración en la base central: derivá a soporte técnico.' },
+			{ sintoma: 'Los campos se ven pero no se pueden editar', causa: 'Hace falta el permiso CONFIGURACION.INSTITUCION.EDITAR (lo tiene el rol Administrador).' },
+			{ sintoma: '«CUIT: debe tener 11 dígitos»', causa: 'Cargá el CUIT completo; los guiones son opcionales.' },
+			{ sintoma: 'Guardé y un PDF viejo sigue con los datos anteriores', causa: 'Los PDFs toman los datos al generarse: volvé a generarlo (si persiste, recargá la página).' },
+		],
+	},
+	{
 		id: 'perfil',
 		titulo: 'Mi Perfil y cambiar contraseña',
 		path: '/dashboard/profile',

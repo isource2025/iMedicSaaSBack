@@ -22,10 +22,66 @@ function firmaBuffer(raw) {
   return null;
 }
 
-/** pdfkit solo dibuja PNG/JPEG: se normaliza a PNG con fondo blanco. */
+/**
+ * BMP sin compresión (1/4/8 bpp con paleta, 24 y 32 bpp) → RGB crudo.
+ * Las firmas cargadas desde el sistema Clarion son BMP y sharp no los decodifica.
+ */
+function decodificarBmp(buf) {
+  if (buf.length < 54 || buf[0] !== 0x42 || buf[1] !== 0x4d) return null;
+  const offset = buf.readUInt32LE(10);
+  const dib = buf.readUInt32LE(14);
+  const width = buf.readInt32LE(18);
+  const rawH = buf.readInt32LE(22);
+  const bpp = buf.readUInt16LE(28);
+  const compr = dib >= 40 ? buf.readUInt32LE(30) : 0;
+  const height = Math.abs(rawH);
+  if (width <= 0 || !height || ![1, 4, 8, 24, 32].includes(bpp)) return null;
+  if (compr !== 0 && !(compr === 3 && bpp === 32)) return null;
+
+  let paleta = null;
+  if (bpp <= 8) {
+    const usadas = (dib >= 40 && buf.readUInt32LE(46)) || 1 << bpp;
+    paleta = [];
+    for (let i = 0; i < usadas; i++) {
+      const p = 14 + dib + i * 4;
+      if (p + 3 > buf.length) break;
+      paleta.push([buf[p + 2], buf[p + 1], buf[p]]);
+    }
+  }
+
+  const stride = Math.floor((bpp * width + 31) / 32) * 4;
+  if (offset + stride * height > buf.length) return null;
+  const out = Buffer.alloc(width * height * 3, 255);
+  for (let y = 0; y < height; y++) {
+    const fila = offset + (rawH > 0 ? height - 1 - y : y) * stride;
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 3;
+      if (bpp >= 24) {
+        const p = fila + x * (bpp / 8);
+        out[o] = buf[p + 2];
+        out[o + 1] = buf[p + 1];
+        out[o + 2] = buf[p];
+      } else {
+        const bit = x * bpp;
+        const idx = (buf[fila + (bit >> 3)] >> (8 - bpp - (bit & 7))) & ((1 << bpp) - 1);
+        const c = paleta[idx] || [255, 255, 255];
+        out[o] = c[0];
+        out[o + 1] = c[1];
+        out[o + 2] = c[2];
+      }
+    }
+  }
+  return { data: out, width, height };
+}
+
+/** pdfkit solo dibuja PNG/JPEG: se normaliza a PNG con fondo blanco y tamaño acotado. */
 async function aPng(buf) {
   try {
-    return await sharp(buf).flatten({ background: '#ffffff' }).png().toBuffer();
+    const bmp = decodificarBmp(buf);
+    const img = bmp
+      ? sharp(bmp.data, { raw: { width: bmp.width, height: bmp.height, channels: 3 } })
+      : sharp(buf).flatten({ background: '#ffffff' });
+    return await img.resize({ width: 600, height: 300, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
   } catch {
     return null;
   }

@@ -561,6 +561,16 @@ function _isoPared(v) {
 	return s ? s.replace(' ', 'T').slice(0, 19) : null;
 }
 
+/** Descripción CIE (imDiagnosticos.CodigoOMS) de un código cargado en texto libre ("t302", "K81"). */
+const sqlApplyDiagnostico = (columna, alias) => `
+		 OUTER APPLY (
+		   SELECT TOP 1 LTRIM(RTRIM(dx.Descripcion)) AS Descripcion
+		   FROM dbo.imDiagnosticos dx
+		   WHERE LTRIM(RTRIM(ISNULL(${columna}, ''))) <> ''
+		     AND REPLACE(UPPER(LTRIM(RTRIM(ISNULL(dx.CodigoOMS, '')))), '.', '') = REPLACE(UPPER(LTRIM(RTRIM(${columna}))), '.', '')
+		   ORDER BY dx.Valor
+		 ) ${alias}`;
+
 async function listarPorVisita(numeroVisita) {
 	const nv = Number(numeroVisita);
 	if (!Number.isFinite(nv) || nv <= 0) throw _httpError('Visita inválida. Volvé a abrir la internación.');
@@ -583,11 +593,15 @@ async function listarPorVisita(numeroVisita) {
 		   LTRIM(RTRIM(ISNULL(p.Estado, ''))) AS Estado,
 		   p.IdOperador,
 		   op.NombreCompleto AS OperadorNombre,
-		   op.Matricula AS OperadorMatricula
+		   op.Matricula AS OperadorMatricula,
+		   dxPre.Descripcion AS DiagnosticoPreDescripcion,
+		   dxPos.Descripcion AS DiagnosticoPosDescripcion
 		 FROM dbo.HCProtocolosPtes p
 		 LEFT JOIN dbo.HCTiposProtocolos tp
 		   ON LTRIM(RTRIM(tp.TipoProtocolo)) = LTRIM(RTRIM(p.TipoProtocolo))
 		 ${SQL_APPLY_OPERADOR_PROTOCOLO}
+		 ${sqlApplyDiagnostico('p.DiagnosticoPreProcedimiento', 'dxPre')}
+		 ${sqlApplyDiagnostico('p.DiagnosticoPosProcedimiento', 'dxPos')}
 		 WHERE p.NumeroVisita = @p0
 		 ORDER BY p.Fecha DESC, p.IdProtocolo DESC`,
 		[{ value: nv, type: 'Int' }],
@@ -638,10 +652,14 @@ async function listarPorVisita(numeroVisita) {
 			   fprof.Funcion,
 			   LTRIM(RTRIM(ISNULL(fn.Descripcion, ''))) AS funcionNombre,
 			   pers.NombreCompleto AS apellidoNombre,
-			   pers.Matricula AS matricula
+			   pers.Matricula AS matricula,
+			   pers.ValorPersonal AS idPersonal,
+			   LTRIM(RTRIM(ISNULL(espE.Descripcion, ''))) AS especialidad
 			 FROM dbo.imFacProfesionales fprof
 			 LEFT JOIN dbo.imFunciones fn ON fn.Valor = fprof.Funcion
 			 ${sqlApplyNombrePersona('fprof.Matricula', 'pers', ['valor', 'matricula'])}
+			 LEFT JOIN dbo.imPersonal persE ON persE.Valor = pers.ValorPersonal
+			 LEFT JOIN dbo.imEspecialidad espE ON espE.Valor = persE.ValorEspecialidad
 			 WHERE fprof.Valor IN (${valores.join(',')})
 			 ORDER BY fprof.Funcion, fprof.IDFacProfesional`,
 		);
@@ -668,6 +686,8 @@ async function listarPorVisita(numeroVisita) {
 			valorPersonal: Number(pr.valorPersonal) || 0,
 			matricula: pr.matricula != null ? Number(pr.matricula) : null,
 			apellidoNombre: pr.apellidoNombre ? String(pr.apellidoNombre).trim() : null,
+			idPersonal: pr.idPersonal != null ? Number(pr.idPersonal) : null,
+			especialidad: pr.especialidad ? String(pr.especialidad).trim() : null,
 			funcion: fn,
 			funcionNombre:
 				(pr.funcionNombre && String(pr.funcionNombre).trim()) ||
@@ -722,6 +742,8 @@ async function listarPorVisita(numeroVisita) {
 			fechaHoraInicio: _isoPared(p.FechaHoraInicio),
 			fechaHoraFin: _isoPared(p.FechaHoraFin),
 			diagnosticoPre: String(p.DiagnosticoPre || '').trim() || null,
+			diagnosticoPreDescripcion: String(p.DiagnosticoPreDescripcion || '').trim() || null,
+			diagnosticoPosDescripcion: String(p.DiagnosticoPosDescripcion || '').trim() || null,
 			diagnosticoPos: String(p.DiagnosticoPos || '').trim() || null,
 			tecnica: String(p.Tecnica || '').trim() || null,
 			texto: p.Texto != null ? String(p.Texto) : '',

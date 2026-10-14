@@ -239,6 +239,13 @@ const SUBMODULOS = Object.freeze({
 		descripcion: 'Consumo y costo del asistente IA (OpenAI) por mensaje y por usuario.',
 		acciones: { VER: 'Ver el consumo de IA de toda la clínica' },
 	},
+	'CONFIGURACION.INSTITUCION': {
+		descripcion: 'Datos de la institución y logo que encabezan los PDFs.',
+		acciones: {
+			VER: 'Ver los datos y el logo de la institución',
+			EDITAR: 'Corregir los datos de la institución y subir, cambiar o quitar el logo',
+		},
+	},
 
 	// ── Plataforma (solo super administradores) ───────────────────────────
 	'PLATAFORMA.PANEL': { descripcion: 'Panel de la plataforma.' },

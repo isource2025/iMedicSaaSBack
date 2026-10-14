@@ -48,18 +48,30 @@ const SELECT_BASE = `
     sec.Descripcion AS SectorDescripcion,
     ep.Profecional,
     per.ApellidoNombre AS ProfesionalNombreCompleto,
+    per.Valor AS IdPersonal,
+    per.Matricula AS Matricula,
     ep.Epicrisis,
     ep.NumeroDocumento,
     RTRIM(LTRIM(ep.Diagnostico)) AS Diagnostico,
-    ep.DiagnosticoText
+    ep.DiagnosticoText,
+    dx.Descripcion AS DiagnosticoDescripcion,
+    LTRIM(RTRIM(ISNULL(esp.Descripcion, ''))) AS EspecialidadDescripcion
   FROM dbo.imHCEpicrisis AS ep
   LEFT JOIN dbo.imSectores AS sec ON ep.IdSector = sec.Valor
   OUTER APPLY (
-    SELECT TOP 1 per0.ApellidoNombre
+    SELECT TOP 1 per0.ApellidoNombre, per0.Valor, per0.Matricula, per0.ValorEspecialidad
     FROM dbo.imPersonal AS per0
     WHERE per0.Matricula = ep.Profecional OR per0.Valor = ep.Profecional
     ORDER BY CASE WHEN per0.Matricula = ep.Profecional THEN 0 ELSE 1 END
   ) AS per
+  LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
+  OUTER APPLY (
+    SELECT TOP 1 LTRIM(RTRIM(d0.Descripcion)) AS Descripcion
+    FROM dbo.imDiagnosticos AS d0
+    WHERE LTRIM(RTRIM(ISNULL(ep.Diagnostico, ''))) <> ''
+      AND REPLACE(UPPER(LTRIM(RTRIM(ISNULL(d0.CodigoOMS, '')))), '.', '') = REPLACE(UPPER(LTRIM(RTRIM(ep.Diagnostico))), '.', '')
+    ORDER BY d0.Valor
+  ) AS dx
 `;
 
 async function listarPorVisita(idVisita) {
