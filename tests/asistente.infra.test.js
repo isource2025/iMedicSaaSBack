@@ -182,6 +182,57 @@ test('escribir_en_campo crea una sugerencia y no un pendiente HTTP', async () =>
 	assert.match(malo.error, /c1 \(Evolución Médica\)/);
 });
 
+test('escribir_en_campo con la etiqueta repetida: pregunta la sección si el pedido no la nombra', async () => {
+	pendientes.resetStore();
+	const pantalla = contexto.pantallaDeBody({
+		campos: [
+			{ id: 'c1', etiqueta: 'Observaciones', grupo: 'Controles', valor: '' },
+			{ id: 'c7', etiqueta: 'Observaciones', grupo: 'Medicamentos aplicados', valor: '' },
+			{ id: 'c8', etiqueta: 'Fecha y hora', tipo: 'date', valor: '' },
+			{ id: 'c9', etiqueta: 'Fecha y hora', tipo: 'time', valor: '' },
+		],
+	});
+	const prompt = construirSystemPrompt({ rol: 'ADMIN', pantalla });
+	assert.match(prompt, /c7 «Observaciones» \[Medicamentos aplicados\] \(text, etiqueta repetida\)/);
+	assert.match(prompt, /c8 «Fecha y hora» \(date\) — vacío/);
+
+	const conv = {};
+	const ctx = ctxBase({ pantalla, inserciones: [], conv, req: { headers: {}, body: { mensaje: 'poné tolera bien' } } });
+	const duda = await ejecutar('escribir_en_campo', { campoId: 'c7', texto: 'Tolera bien' }, ctx);
+	assert.equal(duda.requiereAclaracion, true);
+	assert.equal(ctx.inserciones.length, 0);
+	assert.deepEqual(duda.opciones.map((o) => o.campoId), ['c1', 'c7']);
+
+	const ctx2 = ctxBase({ pantalla, inserciones: [], conv, req: { headers: {}, body: { mensaje: 'en la de abajo' } } });
+	const ok = await ejecutar('escribir_en_campo', { campoId: 'c7', texto: 'Tolera bien' }, ctx2);
+	assert.equal(ok.requiereConfirmacion, true);
+	assert.equal(ctx2.inserciones[0].etiqueta, 'Observaciones (Medicamentos aplicados)');
+
+	const ctx3 = ctxBase({ pantalla, inserciones: [], conv: {}, req: { headers: {}, body: { mensaje: 'en observaciones de medicamentos: tolera bien' } } });
+	assert.equal((await ejecutar('escribir_en_campo', { campoId: 'c7', texto: 'Tolera bien' }, ctx3)).requiereConfirmacion, true);
+
+	const ctx4 = ctxBase({ pantalla, inserciones: [], conv: {}, req: { headers: {}, body: { mensaje: 'fecha 12/10' } } });
+	assert.equal((await ejecutar('escribir_en_campo', { campoId: 'c8', texto: '2026-10-12' }, ctx4)).requiereConfirmacion, true);
+});
+
+test('escribir_en_campo no usa el campo del acompañante para un dato que no lo nombra', async () => {
+	pendientes.resetStore();
+	const pantalla = contexto.pantallaDeBody({
+		campos: [
+			{ id: 'c1', etiqueta: 'Buscar paciente por apellido, nombre, DNI o nº de visita', grupo: 'Paciente de la admisión', valor: '' },
+			{ id: 'c5', etiqueta: 'Nº documento', grupo: 'Acompañante (familiar o contacto, no el paciente)', valor: '' },
+		],
+	});
+	const ctx = ctxBase({ pantalla, inserciones: [], conv: {}, req: { headers: {}, body: { mensaje: 'el dni es 39863295' } } });
+	const no = await ejecutar('escribir_en_campo', { campoId: 'c5', texto: '39863295' }, ctx);
+	assert.equal(no.requiereAclaracion, true);
+	assert.match(no.aviso, /c1/);
+	assert.equal(ctx.inserciones.length, 0);
+
+	const ctx2 = ctxBase({ pantalla, inserciones: [], conv: {}, req: { headers: {}, body: { mensaje: 'el dni de la madre es 30111222' } } });
+	assert.equal((await ejecutar('escribir_en_campo', { campoId: 'c5', texto: '30111222' }, ctx2)).requiereConfirmacion, true);
+});
+
 test('llamar_api marca como generativos los campos declarados', async () => {
 	pendientes.resetStore();
 	const ctx = ctxBase();

@@ -68,13 +68,14 @@ function pantallaDeBody(raw) {
 	if (!raw || typeof raw !== 'object') return null;
 	const lista = (v, n, m) => (Array.isArray(v) ? v.slice(0, n).map((x) => txt(x, m)).filter(Boolean) : []);
 	const campos = Array.isArray(raw.campos)
-		? raw.campos.slice(0, 30).flatMap((c) => {
+		? raw.campos.slice(0, 40).flatMap((c) => {
 				const id = txt(c?.id, 12);
 				if (!/^c\d{1,4}$/.test(id)) return [];
 				return [
 					{
 						id,
 						etiqueta: txt(c.etiqueta, 80) || id,
+						grupo: txt(c.grupo, 110) || null,
 						tipo: txt(c.tipo, 20) || 'text',
 						multilinea: Boolean(c.multilinea),
 						valor: txt(c.valor, 400),

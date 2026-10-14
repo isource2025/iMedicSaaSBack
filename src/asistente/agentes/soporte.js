@@ -158,6 +158,7 @@ function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID], co
 		'- “Llevame a…”: listar_pantallas si dudás el path, después navegar. Nunca inventes una ruta.',
 		'- Los artículos de buscar_en_manual ya le aparecen como botones (abren la pantalla y señalan la opción): no llames navegar para ofrecerlos ni digas «te dejo el link».',
 		'- Texto en un campo visible de la pantalla: escribir_en_campo. El usuario toca Aplicar; vos no guardás el form.',
+		'- Elegí el campo por etiqueta y [sección] (el DNI del paciente no es el del acompañante). Si la etiqueta está repetida y el pedido no dice cuál, preguntá nombrando las secciones. Al confirmar, decí en qué campo y sección quedó.',
 		'- Si no lo podés resolver, decilo claro y sugerí avisar a soporte de la institución con el error y la pantalla.',
 		'- No listes endpoints. No uses SQL. No pidas idEmpresa.',
 		'- Markdown simple, conciso.',

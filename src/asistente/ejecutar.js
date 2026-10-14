@@ -16,6 +16,7 @@ const consultar = require('./consultar');
 const ficha = require('./ficha');
 const sesion = require('./sesion');
 const diagnostico = require('./diagnostico');
+const { claveEtiqueta } = require('./prompt');
 
 const PATH_PERMITIDO = /^\/dashboard(\/|$)/;
 
@@ -121,6 +122,63 @@ function crearPendiente(ctx, { herramienta, args, http, resumen, detalle, link, 
 	};
 }
 
+const VACIAS = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'y', 'datos', 'nuevo', 'nueva']);
+
+function palabrasDe(s) {
+	return claveEtiqueta(s)
+		.split(' ')
+		.filter((w) => w.length > 2 && !VACIAS.has(w))
+		.map((w) => w.slice(0, 6));
+}
+
+/**
+ * Dos campos con la misma etiqueta en secciones distintas: si el mensaje no nombra la
+ * sección del elegido, se pregunta. Al turno siguiente (ya respondió) se deja pasar.
+ */
+function campoAmbiguo(campo, campos, ctx) {
+	const k = claveEtiqueta(campo.etiqueta);
+	const iguales = campos.filter((c) => claveEtiqueta(c.etiqueta) === k && c.tipo === campo.tipo);
+	if (iguales.length < 2) return null;
+	const conv = ctx.conv;
+	if (conv?.campoEnDuda === k) {
+		conv.campoEnDuda = null;
+		return null;
+	}
+	const mensaje = palabrasDe(ctx.req?.body?.mensaje || ctx.mensaje || '');
+	const propias = palabrasDe(campo.grupo || '');
+	const otras = new Set(iguales.filter((c) => c !== campo).flatMap((c) => palabrasDe(c.grupo || '')));
+	const distintivas = propias.filter((w) => !otras.has(w));
+	if (distintivas.some((w) => mensaje.includes(w))) return null;
+	if (conv) conv.campoEnDuda = k;
+	return {
+		requiereAclaracion: true,
+		aviso: `Hay ${iguales.length} campos «${campo.etiqueta}» en la pantalla. Preguntale al usuario en cuál, nombrando las secciones; no escribas nada todavía.`,
+		opciones: iguales.map((c) => ({ campoId: c.id, seccion: c.grupo || 'sin sección', valor: c.vacio ? 'vacío' : c.valor })),
+	};
+}
+
+const OTRA_PERSONA = /acompa[nñ]|familiar|contacto|responsable|tutor|garante/i;
+const NOMBRA_OTRA = /acompa[nñ]|familiar|contacto|responsable|tutor|garante|madre|padre|hij[oa]|espos[oa]|herman[oa]|pareja|mam[aá]|pap[aá]|ti[oa]\b|abuel[oa]|nieto|nieta/i;
+
+/** Campo de un acompañante/contacto cuando el usuario no habló de esa persona: se asume que es el paciente. */
+function campoDeOtraPersona(campo, campos, ctx) {
+	if (!OTRA_PERSONA.test(campo.grupo || '')) return null;
+	const mensaje = String(ctx.req?.body?.mensaje || ctx.mensaje || '');
+	if (NOMBRA_OTRA.test(mensaje)) return null;
+	if (ctx.conv?.campoEnDuda === `otra:${campo.id}`) {
+		ctx.conv.campoEnDuda = null;
+		return null;
+	}
+	if (ctx.conv) ctx.conv.campoEnDuda = `otra:${campo.id}`;
+	const delPaciente = campos.filter((c) => c !== campo && /paciente/i.test(`${c.grupo || ''} ${c.etiqueta}`) && !OTRA_PERSONA.test(c.grupo || ''));
+	return {
+		requiereAclaracion: true,
+		aviso: delPaciente.length
+			? `No se escribió: «${campo.etiqueta}» es de la sección ${campo.grupo}, no del paciente. El usuario no nombró a otra persona: llamá ya escribir_en_campo en ${delPaciente[0].id} («${delPaciente[0].etiqueta}») y aclarale en una línea que lo pusiste en el del paciente, no en el del acompañante. No le muestres ids.`
+			: `No se escribió: «${campo.etiqueta}» es de la sección ${campo.grupo}, no del paciente. Preguntale si el dato es del acompañante. No le muestres ids.`,
+	};
+}
+
 function prepararInsercion(args, ctx) {
 	const campos = ctx.pantalla?.campos || [];
 	const campo = campos.find((c) => c.id === String(args.campoId || ''));
@@ -133,21 +191,24 @@ function prepararInsercion(args, ctx) {
 	}
 	const texto = String(args.texto || '').trim();
 	if (!texto) return { error: 'El texto a escribir está vacío' };
+	const duda = campoDeOtraPersona(campo, campos, ctx) || campoAmbiguo(campo, campos, ctx);
+	if (duda) return duda;
 	const modo = args.modo === 'agregar' ? 'agregar' : 'reemplazar';
+	const nombre = campo.grupo ? `${campo.etiqueta} (${campo.grupo})` : campo.etiqueta;
 	const item = pendientes.crear({
 		idEmpresa: ctx.idEmpresa,
 		valorPersonal: ctx.valorPersonal,
 		herramienta: 'escribir_en_campo',
 		tipo: 'insercion',
 		args: { campoId: campo.id },
-		resumen: `${modo === 'agregar' ? 'Agregar en' : 'Escribir en'} «${campo.etiqueta}»`,
+		resumen: `${modo === 'agregar' ? 'Agregar en' : 'Escribir en'} «${nombre}»`,
 		detalle: texto,
-		insercion: { campoId: campo.id, etiqueta: campo.etiqueta, multilinea: campo.multilinea, texto, modo, ruta: ctx.pantalla?.url || null },
+		insercion: { campoId: campo.id, etiqueta: nombre, multilinea: campo.multilinea, texto, modo, ruta: ctx.pantalla?.url || null },
 	});
 	ctx.inserciones.push({
 		id: item.id,
 		campoId: campo.id,
-		etiqueta: campo.etiqueta,
+		etiqueta: nombre,
 		texto,
 		modo,
 		motivo: args.motivo || null,

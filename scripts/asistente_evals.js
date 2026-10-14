@@ -133,6 +133,7 @@ const SIN_CREAR_EVOLUCION = MEDICO.filter((p) => p !== 'INTERNACION.EVOLUCIONES.
 
 /**
  * espera: tools (todas deben aparecer), noTools, args (nombre → fn(args) que devuelve true),
+ * insercionEn (única tarjeta de escribir_en_campo, en ese campoId),
  * texto / noTexto (regex), pendientes (cantidad), navega (href que debe aparecer).
  */
 const CASOS = [
@@ -300,6 +301,30 @@ const CASOS = [
 				mensaje: 'cómo sigue Sanabria?',
 				ruta: '/dashboard',
 				espera: { algunaDe: ['buscar_internado', 'resumen_internacion'], noTools: ['buscar_en_manual'] },
+			},
+		],
+	},
+	{
+		id: 'admision-dni-acompanante',
+		descripcion: 'Incidente 14/10: «el dni es X» en Nueva Admisión no va al Nº documento del acompañante',
+		permisos: matriz.permisosDeRol('ADMIN'),
+		turnos: [
+			{
+				mensaje: 'el dni es 39863295',
+				ruta: '/dashboard/admission/new',
+				pantalla: {
+					titulo: 'Nueva Admisión',
+					encabezados: ['Nueva Admisión', 'Paciente', 'Datos principales', 'Acompañantes y novedades'],
+					campos: [
+						{ id: 'c1', etiqueta: 'Buscar paciente por apellido, nombre, DNI o nº de visita', grupo: 'Paciente de la admisión', tipo: 'text', valor: '' },
+						{ id: 'c2', etiqueta: 'Diagnóstico de ingreso (buscar CIE-10)', grupo: 'Datos principales', tipo: 'text', valor: '' },
+						{ id: 'c3', etiqueta: 'Observaciones', grupo: 'Datos principales', tipo: 'textarea', multilinea: true, valor: '' },
+						{ id: 'c4', etiqueta: 'Apellido y nombre', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+						{ id: 'c5', etiqueta: 'Nº documento', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+						{ id: 'c6', etiqueta: 'Teléfono', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+					],
+				},
+				espera: { insercionEn: 'c1', noTexto: [/\bc\d+\b/] },
 			},
 		],
 	},
@@ -492,6 +517,10 @@ function revisar(espera, r) {
 	for (const [nombre, ok] of Object.entries(espera.args || {})) {
 		const llamadas = (r.traza || []).filter((t) => t.nombre === nombre);
 		if (llamadas.length && !llamadas.some((t) => ok(t.args || {}))) fallas.push(`${nombre} con args inesperados: ${JSON.stringify(llamadas.map((t) => t.args))}`);
+	}
+	if (espera.insercionEn) {
+		const en = (r.inserciones || []).map((i) => i.campoId);
+		if (en.length !== 1 || en[0] !== espera.insercionEn) fallas.push(`tarjetas de texto en ${JSON.stringify(en)} (esperaba solo ${espera.insercionEn})`);
 	}
 	const texto = String(r.texto || '');
 	for (const re of espera.texto || []) if (!re.test(texto)) fallas.push(`el texto no cumple ${re}`);
