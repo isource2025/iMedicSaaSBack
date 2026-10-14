@@ -40,7 +40,8 @@ OUTER APPLY (
   SELECT TOP 1
     per0.Valor,
     per0.Matricula,
-    per0.ApellidoNombre
+    per0.ApellidoNombre,
+    per0.ValorEspecialidad
   FROM dbo.imPersonal AS per0
   WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
   ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
@@ -303,6 +304,8 @@ SELECT ${topClause}
   iim.ProfesionalAsiste,
   ${SQL_NOMBRE_PROFESIONAL} AS FullName,
   per.Matricula AS MatriculaProfesional,
+  per.Valor AS IdPersonalProfesional,
+  LTRIM(RTRIM(ISNULL(esp.Descripcion, ''))) AS EspecialidadProfesional,
   iim.Frecuencia,
   fa.Intervalo,
   iim.Observaciones,
@@ -340,6 +343,7 @@ SELECT ${topClause}
   iim.FormaAdicional,
   iim.OperadorCarga,
   tit.Tipo as TipoIndicacion,
+  LTRIM(RTRIM(ISNULL(tit.Descripcion, ''))) AS TipoIndicacionDescripcion,
   tit.PromptCodigo,
   tit.Orden as OrdenTipo,
   v.TipoMedicamento,
@@ -361,6 +365,7 @@ LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.V
 LEFT JOIN dbo.imTipoDieta AS td ON tit.Tipo = 'D' AND iim.Codigo = td.Valor
 LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = ca.Valor
 LEFT JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
+LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
 WHERE ${whereParts.join('\n  AND ')}
 ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
   `;
@@ -391,6 +396,8 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 OperadorCarga: r.OperadorCarga ?? null, // para control de propiedad
                 fullName: r.FullName,
                 matricula: r.MatriculaProfesional ?? null,
+                idPersonal: r.IdPersonalProfesional ?? null,
+                especialidad: r.EspecialidadProfesional || null,
                 frecuencia: r.Frecuencia,
                 intervalo: r.Intervalo,
                 observaciones: r.Observaciones,
@@ -401,6 +408,7 @@ ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
                 vigenteDesde: r.FechaCargaISO,
                 horaCarga: r.HoraCarga,
                 tipo: r.TipoIndicacion,
+                tipoDescripcion: r.TipoIndicacionDescripcion || null,
                 promptCodigo: r.PromptCodigo,
                 ordenTipo: r.OrdenTipo,
                 nro: r.NroIndicacion,

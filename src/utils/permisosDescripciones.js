@@ -235,6 +235,13 @@ const SUBMODULOS = Object.freeze({
 			ELIMINAR: 'Eliminar roles personalizados sin usuarios',
 		},
 	},
+	'CONFIGURACION.INSTITUCION': {
+		descripcion: 'Datos de la institución y logo que encabezan los PDFs.',
+		acciones: {
+			VER: 'Ver los datos y el logo de la institución',
+			EDITAR: 'Corregir los datos de la institución y subir, cambiar o quitar el logo',
+		},
+	},
 
 	// ── Plataforma (solo super administradores) ───────────────────────────
 	'PLATAFORMA.PANEL': { descripcion: 'Panel de la plataforma.' },

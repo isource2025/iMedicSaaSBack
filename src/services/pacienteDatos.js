@@ -45,6 +45,10 @@ const SELECT_DATOS_PACIENTE = `
   LTRIM(RTRIM(ISNULL(CAST(pac.TelefonoParticular AS VARCHAR(40)), ''))) AS PacienteTelefono,
   LTRIM(RTRIM(ISNULL(CAST(pac.TelefonoNegocio AS VARCHAR(40)), ''))) AS PacienteTelefonoAlternativo,
   LTRIM(RTRIM(ISNULL(pac.Mail, ''))) AS PacienteEmail,
+  LTRIM(RTRIM(ISNULL(pac.EstadoCivil, ''))) AS PacienteEstadoCivilCodigo,
+  pac.Ocupacion AS PacienteOcupacionCodigo,
+  pac.Provincia AS PacienteProvinciaCodigo,
+  LTRIM(RTRIM(ISNULL(pac.Nacionalidad, ''))) AS PacienteNacionalidadCodigo,
   CASE
     WHEN pac.FechaNacimiento IS NULL OR pac.FechaNacimiento <= 0 OR pac.FechaNacimiento > 1000000 THEN NULL
     ELSE CONVERT(varchar(10), DATEADD(day, pac.FechaNacimiento, '1800-12-28'), 23)
@@ -71,8 +75,44 @@ function mapDatosPaciente(row) {
 		PacienteEmail: txt(row.PacienteEmail),
 		PacienteFechaNacimiento: txt(row.PacienteFechaNacimiento),
 		PacienteEdad: edadDesdeISO(row.PacienteFechaNacimiento),
+		PacienteEstadoCivilCodigo: txt(row.PacienteEstadoCivilCodigo),
+		PacienteOcupacionCodigo: txt(row.PacienteOcupacionCodigo),
+		PacienteProvinciaCodigo: txt(row.PacienteProvinciaCodigo),
+		PacienteNacionalidadCodigo: txt(row.PacienteNacionalidadCodigo),
+		PacienteEstadoCivil: null,
+		PacienteOcupacion: null,
+		PacienteProvincia: null,
+		PacienteNacionalidad: null,
+		PacienteCodigoPostal: null,
 	};
 }
+
+/**
+ * Catálogo Valor → Descripcion cacheado por empresa. Si la tabla no existe en la
+ * instalación queda vacío: el dato simplemente no se muestra.
+ */
+function catalogo(tabla) {
+	return createTenantOnce(async () => {
+		try {
+			const rows = await executeQuery(
+				`SELECT Valor, LTRIM(RTRIM(ISNULL(Descripcion, ''))) AS Nombre FROM dbo.${tabla}`,
+			);
+			return new Map(
+				(rows || [])
+					.filter((r) => r.Valor != null && txt(r.Nombre))
+					.map((r) => [String(r.Valor).trim().toUpperCase(), String(r.Nombre).trim()]),
+			);
+		} catch (e) {
+			console.warn(`[paciente] no se pudo leer ${tabla}:`, e.message || e);
+			return new Map();
+		}
+	});
+}
+
+const estadosCiviles = catalogo('imEstadoCivil');
+const ocupaciones = catalogo('imOcupacion');
+const provincias = catalogo('imProvincia');
+const nacionalidades = catalogo('imNacionalidad');
 
 /**
  * Catálogo imLocalidades cacheado por empresa (valor -> nombre). Se resuelve
@@ -92,14 +132,20 @@ const localidadesPorValor = createTenantOnce(async () => {
 			disponibles.has(c),
 		);
 		if (!columna || !disponibles.has('valor')) return new Map();
+		const cp = disponibles.has('codigopostal')
+			? "LTRIM(RTRIM(ISNULL(CAST(CodigoPostal AS VARCHAR(20)), '')))"
+			: "''";
 
 		const rows = await executeQuery(
-			`SELECT Valor, LTRIM(RTRIM(ISNULL(${columna}, ''))) AS Nombre FROM dbo.imLocalidades`,
+			`SELECT Valor, LTRIM(RTRIM(ISNULL(${columna}, ''))) AS Nombre, ${cp} AS CodigoPostal FROM dbo.imLocalidades`,
 		);
 		return new Map(
 			(rows || [])
 				.filter((r) => r.Valor != null && txt(r.Nombre))
-				.map((r) => [String(r.Valor).trim(), String(r.Nombre).trim()]),
+				.map((r) => [
+					String(r.Valor).trim(),
+					{ nombre: String(r.Nombre).trim(), cp: txt(r.CodigoPostal) },
+				]),
 		);
 	} catch (e) {
 		console.warn('[paciente] no se pudo leer imLocalidades:', e.message || e);
@@ -107,18 +153,33 @@ const localidadesPorValor = createTenantOnce(async () => {
 	}
 });
 
-/** Completa PacienteLocalidad sobre filas que ya traen PacienteValorLocalidad. */
+/**
+ * Completa los nombres que en imPacientes son códigos: localidad (+ código postal),
+ * estado civil, ocupación, provincia y nacionalidad.
+ */
 async function completarLocalidades(filas) {
-	const lista = filas || [];
-	if (!lista.some((f) => f && f.PacienteValorLocalidad != null)) return lista;
-	const mapa = await localidadesPorValor();
-	if (!mapa.size) return lista;
+	const lista = (filas || []).filter(Boolean);
+	if (!lista.length) return filas || [];
+	const [locs, civiles, ocup, provs, nacs] = await Promise.all([
+		localidadesPorValor(),
+		estadosCiviles(),
+		ocupaciones(),
+		provincias(),
+		nacionalidades(),
+	]);
+	const buscar = (mapa, codigo) => (codigo != null ? mapa.get(String(codigo).trim().toUpperCase()) || null : null);
 	for (const f of lista) {
-		if (f && f.PacienteValorLocalidad != null) {
-			f.PacienteLocalidad = mapa.get(String(f.PacienteValorLocalidad).trim()) || null;
+		if (f.PacienteValorLocalidad != null) {
+			const loc = locs.get(String(f.PacienteValorLocalidad).trim());
+			f.PacienteLocalidad = loc?.nombre || null;
+			f.PacienteCodigoPostal = loc?.cp && loc.cp !== '0' ? loc.cp : null;
 		}
+		f.PacienteEstadoCivil = buscar(civiles, f.PacienteEstadoCivilCodigo);
+		f.PacienteOcupacion = buscar(ocup, f.PacienteOcupacionCodigo);
+		f.PacienteProvincia = buscar(provs, f.PacienteProvinciaCodigo);
+		f.PacienteNacionalidad = buscar(nacs, f.PacienteNacionalidadCodigo);
 	}
-	return lista;
+	return filas;
 }
 
 module.exports = {

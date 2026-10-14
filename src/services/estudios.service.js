@@ -314,6 +314,10 @@ function mapPedidoRow(row) {
 		CategoriaPedido: row.CategoriaPedido || null,
 		TextoResultado: cumplido && textoRtf ? rtfToPlain(textoRtf) : null,
 		FechaResultado: row.FechaResultado || null,
+		FechaCargaResultado: cumplido ? row.FechaCargaResultado || null : null,
+		NroProtocolo: cumplido && Number(row.NroProtocolo) > 0 ? Number(row.NroProtocolo) : null,
+		EspecialidadSolicitante: _txt(row.EspecialidadSolicitante),
+		EspecialidadRealizador: cumplido ? _txt(row.EspecialidadRealizador) : null,
 		PracticaFacturada:
 			row.PracticaFacturada != null ? Number(row.PracticaFacturada) : null,
 		// Quién respondió: profesional facturado > quien tomó el pedido > operador que
@@ -397,9 +401,13 @@ const SELECT_PEDIDO = `
   CASE WHEN pe.IdTipoPedido = 33 THEN 'INTERCONSULTA' ELSE 'ESTUDIO' END AS CategoriaPedido,
   pr.TextoProtocolo,
   CONVERT(varchar(16), pr.FechaResultado, 120) AS FechaResultado,
+  CONVERT(varchar(16), pr.FechaCarga, 120) AS FechaCargaResultado,
+  pr.NroProtocolo,
   realz.PracticaFacturada,
   realz.Matricula AS MatriculaRealizador,
   realz.RealizadorNombre,
+  LTRIM(RTRIM(ISNULL(espRealz.Descripcion, ''))) AS EspecialidadRealizador,
+  LTRIM(RTRIM(ISNULL(solEsp.Descripcion, ''))) AS EspecialidadSolicitante,
   pr.CodOperador AS CodOperadorResultado,
   opRes.ApellidoNombre AS OperadorResultadoNombre,
   opRes.ValorPersonal AS ValorPersonalResultado,
@@ -515,7 +523,8 @@ function _fromPedido(coincidirPractica) {
     SELECT TOP 1
       fac.Practica AS PracticaFacturada,
       fprof.Matricula,
-      LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre
+      LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))) AS RealizadorNombre,
+      realiz.ValorEspecialidad
     FROM dbo.imFacPracticas fac
     INNER JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fac.Valor AND fprof.Funcion = 1
     LEFT JOIN dbo.imPersonal realiz ON realiz.Valor = fprof.Matricula
@@ -529,6 +538,15 @@ function _fromPedido(coincidirPractica) {
       CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(realiz.ApellidoNombre, ''))), '') IS NOT NULL THEN 0 ELSE 1 END,
       fprof.IDFacProfesional
   ) realz
+  LEFT JOIN dbo.imEspecialidad espRealz ON espRealz.Valor = realz.ValorEspecialidad
+  OUTER APPLY (
+    SELECT TOP 1 e0.Descripcion
+    FROM dbo.imPersonal p0
+    INNER JOIN dbo.imEspecialidad e0 ON e0.Valor = p0.ValorEspecialidad
+    WHERE ISNULL(pe.ValorProfesional, 0) <> 0
+      AND (p0.Matricula = pe.ValorProfesional OR p0.Valor = pe.ValorProfesional)
+    ORDER BY CASE WHEN p0.Matricula = pe.ValorProfesional THEN 0 ELSE 1 END
+  ) solEsp
   OUTER APPLY (
     SELECT TOP 1 op.ApellidoNombre, op.ValorPersonal
     FROM (

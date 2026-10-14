@@ -246,6 +246,9 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
             per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,
+            LTRIM(RTRIM(ISNULL(esp.Descripcion, ''))) AS EspecialidadDescripcion,
+            CONVERT(VARCHAR(10), vis.FECHAADMISIONS, 23) AS VisitaFechaIngreso,
+            CONVERT(VARCHAR(5), vis.FECHAADMISIONS, 108) AS VisitaHoraIngreso,
             uc.Pulso AS CTRL_Pulso,
             uc.Maximo AS CTRL_Maximo,
             uc.Minimo AS CTRL_Minimo,
@@ -265,7 +268,7 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         OUTER APPLY (
-            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre
+            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre, p.ValorEspecialidad
             FROM dbo.imPersonal p
             WHERE (pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal)
                OR p.Valor = hc.IdProfecional
@@ -277,6 +280,7 @@ const obtenerHCIngresoPorVisita = async (numeroVisita) => {
             END
         ) per
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
+        LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
         OUTER APPLY (
             SELECT TOP 1 cf.*
             FROM dbo.imInterCtrlFrecuente cf
@@ -320,6 +324,9 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             COALESCE(per.IdPersonal, pw.ValorPersonal) AS IdPersonal,
             per.Matricula AS Matricula,
             sec.Descripcion AS SectorDescripcion,
+            LTRIM(RTRIM(ISNULL(esp.Descripcion, ''))) AS EspecialidadDescripcion,
+            CONVERT(VARCHAR(10), vis.FECHAADMISIONS, 23) AS VisitaFechaIngreso,
+            CONVERT(VARCHAR(5), vis.FECHAADMISIONS, 108) AS VisitaHoraIngreso,
             uc.Pulso AS CTRL_Pulso,
             uc.Maximo AS CTRL_Maximo,
             uc.Minimo AS CTRL_Minimo,
@@ -339,7 +346,7 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
         FROM dbo.imHCI AS hc
         LEFT JOIN dbo.imPassword AS pw ON pw.CodOperador = hc.IdProfecional
         OUTER APPLY (
-            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre
+            SELECT TOP 1 p.Valor AS IdPersonal, p.Matricula, p.ApellidoNombre, p.ValorEspecialidad
             FROM dbo.imPersonal p
             WHERE (pw.ValorPersonal IS NOT NULL AND p.Valor = pw.ValorPersonal)
                OR p.Valor = hc.IdProfecional
@@ -351,6 +358,7 @@ const obtenerHCIngresoPorId = async (idHCIngreso) => {
             END
         ) per
         LEFT JOIN dbo.imSectores AS sec ON hc.IdSector = sec.Valor
+        LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
         OUTER APPLY (
             SELECT TOP 1 cf.*
             FROM dbo.imInterCtrlFrecuente cf
