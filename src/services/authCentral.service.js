@@ -409,6 +409,85 @@ async function obtenerEmpresaPorId(idEmpresa) {
 	}
 }
 
+function esColumnaLogoFaltante(e) {
+	return e?.code === 'ER_BAD_FIELD_ERROR' && /logo/i.test(String(e.message || ''));
+}
+
+/** Logo institucional (Empresas.Logo, MEDIUMBLOB). null si no hay o la columna no está instalada. */
+async function obtenerLogoEmpresa(idEmpresa) {
+	if (!isAuthCentralEnabled()) return null;
+	try {
+		const rows = await query('SELECT Logo FROM `Empresas` WHERE IDEMPRESA = ? LIMIT 1', [Number(idEmpresa)]);
+		const logo = rows[0]?.Logo;
+		return logo && logo.length ? Buffer.from(logo) : null;
+	} catch (e) {
+		if (esColumnaLogoFaltante(e)) return null;
+		throw e;
+	}
+}
+
+/** Guarda (buffer) o borra (null) el logo de la empresa. */
+async function guardarLogoEmpresa(idEmpresa, buffer) {
+	if (!isAuthCentralEnabled()) {
+		const e = new Error('El logo se guarda en la base central, que no está habilitada en este entorno');
+		e.statusCode = 409;
+		throw e;
+	}
+	try {
+		await query('UPDATE `Empresas` SET Logo = ? WHERE IDEMPRESA = ?', [buffer, Number(idEmpresa)]);
+	} catch (e) {
+		if (!esColumnaLogoFaltante(e)) throw e;
+		const err = new Error(
+			'Falta instalar la columna Logo en Empresas (scripts/sql/add_empresas_logo_mysql.sql)',
+		);
+		err.statusCode = 409;
+		throw err;
+	}
+}
+
+function esColumnaPdfDisenoFaltante(e) {
+	return e?.code === 'ER_BAD_FIELD_ERROR' && /pdfdiseno/i.test(String(e.message || ''));
+}
+
+/** Diseño de los PDFs (Empresas.PdfDiseno, JSON en TEXT). null si no hay o la columna no está instalada. */
+async function obtenerPdfDisenoEmpresa(idEmpresa) {
+	if (!isAuthCentralEnabled()) return null;
+	try {
+		const rows = await query('SELECT PdfDiseno FROM `Empresas` WHERE IDEMPRESA = ? LIMIT 1', [Number(idEmpresa)]);
+		return rows[0]?.PdfDiseno || null;
+	} catch (e) {
+		if (esColumnaPdfDisenoFaltante(e)) return null;
+		throw e;
+	}
+}
+
+async function guardarPdfDisenoEmpresa(idEmpresa, json) {
+	try {
+		await query('UPDATE `Empresas` SET PdfDiseno = ? WHERE IDEMPRESA = ?', [json, Number(idEmpresa)]);
+	} catch (e) {
+		if (!esColumnaPdfDisenoFaltante(e)) throw e;
+		const err = new Error(
+			'Falta instalar la columna PdfDiseno en Empresas (scripts/sql/add_empresas_pdfdiseno_mysql.sql)',
+		);
+		err.statusCode = 409;
+		throw err;
+	}
+}
+
+/** Datos institucionales editables por el admin de la clínica (no toca conexión ni plataforma). */
+async function actualizarDatosEmpresa(idEmpresa, d) {
+	await query(
+		`UPDATE \`Empresas\` SET
+      DESCRIPCION = ?, calle = ?, calle_nro = ?, Depto = ?, piso = ?, localidad = ?, Provincia = ?,
+      Nro_CUIT = ?, Nro_IngBrutos = ?, IdTipoIVA = ?, TEEmpresa = ?, Email = ?
+    WHERE IDEMPRESA = ?`,
+		[
+			d.descripcion, d.calle, d.calle_nro, d.depto, d.piso, d.localidad, d.provincia,
+			d.cuit, d.ingresosBrutos, d.idTipoIva, d.telefono, d.email, Number(idEmpresa),
+		],
+	);
+}
+
 async function obtenerTodasEmpresas() {
 	if (!isAuthCentralEnabled()) return [];
 	return query(
@@ -823,6 +902,11 @@ module.exports = {
 	obtenerSectorPorPersonal,
 	esSuperAdmin,
 	obtenerEmpresaPorId,
+	obtenerLogoEmpresa,
+	guardarLogoEmpresa,
+	actualizarDatosEmpresa,
+	obtenerPdfDisenoEmpresa,
+	guardarPdfDisenoEmpresa,
 	obtenerTodasEmpresas,
 	obtenerPacksEmpresa,
 	permisosDeRol,
