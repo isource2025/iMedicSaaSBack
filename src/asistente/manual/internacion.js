@@ -103,12 +103,27 @@ module.exports = [
 			'Anula el egreso y la visita vuelve a internación (a su cama si sigue libre). Solo lo puede hacer un administrador clínico (rol ADMIN); no alcanza con un permiso de la matriz.',
 		pasos: [
 			'Abrí la visita egresada desde «Consultar Historia Clínica» y tocá «Modificar».',
-			'En «Ubicación, movimientos y egreso» tocá «Revertir egreso».',
-			'Confirmá en «Anular egreso». Si sale bien: «Egreso anulado».',
+			'En «Ubicación, movimientos y egreso» tocá «Eliminar egreso».',
+			'El mensaje avisa qué pasa con la cama: si sigue libre vuelve ahí; si está ocupada o no disponible, queda internado sin cama.',
+			'Tocá «Confirmar». Si sale bien: «Egreso eliminado». Si quedó sin cama se abre la elección de cama.',
 		],
 		problemas: [
-			{ sintoma: 'No aparece «Revertir egreso»', causa: 'El usuario no es administrador clínico (rol ADMIN).' },
-			{ sintoma: '«No se puede revertir el egreso»', causa: 'Hay un conflicto (por ejemplo la cama ya está ocupada por otro paciente o hay una visita posterior).' },
+			{ sintoma: 'No aparece «Eliminar egreso»', causa: 'El usuario no es administrador clínico (rol ADMIN).' },
+			{ sintoma: '«No se puede eliminar el egreso»', causa: 'Hay un conflicto que lo impide, por ejemplo el paciente ya tiene otra internación abierta.' },
+		],
+	},
+	{
+		id: 'modificar-egreso',
+		titulo: 'Corregir los datos de un egreso',
+		path: '/dashboard/admission/search',
+		modulo: 'INTERNACION',
+		comoLlegar: 'Consultar Historia Clínica → abrir la visita → «Modificar» → «Ubicación, movimientos y egreso».',
+		permisos: ['INTERNACION.MOVIMIENTOS.GESTIONAR'],
+		tags: ['modificar egreso', 'corregir egreso', 'cambiar fecha de egreso', 'cambiar hora de egreso', 'condicion de egreso', 'diagnostico de egreso'],
+		texto: 'Los datos de un egreso guardado se muestran bloqueados. «Modificar» habilita fecha, hora, condición y diagnóstico de egreso.',
+		pasos: [
+			'En la sección de egreso tocá «Modificar».',
+			'Corregí los campos y tocá «Guardar cambios». «Cancelar» descarta lo editado.',
 		],
 	},
 	{
