@@ -15,7 +15,8 @@ const SQL_APPLY_PERSONAS = `
     ${sqlApplyNombrePersona("cf.Profesional", "profFicha", ["valor", "matricula", "operador"])}
     OUTER APPLY (
       SELECT CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
-             CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula
+             CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula,
+             CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.ValorPersonal ELSE profFicha.ValorPersonal END AS ValorPersonal
     ) prof`;
 
 /**
@@ -69,7 +70,9 @@ const obtenerControlesPorVisitaYFecha = async (numeroVisita, fecha, days) => {
       cf.IMC,
       cf.IdTurno,
       cf.IdHci,
-      COALESCE(op.Matricula, prof.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula,
+      prof.Matricula AS MatriculaProfesional,
+      COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
     FROM dbo.imInterCtrlFrecuente AS cf
     ${SQL_APPLY_PERSONAS}
     WHERE cf.NumeroVisita = @param0 
@@ -139,7 +142,9 @@ const obtenerControlPorId = async (valor) => {
       cf.IMC,
       cf.IdTurno,
       cf.IdHci,
-      COALESCE(op.Matricula, prof.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula,
+      prof.Matricula AS MatriculaProfesional,
+      COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
     FROM dbo.imInterCtrlFrecuente AS cf
     ${SQL_APPLY_PERSONAS}
     WHERE cf.Valor = @param0

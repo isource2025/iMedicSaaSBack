@@ -71,7 +71,8 @@ const SELECT_BALANCE = `
     b.Sector,
     prof.NombreCompleto AS ProfesionalApellido,
     CAST(NULL AS VARCHAR(150)) AS ProfesionalNombres,
-    prof.Matricula AS Matricula
+    prof.Matricula AS Matricula,
+    prof.ValorPersonal AS ValorPersonalProfesional
   FROM dbo.imBalanceHidrico AS b
   ${sqlApplyNombrePersona('b.Profesional', 'prof', ['matricula', 'operador', 'valor'])}
 `;

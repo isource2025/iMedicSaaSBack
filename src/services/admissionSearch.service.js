@@ -16,6 +16,7 @@ const evolucionesService = require('./evoluciones.service');
 const protocolosService = require('./protocolos.service');
 const { obtenerHCIngresoPorVisita } = require('./hcIngreso.service');
 const estudiosService = require('./estudios.service');
+const solicitudesEstudiosService = require('./solicitudesEstudios.service');
 const interconsultasService = require('./interconsultas.service');
 const controlesFrecuentesService = require('./controlesFrecuentes.service');
 const balanceHidricoService = require('./balanceHidrico.service');
@@ -1328,7 +1329,20 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   }
 
   const has = (s) => sections.includes(s);
-  const d = await cargarDatosClinicosVisita(numeroVisita, new Set(sections));
+  // Para el PDF los estudios salen de las solicitudes agrupadas, igual que en la sección.
+  const paraPdf = Boolean(opts.paraPdf);
+  const [d, solicitudes] = await Promise.all([
+    cargarDatosClinicosVisita(
+      numeroVisita,
+      new Set(paraPdf ? sections.filter((s) => s !== 'estudios') : sections),
+    ),
+    paraPdf && has('estudios')
+      ? solicitudesEstudiosService.listarPorVisita(numeroVisita).catch((err) => {
+          console.warn('[export] solicitudes de estudios no disponibles:', err?.message || err);
+          return [];
+        })
+      : null,
+  ]);
   const porFecha = (rows, getFecha) => filterPorFecha(rows, getFecha, fechaInicio, fechaFin, exportAll);
 
   const out = {
@@ -1380,7 +1394,9 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   }
 
   if (has('estudios')) {
-    out.estudios = filterEstudiosAd(d.estudios, fechaInicio, fechaFin, exportAll);
+    out.estudios = paraPdf
+      ? porFecha(solicitudes, (s) => s.FechaPedidoISO)
+      : filterEstudiosAd(d.estudios, fechaInicio, fechaFin, exportAll);
   }
 
   if (has('protocolos')) {
@@ -1439,8 +1455,10 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
       NombreArchivo: a.NombreArchivo,
       TipoArchivo: a.TipoArchivo,
       FechaCarga: a.FechaCarga,
+      TipoImagen: a.TipoImagen,
       TipoImagenNombre: a.TipoImagenNombre,
       RutaArchivo: a.RutaArchivo,
+      NombreUsuario: a.NombreUsuario,
     }));
   }
 

@@ -65,7 +65,10 @@ async function consultar(sql, params = []) {
 	if (/^SELECT COUNT\(\*\) AS n FROM imRoles/.test(s)) return [{ n: 7 + db.rolesPersonalizados }];
 
 	if (/^SELECT Activo FROM imFeatureFlags/.test(s)) {
-		if (!db.tablas.has('imFeatureFlags')) throw new Error("Table 'imFeatureFlags' doesn't exist");
+		if (db.caida) throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+		if (!db.tablas.has('imFeatureFlags')) {
+			throw Object.assign(new Error("Table 'imFeatureFlags' doesn't exist"), { code: 'ER_NO_SUCH_TABLE', errno: 1146 });
+		}
 		const k = `${params[0]}:${params[1]}`;
 		return db.flags.has(k) ? [{ Activo: db.flags.get(k) }] : [];
 	}
@@ -258,27 +261,39 @@ test('revertir: asignaciones de usuarios a roles personalizados bloquean la reve
 });
 // ─── Flags por empresa ──────────────────────────────────────────────────────
 
-test('flag: falla cerrado sin tabla, sin auth central o con empresa invalida', async () => {
+test('flag: falla cerrado con base caida, sin auth central o con empresa invalida', async () => {
 	reiniciar();
-	assert.equal(await flags.habilitada(102, flags.FLAG_ROLES_PERSONALIZADOS), false); // sin tabla
+	db.caida = true;
+	assert.equal(await flags.habilitada(102, flags.FLAG_ROLES_PERSONALIZADOS), false);
+	reiniciar();
 	assert.equal(await flags.habilitada(0, flags.FLAG_ROLES_PERSONALIZADOS), false);
 	assert.equal(await flags.habilitada('x', flags.FLAG_ROLES_PERSONALIZADOS), false);
 	habilitadoCentral = false;
 	assert.equal(await flags.habilitada(102, flags.FLAG_ROLES_PERSONALIZADOS), false);
 });
 
-test('flag: se activa por empresa, sin afectar a las demas, y respeta el cache al apagar', async () => {
+test('flag: sin fila (o sin tabla) vale el valor por defecto', async () => {
+	reiniciar();
+	assert.equal(await flags.habilitada(102, flags.FLAG_ROLES_PERSONALIZADOS), true); // sin tabla
+	assert.equal(await flags.habilitada(102, 'OTRA_FLAG'), false);
+	reiniciar();
+	await schema.aplicar(consultar);
+	assert.equal(await flags.habilitada(102, flags.FLAG_ROLES_PERSONALIZADOS), true); // tabla sin fila
+	assert.equal(await flags.habilitada(102, 'OTRA_FLAG'), false);
+});
+
+test('flag: se apaga por empresa, sin afectar a las demas, y respeta el cache', async () => {
 	reiniciar();
 	await schema.aplicar(consultar);
 	const F = flags.FLAG_ROLES_PERSONALIZADOS;
 
-	await flags.establecer(102, F, true, { consultar });
-	assert.equal(await flags.habilitada(102, F), true);
-	assert.equal(await flags.habilitada(100, F), false);
-	assert.deepEqual(await flags.empresasHabilitadas(F, { consultar }), [102]);
-
-	await flags.establecer(102, F, false); // invalida el cache local
+	await flags.establecer(102, F, false, { consultar });
 	assert.equal(await flags.habilitada(102, F), false);
+	assert.equal(await flags.habilitada(100, F), true);
+
+	await flags.establecer(102, F, true); // invalida el cache local
+	assert.equal(await flags.habilitada(102, F), true);
+	assert.deepEqual(await flags.empresasHabilitadas(F, { consultar }), [102]);
 });
 
 test('flag: valida empresa y nombre', async () => {
@@ -313,18 +328,17 @@ test('crearRol: esquema NO instalado responde 409 y no ejecuta DDL', async () =>
 	assert.equal(db.ddl.length, 0);
 });
 
-test('crearRol: esquema instalado pero empresa sin habilitar responde 403', async () => {
+test('crearRol: esquema instalado pero empresa deshabilitada explicitamente responde 403', async () => {
 	reiniciar();
 	await schema.aplicar(consultar);
+	await flags.establecer(102, flags.FLAG_ROLES_PERSONALIZADOS, false, { consultar });
 	await assert.rejects(() => alta(), (e) => e.statusCode === 403 && /no est/.test(e.message));
-	assert.equal(await flags.habilitada(101, flags.FLAG_ROLES_PERSONALIZADOS), false);
+	assert.equal(await flags.habilitada(101, flags.FLAG_ROLES_PERSONALIZADOS), true);
 });
 
-test('crearRol: con esquema y empresa habilitada pasa las compuertas (falla luego por validacion)', async () => {
+test('crearRol: con esquema instalado, toda empresa sin fila pasa las compuertas (falla luego por validacion)', async () => {
 	reiniciar();
 	await schema.aplicar(consultar);
-	await flags.establecer(102, flags.FLAG_ROLES_PERSONALIZADOS, true, { consultar });
 	await assert.rejects(() => alta({ nombre: '' }), (e) => e.statusCode === 400);
-	// otra empresa sigue bloqueada
-	await assert.rejects(() => alta({ idEmpresa: 100 }), (e) => e.statusCode === 403);
+	await assert.rejects(() => alta({ idEmpresa: 100, nombre: '' }), (e) => e.statusCode === 400);
 });

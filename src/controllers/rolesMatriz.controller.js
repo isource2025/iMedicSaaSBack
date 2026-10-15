@@ -96,6 +96,7 @@ const duplicar = handler('duplicar', async (req, idEmpresa) => {
 		actor: actorDe(req),
 		nombre: b.nombre,
 		descripcion: b.descripcion,
+		rolBase: b.rolBase,
 	});
 	return { mensaje: `Rol "${rol.nombre}" creado`, data: rol };
 });

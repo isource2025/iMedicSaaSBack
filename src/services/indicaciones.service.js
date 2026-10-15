@@ -9,6 +9,7 @@ const {
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { resolverPresionMedia } = require("../utils/presionArterial");
+const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -495,11 +496,14 @@ SELECT DISTINCT
   v.TipoMedicamento,
   COALESCE(v.Alias, v.Descripcion, iim.AliasMedicamento) AS DescripcionIndicacion,
   iim.NroAdicional,
-  iim.Orden
+  iim.Orden,
+  op.Matricula AS MatriculaOperador,
+  op.ValorPersonal AS ValorPersonalOperador
 FROM dbo.imInterIndMedicas AS iim
 LEFT JOIN dbo.imPassword AS p ON p.CodOperador = iim.OperadorCarga
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
+${sqlApplyNombrePersona('iim.OperadorCarga', 'op')}
 WHERE iim.NumeroVisita = @param0
   ${periodo.sql ? `AND ${periodo.sql}` : ''}
   AND iim.TipoIndicacion = 9
@@ -542,6 +546,8 @@ ORDER BY iim.Orden ASC;
         apellido: r.Apellido,
         nombres: r.Nombres,
         fullName: r.FullName,
+        matricula: r.MatriculaOperador ?? null,
+        idPersonal: r.ValorPersonalOperador ?? null,
         observaciones: r.Observaciones,
         vigenteDesde: r.FechaCargaISO,
         horaCarga: r.HoraCarga,

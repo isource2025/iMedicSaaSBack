@@ -84,9 +84,14 @@ function mostrarPasos(pasos) {
 			const existe = await consultar(
 				`SELECT 1 AS ok FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'imFeatureFlags'`,
 			);
-			if (!existe.length) return console.log('imFeatureFlags todavía no existe: ninguna empresa habilitada.');
-			const lista = await featureFlags.empresasHabilitadas(featureFlags.FLAG_ROLES_PERSONALIZADOS, { consultar });
-			return console.log(lista.length ? `Empresas habilitadas: ${lista.join(', ')}` : 'Ninguna empresa habilitada.');
+			console.log('Habilitada por defecto para todas las empresas.');
+			if (!existe.length) return console.log('imFeatureFlags todavía no existe: ninguna empresa deshabilitada.');
+			const apagadas = (
+				await consultar('SELECT IdEmpresa FROM imFeatureFlags WHERE Flag = ? AND Activo = 0 ORDER BY IdEmpresa', [
+					featureFlags.FLAG_ROLES_PERSONALIZADOS,
+				])
+			).map((r) => Number(r.IdEmpresa));
+			return console.log(apagadas.length ? `Deshabilitadas: ${apagadas.join(', ')}` : 'Ninguna empresa deshabilitada.');
 		}
 
 		if (tiene('--revertir')) {

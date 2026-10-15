@@ -5,12 +5,14 @@
  * instancias del backend vean el mismo valor y una funcionalidad se pueda
  * activar clínica por clínica.
  *
- * Falla cerrado: sin tabla, sin conexión o ante cualquier error, una flag está
- * APAGADA. Una flag nunca se activa por accidente.
+ * Falla cerrado: sin conexión o ante cualquier error, una flag está APAGADA.
+ * Sin fila para la empresa (o sin tabla) vale su valor por defecto
+ * (`FLAGS_ACTIVAS_POR_DEFECTO`); una fila con Activo = 0 la apaga igual.
  */
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
 
 const FLAG_ROLES_PERSONALIZADOS = 'ROLES_PERSONALIZADOS';
+const FLAGS_ACTIVAS_POR_DEFECTO = new Set([FLAG_ROLES_PERSONALIZADOS]);
 const CACHE_MS = 30 * 1000;
 
 const DDL_TABLA = `
@@ -49,16 +51,17 @@ async function habilitada(idEmpresa, flag) {
 	const hit = cache.get(k);
 	if (hit && hit.expira > Date.now()) return hit.valor;
 
+	const porDefecto = FLAGS_ACTIVAS_POR_DEFECTO.has(String(flag).toUpperCase());
 	let valor = false;
 	try {
 		const rows = await consultarPool(
 			'SELECT Activo FROM imFeatureFlags WHERE IdEmpresa = ? AND Flag = ? LIMIT 1',
 			[e, String(flag).toUpperCase()],
 		);
-		valor = rows.length > 0 && Number(rows[0].Activo) === 1;
+		valor = rows.length > 0 ? Number(rows[0].Activo) === 1 : porDefecto;
 	} catch (err) {
-		// Tabla inexistente o base caída: flag apagada.
-		valor = false;
+		// Tabla inexistente: valor por defecto. Base caída u otro error: apagada.
+		valor = err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146) ? porDefecto : false;
 	}
 	cache.set(k, { valor, expira: Date.now() + CACHE_MS });
 	return valor;
@@ -96,6 +99,7 @@ function _reiniciarCache() {
 
 module.exports = {
 	FLAG_ROLES_PERSONALIZADOS,
+	FLAGS_ACTIVAS_POR_DEFECTO,
 	DDL_TABLA,
 	habilitada,
 	establecer,

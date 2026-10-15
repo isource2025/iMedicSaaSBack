@@ -451,7 +451,7 @@ async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rol
 
 // ─── Duplicar ───────────────────────────────────────────────────────────────
 
-async function duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion }) {
+async function duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion, rolBase }) {
 	await exigirHabilitado(idEmpresa);
 	const id = Number(idOrigen);
 	if (!Number.isFinite(id) || id <= 0) throw error(400, 'Id de rol inválido');
@@ -489,7 +489,7 @@ async function duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion }) 
 		actor,
 		nombre: nombre || `${origen.nombre} (copia)`,
 		descripcion: descripcion !== undefined ? descripcion : origen.descripcion || '',
-		rolBase: origen.rolBase,
+		rolBase: rolBase !== undefined ? rolBase : origen.rolBase,
 		permisos: origen.permisos,
 		origen: { idRol: id, nombre: origen.nombre },
 	});
