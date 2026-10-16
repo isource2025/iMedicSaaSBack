@@ -732,10 +732,16 @@ async function crear(data) {
 				: Array.isArray(data.Sectores)
 					? data.Sectores
 					: [];
-			if (sectoresAlta.length) {
+			const serviciosAlta = Array.isArray(data.servicios)
+				? data.servicios
+				: Array.isArray(data.Servicios)
+					? data.Servicios
+					: [];
+			if (sectoresAlta.length || serviciosAlta.length) {
 				try {
 					await reemplazarAsignacionesPersonal(nuevoValor, {
-						sectores: sectoresAlta,
+						sectores: sectoresAlta.length ? sectoresAlta : undefined,
+						servicios: serviciosAlta.length ? serviciosAlta : undefined,
 						skipCloudSync: deferAuthSync,
 					});
 				} catch (asigErr) {
