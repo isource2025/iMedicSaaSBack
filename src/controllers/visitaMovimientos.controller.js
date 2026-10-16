@@ -4,7 +4,6 @@
  */
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
-const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -163,17 +162,11 @@ function parseNumeroVisitaParam(req, res) {
 }
 
 /**
- * Previsualiza conflictos de revertir egreso (solo ADMIN).
+ * Previsualiza conflictos de revertir egreso.
+ * Autorización: INTERNACION.MOVIMIENTOS.GESTIONAR (middleware de ruta).
  */
 const consultarEstadoRevertirEgreso = async (req, res) => {
   try {
-    if (!(await esAdminClinico(req))) {
-      return res.status(403).json({
-        success: false,
-        mensaje: 'Solo un administrador puede revertir un egreso',
-      });
-    }
-
     const numeroVisitaInt = parseNumeroVisitaParam(req, res);
     if (!numeroVisitaInt) return undefined;
 
@@ -190,17 +183,11 @@ const consultarEstadoRevertirEgreso = async (req, res) => {
 };
 
 /**
- * Revierte el egreso hospitalario (solo ADMIN).
+ * Revierte el egreso hospitalario.
+ * Autorización: INTERNACION.MOVIMIENTOS.GESTIONAR (middleware de ruta).
  */
 const revertirEgresoVisita = async (req, res) => {
   try {
-    if (!(await esAdminClinico(req))) {
-      return res.status(403).json({
-        success: false,
-        mensaje: 'Solo un administrador puede revertir un egreso',
-      });
-    }
-
     const numeroVisitaInt = parseNumeroVisitaParam(req, res);
     if (!numeroVisitaInt) return undefined;
 
