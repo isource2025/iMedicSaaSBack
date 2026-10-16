@@ -15,6 +15,16 @@ const authCentralService = require('./authCentral.service');
 
 /** IdRol desde el cual los roles son personalizados (1..999 = del sistema). */
 const ID_ROL_PERSONALIZADO_MIN = 1000;
+/** Roles de sistema: plantilla completa por id (imRolPermisos puede estar incompleto). */
+const ROL_SISTEMA_POR_ID = Object.freeze({
+	1: 'ADMIN',
+	2: 'MEDICO',
+	3: 'ENFERMERO',
+	4: 'ADMINISTRATIVO',
+	5: 'SUPER_ADMIN',
+	6: 'CARGA_HC',
+	7: 'PANEL_DATOS',
+});
 // Carga diferida: evita ciclos de dependencias y no toca la BD si no se usa.
 const rolesCustom = () => require('./rolesCustom.service');
 
@@ -74,34 +84,28 @@ async function permisosDeRol(idRol, nombreRol) {
 		}
 	}
 
-	// ADMIN / SUPER_ADMIN / MEDICO / ADMINISTRATIVO: matriz completa
-	// (evita imRolPermisos incompleto en auth central / BD tenant).
-	const nombre = nombreRol ? String(nombreRol).trim().toUpperCase() : '';
-	if (nombre === 'ADMIN') {
-		return [...matriz.permisosDeRol('ADMIN')];
+	// Roles de sistema: matriz completa por nombre o por id (1..7).
+	// Evita imRolPermisos incompleto en auth central / BD tenant.
+	const idNum =
+		idRol != null && Number.isFinite(Number(idRol)) ? Number(idRol) : null;
+	const nombre =
+		(nombreRol ? String(nombreRol).trim().toUpperCase() : '') ||
+		(idNum != null ? ROL_SISTEMA_POR_ID[idNum] || '' : '');
+	if (
+		nombre === 'ADMIN' ||
+		nombre === 'SUPER_ADMIN' ||
+		nombre === 'MEDICO' ||
+		nombre === 'ADMINISTRATIVO' ||
+		nombre === 'ENFERMERO' ||
+		nombre === 'CARGA_HC' ||
+		nombre === 'PANEL_DATOS'
+	) {
+		return [...matriz.permisosDeRol(nombre)];
 	}
-	if (nombre === 'SUPER_ADMIN') {
-		return [...matriz.permisosDeRol('SUPER_ADMIN')];
-	}
-	if (nombre === 'MEDICO') {
-		return [...matriz.permisosDeRol('MEDICO')];
-	}
-	if (nombre === 'ADMINISTRATIVO') {
-		return [...matriz.permisosDeRol('ADMINISTRATIVO')];
-	}
-	if (nombre === 'ENFERMERO') {
-		return [...matriz.permisosDeRol('ENFERMERO')];
-	}
-	if (nombre === 'CARGA_HC') {
-		return [...matriz.permisosDeRol('CARGA_HC')];
-	}
-	if (nombre === 'PANEL_DATOS') {
-		return [...matriz.permisosDeRol('PANEL_DATOS')];
-	}
-	if (idRol == null || !Number.isFinite(Number(idRol))) {
+	if (idNum == null) {
 		return matriz.permisosDeRol(nombreRol || null);
 	}
-	const id = Number(idRol);
+	const id = idNum;
 
 	const hit = _cache.get(id);
 	if (hit && hit.expira > _ahora()) return [...hit.permisos];

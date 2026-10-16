@@ -287,17 +287,14 @@ test('sin ningún movimiento: solo limpia el egreso de la internación', async (
 	assert.equal(txLog.commit, 1);
 });
 
-test('si el paciente ya tiene otra internación abierta no se puede quitar el egreso (y no se toca nada)', async () => {
+test('si el paciente ya tiene otra internación abierta avisa pero permite quitar el egreso', async () => {
 	escenario.otraInternacion = true;
 	const estado = await servicio.consultarEstadoRevertirEgreso(NV);
-	assert.equal(estado.puedeRevertir, false);
-	await assert.rejects(servicio.revertirEgresoVisita(NV, { codOperador: 33 }), (err) => {
-		assert.equal(err.statusCode, 409);
-		assert.match(err.message, /otra internación abierta/);
-		return true;
-	});
-	assert.equal(txLog.begin, 0);
-	assert.equal(txLog.queries.length, 0);
+	assert.equal(estado.puedeRevertir, true);
+	assert.ok(estado.avisos.some((a) => a.codigo === 'otra_internacion'));
+	assert.match(estado.avisos.find((a) => a.codigo === 'otra_internacion').mensaje, /dos internaciones abiertas/);
+	await servicio.revertirEgresoVisita(NV, { codOperador: 33 });
+	assert.equal(txLog.commit, 1);
 });
 
 test('una internación sin egreso no se puede revertir', async () => {

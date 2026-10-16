@@ -969,9 +969,9 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
         [{ value: ctx.idPaciente }, { value: num }],
       );
       if (otras?.[0]) {
-        ctx.conflictos.push({
+        ctx.avisos.push({
           codigo: 'otra_internacion',
-          mensaje: `${ctx.pacienteNombre} ya tiene otra internación abierta. No se puede reabrir esta hasta que esa quede egresada.`,
+          mensaje: `${ctx.pacienteNombre} ya tiene otra internación en curso. Si anulás este egreso, quedarán dos internaciones abiertas a la vez.`,
         });
       }
     } catch (_) {
@@ -1051,7 +1051,7 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
     const quienOcupa = ctx.ocupanteNombre ? ` Hoy está ${ctx.ocupanteNombre}.` : '';
     ctx.avisos.push({
       codigo: 'cama_ocupada',
-      mensaje: `La ${etiquetaUbicacion} ya está ocupada.${quienOcupa} Se anula el egreso y ${ctx.pacienteNombre} queda sin cama para asignarle ubicación en movimientos.`,
+      mensaje: `La ${etiquetaUbicacion} ya está ocupada.${quienOcupa} Si anulás el egreso, ${ctx.pacienteNombre} quedará sin cama; después podés asignarle ubicación en movimientos.`,
     });
     return finalizarContextoRevertir(ctx);
   }
@@ -1142,7 +1142,7 @@ async function consultarEstadoRevertirEgreso(numeroVisita) {
 }
 
 /**
- * Revierte un egreso hospitalario (solo admin).
+ * Revierte un egreso hospitalario (requiere INTERNACION.MOVIMIENTOS.GESTIONAR).
  * Si la cama anterior está libre, la restaura; si no existe o no está
  * disponible, deja al paciente en internación sin cama.
  */
