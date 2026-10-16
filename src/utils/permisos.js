@@ -103,8 +103,8 @@ const MODULOS = Object.freeze([
 			{ id: 'ESTUDIOS',             label: 'Pedidos de estudios (complementarios)',  acciones: [...CRUD] },
 			{ id: 'PROTOCOLOS',           label: 'Protocolos',               acciones: [...CRUD] },
 			{ id: 'PROCEDIMIENTOS',       label: 'Procedimientos',           acciones: [...CRUD] },
-			// TRASLADAR = cambio/intercambio/asignación de cama. GESTIONAR además
-			// incluye egreso y edición del último movimiento.
+			// TRASLADAR = cambio/intercambio/asignación de cama.
+			// GESTIONAR = egreso completo (registrar / modificar / eliminar) + editar último movimiento + trasladar.
 			{ id: 'MOVIMIENTOS',          label: 'Movimientos / traslados',  acciones: [ACCIONES.VER, ACCIONES.TRASLADAR, ACCIONES.GESTIONAR] },
 			{ id: 'ADJUNTOS',             label: 'Adjuntos',                 acciones: [...CRUD] },
 			{ id: 'EPICRISIS',            label: 'Epicrisis',                acciones: [...CRUD, ACCIONES.IMPRIMIR] },

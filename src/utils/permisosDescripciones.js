@@ -136,11 +136,12 @@ const SUBMODULOS = Object.freeze({
 	'INTERNACION.PROTOCOLOS': { descripcion: 'Protocolos registrados del paciente internado.' },
 	'INTERNACION.PROCEDIMIENTOS': { descripcion: 'Procedimientos realizados al paciente internado.' },
 	'INTERNACION.MOVIMIENTOS': {
-		descripcion: 'Movimientos y traslados del paciente: cambios de cama y egreso.',
+		descripcion: 'Movimientos y traslados del paciente: cambios de cama y gestión del egreso.',
 		acciones: {
 			VER: 'Ver el historial de movimientos del paciente',
-			TRASLADAR: 'Mover, intercambiar o asignar cama (no permite dar el egreso)',
-			GESTIONAR: 'Registrar el egreso, editar el último movimiento y trasladar',
+			TRASLADAR: 'Mover, intercambiar o asignar cama (sin gestionar el egreso)',
+			GESTIONAR:
+				'Gestionar el egreso completo (registrar, modificar y eliminar/revertir) y editar el último movimiento; incluye trasladar',
 		},
 	},
 	'INTERNACION.ADJUNTOS': {
