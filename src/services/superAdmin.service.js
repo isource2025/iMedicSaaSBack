@@ -10,6 +10,7 @@ const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const platformMysql = require('./platformMysql.service');
 const nubeTenant = require('./nubeTenant.service');
+const { sqlInsertImPasswordConCodOperador } = require('../utils/imPasswordInsert');
 const {
 	PACKS_PRINCIPALES,
 	MODULOS_GENERALES,
@@ -847,11 +848,16 @@ async function espejarCredencialEnFisico(idEmpresa, idPersonal, body = {}) {
 		const password = String(body.password || '').trim() || `tmp-${vp}`;
 		try {
 			await tenantDb.executeQuery(
-				`
-        INSERT INTO dbo.imPassword (
-          ValorPersonal, CodOperador, Apellido, Nombres, NombreRed, Password, Grupo
-        ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, 0)
-        `,
+				sqlInsertImPasswordConCodOperador({
+					insertConCod: `
+          INSERT INTO dbo.imPassword (
+            ValorPersonal, CodOperador, Apellido, Nombres, NombreRed, Password, Grupo
+          ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, 0);`,
+					insertSinCod: `
+          INSERT INTO dbo.imPassword (ValorPersonal, Apellido, Nombres, NombreRed, Password, Grupo)
+          VALUES (@p0, @p2, @p3, @p4, @p5, 0);`,
+					paramCod: '@p1',
+				}),
 				[
 					{ value: vp, type: 'Int' },
 					{ value: codDeseado, type: 'Int' },
