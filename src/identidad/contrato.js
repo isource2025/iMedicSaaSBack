@@ -67,12 +67,12 @@ const COLUMNAS = Object.freeze({
 });
 
 /**
- * Orden de lectura por clave. La clave de la columna va primero; las demás solo rescatan
- * filas que la web grabó con otra clave antes de este contrato.
+ * Orden de lectura por clave.
  *
- * En columnas con historial mixto el piloto (2026-10-19) midió que invertir el orden
- * cambia el nombre de personas ya visibles. Ahí se conserva la interpretación histórica
- * y se agrega la clave del contrato como rescate (llena vacíos, no sustituye nombres).
+ * La clave de la columna va primero. Las demás solo corren si esa clave no
+ * identifica a nadie (filas viejas de la web). Si el número es a la vez el
+ * CodOperador de A y la ficha de B, gana la clave de la columna: es lo que
+ * Clarion grabó y lo único que no choca con las escrituras nuevas.
  */
 const ORDEN_LECTURA = Object.freeze({
 	[OPERADOR]: ['operador', 'valor', 'matricula'],
@@ -80,16 +80,8 @@ const ORDEN_LECTURA = Object.freeze({
 	[MATRICULA]: ['matricula'],
 });
 
-const ORDEN_LECTURA_COLUMNA = Object.freeze({
-	'imRendiciones.OperGraba': ['valor', 'operador'],
-	'imRendiciones.OperCierre': ['valor', 'operador'],
-	'imVisita.DOCTORADMISOR': ['matricula', 'valor'],
-	'imVisita.DOCTORASISTIENDO': ['matricula', 'valor'],
-	'imHCEvolucion.Profecional': ['matricula', 'valor', 'operador'],
-	'imHCEpicrisis.Profecional': ['valor', 'matricula'],
-	'imPedidosEstudios.ValorProfesional': ['valor', 'matricula', 'operador'],
-	'imSolicitudesEstudios.ValorProfesional': ['valor', 'matricula', 'operador'],
-});
+/** Sin excepciones: una excepción volvería a mostrar a la persona equivocada. */
+const ORDEN_LECTURA_COLUMNA = Object.freeze({});
 
 function claveDe(columna) {
 	const clave = COLUMNAS[columna];

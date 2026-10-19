@@ -42,9 +42,11 @@ test('firma.para no usa otra clave si falta la de la columna', () => {
 	assert.throws(() => f2.para('imRendiciones.OperGraba'), (e) => e.statusCode === 400);
 });
 
-test('lectura histórica de rendiciones y visitas no invierte la clave (0 swaps)', () => {
-	assert.equal(ordenDeLectura('imRendiciones.OperGraba')[0], 'valor');
-	assert.equal(ordenDeLectura('imVisita.DOCTORADMISOR')[0], 'matricula');
+test('cada columna se lee primero por su clave de contrato', () => {
+	assert.equal(ordenDeLectura('imRendiciones.OperGraba')[0], 'operador');
+	assert.equal(ordenDeLectura('imVisita.DOCTORADMISOR')[0], 'valor');
+	assert.equal(ordenDeLectura('imHCEvolucion.Profecional')[0], 'valor');
 	assert.equal(ordenDeLectura('imHCI.IdProfecional')[0], 'operador');
 	assert.equal(ordenDeLectura('imPedidosEstudios.ValorProfesional')[0], 'valor');
+	assert.equal(ordenDeLectura('imTurnos.Profesional')[0], 'matricula');
 });

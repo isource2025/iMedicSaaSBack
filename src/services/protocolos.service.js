@@ -7,8 +7,9 @@ const {
 const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
 
 /**
- * IdOperador: la web graba el ValorPersonal de quien carga; el escritorio, su CodOperador
- * (el mismo que deja en imFacPracticas). Ambos números pueden ser de personas distintas.
+ * IdOperador: el escritorio (y la web de ahora) graban CodOperador, el mismo
+ * que dejan en imFacPracticas. Filas viejas de la web tienen ValorPersonal:
+ * si FacPracticas.CodOperador no coincide, se lee como ficha.
  */
 const SQL_APPLY_OPERADOR_PROTOCOLO = `
 		 ${sqlApplyNombrePersona('p.IdOperador', 'opCod', ['operador', 'valor'])}
