@@ -34,8 +34,9 @@ const SQL_EXCLUIR_SIN_EFECTO =
 /**
  * SQL: profesional de la indicación. ProfesionalAsiste guarda matrícula, CodOperador
  * (usuarios sin matrícula) o, en registros viejos, imPersonal.Valor.
- * En Colman/Clarion CodOperador suele ser ValorPersonal+1: priorizar matrícula y
- * CodOperador→cuenta antes que Valor, si no "7" muestra a quien tiene Valor=7.
+ * ProfesionalAsiste guarda matrícula o ValorPersonal (ficha). CodOperador solo
+ * como fallback: si Valor va después de CodOperador, un VP=N se muestra como
+ * la cuenta con CodOperador=N (otra persona en Clarion CO≈VP+1).
  * Expone `per` (imPersonal) y `p` (imPassword); usar después de FROM imInterIndMedicas AS iim.
  */
 const SQL_APPLY_PERSONAL_PROFESIONAL = `
@@ -54,8 +55,8 @@ OUTER APPLY (
      OR pwCod.ValorPersonal IS NOT NULL
   ORDER BY CASE
     WHEN per0.Matricula = iim.ProfesionalAsiste THEN 0
-    WHEN pwCod.ValorPersonal IS NOT NULL THEN 1
-    WHEN per0.Valor = iim.ProfesionalAsiste THEN 2
+    WHEN per0.Valor = iim.ProfesionalAsiste THEN 1
+    WHEN pwCod.ValorPersonal IS NOT NULL THEN 2
     ELSE 3
   END
 ) per`;
@@ -69,8 +70,8 @@ OUTER APPLY (
      OR p0.CodOperador = iim.ProfesionalAsiste
   ORDER BY CASE
     WHEN per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor THEN 0
-    WHEN p0.CodOperador = iim.ProfesionalAsiste THEN 1
-    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 2
+    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 1
+    WHEN p0.CodOperador = iim.ProfesionalAsiste THEN 2
     ELSE 3
   END
 ) p`;

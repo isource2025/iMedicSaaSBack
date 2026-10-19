@@ -33,7 +33,7 @@ const SELECT_DIETA = `
   FROM dbo.imInterCtrlDieta AS d
   LEFT JOIN dbo.imTipoDieta AS td ON td.Valor = d.TipoDieta
   ${sqlApplyNombrePersona('d.OperadorCarga', 'op')}
-  ${sqlApplyNombrePersona('d.Profesional', 'prof', ['matricula', 'operador', 'valor'])}
+  ${sqlApplyNombrePersona('d.Profesional', 'prof', ['matricula', 'valor', 'operador'])}
 `;
 
 async function obtenerPorVisitaYFecha(numeroVisita, fecha, days) {

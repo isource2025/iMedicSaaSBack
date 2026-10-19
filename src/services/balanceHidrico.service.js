@@ -74,7 +74,7 @@ const SELECT_BALANCE = `
     prof.Matricula AS Matricula,
     prof.ValorPersonal AS ValorPersonalProfesional
   FROM dbo.imBalanceHidrico AS b
-  ${sqlApplyNombrePersona('b.Profesional', 'prof', ['matricula', 'operador', 'valor'])}
+  ${sqlApplyNombrePersona('b.Profesional', 'prof', ['matricula', 'valor', 'operador'])}
 `;
 
 /**

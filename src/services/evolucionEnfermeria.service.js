@@ -31,7 +31,7 @@ const SELECT_EVOLUCION = `
       op.NombreCompleto AS OperadorApellido,
       CAST(NULL AS VARCHAR(150)) AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
-    ${sqlApplyNombrePersona("ev.Profesional", "prof", ["matricula", "operador", "valor"])}
+    ${sqlApplyNombrePersona("ev.Profesional", "prof", ["matricula", "valor", "operador"])}
     ${sqlApplyNombrePersona("ev.OperadorCarga", "op")}
 `;
 
