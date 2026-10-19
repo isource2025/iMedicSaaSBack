@@ -306,6 +306,35 @@ function filtroPeriodoClarion(columna, fechaISO, days, indiceParam) {
 	};
 }
 
+/**
+ * Date listo para INSERT DATETIME del HIS (hora de pared argentina).
+ * tedious serializa por campos UTC: la hora AR va puesta ahí para que SQL
+ * guarde lo mismo que Clarion (sin adelantar 3 h).
+ */
+function ahoraWallArgentinaParaSql(ref = new Date()) {
+	const { fecha, hora } = partesFechaHoraArgentina(ref);
+	return new Date(`${fecha}T${hora}Z`);
+}
+
+/**
+ * DATETIME del HIS → ISO wall-clock sin zona (`YYYY-MM-DDTHH:mm:ss`).
+ * tedious etiqueta el valor como UTC; los componentes UTC son la hora local.
+ * Evita que el front reste UTC-3 al formatear.
+ */
+function fechaHisWallIso(value) {
+	if (value == null || value === '') return null;
+	if (value instanceof Date && !Number.isNaN(value.getTime())) {
+		return value.toISOString().slice(0, 19);
+	}
+	const s = String(value).trim();
+	const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/);
+	if (m) {
+		const hora = m[2].length === 5 ? `${m[2]}:00` : m[2];
+		return `${m[1]}T${hora}`;
+	}
+	return s || null;
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -325,6 +354,8 @@ module.exports = {
 	horaClarionAhoraArgentina,
 	fechaClarionHoyArgentina,
 	formatHoraArgentina,
+	ahoraWallArgentinaParaSql,
+	fechaHisWallIso,
 	TZ_ARGENTINA,
 	DIAS_AGENDA,
 };
