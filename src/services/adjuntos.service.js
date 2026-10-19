@@ -7,6 +7,7 @@ const fsSync = require('fs');
 const { normalizarTextoParaClarionAnsi, repararTextoClarionAnsi } = require('../utils/clarionText');
 const { resolveFileServerUrl, fileServerHeaders } = require('../utils/fileServerUrl');
 const { decodeMultipartFilename, sanitizeWindowsFileName, sanitizeFolderName, pathLookupCandidates, normalizeAdjuntoFilePath, fileServerFileUrl, relativeFromLegacyImagenesUnc, toClarionStoredPath, clarionUncRootForFileServerUrl } = require('../utils/fileNameEncoding');
+const { ahoraWallArgentinaParaSql, fechaHisWallIso } = require('../utils/dateUtils');
 
 const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
 
@@ -158,7 +159,8 @@ class AdjuntosService {
           },
           { value: rutaClarion, type: 'NVarChar' },
           { value: rutaServidor, type: 'NVarChar' },
-          { value: new Date(), type: 'DateTime' },
+          // Hora de pared AR (igual que Clarion). new Date() + DateTime corrían UTC y restaban 3 h al mostrar.
+          { value: ahoraWallArgentinaParaSql(), type: 'DateTime' },
           { value: cargadoPor, type: 'Int' },
           { value: idTipo, type: 'VarChar' },
           { value: idSector, type: 'VarChar' },
@@ -411,7 +413,7 @@ class AdjuntosService {
       IdOperador: adj.IdOperador != null ? Number(adj.IdOperador) : null,
       CargadoPor: adj.IdOperador,
       NombreUsuario: adj.NombreOperador || 'Desconocido',
-      FechaCarga: adj.Fecha,
+      FechaCarga: fechaHisWallIso(adj.Fecha),
       TipoImagen: adj.idtipoimagen ? String(adj.idtipoimagen).trim() : null,
       TipoImagenNombre: adj.TipoImagenNombre || 'Sin categoría',
       Origen: adj.Origen ? String(adj.Origen).trim() : null,
