@@ -1,5 +1,10 @@
 const indicacionesService = require("../services/indicaciones.service");
-const { requireOperadorCarga, requireProfesional, resolveOperadorCarga } = require("../utils/sessionIdentity");
+const {
+	requireOperadorCarga,
+	requireProfesional,
+	resolveOperadorCarga,
+	firmarSesion,
+} = require("../utils/sessionIdentity");
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -434,7 +439,15 @@ const aplicarIndicacion = async (req, res) => {
             })
         }
 
-        const data = req.body;
+        const firma = firmarSesion(req, res);
+        if (firma == null) return;
+
+        // Quién aplica = sesión. Nunca confiar en body (ni reescribir el médico indicador).
+        const data = {
+            ...req.body,
+            operadorCarga: firma.codOperador,
+            profesionalAsiste: firma.profesional,
+        };
 
         await indicacionesService.aplicarIndicacion(nroIndicacionInt, data);
 

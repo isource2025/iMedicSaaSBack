@@ -1587,12 +1587,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             paramIndex++;
         }
 
-        // Agregar campos adicionales si vienen
-        if (data.profesionalAsiste) {
-            fieldsToUpdate.push(`ProfesionalAsiste = @p${paramIndex}`);
-            params.push({ value: toNumberOrNull(data.profesionalAsiste) });
-            paramIndex++;
-        }
+        // NO actualizar ProfesionalAsiste al aplicar: es el médico/indicador original.
+        // Quién aplica queda en OperadorCarga/Profesional de imInterCtrl*.
 
         if (data.cantidadIndicada) {
             fieldsToUpdate.push(`CantidadIndicada = @p${paramIndex}`);
@@ -1688,8 +1684,9 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             { value: controlData.Peso },
             { value: controlData.Talla },
             { value: controlData.IdTurno },
-            { value: data.profesionalAsiste },
-            { value: data.profesionalAsiste }
+            // Profesional = matrícula/ValorPersonal; OperadorCarga = CodOperador (quién aplicó)
+            { value: toNumberOrNull(data.profesionalAsiste) },
+            { value: toNumberOrNull(data.operadorCarga) },
         ];
 
         try {
@@ -1720,8 +1717,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             HoraDieta: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
 
             Observaciones: limitLength(data.observaciones || '', 255),
-            Profesional: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null,
-            OperadorCarga: data.profesionalAsiste ? toNumberOrNull(data.profesionalAsiste) : null, // Asumiendo que es el mismo profesional
+            Profesional: toNumberOrNull(data.profesionalAsiste),
+            OperadorCarga: toNumberOrNull(data.operadorCarga),
             Nroindicacion: nroIndicacion,
             TipoDieta: toNumberOrNull(data.dieta.tipoDieta),
         };
@@ -1781,8 +1778,9 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             NumeroVisita: indicacionActual.NumeroVisita,
             Nroindicacion: nroIndicacion,
             Observaciones: limitLength(data.observaciones || indicacionActual.Observaciones || '', 255),
-            Profesional: data.profesionalAsiste || indicacionActual.ProfesionalAsiste,
-            OperadorCarga: data.operadorCarga || indicacionActual.OperadorCarga,
+            // Quién aplicó (sesión), no el médico indicador ni el OperadorCarga original
+            Profesional: toNumberOrNull(data.profesionalAsiste),
+            OperadorCarga: toNumberOrNull(data.operadorCarga),
 
             //Fecha
             HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
@@ -1892,7 +1890,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             Numero: 0,
             NumeroVisita: indicacionActual.NumeroVisita,
             ValorSector: data.medidaAsistencial.valorSector,
-            CodOperador: data.profesionalAsiste,
+            CodOperador: toNumberOrNull(data.operadorCarga),
             HoraGraba: convertirHoraAClarion(getLocalTimeString(dateCarga)),
             FechaGraba: convertirFechaAClarion(getLocalDateString(dateCarga)),
             Observaciones: limitLength(data.observaciones || '', 255),
