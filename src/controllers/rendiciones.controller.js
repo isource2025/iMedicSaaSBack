@@ -3,8 +3,12 @@
  */
 const rendicionesService = require('../services/facturacion/rendiciones.service');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const { firma } = require('../identidad/contrato');
 
-const ctx = (req) => ({ actor: req.valorPersonal ?? null, ip: req.ip });
+const ctx = (req) => {
+	const f = firma(req);
+	return { actor: f.para('imAuditoria.Actor'), operador: f.para('imRendiciones.OperGraba'), ip: req.ip };
+};
 
 /** Envuelve un handler: responde { success, data } o el error con `detalles`. */
 const manejar = (mensajeGenerico, fn) => async (req, res) => {

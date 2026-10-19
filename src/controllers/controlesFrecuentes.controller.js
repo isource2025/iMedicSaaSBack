@@ -1,5 +1,5 @@
 const controlesFrecuentesService = require("../services/controlesFrecuentes.service");
-const { requireOperadorCarga } = require("../utils/sessionIdentity");
+const { requireOperadorCarga, requireProfesional } = require("../utils/sessionIdentity");
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -177,12 +177,15 @@ const crearControl = async (req, res) => {
 
         const operadorCarga = requireOperadorCarga(req, res);
         if (operadorCarga == null) return;
+        const profesional = requireProfesional(req, res);
+        if (profesional == null) return;
 
         const resultado = await controlesFrecuentesService.crearControl({
             numeroVisita: parseInt(numeroVisita),
             fechaControl,
             horaControl,
             operadorCarga,
+            profesional,
             idHci: idHci ? parseInt(idHci) : 0,
             pulso: pulso ? parseInt(pulso) : 0,
             presionMax: presionMax ? parseInt(presionMax) : 0,

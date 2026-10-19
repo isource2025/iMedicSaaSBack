@@ -12,6 +12,7 @@ const { executeQuery } = require('../models/db');
 const { convertirHoraAClarion } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
 const { asegurarDisclaimerEnTexto } = require('./epicrisisIa.service');
+const { sqlAutor } = require('../identidad/contrato');
 
 const MAX_EPICRISIS = 8000;
 const MAX_DIAG_TEXT = 8000;
@@ -47,9 +48,9 @@ const SELECT_BASE = `
     RTRIM(LTRIM(ep.IdSector)) AS IdSector,
     sec.Descripcion AS SectorDescripcion,
     ep.Profecional,
-    per.ApellidoNombre AS ProfesionalNombreCompleto,
-    per.Valor AS IdPersonal,
-    per.Matricula AS Matricula,
+    prof.NombreCompleto AS ProfesionalNombreCompleto,
+    prof.ValorPersonal AS IdPersonal,
+    prof.Matricula AS Matricula,
     ep.Epicrisis,
     ep.NumeroDocumento,
     RTRIM(LTRIM(ep.Diagnostico)) AS Diagnostico,
@@ -58,12 +59,8 @@ const SELECT_BASE = `
     LTRIM(RTRIM(ISNULL(esp.Descripcion, ''))) AS EspecialidadDescripcion
   FROM dbo.imHCEpicrisis AS ep
   LEFT JOIN dbo.imSectores AS sec ON ep.IdSector = sec.Valor
-  OUTER APPLY (
-    SELECT TOP 1 per0.ApellidoNombre, per0.Valor, per0.Matricula, per0.ValorEspecialidad
-    FROM dbo.imPersonal AS per0
-    WHERE per0.Matricula = ep.Profecional OR per0.Valor = ep.Profecional
-    ORDER BY CASE WHEN per0.Matricula = ep.Profecional THEN 0 ELSE 1 END
-  ) AS per
+  ${sqlAutor('imHCEpicrisis.Profecional', 'ep.Profecional', 'prof')}
+  LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal
   LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
   OUTER APPLY (
     SELECT TOP 1 LTRIM(RTRIM(d0.Descripcion)) AS Descripcion

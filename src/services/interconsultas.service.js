@@ -271,6 +271,7 @@ async function obtenerPorId(id, origen) {
 async function crear({
 	idVisita,
 	matriculaSolicitante,
+	valorProfesional,
 	sectorSolicitante,
 	idSectorReceptor,
 	motivo,
@@ -284,6 +285,7 @@ async function crear({
 	const creado = await estudiosService.crearPedido({
 		idVisita,
 		matriculaSolicitante,
+		valorProfesional,
 		sectorSolicitante,
 		idTipoPedido: ID_TIPO_INTERCONSULTA,
 		idSectorReceptor: receptor,

@@ -25,6 +25,12 @@ const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const authCentralService = require('../services/authCentral.service');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
+const { claveDe } = require('../identidad/contrato');
+const {
+	resolveCodOperador,
+	resolveValorPersonal,
+	resolveMatricula,
+} = require('../utils/sessionIdentity');
 
 /** ADMIN de tenant: puede editar registros ajenos en internación. */
 async function esAdminClinico(req) {
@@ -78,36 +84,31 @@ async function esAdminClinico(req) {
 	return false;
 }
 
-function coincideAutor(autor, identificadorSesion, req) {
-	if (identificadorSesion != null && Number(autor) === Number(identificadorSesion)) {
-		return true;
-	}
-	// imHCEvolucion legacy: Profecional suele guardar ValorPersonal (idPersonal del sector), no Matricula
-	if (req.valorPersonal != null && Number(autor) === Number(req.valorPersonal)) {
-		return true;
-	}
-	const u = req.auth?.usuario || {};
-	const codCandidates = [u.codOperador, u.idCodOperador, u.CodOperador];
-	for (const c of codCandidates) {
-		if (c != null && c !== '' && Number(autor) === Number(c)) return true;
-	}
-	return false;
+function clavesPropias(req) {
+	return [resolveCodOperador(req), resolveValorPersonal(req), resolveMatricula(req)].filter(
+		(n) => n != null && Number(n) > 0,
+	);
 }
 
-function resolverIdentificadorSesion(req, { autorEsMatricula }) {
-	if (autorEsMatricula) {
-		const mat = req.matricula ?? req.auth?.usuario?.matricula;
-		const matNum = mat != null && mat !== '' ? Number(mat) : NaN;
-		if (Number.isFinite(matNum) && matNum > 0) return matNum;
+function coincideAutor(autor, identificadorSesion, req) {
+	const n = Number(autor);
+	if (!Number.isFinite(n)) return false;
+	if (identificadorSesion != null && n === Number(identificadorSesion)) return true;
+	// Filas viejas de la misma persona, grabadas con otra de sus claves.
+	return clavesPropias(req).some((k) => Number(k) === n);
+}
+
+function resolverIdentificadorSesion(req, { autorEsMatricula, tabla, autorCol }) {
+	try {
+		const clave = claveDe(`${tabla}.${autorCol}`);
+		if (clave === 'operador') return resolveCodOperador(req);
+		if (clave === 'ficha') return resolveValorPersonal(req);
+		if (clave === 'matricula') return resolveMatricula(req);
+	} catch {
+		/* columna fuera del contrato: se usa el criterio de la ruta */
 	}
-	const u = req.auth?.usuario || {};
-	const candidates = [u.codOperador, u.idCodOperador, u.CodOperador];
-	for (const c of candidates) {
-		if (c == null || c === '') continue;
-		const n = Number(c);
-		if (Number.isFinite(n)) return n;
-	}
-	return null;
+	if (autorEsMatricula) return resolveMatricula(req);
+	return resolveCodOperador(req);
 }
 
 function requirePropietario({
@@ -131,7 +132,11 @@ function requirePropietario({
 				return res.status(400).json({ success: false, mensaje: 'ID de registro requerido' });
 			}
 
-			let identificadorSesion = resolverIdentificadorSesion(req, { autorEsMatricula });
+			let identificadorSesion = resolverIdentificadorSesion(req, {
+				autorEsMatricula,
+				tabla,
+				autorCol,
+			});
 
 			// JWT legacy (Render) puede traer id pero no matricula: resolver desde imPersonal
 			if (identificadorSesion == null && autorEsMatricula && req.valorPersonal) {

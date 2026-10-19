@@ -2,6 +2,7 @@ const estudiosService = require('../services/estudios.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
+const { firmarORechazar } = require('../identidad/contrato');
 
 async function _veTodosLosServicios(req) {
 	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
@@ -12,7 +13,7 @@ async function _veTodosLosServicios(req) {
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : null;
 }
 
 async function _matriculaSesion(req) {
@@ -132,9 +133,12 @@ async function crear(req, res) {
 				mensaje: 'No se pudo resolver la matrícula del solicitante',
 			});
 		}
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const data = await estudiosService.crearPedido({
 			idVisita: Number(body.idVisita),
-			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
+			valorProfesional: firma.para('imPedidosEstudios.ValorProfesional'),
+			matriculaSolicitante: matricula,
 			sectorSolicitante: idSectorSesion(req) || String(body.sectorSolicitante || '').trim(),
 			idTipoPedido: body.idTipoPedido,
 			idPractica: body.idPractica,
@@ -212,11 +216,13 @@ async function cumplir(req, res) {
 				mensaje: 'No se pudo resolver la matrícula del realizador',
 			});
 		}
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const data = await estudiosService.cumplirPedido({
 			idPedido,
 			textoInforme: body.textoInforme,
-			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			matriculaRealizador: matricula,
+			codOperador: firma.para('imProtocolosResultados.CodOperador'),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 			codPractica: body.codPractica,
 		});
@@ -243,7 +249,7 @@ async function actualizarResultado(req, res) {
 			textoInforme: body.textoInforme || body.textoRespuesta || body.Respuesta,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -265,7 +271,7 @@ async function tomar(req, res) {
 		const data = await estudiosService.tomarPedido({
 			idPedido,
 			matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

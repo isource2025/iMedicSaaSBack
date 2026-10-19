@@ -121,6 +121,11 @@ exports.crear = async (req, res) => {
       });
     }
     
+    const { firmarORechazar } = require('../identidad/contrato');
+    const firma = firmarORechazar(req, res);
+    if (!firma) return;
+    data.IdProfecional = firma.para('imHCI.IdProfecional');
+
     const hc = await hciService.crear(data, req.auth);
     
     res.status(201).json({
@@ -154,6 +159,10 @@ exports.actualizar = async (req, res) => {
       });
     }
     
+    if (data && typeof data === 'object') {
+      delete data.IdProfecional;
+      delete data.idProfecional;
+    }
     const hc = await hciService.actualizar(parseInt(id), data, req.auth);
     
     res.json({

@@ -237,8 +237,8 @@ const crearControl = async (data) => {
         { value: data.numeroVisita },                                       // @param0
         { value: fechaCargaClarion },                                       // @param1
         { value: horaCargaClarion },                                        // @param2
-        { value: data.operadorCarga || 0 },                                 // @param3
-        { value: data.operadorCarga || 0 },                                 // @param4 (Profesional = OperadorCarga)
+        { value: data.operadorCarga || 0 },                                 // @param3 OperadorCarga = CodOperador
+        { value: data.profesional || 0 },                                   // @param4 Profesional = ficha
         { value: fechaControlClarion },                                     // @param5
         { value: horaControlClarion },                                      // @param6
         { value: data.pulso || 0 },                                         // @param7

@@ -630,6 +630,7 @@ async function _limpiarNotificaciones(idsPedido) {
 async function crearSolicitud({
 	idVisita,
 	matriculaSolicitante,
+	valorProfesional,
 	sectorSolicitante,
 	idSectorReceptor,
 	items,
@@ -640,9 +641,9 @@ async function crearSolicitud({
 	await ensureSchema();
 	const visita = Number(idVisita);
 	if (!Number.isFinite(visita) || visita <= 0) throw _httpError('idVisita inválido');
-	const matricula = Number(matriculaSolicitante);
+	const matricula = Number(valorProfesional) > 0 ? Number(valorProfesional) : Number(matriculaSolicitante);
 	if (!Number.isFinite(matricula) || matricula <= 0) {
-		throw _httpError('matriculaSolicitante inválida');
+		throw _httpError('No se pudo identificar al profesional solicitante');
 	}
 	if (!String(idSectorReceptor || '').trim()) throw _httpError('El servicio destino es obligatorio');
 

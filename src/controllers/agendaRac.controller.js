@@ -1,4 +1,5 @@
 const racService = require('../services/agendaRac.service');
+const { firmarORechazar } = require('../identidad/contrato');
 
 function _err(res, e) {
 	const code = e?.statusCode || 500;
@@ -23,14 +24,26 @@ async function obtenerRac(req, res) {
 
 async function crearControl(req, res) {
 	return _withTurno(req, res, req.params.idTurno, async () => {
-		const data = await racService.crearControlTurno(req.params.idTurno, req.body || {});
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
+		const data = await racService.crearControlTurno(req.params.idTurno, {
+			...(req.body || {}),
+			operadorCarga: firma.para('imInterCtrlFrecuente.OperadorCarga'),
+			profesional: firma.para('imInterCtrlFrecuente.Profesional'),
+		});
 		res.json({ success: true, data });
 	});
 }
 
 async function crearMedicacion(req, res) {
 	return _withTurno(req, res, req.params.idTurno, async () => {
-		const data = await racService.crearMedicacionTurno(req.params.idTurno, req.body || {});
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
+		const data = await racService.crearMedicacionTurno(req.params.idTurno, {
+			...(req.body || {}),
+			operadorCarga: firma.para('imInterCtrlMedicamento.OperadorCarga'),
+			profesional: firma.para('imInterCtrlMedicamento.Profesional'),
+		});
 		res.json({ success: true, data });
 	});
 }

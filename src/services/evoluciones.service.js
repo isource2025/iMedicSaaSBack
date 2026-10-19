@@ -5,10 +5,9 @@ const {
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlAutor } = require("../identidad/contrato");
 
-/** Profecional guarda la matrícula de la sesión o, si no tiene, su imPersonal.Valor. */
-const SQL_APPLY_PROFESIONAL = sqlApplyNombrePersona("ev.Profecional", "prof", ["matricula", "valor", "operador"]);
+const SQL_APPLY_PROFESIONAL = sqlAutor("imHCEvolucion.Profecional", "ev.Profecional", "prof");
 
 /**
  * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).

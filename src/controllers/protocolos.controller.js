@@ -1,9 +1,5 @@
 const protocolosService = require('../services/protocolos.service');
-
-function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
-}
+const { firmarORechazar } = require('../identidad/contrato');
 
 function _err(res, err) {
 	const code = err?.statusCode || 500;
@@ -106,11 +102,10 @@ async function listarPorVisita(req, res) {
 
 async function crear(req, res) {
 	try {
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const body = req.body || {};
-		const idOperador =
-			body.idOperador != null && Number(body.idOperador) > 0
-				? Number(body.idOperador)
-				: Number(req.valorPersonal) || 0;
+		const idOperador = firma.para('HCProtocolosPtes.IdOperador');
 
 		const data = await protocolosService.crearProtocolo({
 			numeroVisita: Number(body.numeroVisita),
@@ -123,7 +118,7 @@ async function crear(req, res) {
 			fechaHoraFin: body.fechaHoraFin,
 			estado: body.estado,
 			idOperador,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: idOperador,
 			sector: body.sector,
 			practicas: body.practicas,
 			medicamentos: body.medicamentos,
@@ -145,6 +140,8 @@ async function actualizar(req, res) {
 		if (!Number.isFinite(id) || id <= 0) {
 			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
 		}
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const body = req.body || {};
 		const data = await protocolosService.actualizarProtocolo(id, {
 			texto: body.texto,
@@ -159,7 +156,7 @@ async function actualizar(req, res) {
 			practicas: body.practicas,
 			medicamentos: body.medicamentos,
 			profesionales: body.profesionales,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: firma.para('imFacPracticas.CodOperador'),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

@@ -5,6 +5,7 @@ const { runWithTenant } = require('../context/tenantContext');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
+const { firmarORechazar } = require('../identidad/contrato');
 
 async function _veTodosLosServicios(req) {
 	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
@@ -129,9 +130,12 @@ async function crear(req, res) {
 		const body = req.body || {};
 		const matricula = await _matriculaSesion(req);
 		if (!matricula) return _sinMatricula(res, 'solicitante');
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const data = await svc.crearSolicitud({
 			idVisita: Number(body.idVisita),
-			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
+			valorProfesional: firma.para('imSolicitudesEstudios.ValorProfesional'),
+			matriculaSolicitante: matricula,
 			sectorSolicitante: idSectorSesion(req) || String(body.sectorSolicitante || '').trim(),
 			idSectorReceptor: body.idSectorReceptor,
 			items: body.items,
@@ -191,7 +195,7 @@ async function tomar(req, res) {
 		const data = await svc.tomarSolicitud({
 			clave: req.params.clave,
 			matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -221,7 +225,7 @@ async function cumplir(req, res) {
 			clave: req.params.clave,
 			textoInforme: body.textoInforme,
 			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 			idsPedidos: Array.isArray(body.idsPedidos) ? body.idsPedidos : undefined,
 			respuestas: Array.isArray(body.respuestas) ? body.respuestas : undefined,

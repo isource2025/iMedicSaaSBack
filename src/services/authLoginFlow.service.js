@@ -454,6 +454,23 @@ async function completarLogin({
 		} catch (e) {
 			console.warn('[auth.login] Matricula tenant:', e.message);
 		}
+		try {
+			const { resolverCodOperadorTenant } = require('../identidad/codOperadorTenant');
+			const tenantCo = await runWithTenant(Number(idEmpresaEfectiva), () =>
+				resolverCodOperadorTenant(
+					usuario.ValorPersonal,
+					usuario.NombreRed || usuario.Nombrered || username,
+				),
+			);
+			if (tenantCo && String(tenantCo) !== String(usuario.CodOperador ?? '').trim()) {
+				console.warn(
+					`[auth.login] ${username} (empresa ${idEmpresaEfectiva}): CodOperador nube ${usuario.CodOperador} → hospital ${tenantCo}`,
+				);
+				usuario.CodOperador = tenantCo;
+			}
+		} catch (e) {
+			console.warn('[auth.login] CodOperador tenant:', e.message);
+		}
 	}
 
 	const rolNombreLogin = String(rol?.nombre || usuario?.RolNombre || '').trim().toUpperCase();

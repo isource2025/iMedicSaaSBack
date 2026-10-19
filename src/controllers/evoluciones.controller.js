@@ -111,6 +111,11 @@ const crearEvolucion = async (req, res) => {
             });
         }
 
+        const { firmarORechazar } = require('../identidad/contrato');
+        const firma = firmarORechazar(req, res);
+        if (!firma) return;
+        data.Profecional = firma.para('imHCEvolucion.Profecional');
+
         const resultado = await evolucionesService.crearEvolucion(data);
 
         res.status(201).json({

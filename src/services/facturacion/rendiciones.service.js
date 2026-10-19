@@ -19,6 +19,7 @@ const {
 	convertirHoraClarionAString,
 } = require('../../utils/dateUtils');
 const auditoria = require('../auditoria.service');
+const { sqlAutor } = require('../../identidad/contrato');
 
 const TAM_PAGINA = 50;
 const MAX_TAM_PAGINA = 500;
@@ -140,13 +141,13 @@ const SELECT_CABECERA = `
 	RTRIM(cli.RazonSocial) AS RazonSocial, r.idConvenio, RTRIM(cc.Descripcion) AS ConvenioDescripcion,
 	cc.Valor AS ConvenioObraSocial, r.Periodo, r.Honorarios, r.Gastos, r.Medicamentos, r.OtrosServicios,
 	r.Visitas, r.FechaCierre, r.HoraCierre, r.OperCierre, r.Observaciones, r.IdEmpresa, r.IdSucursal,
-	RTRIM(op.ApellidoNombre) AS OperadorNombre, ${SQL_ESTADO} AS Estado, ${SQL_TOTAL} AS Total`;
+	RTRIM(op.NombreCompleto) AS OperadorNombre, ${SQL_ESTADO} AS Estado, ${SQL_TOTAL} AS Total`;
 
 const FROM_CABECERA = `
 	FROM dbo.imRendiciones r
 	LEFT JOIN dbo.imClientes cli ON cli.Valor = r.idCliente
 	LEFT JOIN dbo.imClientesConvenios cc ON cc.Codigo = r.idConvenio
-	OUTER APPLY (SELECT TOP 1 p.ApellidoNombre FROM dbo.imPersonal p WHERE p.Valor = r.OperGraba) op`;
+	${sqlAutor('imRendiciones.OperGraba', 'r.OperGraba', 'op')}`;
 
 function cabecera(f) {
 	const tipo = texto(f.IdTipoCliente);
@@ -596,7 +597,7 @@ async function crear(body, ctx) {
 		 VALUES (GETDATE(), @p0, @p1, @p2, 0, @p3, @p4, 0, 0, 0, 0, 0, 0, 0, 0, @p5, ISNULL(@emp, 1), ISNULL(@suc, 1));
 		 SELECT CONVERT(int, SCOPE_IDENTITY()) AS IdRendicion;`,
 		[
-			{ value: Number(ctx?.actor) || 0, type: 'SmallInt' },
+			{ value: Number(ctx?.operador) || 0, type: 'SmallInt' },
 			{ value: d.tipoCliente, type: 'VarChar', length: 3 },
 			{ value: d.idCliente, type: 'Int' },
 			{ value: d.idConvenio, type: 'Int' },

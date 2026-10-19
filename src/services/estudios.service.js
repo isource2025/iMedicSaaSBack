@@ -1218,6 +1218,7 @@ function dedupePedidos(rows) {
 async function crearPedido({
 	idVisita,
 	matriculaSolicitante,
+	valorProfesional,
 	sectorSolicitante,
 	idTipoPedido,
 	idPractica,
@@ -1230,9 +1231,9 @@ async function crearPedido({
 	if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
 		throw _httpError('idVisita inválido');
 	}
-	const matricula = Number(matriculaSolicitante);
-	if (!Number.isFinite(matricula) || matricula <= 0) {
-		throw _httpError('matriculaSolicitante inválida');
+	const ficha = Number(valorProfesional) > 0 ? Number(valorProfesional) : Number(matriculaSolicitante);
+	if (!Number.isFinite(ficha) || ficha <= 0) {
+		throw _httpError('No se pudo identificar al profesional solicitante');
 	}
 	if (!String(idSectorReceptor || '').trim()) {
 		throw _httpError('El servicio destino es obligatorio');
@@ -1263,7 +1264,7 @@ async function crearPedido({
 		[
 			{ value: now, type: 'DateTime' },
 			{ value: _s(notas, 5000), type: 'VarChar' },
-			{ value: matricula, type: 'Int' },
+			{ value: ficha, type: 'Int' },
 			{ value: numeroVisita, type: 'Int' },
 			{ value: codPractica, type: 'Int' },
 			{ value: urgencia, type: 'VarChar' },
@@ -1292,7 +1293,7 @@ async function crearPedido({
 			idSectorReceptor,
 			descripcionPractica: result.descripcion,
 			estadoUrgencia: urgencia,
-			matriculaSolicitante: matricula,
+			matriculaSolicitante: Number(matriculaSolicitante) || ficha,
 		});
 	} catch (err) {
 		console.warn('[estudios] notif servicio omitida:', err.message || err);

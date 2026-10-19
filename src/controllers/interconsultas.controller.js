@@ -2,6 +2,7 @@ const interconsultasService = require('../services/interconsultas.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
+const { firmarORechazar } = require('../identidad/contrato');
 
 function _codOperadorSesion(req) {
 	const cod = req.auth?.usuario?.codOperador;
@@ -148,9 +149,12 @@ async function crear(req, res) {
 			return res.status(400).json({ success: false, mensaje: 'Motivo es requerido' });
 		}
 
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
 		const data = await interconsultasService.crear({
 			idVisita,
-			matriculaSolicitante: Number(body.matriculaSolicitante) || matricula,
+			valorProfesional: firma.para('imPedidosEstudios.ValorProfesional'),
+			matriculaSolicitante: matricula,
 			sectorSolicitante,
 			idSectorReceptor,
 			motivo,
@@ -176,7 +180,7 @@ async function tomar(req, res) {
 		const data = await interconsultasService.tomar({
 			idPedido,
 			matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -218,7 +222,7 @@ async function cumplir(req, res) {
 			idPedido,
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
 			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 		});
 		return res.json({ success: true, data });
@@ -244,7 +248,7 @@ async function actualizarRespuesta(req, res) {
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 		});
 		return res.json({ success: true, data });
 	} catch (err) {
@@ -268,7 +272,7 @@ async function actualizar(req, res) {
 			idPedido,
 			matricula,
 			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
-			codOperador: _codOperadorSesion(req) || Number(req.valorPersonal) || 0,
+			codOperador: _codOperadorSesion(req),
 			idSectorReceptor: body.idSectorReceptor ?? body.IdSectorReceptor,
 			motivo: body.motivo ?? body.Motivo ?? body.notas ?? body.NotasObservacion,
 			estadoUrgencia: body.estadoUrgencia ?? body.EstadoUrgencia,

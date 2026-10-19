@@ -118,6 +118,7 @@ async function crearControlTurno(idTurno, data) {
 		fechaControl: data.fechaControl,
 		horaControl: data.horaControl,
 		operadorCarga: data.operadorCarga,
+		profesional: data.profesional,
 		pulso: data.pulso,
 		presionMax: data.presionMax,
 		presionMin: data.presionMin,
@@ -172,7 +173,7 @@ async function crearMedicacionTurno(idTurno, data) {
 	const params = [
 		{ value: turno.numeroVisita || 0 },
 		{ value: normalizarTextoParaClarionAnsi(data.observaciones || '') },
-		{ value: data.profesional || data.operadorCarga || 0 },
+		{ value: data.profesional || 0 },
 		{ value: data.operadorCarga || 0 },
 		{ value: horaCargaClarion },
 		{ value: fechaCargaClarion },

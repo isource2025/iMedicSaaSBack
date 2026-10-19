@@ -72,6 +72,19 @@ function _hhmm(clarion) {
 	return s ? s.slice(0, 5) : null;
 }
 
+/** Ficha (imPersonal.Valor) del médico del turno, a partir de su matrícula. */
+async function _fichaDeMatricula(matricula) {
+	const m = Number(matricula);
+	if (!Number.isFinite(m) || m <= 0) return null;
+	const rows = await executeQuery(
+		`SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Matricula = @p0
+		 ORDER BY CASE WHEN Valor = Matricula THEN 0 ELSE 1 END, Valor`,
+		[{ value: m, type: 'Int' }],
+	);
+	const v = Number(rows?.[0]?.Valor);
+	return Number.isFinite(v) && v > 0 ? v : m;
+}
+
 /** Nombre del operador (imPassword) por CodOperador o Valor personal. */
 async function _nombreOperador(cod) {
 	const n = Number(cod);
@@ -2005,6 +2018,7 @@ async function _insertarFacPracticaConProfesional({
 	sector,
 	codOp,
 	matriculaMedico,
+	fichaMedico,
 	fechaClarion,
 	horaClarion,
 	tipoPractica = 'NO',
@@ -2053,7 +2067,7 @@ async function _insertarFacPracticaConProfesional({
 		SELECT SCOPE_IDENTITY() AS IDFacProfesional`,
 		[
 			{ value: valorPractica, type: 'Int' },
-			{ value: matriculaMedico, type: 'Int' },
+			{ value: Number(fichaMedico) > 0 ? Number(fichaMedico) : matriculaMedico, type: 'Int' },
 			{ value: codOp, type: 'Int' },
 			{ value: fechaClarion, type: 'Int' },
 			{ value: horaClarion, type: 'Int' },
@@ -2133,7 +2147,7 @@ async function _validarEstudiosRepetidos(items) {
  * (igual que Internación). Si la solicitud no se puede crear (p. ej. el servicio no admite alguna
  * práctica por prefijo), se registran sueltas como antes para no bloquear el cierre.
  */
-async function _crearPedidosEstudiosTurno({ numeroVisita, matriculaMedico, sectorSolicitante, items, fechaPedido }) {
+async function _crearPedidosEstudiosTurno({ numeroVisita, matriculaMedico, fichaMedico, sectorSolicitante, items, fechaPedido }) {
 	const solicitudesService = require('./solicitudesEstudios.service');
 	const out = { idsPedido: [], idsSolicitud: [] };
 	const porServicio = new Map();
@@ -2147,6 +2161,7 @@ async function _crearPedidosEstudiosTurno({ numeroVisita, matriculaMedico, secto
 		const creado = await estudiosService.crearPedido({
 			idVisita: numeroVisita,
 			matriculaSolicitante: matriculaMedico,
+			valorProfesional: fichaMedico || matriculaMedico,
 			sectorSolicitante,
 			idTipoPedido: item?.idTipoPedido,
 			idPractica: item?.idPractica,
@@ -2282,7 +2297,12 @@ async function cerrarTurno({
 		e.statusCode = 400;
 		throw e;
 	}
-	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
+	const codOp = Number(codOperador);
+	if (!Number.isFinite(codOp) || codOp <= 0) {
+		const e = new Error('La sesión no tiene CodOperador: no se puede registrar la acción');
+		e.statusCode = 400;
+		throw e;
+	}
 
 	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
 	const matriculaMedico = Number(row.Profesional) || m;
@@ -2291,6 +2311,7 @@ async function cerrarTurno({
 		e.statusCode = 409;
 		throw e;
 	}
+	const fichaMedico = await _fichaDeMatricula(matriculaMedico);
 	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
 	const idP = Number(row.IDPaciente) || 0;
 	if (idP <= 0) {
@@ -2389,7 +2410,7 @@ async function cerrarTurno({
 					{ value: idP, type: 'Int' },
 					{ value: now, type: 'DateTime' },
 					{ value: sector, type: 'VarChar' },
-					{ value: matriculaMedico, type: 'Int' },
+					{ value: fichaMedico, type: 'Int' },
 					{ value: diagPadded, type: 'VarChar' },
 					{ value: contratoId, type: 'Int' },
 					{ value: fechaClarion, type: 'Int' },
@@ -2438,7 +2459,7 @@ async function cerrarTurno({
 				{ value: numeroVisita, type: 'Int' },
 				{ value: now, type: 'DateTime' },
 				{ value: sector, type: 'VarChar' },
-				{ value: matriculaMedico, type: 'Int' },
+				{ value: codOp, type: 'Int' },
 				{ value: _s(h.motivoConsulta, 500), type: 'VarChar' },
 				{ value: _s(h.enfermedadActual, 8000), type: 'VarChar' },
 				{ value: _s(h.semiologia, 255), type: 'VarChar' },
@@ -2469,6 +2490,7 @@ async function cerrarTurno({
 			sector,
 			codOp,
 			matriculaMedico,
+			fichaMedico,
 			fechaClarion,
 			horaClarion,
 		});
@@ -2487,6 +2509,7 @@ async function cerrarTurno({
 				sector,
 				codOp,
 				matriculaMedico,
+				fichaMedico,
 				fechaClarion,
 				horaClarion,
 				tipoPractica,
@@ -2500,6 +2523,7 @@ async function cerrarTurno({
 			const r = await _crearPedidosEstudiosTurno({
 				numeroVisita,
 				matriculaMedico,
+				fichaMedico,
 				sectorSolicitante,
 				items: listaPedidosEstudios,
 				fechaPedido: now,
@@ -2648,6 +2672,7 @@ async function actualizarAtencionPostCierre({
 
 	const row = porIdTurno ? await _obtenerTurnoPorId(id) : await _obtenerTurnoProfesional(m, id);
 	const matriculaMedico = Number(row.Profesional) || m;
+	const fichaMedico = await _fichaDeMatricula(matriculaMedico);
 	const st = row.Status != null ? Number(row.Status) : STATUS_OCUPADO;
 	const hs = Number(row.HoraSalida) || 0;
 	const numeroVisita = Number(row.NumeroVisita) || 0;
@@ -2683,7 +2708,12 @@ async function actualizarAtencionPostCierre({
 	);
 	const sector = String(detalle[0]?.Sector || '').trim().padEnd(4, ' ').slice(0, 4);
 	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
-	const codOp = Number(codOperador) || Number(valorPersonal) || 0;
+	const codOp = Number(codOperador);
+	if (!Number.isFinite(codOp) || codOp <= 0) {
+		const e = new Error('La sesión no tiene CodOperador: no se puede registrar la acción');
+		e.statusCode = 400;
+		throw e;
+	}
 	const fechaIso = fechaCalendarioArgentina();
 	const horaStr = horaWallArgentina(true);
 	const fechaClarion = convertirFechaAClarion(fechaIso);
@@ -2762,6 +2792,7 @@ async function actualizarAtencionPostCierre({
 			sector,
 			codOp,
 			matriculaMedico,
+			fichaMedico,
 			fechaClarion,
 			horaClarion,
 			tipoPractica,
@@ -2774,6 +2805,7 @@ async function actualizarAtencionPostCierre({
 				await _crearPedidosEstudiosTurno({
 					numeroVisita,
 					matriculaMedico,
+					fichaMedico,
 					sectorSolicitante,
 					items: listaPedidosEstudios,
 					fechaPedido: now,

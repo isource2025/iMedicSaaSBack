@@ -63,6 +63,11 @@ const crear = async (req, res) => {
 			return res.status(400).json({ success: false, mensaje: 'NumeroDocumento es requerido' });
 		}
 
+		const { firmarORechazar } = require('../identidad/contrato');
+		const firma = firmarORechazar(req, res);
+		if (!firma) return;
+		data.Profecional = firma.para('imHCEpicrisis.Profecional');
+
 		const resultado = await epicrisisService.crear(data);
 		return res.status(201).json({
 			success: true,

@@ -484,6 +484,11 @@ const crearIndicacionHija = async (req, res) => {
             });
         }
         
+        const firma = firmarSesion(req, res);
+        if (firma == null) return;
+        data.operadorCarga = firma.codOperador;
+        data.profesionalAsiste = firma.valorPersonal;
+
         const resultado = await indicacionesService.crearIndicacionHija(data);
         
         res.status(201).json({
