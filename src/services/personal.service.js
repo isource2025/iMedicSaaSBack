@@ -944,20 +944,40 @@ async function listarServicios() {
 	}
 }
 
-/** Servicios asignables al personal: solo el catálogo de la nube (imServicios de la empresa). */
+/**
+ * Servicios asignables al personal (bandeja de pedidos).
+ * Misma lista en nube y escritorio: se reconcilió imServicios SQL → MySQL antes de listar.
+ */
 async function listarCatalogoServiciosNube() {
 	const tenantId = resolveTenantEmpresaId();
-	if (tenantId == null) return [];
-	const items = await require('./nubeTenant.service').listarServicios(tenantId);
+	if (tenantId != null) {
+		try {
+			const items = await require('./nubeTenant.service').listarServicios(tenantId);
+			const mapped = (items || [])
+				.map((s) => ({
+					valor: String(s.id || s.valor || '').trim(),
+					descripcion: String(s.descripcion || '').trim(),
+				}))
+				.filter((s) => s.valor);
+			if (mapped.length) {
+				return mapped.sort((a, b) =>
+					String(a.descripcion || a.valor).localeCompare(
+						String(b.descripcion || b.valor),
+						'es',
+					),
+				);
+			}
+		} catch (err) {
+			console.warn('[personal.listarCatalogoServiciosNube] nube:', err?.message || err);
+		}
+	}
+	const items = await personalServicios.listarCatalogoPedidos();
 	return (items || [])
 		.map((s) => ({
-			valor: String(s.id || '').trim(),
+			valor: String(s.valor || '').trim(),
 			descripcion: String(s.descripcion || '').trim(),
 		}))
-		.filter((s) => s.valor)
-		.sort((a, b) =>
-			String(a.descripcion || a.valor).localeCompare(String(b.descripcion || b.valor), 'es'),
-		);
+		.filter((s) => s.valor);
 }
 
 async function listarCatalogoSectores() {

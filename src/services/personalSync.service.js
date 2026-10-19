@@ -351,6 +351,40 @@ async function upsertCatalogoMysql(emp, mysqlTable, fisicoRows, { ambInt = false
 			vals,
 		);
 	}
+
+	// Baja en nube lo que ya no está en escritorio (misma lista en ambos lados).
+	const keep = new Set();
+	for (const s of fisicoRows || []) {
+		const valor = String(rowField(s, 'Valor') || '').trim();
+		if (valor) keep.add(valor);
+	}
+	for (const [valor, prev] of byValor) {
+		if (keep.has(valor)) continue;
+		cambios += 1;
+		detalleCatalogo.push({
+			valor,
+			descripcion: displayVal(prev?.desc),
+			accion: 'baja',
+			de: displayVal(prev?.desc),
+		});
+		await mysqlExec(`DELETE FROM ${q(mysqlTable)} WHERE IdEmpresa = ? AND Valor = ?`, [
+			emp,
+			valor,
+		]);
+		if (mysqlTable === 'imServicios') {
+			await mysqlExec(
+				`DELETE FROM ${q('imPersonalServicios')} WHERE IdEmpresa = ? AND idServicio = ?`,
+				[emp, valor],
+			).catch(() => {});
+		}
+		if (mysqlTable === 'imSectores') {
+			await mysqlExec(
+				`DELETE FROM ${q('imPersonalSectores')} WHERE IdEmpresa = ? AND idSector = ?`,
+				[emp, valor],
+			).catch(() => {});
+		}
+	}
+
 	return { catalogo: (fisicoRows || []).length, catalogoCambios: cambios, detalleCatalogo };
 }
 
@@ -1645,12 +1679,26 @@ async function syncCatalogosDesdeFisico(idEmpresa) {
 	};
 }
 
+/**
+ * Espeja catálogo imServicios escritorio → nube (altas, updates y bajas).
+ * Soft: no falla si auth central o SQL físico no están disponibles.
+ */
+async function reconciliarServiciosDesdeFisico(idEmpresa) {
+	if (!isAuthCentralEnabled()) return null;
+	const emp = resolveIdEmpresa(idEmpresa);
+	const row = await loadEmpresaConnectionRow(emp);
+	if (!empresaRowHasSqlConnection(row)) return null;
+	const pool = await getTenantPool(emp);
+	return syncServiciosDesdeFisico(emp, pool);
+}
+
 module.exports = {
 	listExportFields,
 	puedeSyncDesdeFisico,
 	ensureImPersonalExportColumns,
 	syncPersonalDesdeFisico,
 	syncCatalogosDesdeFisico,
+	reconciliarServiciosDesdeFisico,
 	listarParaExport,
 	PERSONAL_SYNC_COLUMNS,
 };
