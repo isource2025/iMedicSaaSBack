@@ -928,9 +928,21 @@ async function listarFunciones() {
 	}));
 }
 
+/**
+ * Catálogo para asignar servicios al personal (bandeja).
+ * Solo dbo.imServicios (igual que Tablas maestras); reconcilia la nube al listar.
+ */
 async function listarServicios() {
 	try {
-		return await personalServicios.listarCatalogo();
+		const tenantId = resolveTenantEmpresaId();
+		if (tenantId != null) {
+			try {
+				await require('./personalSync.service').reconciliarServiciosDesdeFisico(tenantId);
+			} catch (err) {
+				console.warn('[personal.listarServicios] reconcile:', err?.message || err);
+			}
+		}
+		return await personalServicios.listarCatalogoPedidos();
 	} catch (err) {
 		console.warn('[personal.listarServicios]', err?.message || err);
 		return [];

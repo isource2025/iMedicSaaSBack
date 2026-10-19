@@ -162,6 +162,8 @@ const CATALOGOS = [
 		table: 'imClientesConvenios',
 		permiso: 'FACTURACION.TABLA.VER',
 		match: ['convenio'],
+		// Borrar la cabecera deja huérfanas sus filas de detalle (no hay FKs).
+		noBorrar: 'Los convenios no se borran desde la web. Si ya no se usa, cerrale la vigencia en Facturación › Convenios.',
 		key: 'Clave',
 		keyParts: [
 			{ name: 'Valor', as: 'Cliente', type: 'Int' },
@@ -609,12 +611,34 @@ async function validarMulti(c, texto, previo) {
 }
 
 /** Los prefijos por servicio se guardan en memoria unos minutos: se descartan al escribir. */
-function alEscribir(def) {
+function alEscribir(def, { accion, clave } = {}) {
 	if (def.id === 'servicios') require('./prefijosPractica.service').limpiarCache();
 	const tabla = String(def.table || '').toLowerCase();
 	if (tabla === 'imsectores' || tabla === 'imestadocama') {
 		require('./beds.service').invalidarCatalogosCamas();
 	}
+	espejarCatalogoEnNube(def, { accion, clave }).catch((err) => {
+		console.warn('[catalogoSql] espejo nube:', err?.message || err);
+	});
+}
+
+/** Mantiene imServicios / imSectores iguales en MySQL (auth central) tras CRUD de tablas maestras. */
+async function espejarCatalogoEnNube(def, { accion, clave } = {}) {
+	const tabla = String(def.table || '');
+	if (tabla !== 'imServicios' && tabla !== 'imSectores') return;
+	const { getTenantId } = require('../context/tenantContext');
+	const tenantId = Number(getTenantId());
+	if (!Number.isFinite(tenantId) || tenantId <= 0) return;
+	const sync = require('./authCentralSync.service');
+	const valor = String(clave || '').trim();
+	if (!valor) return;
+	if (tabla === 'imServicios') {
+		if (accion === 'borrar') await sync.removeServicio(tenantId, valor);
+		else await sync.syncServicio(tenantId, valor);
+		return;
+	}
+	if (accion === 'borrar') await sync.removeSector(tenantId, valor);
+	else await sync.syncSector(tenantId, valor);
 }
 
 async function validarCampos(def, body, { actual = null, clave = '' } = {}) {
@@ -867,7 +891,13 @@ async function crear(id, body = {}) {
 	}
 
 	await insertarFila(def, names, placeholders, params);
-	alEscribir(def);
+	const claveCreada = String(
+		valorDeBody(def.columns.find((c) => esColumnaClave(def, c)) || {}, body) ??
+			body[def.key] ??
+			body.Valor ??
+			'',
+	).trim();
+	alEscribir(def, { accion: 'crear', clave: claveCreada });
 	return listar(id);
 }
 
@@ -887,16 +917,17 @@ async function actualizar(id, clave, body = {}) {
 	if (!sets.length) throw errorHttp('Nada para actualizar', 400);
 	const where = whereClave(def, clave, params);
 	await executeQuery(`UPDATE dbo.[${def.table}] SET ${sets.join(', ')} WHERE ${where}`, params);
-	alEscribir(def);
+	alEscribir(def, { accion: 'actualizar', clave });
 	return listar(id);
 }
 
 async function borrar(id, clave) {
 	const def = porId(id);
+	if (def.noBorrar) throw errorHttp(def.noBorrar, 409);
 	const params = [];
 	const where = whereClave(def, clave, params);
 	await executeQuery(`DELETE FROM dbo.[${def.table}] WHERE ${where}`, params);
-	alEscribir(def);
+	alEscribir(def, { accion: 'borrar', clave });
 	return listar(id);
 }
 

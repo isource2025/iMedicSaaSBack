@@ -620,40 +620,38 @@ async function ensurePersonalSectoresTable(idEmpresa) {
 	return emp;
 }
 
+/** Solo imServicios del escritorio (nunca imServiciosMedicos: son catálogos distintos). */
 async function seedServiciosDesdeFisico(idEmpresa) {
 	const { emp, fisica } = await empresaEsFisica(idEmpresa);
 	if (!fisica) return 0;
 	try {
 		const pool = await getTenantPool(emp);
-		for (const tabla of ['imServicios', 'imServiciosMedicos']) {
-			const cols = await sqlServerColumnas(pool, tabla).catch(() => []);
-			if (!cols.length) continue;
-			const data = await pool.request().query(
-				`SELECT LTRIM(RTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor,
-				        LTRIM(RTRIM(CAST(Descripcion AS VARCHAR(200)))) AS Descripcion
-				 FROM dbo.[${tabla}]`,
-			);
-			const filas = data.recordset || [];
-			if (!filas.length) continue;
-			for (const r of filas) {
-				const valor = String(r.Valor || '').trim().slice(0, 20);
-				const desc = String(r.Descripcion || r.Valor || '').trim().slice(0, 200);
-				if (!valor) continue;
-				try {
-					await mysqlExec(
-						`INSERT INTO \`imServicios\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`)
-						 SELECT ?, ?, ? FROM DUAL
-						 WHERE NOT EXISTS (
-						   SELECT 1 FROM \`imServicios\` WHERE IdEmpresa = ? AND Valor = ?
-						 )`,
-						[emp, valor, desc, emp, valor],
-					);
-				} catch (e) {
-					console.warn('[nube] seed servicio', valor, e.message);
-				}
+		const cols = await sqlServerColumnas(pool, 'imServicios').catch(() => []);
+		if (!cols.length) return 0;
+		const data = await pool.request().query(
+			`SELECT LTRIM(RTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor,
+			        LTRIM(RTRIM(CAST(Descripcion AS VARCHAR(200)))) AS Descripcion
+			 FROM dbo.imServicios`,
+		);
+		const filas = data.recordset || [];
+		for (const r of filas) {
+			const valor = String(r.Valor || '').trim().slice(0, 20);
+			const desc = String(r.Descripcion || r.Valor || '').trim().slice(0, 200);
+			if (!valor) continue;
+			try {
+				await mysqlExec(
+					`INSERT INTO \`imServicios\` (\`IdEmpresa\`, \`Valor\`, \`Descripcion\`)
+					 SELECT ?, ?, ? FROM DUAL
+					 WHERE NOT EXISTS (
+					   SELECT 1 FROM \`imServicios\` WHERE IdEmpresa = ? AND Valor = ?
+					 )`,
+					[emp, valor, desc, emp, valor],
+				);
+			} catch (e) {
+				console.warn('[nube] seed servicio', valor, e.message);
 			}
-			return filas.length;
 		}
+		return filas.length;
 	} catch (e) {
 		console.warn('[nube] seed servicios desde físico:', e.message);
 	}
@@ -662,6 +660,14 @@ async function seedServiciosDesdeFisico(idEmpresa) {
 
 async function listarServicios(idEmpresa) {
 	const emp = await ensureServiciosTables(idEmpresa);
+	const { fisica } = await empresaEsFisica(emp);
+	if (fisica) {
+		try {
+			await require('./personalSync.service').reconciliarServiciosDesdeFisico(emp);
+		} catch (e) {
+			console.warn('[nube] reconcile servicios:', e.message);
+		}
+	}
 	let rows = await mysqlQuery(
 		`SELECT Valor, Descripcion FROM \`imServicios\` WHERE IdEmpresa = ? ORDER BY Descripcion`,
 		[emp],
