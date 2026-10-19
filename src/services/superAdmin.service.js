@@ -10,7 +10,6 @@ const authCentralService = require('./authCentral.service');
 const authCentralSync = require('./authCentralSync.service');
 const platformMysql = require('./platformMysql.service');
 const nubeTenant = require('./nubeTenant.service');
-const { sqlInsertImPasswordConCodOperador } = require('../utils/imPasswordInsert');
 const {
 	PACKS_PRINCIPALES,
 	MODULOS_GENERALES,
@@ -723,7 +722,22 @@ async function espejarAsignacionesEnFisico(idEmpresa, idPersonal, sectores, serv
  * 3) Si hay fila por NombreRed con ValorPersonal vacío → la vincula.
  * 4) Si no existe → INSERT mínimo con ValorPersonal (= CodOperador cuando se pueda).
  */
+/** Graba la credencial en el hospital y la nube adopta el CodOperador que quedó allí. */
 async function espejarCredencialEnFisico(idEmpresa, idPersonal, body = {}) {
+	const r = await grabarCredencialEnFisico(idEmpresa, idPersonal, body);
+	if (!r.ok) return r;
+	try {
+		const cod = await runWithTenant(idEmpresa, () =>
+			authCentralSync.syncCodOperador(idEmpresa, Number(idPersonal)),
+		);
+		if (cod != null) r.codOperador = cod;
+	} catch (e) {
+		console.warn('[superAdmin] CodOperador del hospital a la nube:', e.message);
+	}
+	return r;
+}
+
+async function grabarCredencialEnFisico(idEmpresa, idPersonal, body = {}) {
 	const vp = Number(idPersonal);
 	if (!Number.isFinite(vp) || vp <= 0) return { ok: false, motivo: 'id_invalido' };
 
@@ -848,16 +862,11 @@ async function espejarCredencialEnFisico(idEmpresa, idPersonal, body = {}) {
 		const password = String(body.password || '').trim() || `tmp-${vp}`;
 		try {
 			await tenantDb.executeQuery(
-				sqlInsertImPasswordConCodOperador({
-					insertConCod: `
-          INSERT INTO dbo.imPassword (
-            ValorPersonal, CodOperador, Apellido, Nombres, NombreRed, Password, Grupo
-          ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, 0);`,
-					insertSinCod: `
-          INSERT INTO dbo.imPassword (ValorPersonal, Apellido, Nombres, NombreRed, Password, Grupo)
-          VALUES (@p0, @p2, @p3, @p4, @p5, 0);`,
-					paramCod: '@p1',
-				}),
+				`
+        INSERT INTO dbo.imPassword (
+          ValorPersonal, CodOperador, Apellido, Nombres, NombreRed, Password, Grupo
+        ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, 0)
+        `,
 				[
 					{ value: vp, type: 'Int' },
 					{ value: codDeseado, type: 'Int' },
@@ -897,13 +906,14 @@ async function crearUsuarioEmpresa(idEmpresa, body) {
 	if (await gestionAuthEnRailway()) {
 		const created = await nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
 		if (!(await esEmpresaNube(idEmpresa))) {
-			await espejarCredencialEnFisico(idEmpresa, created.idPersonal, {
+			const espejo = await espejarCredencialEnFisico(idEmpresa, created.idPersonal, {
 				...body,
 				nombreRed: body.nombreRed || created.usuario,
 				apellido: body.apellido || created.apellido,
 				nombres: body.nombres || created.nombre,
 				codOperador: body.codOperador ?? created.codOperador ?? created.idPersonal,
 			}).catch((e) => console.warn('[superAdmin] espejo alta credencial físico:', e.message));
+			if (espejo?.codOperador != null) created.codOperador = espejo.codOperador;
 			await espejarAsignacionesEnFisico(
 				idEmpresa,
 				created.idPersonal,

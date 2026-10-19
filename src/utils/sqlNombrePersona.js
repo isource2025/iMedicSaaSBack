@@ -1,18 +1,21 @@
 /**
  * Nombre "Apellido Nombres" de quien hizo un registro clínico (SQL Server).
  *
- * Las tablas Clarion guardan en la misma columna un CodOperador, un imPersonal.Valor
- * (= imPassword.ValorPersonal) o una matrícula según quién grabó la fila. `orden`
- * decide qué interpretación gana cuando el número coincide con más de una persona;
- * las claves omitidas no se buscan.
+ * CodOperador e imPersonal.Valor (= imPassword.ValorPersonal) son claves independientes:
+ * el mismo número puede ser el CodOperador de una persona y el Valor de otra. Cada
+ * columna de autor guarda una sola de ellas, la que graba el escritorio Clarion:
+ *   - CodOperador: OperadorCarga, imHCI.IdProfecional  → sqlApplyOperador
+ *   - Valor:       Profesional, ProfesionalAsiste      → sqlApplyFicha
+ * Las claves siguientes del orden solo nombran filas que versiones anteriores de la web
+ * grabaron con otra clave; nunca le ganan a la clave propia de la columna.
  *
  * Expone `<alias>.NombreCompleto`, `<alias>.ValorPersonal` y `<alias>.Matricula`.
  * CodOperador se compara como texto: en algunas bases Clarion es VARCHAR con valores
  * no numéricos y la conversión implícita a INT haría fallar toda la consulta.
  */
-// Por defecto: CodOperador primero (OperadorCarga legacy), luego matrícula, luego Valor.
-// Si Valor va antes que CodOperador, en bases donde CO = VP+1 el id N muestra a otra persona.
-const CLAVES = ['operador', 'matricula', 'valor'];
+const ORDEN_OPERADOR = ['operador', 'valor', 'matricula'];
+const ORDEN_FICHA = ['valor', 'matricula', 'operador'];
+const CLAVES = ORDEN_OPERADOR;
 
 const nombreCuenta = (a) =>
 	`NULLIF(LTRIM(RTRIM(ISNULL(${a}.Apellido, '') + ' ' + ISNULL(${a}.Nombres, ''))), '')`;
@@ -74,4 +77,7 @@ function sqlApplyNombrePersona(columnaOriginal, alias, orden = CLAVES) {
 	) ${alias}`;
 }
 
-module.exports = { sqlApplyNombrePersona };
+const sqlApplyOperador = (columna, alias) => sqlApplyNombrePersona(columna, alias, ORDEN_OPERADOR);
+const sqlApplyFicha = (columna, alias) => sqlApplyNombrePersona(columna, alias, ORDEN_FICHA);
+
+module.exports = { sqlApplyNombrePersona, sqlApplyOperador, sqlApplyFicha };

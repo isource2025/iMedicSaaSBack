@@ -1,9 +1,10 @@
 const { executeQuery } = require('../models/db');
 const { conContextoAuditoria } = require('../utils/auditoriaHci');
 const { normalizarFila, normalizarFilas } = require('../utils/codigoSector');
-const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+const { sqlApplyOperador } = require('../utils/sqlNombrePersona');
 
-const SQL_APPLY_PROFESIONAL = sqlApplyNombrePersona('h.IdProfecional', 'prof');
+/** Pese al nombre, imHCI.IdProfecional guarda el CodOperador de quien carga. */
+const SQL_APPLY_PROFESIONAL = sqlApplyOperador('h.IdProfecional', 'prof');
 
 /**
  * Servicio para gestionar Historia Clínica de Ingreso (imHCI)

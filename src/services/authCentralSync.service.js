@@ -120,6 +120,25 @@ async function syncPassword(idEmpresa, valorPersonal) {
 	await upsertRow('imPassword', ['IdEmpresa', 'ValorPersonal'], row);
 }
 
+/**
+ * La cuenta de la nube adopta el CodOperador del hospital: allí lo numera Clarion
+ * (a veces IDENTITY) y es el que queda en OperadorCarga. Requiere contexto de tenant.
+ */
+async function syncCodOperador(idEmpresa, valorPersonal) {
+	if (!isAuthCentralEnabled()) return null;
+	const row = await readTenantRow('imPassword', 'ValorPersonal = @p0', [
+		{ value: valorPersonal, type: 'Int' },
+	]);
+	const cod = row?.CodOperador;
+	if (cod == null || String(cod).trim() === '') return null;
+	await mysqlExec('UPDATE imPassword SET CodOperador = ? WHERE IdEmpresa = ? AND ValorPersonal = ?', [
+		cod,
+		Number(idEmpresa),
+		Number(valorPersonal),
+	]);
+	return cod;
+}
+
 async function syncPersonal(idEmpresa, valorPersonal) {
 	const { isTenantEmpresa, isValidTenantPersonalId } = require('../config/tenantIdentity');
 	const emp = Number(idEmpresa);
@@ -382,6 +401,7 @@ async function vincularUsuarioEmpresaTenant(idEmpresa, valorPersonal, options = 
 
 module.exports = {
 	syncPassword,
+	syncCodOperador,
 	syncPersonal,
 	syncPersonalEmpresa,
 	removePersonalEmpresa,

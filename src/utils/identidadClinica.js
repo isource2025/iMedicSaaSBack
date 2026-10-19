@@ -14,8 +14,8 @@ function errIdentidad(mensaje, detalle = {}) {
 }
 
 /**
- * Resuelve ficha + cuenta a partir del valor que Clarion guarda en ProfesionalAsiste
- * (matrícula, ValorPersonal o CodOperador).
+ * Resuelve ficha + cuenta a partir de ProfesionalAsiste (imPersonal.Valor). Acepta
+ * matrícula o CodOperador solo si el número no es una ficha (filas web anteriores).
  */
 async function resolverIdentidadProfesional(profesionalAsiste) {
 	const id = Number(profesionalAsiste);
@@ -123,7 +123,7 @@ async function assertOperadorCarga(operadorCarga) {
 		`
     SELECT TOP 1 ValorPersonal, CodOperador, NombreRed
     FROM dbo.imPassword
-    WHERE CodOperador = @p0 OR ValorPersonal = @p0
+    WHERE LTRIM(RTRIM(CAST(CodOperador AS VARCHAR(40)))) = CAST(@p0 AS VARCHAR(40))
     `,
 		[{ value: op, type: 'Int' }],
 	);

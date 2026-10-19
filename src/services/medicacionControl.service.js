@@ -1,15 +1,15 @@
 const { executeQuery } = require("../models/db");
 const { convertirFechaAClarion, filtroPeriodoClarion } = require("../utils/dateUtils");
 const { normalizarFilas } = require("../utils/codigoSector");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 
 /**
- * OperadorCarga = CodOperador. Profesional: el escritorio graba el imPersonal.Valor de quien
- * carga (que a veces coincide con el CodOperador de otra persona); la web, el CodOperador.
+ * OperadorCarga = CodOperador; Profesional = imPersonal.Valor de quien carga.
+ * Versiones anteriores de la web grababan el CodOperador en ambas: si coinciden, manda OperadorCarga.
  */
 const SQL_APPLY_PERSONAS = `
-    ${sqlApplyNombrePersona("mc.OperadorCarga", "op")}
-    ${sqlApplyNombrePersona("mc.Profesional", "profFicha", ["matricula", "valor", "operador"])}
+    ${sqlApplyOperador("mc.OperadorCarga", "op")}
+    ${sqlApplyFicha("mc.Profesional", "profFicha")}
     OUTER APPLY (
       SELECT CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
              CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula,

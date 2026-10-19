@@ -2,7 +2,6 @@ const { executeQuery } = require('../models/db');
 const { getTenantId } = require('../context/tenantContext');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
 const { sqlLiteralMarcadeBajaAlta: sqlLiteralMarcadeBajaAltaCore } = require('../utils/imPasswordActivo');
-const { sqlInsertImPasswordConCodOperador } = require('../utils/imPasswordInsert');
 const authCentralSync = require('./authCentralSync.service');
 const { codigo, normalizarFilas } = require('../utils/codigoSector');
 
@@ -357,10 +356,12 @@ async function insertImPasswordManualId(
   }
 
   const marcaBaja = sqlLiteralMarcadeBajaAlta(colMap);
-  // CodOperador IDENTITY: grabarlo igual a ValorPersonal en vez de dejar que el motor asigne otro.
-  const insertCodOperadorIdentity = (conCod) => `
+  const consulta =
+    fechaTipo === 'int'
+      ? omitCodOperador
+        ? `
       INSERT INTO imPassword (
-        ValorPersonal,${conCod ? '\n        CodOperador,' : ''}
+        ValorPersonal,
         Apellido,
         Nombres,
         NombreRed,
@@ -371,15 +372,9 @@ async function insertImPasswordManualId(
         MarcadeBaja,
         Grupo
       )
-      VALUES (@p0,${conCod ? ' @p0,' : ''} @p1, @p2, @p3, @p4, @p5, @p6, ${fechaTipo === 'int' ? '@p7' : 'GETDATE()'}, ${marcaBaja}, 0);`;
-  const consulta = omitCodOperador
-    ? sqlInsertImPasswordConCodOperador({
-        insertConCod: insertCodOperadorIdentity(true),
-        insertSinCod: insertCodOperadorIdentity(false),
-        paramCod: '@p0',
-      })
-    : fechaTipo === 'int'
-      ? `
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, ${marcaBaja}, 0)
+    `
+        : `
       INSERT INTO imPassword (
         ValorPersonal,
         CodOperador,
@@ -395,7 +390,23 @@ async function insertImPasswordManualId(
       )
       VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, ${marcaBaja}, 0)
     `
-      : `
+      : omitCodOperador
+        ? `
+      INSERT INTO imPassword (
+        ValorPersonal,
+        Apellido,
+        Nombres,
+        NombreRed,
+        Password,
+        NumeroDocumento,
+        Legajo,
+        FechaActual,
+        MarcadeBaja,
+        Grupo
+      )
+      VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6, GETDATE(), ${marcaBaja}, 0)
+    `
+        : `
       INSERT INTO imPassword (
         ValorPersonal,
         CodOperador,

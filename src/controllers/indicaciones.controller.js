@@ -446,7 +446,7 @@ const aplicarIndicacion = async (req, res) => {
         const data = {
             ...req.body,
             operadorCarga: firma.codOperador,
-            profesionalAsiste: firma.profesional,
+            profesionalAsiste: firma.valorPersonal,
         };
 
         await indicacionesService.aplicarIndicacion(nroIndicacionInt, data);

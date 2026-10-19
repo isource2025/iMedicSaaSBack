@@ -19,7 +19,7 @@ class SignosVitalesService {
    * @param {Object} data.medibles - Datos medibles (FC, FR, Temp, Presión, etc.)
    * @param {Object} data.antropometricos - Datos antropométricos (Talla, Peso, etc.)
    * @param {number} data.OperadorCarga - Operador que carga
-   * @param {number} data.Profesional - Profesional responsable
+   * @param {number} data.Profesional - Ficha (imPersonal.Valor) del profesional responsable
    * @param {string} data.IdSector - Sector
    * @returns {Promise<Object>} Resultado con IDs
    */
@@ -85,12 +85,13 @@ class SignosVitalesService {
    * Prepara datos para imHCI (solo campos que existen en la tabla)
    */
   prepararDatosHCI(data) {
-    const { medibles, antropometricos, NumeroVisita, IdSector, Profesional } = data;
+    const { medibles, antropometricos, NumeroVisita, IdSector, OperadorCarga } = data;
     
     const datosHCI = {
       NumeroVisita,
       IdSector,
-      IdProfecional: Profesional,
+      // Pese al nombre, Clarion guarda en imHCI.IdProfecional el CodOperador.
+      IdProfecional: OperadorCarga,
       Fecha: new Date()
     };
     

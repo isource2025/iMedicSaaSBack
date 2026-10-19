@@ -4,15 +4,15 @@ const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { calcularIMC, enrichControlWithIMC, enrichControlesWithIMC } = require("../utils/antropometria");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { calcularPresionMedia, resolverPresionMedia } = require("../utils/presionArterial");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 
 /**
- * La web graba CodOperador en ambas columnas; el escritorio graba en Profesional el
- * imPersonal.Valor de quien carga, que a veces coincide con el CodOperador de otra persona.
+ * OperadorCarga = CodOperador; Profesional = imPersonal.Valor de quien carga.
+ * Versiones anteriores de la web grababan el CodOperador en ambas: si coinciden, manda OperadorCarga.
  */
 const SQL_APPLY_PERSONAS = `
-    ${sqlApplyNombrePersona("cf.OperadorCarga", "op")}
-    ${sqlApplyNombrePersona("cf.Profesional", "profFicha", ["matricula", "valor", "operador"])}
+    ${sqlApplyOperador("cf.OperadorCarga", "op")}
+    ${sqlApplyFicha("cf.Profesional", "profFicha")}
     OUTER APPLY (
       SELECT CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
              CASE WHEN cf.Profesional = cf.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula,

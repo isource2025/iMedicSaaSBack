@@ -74,7 +74,7 @@ const crear = async (req, res) => {
 			horaDieta: body.horaDieta,
 			observaciones: body.observaciones,
 			operadorCarga,
-			profesional: resolveProfesional(req) ?? operadorCarga,
+			profesional: resolveProfesional(req) ?? 0,
 		});
 		res.status(201).json({ success: true, data });
 	} catch (error) {

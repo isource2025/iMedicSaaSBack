@@ -9,7 +9,7 @@ const {
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { resolverPresionMedia } = require("../utils/presionArterial");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -32,54 +32,14 @@ const SQL_EXCLUIR_SIN_EFECTO =
 	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'";
 
 /**
- * SQL: profesional de la indicación. ProfesionalAsiste guarda matrícula, CodOperador
- * (usuarios sin matrícula) o, en registros viejos, imPersonal.Valor.
- * ProfesionalAsiste guarda matrícula o ValorPersonal (ficha). CodOperador solo
- * como fallback: si Valor va después de CodOperador, un VP=N se muestra como
- * la cuenta con CodOperador=N (otra persona en Clarion CO≈VP+1).
- * Expone `per` (imPersonal) y `p` (imPassword); usar después de FROM imInterIndMedicas AS iim.
+ * SQL: médico de la indicación (ProfesionalAsiste = imPersonal.Valor).
+ * Expone `prof` (nombre) y `per` (ficha); usar después de FROM imInterIndMedicas AS iim.
  */
 const SQL_APPLY_PERSONAL_PROFESIONAL = `
-OUTER APPLY (
-  SELECT TOP 1
-    per0.Valor,
-    per0.Matricula,
-    per0.ApellidoNombre,
-    per0.ValorEspecialidad
-  FROM dbo.imPersonal AS per0
-  LEFT JOIN dbo.imPassword AS pwCod
-    ON pwCod.CodOperador = iim.ProfesionalAsiste
-   AND pwCod.ValorPersonal = per0.Valor
-  WHERE per0.Valor = iim.ProfesionalAsiste
-     OR per0.Matricula = iim.ProfesionalAsiste
-     OR pwCod.ValorPersonal IS NOT NULL
-  ORDER BY CASE
-    WHEN per0.Matricula = iim.ProfesionalAsiste THEN 0
-    WHEN per0.Valor = iim.ProfesionalAsiste THEN 1
-    WHEN pwCod.ValorPersonal IS NOT NULL THEN 2
-    ELSE 3
-  END
-) per`;
+${sqlApplyFicha('iim.ProfesionalAsiste', 'prof')}
+LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal`;
 
-const SQL_APPLY_PASSWORD_PROFESIONAL = `
-OUTER APPLY (
-  SELECT TOP 1 p0.Apellido, p0.Nombres
-  FROM dbo.imPassword AS p0
-  WHERE (per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor)
-     OR p0.ValorPersonal = iim.ProfesionalAsiste
-     OR p0.CodOperador = iim.ProfesionalAsiste
-  ORDER BY CASE
-    WHEN per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor THEN 0
-    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 1
-    WHEN p0.CodOperador = iim.ProfesionalAsiste THEN 2
-    ELSE 3
-  END
-) p`;
-
-const SQL_NOMBRE_PROFESIONAL = `COALESCE(
-    NULLIF(LTRIM(RTRIM(ISNULL(p.Apellido, '') + ' ' + ISNULL(p.Nombres, ''))), ''),
-    NULLIF(LTRIM(RTRIM(per.ApellidoNombre)), '')
-  )`;
+const SQL_NOMBRE_PROFESIONAL = 'prof.NombreCompleto';
 
 /**
  * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
@@ -373,7 +333,6 @@ SELECT ${topClause}
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
 ${SQL_APPLY_PERSONAL_PROFESIONAL}
-${SQL_APPLY_PASSWORD_PROFESIONAL}
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN dbo.imInterTipoControles AS tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor
@@ -517,7 +476,7 @@ FROM dbo.imInterIndMedicas AS iim
 LEFT JOIN dbo.imPassword AS p ON p.CodOperador = iim.OperadorCarga
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
-${sqlApplyNombrePersona('iim.OperadorCarga', 'op')}
+${sqlApplyOperador('iim.OperadorCarga', 'op')}
 WHERE iim.NumeroVisita = @param0
   ${periodo.sql ? `AND ${periodo.sql}` : ''}
   AND iim.TipoIndicacion = 9
@@ -1175,7 +1134,6 @@ SELECT
     v.TipoMedicamento AS VademecumTipoMedicamento
 FROM imInterIndMedicas iim
 ${SQL_APPLY_PERSONAL_PROFESIONAL}
-${SQL_APPLY_PASSWORD_PROFESIONAL}
 LEFT JOIN imFrecuenciasAdmin fa ON iim.Frecuencia = fa.Valor
 LEFT JOIN imInterTipoIndicacion tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN imInterTipoControles tc ON tit.Tipo = 'C' AND iim.Codigo = tc.Valor

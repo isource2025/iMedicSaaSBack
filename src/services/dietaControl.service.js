@@ -7,7 +7,7 @@ const {
 	horaClarionAhoraArgentina,
 } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi: toAnsi } = require('../utils/clarionText');
-const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+const { sqlApplyOperador, sqlApplyFicha } = require('../utils/sqlNombrePersona');
 
 /** Las filas que genera la indicación no traen FechaDieta: se ubican por la fecha de carga. */
 const COL_FECHA = 'COALESCE(NULLIF(d.FechaDieta, 0), d.FechaCarga)';
@@ -32,8 +32,8 @@ const SELECT_DIETA = `
     COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
   FROM dbo.imInterCtrlDieta AS d
   LEFT JOIN dbo.imTipoDieta AS td ON td.Valor = d.TipoDieta
-  ${sqlApplyNombrePersona('d.OperadorCarga', 'op')}
-  ${sqlApplyNombrePersona('d.Profesional', 'prof', ['matricula', 'valor', 'operador'])}
+  ${sqlApplyOperador('d.OperadorCarga', 'op')}
+  ${sqlApplyFicha('d.Profesional', 'prof')}
 `;
 
 async function obtenerPorVisitaYFecha(numeroVisita, fecha, days) {

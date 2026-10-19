@@ -1,10 +1,9 @@
 /**
  * Identidad clínica desde JWT (no confiar en campos del body).
  *
- * En Clarion/Colman suele pasar CodOperador = ValorPersonal + 1 (IDENTITY).
- * OperadorCarga debe seguir guardando CodOperador; ProfesionalAsiste NO debe
- * caer en CodOperador si existe ValorPersonal, porque al listar se resuelve
- * como otra persona (imPersonal.Valor = ese número).
+ * CodOperador (cuenta) y ValorPersonal (ficha imPersonal.Valor) son claves independientes
+ * en Clarion; cada columna de autor recibe la suya (ver utils/sqlNombrePersona.js) y nunca
+ * se sustituye una por otra.
  */
 function resolveCodOperador(req) {
 	const u = req.auth?.usuario || {};
@@ -51,12 +50,9 @@ function resolveOperadorCarga(req) {
 	return resolveCodOperador(req);
 }
 
-/**
- * Identificador para ProfesionalAsiste / columnas "Profesional".
- * Preferir matrícula; si no hay, ValorPersonal (ficha); recién al final CodOperador.
- */
+/** Ficha (imPersonal.Valor) para ProfesionalAsiste / columnas "Profesional". */
 function resolveProfesional(req) {
-	return resolveMatricula(req) ?? resolveValorPersonal(req) ?? resolveCodOperador(req);
+	return resolveValorPersonal(req);
 }
 
 function requireOperadorCarga(req, res) {
@@ -76,7 +72,7 @@ function requireProfesional(req, res) {
 	if (p == null || !Number.isFinite(p) || p <= 0) {
 		res.status(400).json({
 			success: false,
-			mensaje: 'Sesión sin matrícula/CodOperador — no se puede registrar la acción clínica',
+			mensaje: 'La cuenta no está vinculada a una ficha de personal — no se puede registrar la acción clínica',
 		});
 		return null;
 	}
@@ -110,15 +106,15 @@ function quitarAutorDelBody(data) {
 
 /**
  * Identidad para grabar: siempre el usuario de la sesión.
- * @returns {{ codOperador: number, profesional: number, matricula: number|null } | null}
+ * `valorPersonal` es 0 ("sin profesional" en Clarion) si la cuenta no tiene ficha.
+ * @returns {{ codOperador: number, valorPersonal: number, matricula: number|null } | null}
  */
 function firmarSesion(req, res) {
 	const codOperador = requireOperadorCarga(req, res);
 	if (codOperador == null) return null;
-	const profesional = resolveProfesional(req) ?? codOperador;
 	return {
 		codOperador,
-		profesional,
+		valorPersonal: resolveValorPersonal(req) ?? 0,
 		matricula: resolveMatricula(req),
 	};
 }

@@ -2,7 +2,7 @@ const { executeQuery } = require('../models/db');
 const { convertirHoraAClarion: horaAClarion } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi: toAnsi } = require('../utils/clarionText');
 const { normalizarFilas } = require('../utils/codigoSector');
-const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+const { sqlApplyFicha } = require('../utils/sqlNombrePersona');
 
 function num(v, fallback = 0) {
 	if (v == null || v === '') return fallback;
@@ -74,7 +74,7 @@ const SELECT_BALANCE = `
     prof.Matricula AS Matricula,
     prof.ValorPersonal AS ValorPersonalProfesional
   FROM dbo.imBalanceHidrico AS b
-  ${sqlApplyNombrePersona('b.Profesional', 'prof', ['matricula', 'valor', 'operador'])}
+  ${sqlApplyFicha('b.Profesional', 'prof')}
 `;
 
 /**

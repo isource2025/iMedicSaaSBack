@@ -5,11 +5,11 @@ const {
     restarDiasISO,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 
 /**
- * Profesional: el escritorio graba imPersonal.Valor; la web, la matrícula o (sin matrícula)
- * el mismo CodOperador de OperadorCarga. El CodOperador puede coincidir con el Valor de otra persona.
+ * OperadorCarga = CodOperador; Profesional = imPersonal.Valor de quien carga.
+ * Versiones anteriores de la web grababan el CodOperador en ambas: si coinciden, manda OperadorCarga.
  */
 const SELECT_EVOLUCION = `
     SELECT 
@@ -31,8 +31,8 @@ const SELECT_EVOLUCION = `
       op.NombreCompleto AS OperadorApellido,
       CAST(NULL AS VARCHAR(150)) AS OperadorNombres
     FROM dbo.imInterCtrlEvolucion AS ev
-    ${sqlApplyNombrePersona("ev.Profesional", "prof", ["matricula", "valor", "operador"])}
-    ${sqlApplyNombrePersona("ev.OperadorCarga", "op")}
+    ${sqlApplyFicha("ev.Profesional", "prof")}
+    ${sqlApplyOperador("ev.OperadorCarga", "op")}
 `;
 
 /**
