@@ -49,7 +49,7 @@ node --test src/services/facturacion/conveniosDefinicion.test.js
 | `imClientesConvModuladas` | `ValorConvenio` | PK `Id` IDENTITY; único (ValorConvenio, Desde, Hasta, Funcion, Ambulatorio, Internacion) | 305.745 | Valor por práctica modulada |
 | `imClientesConvVadem` | `ValorConvenio` | PK (ValorConvenio, Descripcion, Troquel) | 2.591 | Valor por medicamento. Pestaña Vademécum (`Troquel <> 0`) y Genéricos (`Troquel = 0`, descripción libre) |
 | `imClientesConvComplejidad` | `ValorConvenio` | PK (ValorConvenio, Complejidad, NoCubre, TipoValor, Ambulatorio, Internacion) | 113 | Valor por nivel de complejidad (pestaña "Anestesistas") |
-| `imClientesConvCateg` | `ValorConvenio` | único (ValorConvenio, ValorCategoria) | 0 | Fuera de alcance (vacía) |
+| `imClientesConvCateg` | `ValorConvenio` | PK `Id` IDENTITY; único (ValorConvenio, ValorCategoria) | 0 | Valor por categoría profesional (`imCategorias`), pestaña "Categorías". Una fila por categoría |
 | `imPracticasXConvenios` | `IdConvenio` | PK (IdConvenio, IdPractica, AliasTabla) | 8.954.995 | **Derivada**, la mantienen los triggers. No se edita. |
 
 ### 1.2 Catálogos de los que depende el detalle (selectores)
