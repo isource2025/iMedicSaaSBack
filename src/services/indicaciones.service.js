@@ -34,6 +34,8 @@ const SQL_EXCLUIR_SIN_EFECTO =
 /**
  * SQL: profesional de la indicación. ProfesionalAsiste guarda matrícula, CodOperador
  * (usuarios sin matrícula) o, en registros viejos, imPersonal.Valor.
+ * En Colman/Clarion CodOperador suele ser ValorPersonal+1: priorizar matrícula y
+ * CodOperador→cuenta antes que Valor, si no "7" muestra a quien tiene Valor=7.
  * Expone `per` (imPersonal) y `p` (imPassword); usar después de FROM imInterIndMedicas AS iim.
  */
 const SQL_APPLY_PERSONAL_PROFESIONAL = `
@@ -44,8 +46,18 @@ OUTER APPLY (
     per0.ApellidoNombre,
     per0.ValorEspecialidad
   FROM dbo.imPersonal AS per0
-  WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
-  ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
+  LEFT JOIN dbo.imPassword AS pwCod
+    ON pwCod.CodOperador = iim.ProfesionalAsiste
+   AND pwCod.ValorPersonal = per0.Valor
+  WHERE per0.Valor = iim.ProfesionalAsiste
+     OR per0.Matricula = iim.ProfesionalAsiste
+     OR pwCod.ValorPersonal IS NOT NULL
+  ORDER BY CASE
+    WHEN per0.Matricula = iim.ProfesionalAsiste THEN 0
+    WHEN pwCod.ValorPersonal IS NOT NULL THEN 1
+    WHEN per0.Valor = iim.ProfesionalAsiste THEN 2
+    ELSE 3
+  END
 ) per`;
 
 const SQL_APPLY_PASSWORD_PROFESIONAL = `
@@ -57,8 +69,9 @@ OUTER APPLY (
      OR p0.CodOperador = iim.ProfesionalAsiste
   ORDER BY CASE
     WHEN per.Valor IS NOT NULL AND p0.ValorPersonal = per.Valor THEN 0
-    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 1
-    ELSE 2
+    WHEN p0.CodOperador = iim.ProfesionalAsiste THEN 1
+    WHEN p0.ValorPersonal = iim.ProfesionalAsiste THEN 2
+    ELSE 3
   END
 ) p`;
 

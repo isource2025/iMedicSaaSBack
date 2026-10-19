@@ -10,7 +10,9 @@
  * CodOperador se compara como texto: en algunas bases Clarion es VARCHAR con valores
  * no numéricos y la conversión implícita a INT haría fallar toda la consulta.
  */
-const CLAVES = ['operador', 'valor', 'matricula'];
+// Por defecto: CodOperador primero (OperadorCarga legacy), luego matrícula, luego Valor.
+// Si Valor va antes que CodOperador, en bases donde CO = VP+1 el id N muestra a otra persona.
+const CLAVES = ['operador', 'matricula', 'valor'];
 
 const nombreCuenta = (a) =>
 	`NULLIF(LTRIM(RTRIM(ISNULL(${a}.Apellido, '') + ' ' + ISNULL(${a}.Nombres, ''))), '')`;

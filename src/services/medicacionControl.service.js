@@ -9,7 +9,7 @@ const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
  */
 const SQL_APPLY_PERSONAS = `
     ${sqlApplyNombrePersona("mc.OperadorCarga", "op")}
-    ${sqlApplyNombrePersona("mc.Profesional", "profFicha", ["valor", "matricula", "operador"])}
+    ${sqlApplyNombrePersona("mc.Profesional", "profFicha", ["matricula", "operador", "valor"])}
     OUTER APPLY (
       SELECT CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
              CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula,

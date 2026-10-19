@@ -710,10 +710,194 @@ async function espejarAsignacionesEnFisico(idEmpresa, idPersonal, sectores, serv
 	});
 }
 
+/**
+ * Auth vive en Railway, pero la clínica (indicaciones, etc.) valida identidad contra
+ * imPassword/imPersonal del SQL físico. Sin este espejo, un admin dado de alta desde
+ * superadmin queda con ValorPersonal en MySQL y en el hospital una fila Clarion con
+ * CodOperador lleno y ValorPersonal NULL → falla assertIdentidadParaIndicacion.
+ *
+ * Estrategia:
+ * 1) Si ya hay fila con ValorPersonal = id → OK (solo refresca nombre si hace falta).
+ * 2) Si hay fila legacy con CodOperador = id (o cod pedido) y ValorPersonal vacío → la vincula.
+ * 3) Si hay fila por NombreRed con ValorPersonal vacío → la vincula.
+ * 4) Si no existe → INSERT mínimo con ValorPersonal (= CodOperador cuando se pueda).
+ */
+async function espejarCredencialEnFisico(idEmpresa, idPersonal, body = {}) {
+	const vp = Number(idPersonal);
+	if (!Number.isFinite(vp) || vp <= 0) return { ok: false, motivo: 'id_invalido' };
+
+	const apellido = String(body.apellido || '').trim();
+	const nombres = String(body.nombres || '').trim();
+	const nombreRed = String(body.nombreRed || body.usuario || '').trim();
+	const numeroDocumento = body.numeroDocumento || '';
+	const codDeseado = Number(body.codOperador) > 0 ? Number(body.codOperador) : vp;
+
+	return runWithTenant(idEmpresa, async () => {
+		await asegurarFichaPersonal(vp, { apellido, nombres, numeroDocumento });
+
+		const porVp = await tenantDb.executeQuery(
+			`
+      SELECT TOP 1 ValorPersonal, CodOperador, NombreRed
+      FROM dbo.imPassword
+      WHERE ValorPersonal = @p0
+      `,
+			[{ value: vp, type: 'Int' }],
+		);
+		if (porVp.length) {
+			if (nombreRed || apellido || nombres) {
+				await tenantDb
+					.executeQuery(
+						`
+          UPDATE dbo.imPassword
+          SET NombreRed = CASE WHEN @p1 <> '' THEN @p1 ELSE NombreRed END,
+              Apellido = CASE WHEN @p2 <> '' THEN @p2 ELSE Apellido END,
+              Nombres = CASE WHEN @p3 <> '' THEN @p3 ELSE Nombres END
+          WHERE ValorPersonal = @p0
+          `,
+						[
+							{ value: vp, type: 'Int' },
+							{ value: nombreRed, type: 'VarChar' },
+							{ value: apellido, type: 'VarChar' },
+							{ value: nombres, type: 'VarChar' },
+						],
+					)
+					.catch((e) => console.warn('[superAdmin] espejo credencial refresh:', e.message));
+			}
+			return { ok: true, modo: 'ya_vinculado' };
+		}
+
+		const porCod = await tenantDb.executeQuery(
+			`
+      SELECT TOP 1 CodOperador, ValorPersonal, NombreRed
+      FROM dbo.imPassword
+      WHERE CodOperador = @p0 OR CodOperador = @p1
+      ORDER BY
+        CASE WHEN ValorPersonal IS NULL OR TRY_CAST(ValorPersonal AS int) = 0 THEN 0 ELSE 1 END,
+        CASE WHEN CodOperador = @p0 THEN 0 ELSE 1 END
+      `,
+			[
+				{ value: vp, type: 'Int' },
+				{ value: codDeseado, type: 'Int' },
+			],
+		);
+		if (porCod.length) {
+			const row = porCod[0];
+			const vpExistente = row.ValorPersonal != null && row.ValorPersonal !== '' ? Number(row.ValorPersonal) : NaN;
+			if (!Number.isFinite(vpExistente) || vpExistente <= 0) {
+				const codRow = Number(row.CodOperador);
+				await tenantDb.executeQuery(
+					`
+          UPDATE dbo.imPassword
+          SET ValorPersonal = @p0,
+              NombreRed = CASE WHEN @p1 <> '' THEN @p1 ELSE NombreRed END,
+              Apellido = CASE WHEN @p2 <> '' THEN @p2 ELSE Apellido END,
+              Nombres = CASE WHEN @p3 <> '' THEN @p3 ELSE Nombres END
+          WHERE CodOperador = @p4
+            AND (ValorPersonal IS NULL OR TRY_CAST(ValorPersonal AS int) IS NULL OR TRY_CAST(ValorPersonal AS int) = 0)
+          `,
+					[
+						{ value: vp, type: 'Int' },
+						{ value: nombreRed, type: 'VarChar' },
+						{ value: apellido, type: 'VarChar' },
+						{ value: nombres, type: 'VarChar' },
+						{ value: Number.isFinite(codRow) ? codRow : codDeseado, type: 'Int' },
+					],
+				);
+				return { ok: true, modo: 'relink_codoperador', codOperador: codRow };
+			}
+		}
+
+		if (nombreRed) {
+			const porNombre = await tenantDb.executeQuery(
+				`
+        SELECT TOP 1 CodOperador, ValorPersonal, NombreRed
+        FROM dbo.imPassword
+        WHERE UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0)))
+        ORDER BY CASE WHEN ValorPersonal IS NULL OR TRY_CAST(ValorPersonal AS int) = 0 THEN 0 ELSE 1 END
+        `,
+				[{ value: nombreRed, type: 'VarChar' }],
+			);
+			if (porNombre.length) {
+				const vpExistente =
+					porNombre[0].ValorPersonal != null && porNombre[0].ValorPersonal !== ''
+						? Number(porNombre[0].ValorPersonal)
+						: NaN;
+				if (!Number.isFinite(vpExistente) || vpExistente <= 0) {
+					await tenantDb.executeQuery(
+						`
+            UPDATE dbo.imPassword
+            SET ValorPersonal = @p0,
+                Apellido = CASE WHEN @p1 <> '' THEN @p1 ELSE Apellido END,
+                Nombres = CASE WHEN @p2 <> '' THEN @p2 ELSE Nombres END
+            WHERE UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p3)))
+              AND (ValorPersonal IS NULL OR TRY_CAST(ValorPersonal AS int) IS NULL OR TRY_CAST(ValorPersonal AS int) = 0)
+            `,
+						[
+							{ value: vp, type: 'Int' },
+							{ value: apellido, type: 'VarChar' },
+							{ value: nombres, type: 'VarChar' },
+							{ value: nombreRed, type: 'VarChar' },
+						],
+					);
+					return { ok: true, modo: 'relink_nombrered' };
+				}
+			}
+		}
+
+		const password = String(body.password || '').trim() || `tmp-${vp}`;
+		try {
+			await tenantDb.executeQuery(
+				`
+        INSERT INTO dbo.imPassword (
+          ValorPersonal, CodOperador, Apellido, Nombres, NombreRed, Password, Grupo
+        ) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, 0)
+        `,
+				[
+					{ value: vp, type: 'Int' },
+					{ value: codDeseado, type: 'Int' },
+					{ value: apellido || 'Admin', type: 'VarChar' },
+					{ value: nombres || 'Empresa', type: 'VarChar' },
+					{ value: nombreRed || `user${vp}`, type: 'VarChar' },
+					{ value: password, type: 'VarChar' },
+				],
+			);
+			return { ok: true, modo: 'insert' };
+		} catch (e1) {
+			// CodOperador IDENTITY u otras columnas: insert mínimo
+			try {
+				await tenantDb.executeQuery(
+					`
+          INSERT INTO dbo.imPassword (ValorPersonal, Apellido, Nombres, NombreRed, Password, Grupo)
+          VALUES (@p0, @p1, @p2, @p3, @p4, 0)
+          `,
+					[
+						{ value: vp, type: 'Int' },
+						{ value: apellido || 'Admin', type: 'VarChar' },
+						{ value: nombres || 'Empresa', type: 'VarChar' },
+						{ value: nombreRed || `user${vp}`, type: 'VarChar' },
+						{ value: password, type: 'VarChar' },
+					],
+				);
+				return { ok: true, modo: 'insert_min' };
+			} catch (e2) {
+				console.warn('[superAdmin] espejo credencial INSERT falló:', e1.message, e2.message);
+				return { ok: false, motivo: 'insert_failed', error: e2.message };
+			}
+		}
+	});
+}
+
 async function crearUsuarioEmpresa(idEmpresa, body) {
 	if (await gestionAuthEnRailway()) {
 		const created = await nubeTenant.crearUsuarioEmpresa(idEmpresa, body);
 		if (!(await esEmpresaNube(idEmpresa))) {
+			await espejarCredencialEnFisico(idEmpresa, created.idPersonal, {
+				...body,
+				nombreRed: body.nombreRed || created.usuario,
+				apellido: body.apellido || created.apellido,
+				nombres: body.nombres || created.nombre,
+				codOperador: body.codOperador ?? created.codOperador ?? created.idPersonal,
+			}).catch((e) => console.warn('[superAdmin] espejo alta credencial físico:', e.message));
 			await espejarAsignacionesEnFisico(
 				idEmpresa,
 				created.idPersonal,
@@ -899,6 +1083,13 @@ async function actualizarUsuarioEmpresa(idEmpresa, idPersonal, body) {
 	if (await gestionAuthEnRailway()) {
 		const result = await nubeTenant.actualizarUsuarioEmpresa(idEmpresa, idPersonal, body);
 		if (!(await esEmpresaNube(idEmpresa))) {
+			await espejarCredencialEnFisico(idEmpresa, idPersonal, {
+				...body,
+				nombreRed: body.nombreRed || result?.usuario,
+				apellido: body.apellido || result?.apellido,
+				nombres: body.nombres || result?.nombre,
+				codOperador: body.codOperador ?? result?.codOperador ?? idPersonal,
+			}).catch((e) => console.warn('[superAdmin] espejo credencial físico (update):', e.message));
 			await actualizarUsuarioEmpresaEnFisico(idEmpresa, idPersonal, body, {
 				requireVinculo: false,
 				syncToRailway: false,
@@ -1647,26 +1838,20 @@ async function crearEmpresaAlta(data) {
 			sectores: [valor],
 		};
 
-		// Auth/gestión vive en Railway: el alta no exige SQL físico ni túnel.
+		// Auth en Railway o local: el sector puede ir a nube o físico; el admin SIEMPRE
+		// pasa por crearUsuarioEmpresa para espejar credencial clínica en empresas FISICO.
 		if (await gestionAuthEnRailway()) {
 			await nubeTenant.crearSector(nuevoId, sectorBody);
-			await upsertOnboarding(nuevoId, {
-				pasoActual: 'CONFIG',
-				completado: false,
-				altaCompletada: true,
-				sectoresDefecto: [valor],
-			});
-			await nubeTenant.crearUsuarioEmpresa(nuevoId, adminBody);
 		} else {
 			await crearSector({ idEmpresa: nuevoId, ...sectorBody });
-			await upsertOnboarding(nuevoId, {
-				pasoActual: 'CONFIG',
-				completado: false,
-				altaCompletada: true,
-				sectoresDefecto: [valor],
-			});
-			await crearUsuarioEmpresa(nuevoId, adminBody);
 		}
+		await upsertOnboarding(nuevoId, {
+			pasoActual: 'CONFIG',
+			completado: false,
+			altaCompletada: true,
+			sectoresDefecto: [valor],
+		});
+		await crearUsuarioEmpresa(nuevoId, adminBody);
 
 		const detalle = await obtenerEmpresaDetalle(nuevoId);
 		const checklist = await obtenerChecklistEmpresa(nuevoId, detalle);

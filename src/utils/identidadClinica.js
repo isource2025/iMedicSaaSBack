@@ -41,6 +41,7 @@ async function resolverIdentidadProfesional(profesionalAsiste) {
 
 	if (personal?.[0]) {
 		const valor = Number(personal[0].Valor);
+		// Clarion a veces deja ValorPersonal NULL y solo llena CodOperador (= Valor de imPersonal).
 		const cuenta = await executeQuery(
 			`
       SELECT TOP 1
@@ -48,7 +49,8 @@ async function resolverIdentidadProfesional(profesionalAsiste) {
         CodOperador,
         LTRIM(RTRIM(ISNULL(NombreRed, ''))) AS NombreRed
       FROM dbo.imPassword
-      WHERE ValorPersonal = @p0
+      WHERE ValorPersonal = @p0 OR CodOperador = @p0
+      ORDER BY CASE WHEN ValorPersonal = @p0 THEN 0 ELSE 1 END
       `,
 			[{ value: valor, type: 'Int' }],
 		);
@@ -65,9 +67,10 @@ async function resolverIdentidadProfesional(profesionalAsiste) {
 			);
 		}
 
+		const valorCuenta = Number(cuenta[0].ValorPersonal);
 		return {
 			modo: 'personal',
-			valorPersonal: valor,
+			valorPersonal: Number.isFinite(valorCuenta) && valorCuenta > 0 ? valorCuenta : valor,
 			matricula: personal[0].Matricula != null ? Number(personal[0].Matricula) : null,
 			apellidoNombre: personal[0].ApellidoNombre,
 			nombreRed: cuenta[0].NombreRed,
