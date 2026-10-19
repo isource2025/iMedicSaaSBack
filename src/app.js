@@ -76,6 +76,7 @@ const admisionesVigentesRoutes = require('./routes/admisionesVigentes.routes');
 const visitaAcompanantesRoutes = require('./routes/visitaAcompanantes.routes');
 const rendicionesRoutes = require('./routes/rendiciones.routes');
 const liquidacionImportRoutes = require('./routes/liquidacionImport.routes');
+const conveniosRoutes = require('./routes/convenios.routes');
 const personalRoutes = require('./routes/personal.routes');
 const firmasRoutes = require('./routes/firmas.routes');
 const miPerfilRoutes = require('./routes/miPerfil.routes');
@@ -157,6 +158,8 @@ if (isPlatformSqlConfigured() && !isAuthCentralEnabled()) {
 // Configurar middlewares
 configureCors(app); // Configuración CORS (único middleware; evita doble cors con allow-origin *)
 
+// Los lotes de nomenclador de un convenio pueden traer miles de filas.
+app.use('/api/convenios', express.json({ limit: '10mb' }));
 app.use(express.json()); // UTF-8; textos Clarion/Renaper se reparan en capa de datos
 app.use((req, res, next) => {
 	res.charset = 'utf-8';
@@ -252,6 +255,7 @@ app.use('/api/admisiones-vigentes', admisionesVigentesRoutes);
 app.use('/api/visita-acompanantes', visitaAcompanantesRoutes);
 app.use('/api/rendiciones', rendicionesRoutes);
 app.use('/api/liquidaciones', liquidacionImportRoutes);
+app.use('/api/convenios', conveniosRoutes);
 app.use('/api/personal', personalRoutes);
 app.use('/api/firmas', firmasRoutes);
 app.use('/api/mi-perfil', miPerfilRoutes);
