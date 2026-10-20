@@ -1142,6 +1142,25 @@ function _sniffImageMime(buf) {
 	return 'image/png';
 }
 
+/**
+ * jsPDF no incrusta bien PNG con transparencia (el pad de firma los genera así).
+ * Se aplana a JPEG opaco para el PDF, sin tocar el blob guardado en imPersonal.
+ */
+async function _firmaParaPdf(buf) {
+	const mime = _sniffImageMime(buf);
+	if (mime !== 'image/png') return { buf, mime };
+	try {
+		const sharp = require('sharp');
+		const meta = await sharp(buf).metadata();
+		if (!meta.hasAlpha && (meta.channels || 0) < 4) return { buf, mime };
+		const jpeg = await sharp(buf).flatten({ background: '#ffffff' }).jpeg({ quality: 88 }).toBuffer();
+		if (jpeg && jpeg.length) return { buf: jpeg, mime: 'image/jpeg' };
+	} catch (e) {
+		console.warn('[firma] no se pudo aplanar PNG:', e.message);
+	}
+	return { buf, mime };
+}
+
 function _toFirmaBuffer(firma) {
 	if (firma == null) return null;
 	if (Buffer.isBuffer(firma)) return firma.length ? firma : null;
@@ -1178,9 +1197,9 @@ async function obtenerFirmaPersonal(valor) {
 	`);
 	const row = r.recordset[0];
 	if (!row) return { hasFirma: false };
-	const buf = _toFirmaBuffer(row.Firma);
-	if (!buf) return { hasFirma: false };
-	const mime = _sniffImageMime(buf);
+	const raw = _toFirmaBuffer(row.Firma);
+	if (!raw) return { hasFirma: false };
+	const { buf, mime } = await _firmaParaPdf(raw);
 	return {
 		hasFirma: true,
 		mime,
