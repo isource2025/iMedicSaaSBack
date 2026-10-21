@@ -1,5 +1,6 @@
 const service = require('../services/agendaConfig.service');
 const personalService = require('../services/personal.service');
+const { matriculaAlcanceAgenda } = require('../utils/matriculaTenant');
 const {
 	DIAS_SEMANA,
 	MOTIVOS_NO_HORARIO,
@@ -9,19 +10,9 @@ const {
 } = require('../utils/agendaCatalogos');
 
 /**
- * Personal → AGENDA / Turnos → Configuración de horarios.
- * Las rutas ya exigen TURNOS.CONFIGURACION.* / EXCEPCIONES.* (requirePermiso).
- * Siempre se opera sobre la matrícula del path (el profesional editado),
- * nunca sobre la del usuario logueado — aunque el JWT diga MEDICO.
+ * Si el usuario es MEDICO, sólo puede operar sobre su matrícula de imPersonal (tenant).
+ * ADMIN/ADMINISTRATIVO/ENFERMERO no se restringen acá (eso lo hace requirePermiso).
  */
-function matriculaDelPath(req, res) {
-	const m = Number(req.params.matricula);
-	if (!Number.isFinite(m) || m <= 0) {
-		res.status(400).json({ success: false, mensaje: 'Matrícula inválida' });
-		return null;
-	}
-	return m;
-}
 
 function _err(res, e) {
 	const code = e?.statusCode || 500;
@@ -57,7 +48,7 @@ async function obtenerCatalogos(req, res) {
 // ───── Horarios ─────
 async function obtenerHorarios(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const data = await service.obtenerHorariosPorMatricula(m);
 		res.json({ success: true, data });
@@ -66,7 +57,7 @@ async function obtenerHorarios(req, res) {
 
 async function reemplazarHorarios(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const data = await service.reemplazarHorarios(m, req.body);
 		res.json({ success: true, data });
@@ -76,7 +67,7 @@ async function reemplazarHorarios(req, res) {
 // ───── No-horarios ─────
 async function listarNoHorarios(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const data = await service.listarNoHorarios(m, {
 			desde: req.query.desde,
@@ -88,7 +79,7 @@ async function listarNoHorarios(req, res) {
 
 async function crearNoHorario(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const codOp = req.auth?.usuario?.codOperador;
 		const data = await service.crearNoHorario(m, codOp, req.body);
@@ -98,7 +89,7 @@ async function crearNoHorario(req, res) {
 
 async function actualizarNoHorario(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const codOp = req.auth?.usuario?.codOperador;
 		const data = await service.actualizarNoHorario(m, codOp, req.body);
@@ -108,7 +99,7 @@ async function actualizarNoHorario(req, res) {
 
 async function eliminarNoHorario(req, res) {
 	try {
-		const m = matriculaDelPath(req, res);
+		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const data = await service.eliminarNoHorario(m, req.body);
 		res.json({ success: true, data });
