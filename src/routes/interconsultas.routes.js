@@ -22,6 +22,11 @@ const atender = requireAnyPermiso(
 	'INTERNACION.INTERCONSULTAS.EDITAR',
 	'TURNOS.AGENDA.EDITAR',
 );
+const eliminar = requireAnyPermiso(
+	'INTERNACION.INTERCONSULTAS.ELIMINAR',
+	'INTERNACION.INTERCONSULTAS.CREAR',
+	'TURNOS.AGENDA.EDITAR',
+);
 
 router.get('/sectores-destino', ver, interconsultasController.listarSectores);
 router.get('/pendientes', ver, interconsultasController.listarPendientes);
@@ -29,6 +34,7 @@ router.get('/detalle/:id', ver, interconsultasController.obtenerPorId);
 router.get('/:idVisita', ver, interconsultasController.listarPorVisita);
 router.post('/', crear, interconsultasController.crear);
 router.put('/:idPedido', atender, interconsultasController.actualizar);
+router.delete('/:idPedido', eliminar, interconsultasController.eliminar);
 router.post('/:idPedido/tomar', atender, interconsultasController.tomar);
 router.post('/:idPedido/liberar', atender, interconsultasController.liberar);
 router.post('/:idPedido/cumplir', atender, interconsultasController.cumplir);
