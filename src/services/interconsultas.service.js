@@ -391,6 +391,57 @@ async function actualizar({
 	return obtenerPorId(idPedido, 'LEGACY');
 }
 
+function _idsAutorSesion({ matricula, valorPersonal, codOperador }) {
+	return [
+		...new Set(
+			[matricula, valorPersonal, codOperador]
+				.map(Number)
+				.filter((n) => Number.isFinite(n) && n > 0),
+		),
+	];
+}
+
+/**
+ * Elimina interconsulta pendiente del solicitante.
+ * LEGACY (imPedidosEstudios tipo 33): misma regla que estudios.
+ * WEB (imHCInterconsulta): solo si sigue PENDIENTE y sin respuesta.
+ */
+async function eliminar({ idPedido, origen, matricula, valorPersonal, codOperador }) {
+	const id = Number(idPedido);
+	if (!Number.isFinite(id) || id <= 0) throw _httpError('idPedido inválido');
+	const sesion = { matricula, valorPersonal, codOperador };
+
+	if (String(origen || '').toUpperCase() === 'WEB') {
+		const row = await obtenerPorId(id, 'WEB');
+		if (!row) throw _httpError('Interconsulta no encontrada', 404);
+		const estado = String(row.Estado || '').trim().toUpperCase();
+		if (row.Respuesta || (estado && !estado.includes('PEND'))) {
+			throw _httpError('Solo se pueden eliminar interconsultas pendientes.', 409);
+		}
+		const autor = Number(row.MedicoSolicitante);
+		const ids = _idsAutorSesion(sesion);
+		if (!Number.isFinite(autor) || autor <= 0 || !ids.includes(autor)) {
+			throw _httpError('Solo quien solicitó la interconsulta puede eliminarla.', 403);
+		}
+		await executeQuery(`DELETE FROM dbo.imHCInterconsulta WHERE IdInterconsulta = @p0`, [
+			{ value: id, type: 'Int' },
+		]);
+		return { idPedido: id, origen: 'WEB' };
+	}
+
+	const ped = await estudiosService.obtenerPorId(id);
+	if (!ped || Number(ped.IdTipoPedido) !== ID_TIPO_INTERCONSULTA) {
+		throw _httpError('Interconsulta no encontrada', 404);
+	}
+	await estudiosService.eliminarPedido({
+		idPedido: id,
+		matricula,
+		valorPersonal,
+		codOperador,
+	});
+	return { idPedido: id, origen: 'LEGACY' };
+}
+
 /** @deprecated solo lectura de filas web antiguas; no usar para crear nuevas */
 async function crearWebLegacy(data) {
 	const fechaClarion = convertirFechaAClarion(data.FechaSolicitud);
@@ -427,5 +478,6 @@ module.exports = {
 	cumplir,
 	actualizarRespuesta,
 	actualizar,
+	eliminar,
 	crearWebLegacy,
 };
