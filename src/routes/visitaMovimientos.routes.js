@@ -47,6 +47,11 @@ router.post(
 	visitaMovimientosController.asignarPacienteACama,
 );
 router.get(
+	'/internados-sin-cama/conteo',
+	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	visitaMovimientosController.contarPacientesInternadosSinCama,
+);
+router.get(
 	'/internados-sin-cama',
 	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
 	visitaMovimientosController.obtenerPacientesInternadosSinCama,

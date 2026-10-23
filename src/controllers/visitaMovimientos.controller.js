@@ -432,6 +432,23 @@ const obtenerPacientesInternadosSinCama = async (req, res) => {
 };
 
 /**
+ * Conteo de internados vigentes sin cama (para campanita / avisos).
+ */
+const contarPacientesInternadosSinCama = async (req, res) => {
+  try {
+    const count = await visitaMovimientosService.contarPacientesInternadosSinCama();
+    res.json({ success: true, count });
+  } catch (error) {
+    console.error('Error al contar internados sin cama:', error);
+    res.status(statusDeError(error)).json({
+      success: false,
+      mensaje: mensajeDeError(error, 'Error al contar pacientes internados sin cama'),
+      error: error.message,
+    });
+  }
+};
+
+/**
  * Asigna una cama libre a un internado sin ubicación
  */
 const asignarPacienteACama = async (req, res) => {
@@ -506,5 +523,6 @@ module.exports = {
   intercambiarCamasPacientes,
   obtenerMovimientosRecientes,
   obtenerPacientesInternadosSinCama,
+  contarPacientesInternadosSinCama,
   asignarPacienteACama,
 };

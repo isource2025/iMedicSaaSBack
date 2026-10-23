@@ -181,6 +181,7 @@ function mapRow(row) {
 			const n = Number(r);
 			return Number.isFinite(n) ? n : null;
 		})(),
+		hasFirma: Number(row.hasFirma) === 1 || row.hasFirma === true,
 	};
 }
 
@@ -213,7 +214,8 @@ const SELECT_COLS = `
 	p.Estado,
 	p.CUIT,
 	p.Observaciones,
-	p.Rol
+	p.Rol,
+	CASE WHEN DATALENGTH(p.Firma) > 0 THEN 1 ELSE 0 END AS hasFirma
 `;
 
 /**

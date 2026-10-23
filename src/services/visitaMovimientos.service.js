@@ -2153,6 +2153,31 @@ async function obtenerPacientesInternadosSinCama(termino = '') {
 }
 
 /**
+ * Cantidad de internados vigentes (ClasePaciente = I, sin egreso) sin cama asignada.
+ */
+async function contarPacientesInternadosSinCama() {
+  const sql = `
+    SELECT COUNT(1) AS total
+    FROM dbo.imVisita v
+    WHERE UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+      AND (
+        v.FECHAEGRESO IS NULL
+        OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL
+        OR TRY_CAST(v.FECHAEGRESO AS int) = 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM dbo.imHabitacionCamas hc
+        WHERE hc.NumeroVisita = v.NumeroVisita
+          AND ISNULL(hc.NumeroVisita, 0) <> 0
+      )
+  `;
+  const rows = await executeQuery(sql, []);
+  const total = Number(rows?.[0]?.total ?? 0);
+  return Number.isFinite(total) ? total : 0;
+}
+
+/**
  * Asigna por primera vez una cama libre a un internado sin ubicación.
  * Tablas: imVisitaMovimiento (insert), imHabitacionCamas (ocupar), imVisita (actualizar).
  */
@@ -2435,5 +2460,6 @@ module.exports = {
   intercambiarCamasPacientes,
   obtenerMovimientosRecientes,
   obtenerPacientesInternadosSinCama,
+  contarPacientesInternadosSinCama,
   asignarPacienteACama,
 };
