@@ -14,6 +14,11 @@ router.get(
 	controller.catalogosAdmision,
 );
 router.get(
+	'/coberturas',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.coberturas,
+);
+router.get(
 	'/paciente/:idPaciente/turnos-activos',
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.turnosActivosPaciente,

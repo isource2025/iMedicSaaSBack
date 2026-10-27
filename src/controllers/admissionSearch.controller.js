@@ -53,6 +53,10 @@ async function buscar(req, res) {
       nombreApellido = '',
       fechaInicio = '',
       fechaFin = '',
+      porEgreso = '',
+      porIngreso = '',
+      tipoAtencion = '',
+      cliente = '',
       page = 1,
       limit = 25,
     } = req.query;
@@ -63,6 +67,10 @@ async function buscar(req, res) {
       nombreApellido,
       fechaInicio,
       fechaFin,
+      porEgreso,
+      porIngreso,
+      tipoAtencion,
+      cliente,
       page: Number(page),
       limit: Number(limit),
     });
@@ -180,6 +188,19 @@ async function catalogosAdmision(req, res) {
   }
 }
 
+async function coberturas(req, res) {
+  try {
+    const data = await admissionSearchService.listarCoberturas();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error al listar coberturas para búsqueda:', error);
+    res.status(statusDeError(error)).json({
+      success: false,
+      message: 'Error al listar coberturas',
+    });
+  }
+}
+
 const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
 async function resumenIa(req, res) {
   try {
@@ -286,6 +307,7 @@ module.exports = {
   datosPrincipales,
   actualizarDatosPrincipales,
   catalogosAdmision,
+  coberturas,
   exportSelectivo,
   resumenIa,
   turnosActivosPaciente,

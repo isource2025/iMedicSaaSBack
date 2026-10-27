@@ -2,7 +2,7 @@ const fsSync = require('fs');
 const axios = require('axios');
 
 const admissionNuevaService = require('../services/admissionNueva.service');
-const { resolveCodOperador } = require('../utils/sessionIdentity');
+const { requireOperadorCarga } = require('../utils/sessionIdentity');
 const { statusDeError } = require('../utils/httpError');
 const {
 	resolveFileServerUrl,
@@ -79,8 +79,10 @@ async function ultimaVisita(req, res) {
 
 async function crear(req, res) {
 	try {
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await admissionNuevaService.crearAdmision(req.body || {}, {
-			codOperador: resolveCodOperador(req),
+			codOperador,
 		});
 		res.status(201).json({ success: true, data });
 	} catch (error) {
@@ -131,11 +133,13 @@ async function subirArchivoRequisito(req, res) {
 		if (!req.file) {
 			return res.status(400).json({ success: false, message: 'No se recibió ningún archivo' });
 		}
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await admissionNuevaService.adjuntarArchivoRequisito(
 			req.params.numeroVisita,
 			req.params.valor,
 			req.file,
-			{ codOperador: resolveCodOperador(req) },
+			{ codOperador },
 		);
 		res.status(201).json({ success: true, data });
 	} catch (error) {

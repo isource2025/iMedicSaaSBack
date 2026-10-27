@@ -279,12 +279,23 @@ async function buscarAdmisiones({
   nombreApellido = '',
   fechaInicio = '',
   fechaFin = '',
+  porEgreso = '',
+  porIngreso = '',
+  tipoAtencion = '',
+  cliente = '',
   page = 1,
   limit = 25,
 }) {
   const whereParts = [];
   const params = [];
   let visitaExactaParam = -1;
+  const flagOn = (v) => ['1', 'true', 'yes', 'si', 'sí'].includes(String(v).trim().toLowerCase());
+  const filtrarPorEgreso = flagOn(porEgreso);
+  const filtrarPorIngreso = flagOn(porIngreso) && !filtrarPorEgreso;
+  const tipoNorm = String(tipoAtencion).trim().toUpperCase();
+  const filtrarInternado = tipoNorm === 'I' || tipoNorm === 'INTERNADO';
+  const filtrarAmbulatorio = tipoNorm === 'A' || tipoNorm === 'AMBULATORIO';
+  const clienteVal = String(cliente).trim();
 
   // Buscador unificado: un solo término que se prueba contra apellido y nombre,
   // documento y número de visita. Van con OR porque el usuario no elige el campo.
@@ -330,14 +341,51 @@ async function buscarAdmisiones({
     params.push({ value: normalizeLike(nombreApellido) });
   }
 
-  if (String(fechaInicio).trim()) {
-    whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) >= @param${params.length}`);
-    params.push({ value: fechaInicio });
+  const egresoSqlExpr = `CAST(dbo.fn_ClarionDATE2SQL(v.FechaEgreso) AS date)`;
+  const egresoValidoSql = `TRY_CAST(v.FechaEgreso AS int) IS NOT NULL AND TRY_CAST(v.FechaEgreso AS int) > 0`;
+  const fechaIni = String(fechaInicio).trim();
+  const fechaFinVal = String(fechaFin).trim();
+
+  if (filtrarPorEgreso) {
+    // Solo visitas con egreso real; el rango (si hay) aplica a FechaEgreso.
+    whereParts.push(`(${egresoValidoSql})`);
+    if (fechaIni) {
+      whereParts.push(`${egresoSqlExpr} >= @param${params.length}`);
+      params.push({ value: fechaIni });
+    }
+    if (fechaFinVal) {
+      whereParts.push(`${egresoSqlExpr} <= @param${params.length}`);
+      params.push({ value: fechaFinVal });
+    }
+  } else if (fechaIni || fechaFinVal || filtrarPorIngreso) {
+    // Ingreso (explícito o por defecto): el rango aplica a FECHAADMISIONS.
+    if (fechaIni) {
+      whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) >= @param${params.length}`);
+      params.push({ value: fechaIni });
+    }
+    if (fechaFinVal) {
+      whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) <= @param${params.length}`);
+      params.push({ value: fechaFinVal });
+    }
   }
 
-  if (String(fechaFin).trim()) {
-    whereParts.push(`CAST(v.FECHAADMISIONS AS DATE) <= @param${params.length}`);
-    params.push({ value: fechaFin });
+  // Tipo de atención = ClasePaciente (I/A). Sin fallback a TipoPaciente.
+  if (filtrarInternado) {
+    whereParts.push(`UPPER(LEFT(LTRIM(RTRIM(COALESCE(v.ClasePaciente, ''))), 1)) = 'I'`);
+  } else if (filtrarAmbulatorio) {
+    whereParts.push(`UPPER(LEFT(LTRIM(RTRIM(COALESCE(v.ClasePaciente, ''))), 1)) = 'A'`);
+  }
+
+  // Cobertura = imVisita.CLIENTE (código de imClientes).
+  if (clienteVal) {
+    const clienteNum = Number(clienteVal);
+    if (Number.isFinite(clienteNum)) {
+      whereParts.push(`TRY_CAST(v.CLIENTE AS int) = @param${params.length}`);
+      params.push({ value: clienteNum });
+    } else {
+      whereParts.push(`LTRIM(RTRIM(CAST(v.CLIENTE AS VARCHAR(50)))) = @param${params.length}`);
+      params.push({ value: clienteVal });
+    }
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
@@ -1757,9 +1805,25 @@ async function actualizarDatosPrincipales(numeroVisita, body = {}) {
   return obtenerDatosPrincipales(nv);
 }
 
+/** Catálogo de coberturas (imClientes) para el filtro de búsqueda. */
+async function listarCoberturas() {
+  const rows = await executeQuery(`
+    SELECT
+      c.Valor,
+      LTRIM(RTRIM(ISNULL(c.RazonSocial, ''))) AS Descripcion
+    FROM dbo.imClientes c
+    ORDER BY c.RazonSocial
+  `);
+  return (rows || []).map((r) => ({
+    Valor: Number(r.Valor),
+    Descripcion: String(r.Descripcion || '').trim() || String(r.Valor),
+  }));
+}
+
 module.exports = {
   VISITA_SECCIONES,
   buscarAdmisiones,
+  listarCoberturas,
   obtenerPracticasPorVisita,
   exportarAdmisionCompleta,
   exportarAdmisionSelectivo,
