@@ -401,17 +401,35 @@ function Install-FileServer {
 	$ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 	$arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$FsScript`" -UncRoot `"$UncRoot`" -LocalRoot `"$LocalRoot`" -Port $Port -MaxMb $MaxMb"
 	$action = New-ScheduledTaskAction -Execute $ps -Argument $arg
-	$trigLogon = New-ScheduledTaskTrigger -AtLogOn -User $User
 	$trigLoop = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 5)
-	$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
-	# Usuario interactivo: tickets Kerberos/NTLM al share UNC (SYSTEM no llega)
-	$principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
+	$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew `
+		-RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-	Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigLogon, $trigLoop) `
-		-Principal $principal -Settings $settings `
-		-Description "File server adjuntos $Clinica (UNC $UncRoot)" | Out-Null
+	# Disco local → SYSTEM al boot, sin iniciar sesion.
+	# Share UNC → usuario interactivo (SYSTEM no ve la red).
+	$usaRed = $UncRoot -like '\\*'
+	if ($usaRed) {
+		$principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
+		$trigs = @(
+			(New-ScheduledTaskTrigger -AtLogOn -User $User),
+			(New-ScheduledTaskTrigger -AtStartup),
+			$trigLoop
+		)
+		$quien = $User
+	} else {
+		$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+		$trigs = @(
+			(New-ScheduledTaskTrigger -AtStartup),
+			$trigLoop
+		)
+		$quien = 'SYSTEM (sin sesion)'
+	}
+
+	Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigs `
+		-Principal $principal -Settings $settings -Force `
+		-Description "File server adjuntos $Clinica ($UncRoot)" | Out-Null
 	Start-ScheduledTask -TaskName $TaskName
-	Write-Ok "tarea '$TaskName' como $User"
+	Write-Ok "tarea '$TaskName' como $quien"
 }
 
 function Set-FileServerUrlRemote {

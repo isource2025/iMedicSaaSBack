@@ -16,24 +16,6 @@ function resolveCodOperador(req) {
 	return null;
 }
 
-function resolveValorPersonal(req) {
-	const u = req.auth?.usuario || {};
-	const candidates = [
-		req.valorPersonal,
-		u.id,
-		u.idValorpersonal,
-		u.idValorPersonal,
-		u.valorPersonal,
-		u.ValorPersonal,
-	];
-	for (const c of candidates) {
-		if (c == null || c === '') continue;
-		const n = Number(c);
-		if (Number.isFinite(n) && n > 0) return n;
-	}
-	return null;
-}
-
 function resolveMatricula(req) {
 	const u = req.auth?.usuario || {};
 	const candidates = [req.matricula, u.matricula, u.Matricula];
@@ -50,7 +32,7 @@ function resolveOperadorCarga(req) {
 	return resolveCodOperador(req);
 }
 
-/** Ficha (imPersonal.Valor) para ProfesionalAsiste / columnas "Profesional". */
+/** Matrícula profesional; si no hay, usa CodOperador (enfermería / admin). */
 function resolveProfesional(req) {
 	return resolveValorPersonal(req);
 }
@@ -106,15 +88,15 @@ function quitarAutorDelBody(data) {
 
 /**
  * Identidad para grabar: siempre el usuario de la sesión.
- * `valorPersonal` es 0 ("sin profesional" en Clarion) si la cuenta no tiene ficha.
- * @returns {{ codOperador: number, valorPersonal: number, matricula: number|null } | null}
+ * @returns {{ codOperador: number, profesional: number, matricula: number|null } | null}
  */
 function firmarSesion(req, res) {
 	const codOperador = requireOperadorCarga(req, res);
 	if (codOperador == null) return null;
+	const profesional = resolveProfesional(req) ?? codOperador;
 	return {
 		codOperador,
-		valorPersonal: resolveValorPersonal(req) ?? 0,
+		profesional,
 		matricula: resolveMatricula(req),
 	};
 }

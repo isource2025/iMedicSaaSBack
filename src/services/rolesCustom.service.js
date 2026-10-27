@@ -42,6 +42,14 @@ function habilitadoGlobal() {
 }
 
 /**
+ * Fase 2: las plantillas custom quedan en sólo lectura (asignables, no editables).
+ * Default ON. Para reabrir escritura: ROLES_PLANTILLAS_CONGELADAS=false.
+ */
+function plantillasCongeladas() {
+	return String(process.env.ROLES_PLANTILLAS_CONGELADAS || 'true').toLowerCase() !== 'false';
+}
+
+/**
  * Crear/editar/duplicar/eliminar exige: autenticación central, interruptor de
  * emergencia encendido, esquema INSTALADO (lo instala una persona con
  * scripts/esquema_roles.js) y la función habilitada para ESA empresa.
@@ -57,6 +65,12 @@ async function exigirHabilitado(idEmpresa) {
 	}
 	if (!(await featureFlags.habilitada(idEmpresa, FLAG))) {
 		throw error(403, 'Los roles personalizados no están habilitados para esta clínica. Pedile a soporte que los active.');
+	}
+	if (plantillasCongeladas()) {
+		throw error(
+			403,
+			'Las plantillas de roles están congeladas. El ajuste fino de permisos se hace por persona en Personal.',
+		);
 	}
 }
 
@@ -151,7 +165,13 @@ async function contarUsuariosPorRol(idEmpresa) {
 /** Roles del sistema + personalizados de la empresa, con sus permisos. */
 async function listarMatriz(idEmpresa) {
 	if (!isAuthCentralEnabled()) {
-		return { soportaPersonalizados: false, esquemaListo: false, sistema: [], personalizados: [] };
+		return {
+			soportaPersonalizados: false,
+			plantillasCongeladas: plantillasCongeladas(),
+			esquemaListo: false,
+			sistema: [],
+			personalizados: [],
+		};
 	}
 	const listo = await schema.esquemaListo();
 	const filtroSistema = listo ? 'AND IdEmpresa = 0' : '';
@@ -201,13 +221,14 @@ async function listarMatriz(idEmpresa) {
 				if (validos.has(c) && !esPermisoRestringido(c)) permisosPorRol.get(Number(p.idRol))?.push(c);
 			}
 		}
+		const congeladas = plantillasCongeladas();
 		personalizados = roles.map((r) => ({
 			idRol: Number(r.idRol),
 			nombre: String(r.nombre || '').trim(),
 			descripcion: String(r.descripcion || '').trim(),
 			nivel: Number(r.nivel ?? 0),
 			esSistema: false,
-			editable: true,
+			editable: !congeladas,
 			rolBase: r.rolBase || 'NINGUNO',
 			permisos: permisosPorRol.get(Number(r.idRol)) || [],
 			usuarios: usuarios.get(Number(r.idRol)) || 0,
@@ -216,8 +237,12 @@ async function listarMatriz(idEmpresa) {
 		}));
 	}
 
+	const flagOn = habilitadoGlobal() && listo && (await featureFlags.habilitada(idEmpresa, FLAG));
+	const congeladas = plantillasCongeladas();
 	return {
-		soportaPersonalizados: habilitadoGlobal() && listo && (await featureFlags.habilitada(idEmpresa, FLAG)),
+		// Crear/editar plantillas: requiere flag y que no estén congeladas
+		soportaPersonalizados: flagOn && !congeladas,
+		plantillasCongeladas: congeladas,
 		esquemaListo: listo,
 		sistema,
 		personalizados,
@@ -608,4 +633,7 @@ module.exports = {
 	auditoriaDeRol,
 	registrarAsignacion,
 	obtenerRolPropio,
+	plantillasCongeladas,
+	BASE_DE_ROL_SISTEMA,
+	NIVEL_POR_BASE,
 };

@@ -166,15 +166,13 @@ async function catalogos() {
 }
 
 async function catalogosValidacion() {
-	const [letras, funciones, categorias] = await Promise.all([
+	const [letras, funciones] = await Promise.all([
 		executeQuery(`SELECT RTRIM(Valor) AS Valor FROM dbo.imClienteConvLetra`),
 		executeQuery(`SELECT Valor FROM dbo.imFunciones`),
-		executeQuery(`SELECT Valor FROM dbo.imCategorias`),
 	]);
 	return {
 		letras: new Set(letras.map((l) => String(l.Valor).trim())),
 		funciones: new Set([...funciones.map((f) => Number(f.Valor)), ...FUNCIONES_SIN_CATALOGO]),
-		categorias: new Set(categorias.map((c) => Number(c.Valor))),
 	};
 }
 
@@ -577,17 +575,8 @@ async function guardarLote(codigoCrudo, pestanaId, lote, ctx) {
 		const run = async (texto) => {
 			const req = new sql.Request(tx);
 			req.input('conv', sql.Int, codigo);
-			try {
-				const r = await req.query(texto);
-				return r.rowsAffected?.[0] || 0;
-			} catch (e) {
-				// Índice único de la base (p. ej. una fila por categoría en imClientesConvCateg).
-				if (e?.number === 2601 || e?.number === 2627) {
-					const campos = p.unica.map((k) => def.columna(p, k).label).join(', ');
-					throw errorHttp(`Ya existe otra fila con el mismo valor de ${campos}`, 409);
-				}
-				throw e;
-			}
+			const r = await req.query(texto);
+			return r.rowsAffected?.[0] || 0;
 		};
 		const cambiada = 'Los datos cambiaron mientras editabas (otra persona o pestaña). Recargá y volvé a aplicar los cambios.';
 
@@ -679,7 +668,6 @@ async function previsualizarAjuste(codigoCrudo, body) {
 		const etiqueta = {
 			valores: 't.ValorLetra',
 			complejidad: 't.Complejidad',
-			categorias: 't.ValorCategoria',
 			vademecum: 't.Troquel',
 			genericos: 't.Descripcion',
 		}[p.id] || 't.Desde';

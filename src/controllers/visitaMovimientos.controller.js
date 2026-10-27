@@ -128,8 +128,11 @@ const actualizarUltimoMovimientoVisita = async (req, res) => {
 
     const codOperador = requireOperadorCarga(req, res);
     if (codOperador == null) return;
+    delete datosEgreso.Operador;
+    delete datosEgreso.operador;
     datosEgreso.codOperador = codOperador;
     datosEgreso.operadorEgreso = codOperador;
+    datosEgreso.OperadorEgreso = codOperador;
 
     console.log(`Llamando a visitaMovimientosService.actualizarUltimoMovimientoVisita con numeroVisita=${numeroVisitaInt} y datosEgreso:`, datosEgreso);
     const resultado = await visitaMovimientosService.actualizarUltimoMovimientoVisita(numeroVisitaInt, datosEgreso);

@@ -1,5 +1,7 @@
 const epicrisisService = require('../services/epicrisis.service');
 const epicrisisIaService = require('../services/epicrisisIa.service');
+const asistenteAuditoria = require('../asistente/auditoria');
+const { requireProfesional, quitarAutorDelBody } = require('../utils/sessionIdentity');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 const listarPorVisita = async (req, res) => {
@@ -44,6 +46,10 @@ const obtenerPorId = async (req, res) => {
 const crear = async (req, res) => {
 	try {
 		const data = req.body || {};
+		quitarAutorDelBody(data);
+		const Profecional = requireProfesional(req, res);
+		if (Profecional == null) return;
+		data.Profecional = Profecional;
 		if (!data.IdVisita) {
 			return res.status(400).json({ success: false, mensaje: 'IdVisita es requerido' });
 		}
@@ -91,6 +97,7 @@ const actualizar = async (req, res) => {
 			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
 		}
 		const data = req.body || {};
+		quitarAutorDelBody(data);
 		if (!data.Epicrisis || !String(data.Epicrisis).trim()) {
 			return res.status(400).json({ success: false, mensaje: 'Epicrisis es requerida' });
 		}
@@ -131,6 +138,16 @@ const generarConIA = async (req, res) => {
 			return res.status(400).json({ success: false, mensaje: 'idVisita inválido' });
 		}
 		const draft = await epicrisisIaService.generarBorrador(idVisita);
+		if (draft.uso) {
+			await asistenteAuditoria.registrarConsumoIa({
+				req,
+				accion: 'EPICRISIS_IA',
+				idEntidad: idVisita,
+				modelo: draft.uso.modelo,
+				usage: draft.uso.usage,
+				extra: { fuente: draft.fuente, contextoChars: draft.contextoChars },
+			});
+		}
 		return res.json({
 			success: true,
 			data: draft,

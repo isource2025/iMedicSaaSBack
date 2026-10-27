@@ -55,7 +55,7 @@ const esperaError = async (titulo, fn, status) => {
 		const nom = await paso('pestaña nomenclador', () => svc.listarPestana(origen, 'nomenclador', { tamPagina: 5 }));
 		console.log('   ', nom.total, 'filas; porFuncion', JSON.stringify(nom.porFuncion), JSON.stringify(nom.filas[0]));
 		await paso('pestaña nomenclador q', () => svc.listarPestana(origen, 'nomenclador', { q: 'consulta' }));
-		for (const p of ['valores', 'moduladas', 'vademecum', 'genericos', 'categorias', 'complejidad']) {
+		for (const p of ['valores', 'moduladas', 'vademecum', 'genericos', 'complejidad']) {
 			await paso(`pestaña ${p}`, () => svc.listarPestana(origen, p, {}));
 		}
 		const busq = await paso('buscar nomenclador', () => svc.buscarEnCatalogo('nomenclador', '420101'));
@@ -104,17 +104,6 @@ const esperaError = async (titulo, fn, status) => {
 			await svc.guardarLote(copia, 'genericos', { bajas: [g._id] }, {});
 			const vadDespues = (await svc.listarPestana(copia, 'vademecum')).total;
 			if (vadAntes !== vadDespues) throw new Error(`el vademécum cambió: ${vadAntes} → ${vadDespues}`);
-		});
-		await paso('categorías: alta, repetida, cambio y baja', async () => {
-			const categoria = cat.categorias[0].valor;
-			await svc.guardarLote(copia, 'categorias', { altas: [{ ValorCategoria: categoria, Desde: 0, Hasta: 0, Funcion: 0, TipoValor: '%', Valor: 15, Ambulatorio: 1, Internacion: 1 }] }, {});
-			const f = (await svc.listarPestana(copia, 'categorias')).filas.find((x) => x.ValorCategoria === categoria);
-			if (!f || f.Valor !== 15) throw new Error(`categoría mal guardada: ${JSON.stringify(f)}`);
-			await esperaError('categoría repetida', () =>
-				svc.guardarLote(copia, 'categorias', { altas: [{ ValorCategoria: categoria, Valor: 1 }] }, {}),
-			409);
-			await svc.guardarLote(copia, 'categorias', { cambios: [{ ...f, Valor: 20 }] }, {});
-			await svc.guardarLote(copia, 'categorias', { bajas: [f._id] }, {});
 		});
 		await esperaError('vademécum con troquel 0', () =>
 			svc.guardarLote(copia, 'vademecum', { altas: [{ Troquel: 0, Descripcion: 'X', Valor: 1, Ambulatorio: 1, Internacion: 1 }] }, {}),

@@ -2,11 +2,16 @@ const interconsultasService = require('../services/interconsultas.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { esAdminClinico } = require('../middlewares/propietario.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
-const { firmarORechazar } = require('../identidad/contrato');
+const { resolveCodOperador } = require('../utils/sessionIdentity');
 
 function _codOperadorSesion(req) {
-	const cod = req.auth?.usuario?.codOperador;
-	return cod != null && Number.isFinite(Number(cod)) ? Number(cod) : 0;
+	const op = resolveCodOperador(req);
+	if (op == null) {
+		const e = new Error('Sesión sin CodOperador — no se puede registrar la acción clínica');
+		e.statusCode = 400;
+		throw e;
+	}
+	return op;
 }
 
 async function _matriculaSesion(req) {
@@ -153,7 +158,6 @@ async function crear(req, res) {
 		if (!firma) return;
 		const data = await interconsultasService.crear({
 			idVisita,
-			valorProfesional: firma.para('imPedidosEstudios.ValorProfesional'),
 			matriculaSolicitante: matricula,
 			sectorSolicitante,
 			idSectorReceptor,
@@ -221,7 +225,7 @@ async function cumplir(req, res) {
 		const data = await interconsultasService.cumplir({
 			idPedido,
 			textoRespuesta: body.textoRespuesta || body.textoInforme || body.Respuesta,
-			matriculaRealizador: Number(body.matriculaRealizador) || matricula,
+			matriculaRealizador: matricula,
 			codOperador: _codOperadorSesion(req),
 			sectorServicio: idSectorSesion(req) || String(body.sectorServicio || '').trim(),
 		});

@@ -757,6 +757,13 @@ async function crear(data) {
 				} catch (syncErr) {
 					console.warn('[personal.crear] syncUserLoginBundle:', syncErr?.message || syncErr);
 				}
+				if (serviciosAlta.length) {
+					try {
+						await authCentralSync.syncPersonalServicios(tenantIdPre, nuevoValor);
+					} catch (syncErr) {
+						console.warn('[personal.crear] syncPersonalServicios:', syncErr?.message || syncErr);
+					}
+				}
 			}
 
 			if (!(await existeFichaFisica(nuevoValor))) {
@@ -949,6 +956,42 @@ async function listarServicios() {
 		console.warn('[personal.listarServicios]', err?.message || err);
 		return [];
 	}
+}
+
+/**
+ * Servicios asignables al personal (bandeja de pedidos).
+ * Misma lista en nube y escritorio: se reconcilió imServicios SQL → MySQL antes de listar.
+ */
+async function listarCatalogoServiciosNube() {
+	const tenantId = resolveTenantEmpresaId();
+	if (tenantId != null) {
+		try {
+			const items = await require('./nubeTenant.service').listarServicios(tenantId);
+			const mapped = (items || [])
+				.map((s) => ({
+					valor: String(s.id || s.valor || '').trim(),
+					descripcion: String(s.descripcion || '').trim(),
+				}))
+				.filter((s) => s.valor);
+			if (mapped.length) {
+				return mapped.sort((a, b) =>
+					String(a.descripcion || a.valor).localeCompare(
+						String(b.descripcion || b.valor),
+						'es',
+					),
+				);
+			}
+		} catch (err) {
+			console.warn('[personal.listarCatalogoServiciosNube] nube:', err?.message || err);
+		}
+	}
+	const items = await personalServicios.listarCatalogoPedidos();
+	return (items || [])
+		.map((s) => ({
+			valor: String(s.valor || '').trim(),
+			descripcion: String(s.descripcion || '').trim(),
+		}))
+		.filter((s) => s.valor);
 }
 
 async function listarCatalogoSectores() {
@@ -1909,6 +1952,7 @@ module.exports = {
 	listarFunciones,
 	listarServicios,
 	listarCatalogoSectores,
+	listarCatalogoServiciosNube,
 	listarCategorias,
 	listarClases,
 	listarEmpresasCatalogo,

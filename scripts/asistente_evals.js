@@ -1,0 +1,640 @@
+/**
+ * Conversaciones de referencia del asistente contra el modelo real, con la base y la
+ * API simuladas en memoria: no se conecta a ningún SQL ni ejecuta escrituras.
+ * Sirve para cambiar prompts/router y ver al toque si algo se rompió.
+ *
+ *   node scripts/asistente_evals.js                 # todos los casos, una vez
+ *   node scripts/asistente_evals.js --veces=3       # estabilidad: cada caso 3 veces
+ *   node scripts/asistente_evals.js --caso=sanabria # solo los casos cuyo id contiene «sanabria»
+ *
+ * Necesita ASISTENTE_OPENAI_API_KEY (u OPENAI_API_KEY) en el entorno o en .env.
+ */
+const path = require('path');
+
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// La base queda simulada: ningún módulo del asistente llega a abrir una conexión.
+for (const k of Object.keys(process.env)) if (/^(DB_|AUTH_DB|MYSQL)/.test(k)) delete process.env[k];
+delete process.env.ASISTENTE_INTERNACION_ESCRITURA;
+// Las evals cubren Internación; en producción el default es apagado (opt-in con =1).
+process.env.ASISTENTE_INTERNACION_LISTO = '1';
+
+const src = (p) => path.join(__dirname, '..', 'src', p);
+
+function stubModulo(rel, exports) {
+	const p = require.resolve(src(rel));
+	require.cache[p] = { id: p, filename: p, loaded: true, exports };
+}
+
+/* ───────────── Datos de prueba ───────────── */
+
+const INTERNADOS = [
+	{ numeroVisita: 458887, paciente: 'SANABRIA ELIZABETH', documento: '35001268', sector: 'QUR2', sectorDescripcion: 'QUIRURGICO 2', cama: '04', diagnostico: 'NEUMONIA' },
+	{ numeroVisita: 470001, paciente: 'MEZA GUSTAVO ADOLFO', documento: '20111222', sector: 'CM1', sectorDescripcion: 'CLINICA MEDICA 1', cama: '12', diagnostico: 'ICC' },
+	{ numeroVisita: 404444, paciente: 'MIRANDA JUAN CARLOS', documento: '18333444', sector: 'UTI', sectorDescripcion: 'TERAPIA INTENSIVA', cama: '03', diagnostico: 'SEPSIS' },
+	{ numeroVisita: 409100, paciente: 'UMBERT CARLOS', documento: '17555666', sector: 'CM2', sectorDescripcion: 'CLINICA MEDICA 2', cama: '07', diagnostico: 'EPOC' },
+].map((i) => ({ ...i, idPaciente: i.numeroVisita + 1, hc: i.numeroVisita, ingreso: '01/10/2026', egresada: 0 }));
+
+const porVisita = (nv) => INTERNADOS.find((i) => i.numeroVisita === Number(nv));
+
+/** Imita el WHERE de clinica.whereClaves: DNI o visita exactos, o todos los LIKE del nombre. */
+function filasInternados(sql, params) {
+	if (/asistente:censo/.test(sql)) return INTERNADOS.map((i) => ({ ...i, ingresoIso: '2026-10-01' }));
+	if (!/imHabitacionCamas/i.test(sql) || /FechaEgreso AS int\), 0\) > 0/i.test(sql)) return [];
+	const likes = params.filter((p) => typeof p.value === 'string' && p.value.startsWith('%')).map((p) => p.value.slice(1, -1).toLowerCase());
+	const exactos = params.filter((p) => !String(p.value).startsWith('%')).map((p) => String(p.value));
+	return INTERNADOS.filter(
+		(i) =>
+			exactos.includes(i.documento) ||
+			exactos.includes(String(i.numeroVisita)) ||
+			(likes.length && likes.every((t) => i.paciente.toLowerCase().includes(t))),
+	);
+}
+
+stubModulo('models/db.js', {
+	executeQuery: async (sql, params = []) => filasInternados(String(sql), params),
+	getRequestPool: async () => ({}),
+	sql: {},
+});
+stubModulo('services/auditoria.service.js', { registrar: async () => {}, registrarEvento: async () => {} });
+
+const ESTUDIOS_SANABRIA = [
+	{
+		SectorReceptorNombre: 'RAYOS',
+		MedicoSolicitanteNombre: 'PEREZ ANA',
+		FechaPedido: '2026-10-03',
+		Items: [
+			{ PracticaSolicitada: 'RX DE TORAX FRENTE', Cumplido: 1, FechaResultado: '2026-10-04', TextoResultado: 'Infiltrado basal derecho.' },
+			{ PracticaSolicitada: 'TC DE TORAX SIN CONTRASTE', Cumplido: 0 },
+		],
+	},
+];
+
+/** Cargada ayer: si «se borró», es el filtro «Hoy» de la pantalla. */
+const EVOLUCIONES_SANABRIA = [
+	{
+		IdHCEvolucion: 9001,
+		Fecha: '2026-10-11',
+		Hora: '10:30',
+		ProfesionalNombreCompleto: 'EVAL USUARIO',
+		Evolucion: 'Paciente estable, afebril. Buena mecánica ventilatoria. Continúa antibiótico.',
+	},
+];
+
+function respuestaApi(req) {
+	const p = req.path;
+	let m = p.match(/^\/api\/patients\/visitas\/(\d+)\/contexto-clinico$/);
+	if (m) {
+		const i = porVisita(m[1]);
+		if (!i) return { status: 404, body: { mensaje: 'Visita inexistente' } };
+		return {
+			status: 200,
+			body: {
+				data: {
+					NombrePaciente: i.paciente,
+					documentoPaciente: i.documento,
+					sector: i.sector,
+					numeroCama: i.cama,
+					egresada: false,
+					DiagnosticoDescripcion: i.diagnostico,
+					fechaIngresoSQL: '2026-10-01',
+				},
+			},
+		};
+	}
+	m = p.match(/^\/api\/solicitudes-estudios\/visita\/(\d+)$/);
+	if (m) return { status: 200, body: { data: Number(m[1]) === 458887 ? ESTUDIOS_SANABRIA : [] } };
+	m = p.match(/^\/api\/evoluciones\/(\d+)\/byDate$/);
+	if (m) return { status: 200, body: { data: Number(m[1]) === 458887 ? EVOLUCIONES_SANABRIA : [] } };
+	if (/^\/api\/indicaciones\/(\d+\/byDate|ultimas\/\d+)$/.test(p)) return { status: 200, body: { data: [] } };
+	return { status: 404, body: { mensaje: `Sin dato de prueba para ${req.method} ${p}` } };
+}
+
+const httpInterno = require(src('asistente/httpInterno'));
+httpInterno.llamar = async (req) => {
+	if (String(req.method).toUpperCase() !== 'GET') throw new Error(`Las evals no ejecutan escrituras (${req.method} ${req.path})`);
+	return respuestaApi(req);
+};
+
+const contexto = require(src('asistente/contexto'));
+const autoria = require(src('asistente/autoria'));
+const auditoria = require(src('asistente/auditoria'));
+const openai = require(src('asistente/openai'));
+const sesion = require(src('asistente/sesion'));
+const pendientes = require(src('asistente/pendientes'));
+const matriz = require(src('utils/permisos'));
+const controller = require(src('asistente/controller'));
+
+autoria.esAdmin = async () => false;
+auditoria.registrarUso = async () => {};
+
+/* ───────────── Casos ───────────── */
+
+const MEDICO = matriz.permisosDeRol('MEDICO');
+const SIN_CREAR_EVOLUCION = MEDICO.filter((p) => p !== 'INTERNACION.EVOLUCIONES.CREAR');
+
+/**
+ * espera: tools (todas deben aparecer), noTools, args (nombre → fn(args) que devuelve true),
+ * insercionEn (única tarjeta de escribir_en_campo, en ese campoId),
+ * texto / noTexto (regex), pendientes (cantidad), navega (href que debe aparecer).
+ */
+const CASOS = [
+	{
+		id: 'soporte-error-permiso',
+		descripcion: '«No me deja guardar» con el 403 de la API en pantalla',
+		permisos: SIN_CREAR_EVOLUCION,
+		turnos: [
+			{
+				mensaje: 'no me deja guardar la evolución',
+				ruta: '/dashboard/visita/458887?seccion=evoluciones',
+				pantalla: {
+					errores: [
+						{ metodo: 'POST', path: '/api/evoluciones', status: 403, mensaje: 'Permiso requerido: INTERNACION.EVOLUCIONES.CREAR', haceSeg: 30 },
+					],
+				},
+				espera: {
+					tools: ['diagnosticar'],
+					noTools: ['preparar_evolucion'],
+					texto: [/permiso/i, /administrador|matriz de permisos/i],
+					pendientes: 0,
+				},
+			},
+		],
+	},
+	{
+		id: 'soporte-como-cargar',
+		descripcion: 'Pregunta de uso con palabra clínica: manual, sin cargar nada',
+		turnos: [
+			{
+				mensaje: '¿cómo cargo una evolución?',
+				ruta: '/dashboard',
+				espera: { tools: ['buscar_en_manual'], noTools: ['preparar_evolucion'], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'soporte-que-es',
+		descripcion: '«Qué es una epicrisis» no arma una epicrisis',
+		turnos: [
+			{
+				mensaje: 'qué es una epicrisis?',
+				ruta: '/dashboard',
+				espera: { noTools: ['preparar_epicrisis'], pendientes: 0, texto: [/epicrisis/i] },
+			},
+		],
+	},
+	{
+		id: 'soporte-navegar',
+		descripcion: 'Llevar al mapa de camas',
+		turnos: [
+			{
+				mensaje: 'llevame al mapa de camas',
+				ruta: '/dashboard',
+				espera: { tools: ['navegar'], navega: '/dashboard/beds', pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'soporte-exportar-sin-permiso',
+		descripcion: 'Médico sin permiso de exportar: diagnóstico y quién lo habilita',
+		turnos: [
+			{
+				mensaje: 'por qué no puedo exportar la tabla de internación?',
+				ruta: '/dashboard/beds/tables',
+				espera: { tools: ['diagnosticar'], texto: [/administrador|matriz de permisos/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'manual-reprogramar',
+		descripcion: 'Función que no existe («Cambiar turno» próx.): lo dice y da el camino real',
+		turnos: [
+			{
+				mensaje: 'cómo reprogramo un turno?',
+				ruta: '/dashboard/turnos/agenda',
+				espera: { tools: ['buscar_en_manual'], texto: [/cancel/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'manual-olvide-clave',
+		descripcion: '«¿Olvidó su contraseña?» no tiene recuperación: la blanquea un administrador',
+		turnos: [
+			{
+				mensaje: 'olvidé mi contraseña, cómo la recupero?',
+				ruta: '/dashboard/profile',
+				espera: { tools: ['buscar_en_manual'], texto: [/administrador/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'manual-se-borro',
+		descripcion: '«Se me borró»: la evolución existe, la oculta el filtro de período',
+		turnos: [
+			{
+				mensaje: 'se me borró la evolución que cargué ayer',
+				ruta: '/dashboard/visita/458887?seccion=evoluciones',
+				espera: {
+					texto: [/per[ií]odo|«?Hoy»?|calendario|filtro|Semana|Todas/i],
+					noTexto: [/no hay evoluciones/i],
+					noTools: ['preparar_evolucion'],
+					pendientes: 0,
+				},
+			},
+		],
+	},
+	{
+		id: 'manual-seccion-abierta',
+		descripcion: 'Pregunta genérica en Dietas: responde con los pasos de Dietas',
+		turnos: [
+			{
+				mensaje: 'cómo cargo acá?',
+				ruta: '/dashboard/visita/458887?seccion=dieta',
+				espera: { tools: ['buscar_en_manual'], texto: [/Agregar dieta/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'soporte-permiso-inexistente',
+		descripcion: '403 con un código que no está en la matriz: soporte técnico, no el admin',
+		permisos: matriz.permisosDeRol('ADMIN'),
+		turnos: [
+			{
+				mensaje: 'no me deja crear un sector nuevo',
+				ruta: '/dashboard/settings/sectores',
+				pantalla: {
+					errores: [{ metodo: 'POST', path: '/api/sectores', status: 403, mensaje: 'Permiso requerido: CONFIGURACION.SECTORES.CREAR', haceSeg: 20 }],
+				},
+				espera: { tools: ['diagnosticar'], texto: [/soporte/i], pendientes: 0 },
+			},
+		],
+	},
+	{
+		id: 'sanabria-desde-inicio',
+		descripcion: 'Caso Sanabria sin estar en el mapa de camas, y estudios hechos',
+		turnos: [
+			{
+				mensaje: 'dónde está Sanabria',
+				ruta: '/dashboard',
+				espera: {
+					tools: ['buscar_internado'],
+					args: { buscar_internado: (a) => /sanabria/i.test(a.termino || '') },
+					texto: [/458887/, /QUR2|QUIRURGICO/i],
+					maxLlamadas: 1,
+				},
+			},
+			{
+				mensaje: 'resumen de los estudios ya hechos',
+				ruta: '/dashboard',
+				espera: {
+					tools: ['ver_estudios'],
+					args: { ver_estudios: (a) => a.filtro === 'hechos' },
+					texto: [/RX/i],
+					noTools: ['buscar_codigo', 'llamar_api'],
+				},
+			},
+		],
+	},
+	{
+		id: 'estado-paciente',
+		descripcion: '«Cómo sigue Sanabria» es clínico, no un pedido de ayuda',
+		turnos: [
+			{
+				mensaje: 'cómo sigue Sanabria?',
+				ruta: '/dashboard',
+				espera: { algunaDe: ['buscar_internado', 'resumen_internacion'], noTools: ['buscar_en_manual'] },
+			},
+		],
+	},
+	{
+		id: 'admision-dni-acompanante',
+		descripcion: 'Incidente 14/10: «el dni es X» en Nueva Admisión no va al Nº documento del acompañante',
+		permisos: matriz.permisosDeRol('ADMIN'),
+		turnos: [
+			{
+				mensaje: 'el dni es 39863295',
+				ruta: '/dashboard/admission/new',
+				pantalla: {
+					titulo: 'Nueva Admisión',
+					encabezados: ['Nueva Admisión', 'Paciente', 'Datos principales', 'Acompañantes y novedades'],
+					campos: [
+						{ id: 'c1', etiqueta: 'Buscar paciente por apellido, nombre, DNI o nº de visita', grupo: 'Paciente de la admisión', tipo: 'text', valor: '' },
+						{ id: 'c2', etiqueta: 'Diagnóstico de ingreso (buscar CIE-10)', grupo: 'Datos principales', tipo: 'text', valor: '' },
+						{ id: 'c3', etiqueta: 'Observaciones', grupo: 'Datos principales', tipo: 'textarea', multilinea: true, valor: '' },
+						{ id: 'c4', etiqueta: 'Apellido y nombre', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+						{ id: 'c5', etiqueta: 'Nº documento', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+						{ id: 'c6', etiqueta: 'Teléfono', grupo: 'Acompañante (familiar o contacto, no el paciente)', tipo: 'text', valor: '' },
+					],
+				},
+				espera: { insercionEn: 'c1', noTexto: [/\bc\d+\b/] },
+			},
+		],
+	},
+	{
+		id: 'ayuda-falsa-clinica',
+		descripcion: '«Por qué está con fiebre» pasa por la regla de ayuda: habilitar_modulo trae las tools clínicas',
+		turnos: [
+			{
+				mensaje: 'por qué está con fiebre Sanabria?',
+				ruta: '/dashboard/beds',
+				espera: { algunaDe: ['resumen_internacion', 'ver_historia_clinica'] },
+			},
+		],
+	},
+	{
+		id: 'umbert-en-pantalla-de-miranda',
+		descripcion: 'Incidente 12/10: egreso pedido por nombre con otro paciente en pantalla (modo altas: no habilitado)',
+		turnos: [
+			{
+				mensaje: 'egresemos a umbert',
+				ruta: '/dashboard/visita/404444',
+				pantalla: { internado: { numeroVisita: 404444, paciente: 'MIRANDA JUAN CARLOS', sector: 'UTI', cama: '03' } },
+				espera: { noTools: ['preparar_egreso'], pendientes: 0, texto: [/no est[aá] habilitad/i], noTexto: [/MIRANDA.*(egres|alta)/i] },
+			},
+		],
+	},
+	{
+		id: 'evolucion-meza',
+		descripcion: 'Alta del menú médico: tarjeta para el paciente nombrado, sin decir «cargué»',
+		turnos: [
+			{
+				mensaje: 'evolucioná a Meza: paciente estable, afebril, tolera la dieta',
+				ruta: '/dashboard/beds',
+				espera: {
+					tools: ['preparar_evolucion'],
+					pendientes: 1,
+					pendienteDe: /MEZA/,
+					noTexto: [/\bcargu[eé]\b|se ha registrado|registr[eé]\b|qued[oó] cargad/i],
+					maxLlamadas: 1,
+				},
+			},
+		],
+	},
+	{
+		id: 'f3-carga-sin-verbo',
+		descripcion: 'Carga dicha sin verbo de carga: la consulta no trae las tools de carga, habilitar_cargas las suma',
+		turnos: [
+			{
+				mensaje: 'qué evoluciones tiene Sanabria?',
+				ruta: '/dashboard',
+				espera: { tools: ['ver_evoluciones'], noTools: ['habilitar_cargas'], pendientes: 0 },
+			},
+			{
+				mensaje: 'ponele en la evolución de hoy: estable, sin dolor, tolera vía oral',
+				ruta: '/dashboard',
+				espera: { tools: ['preparar_evolucion'], pendientes: 1, pendienteDe: /SANABRIA/ },
+			},
+		],
+	},
+	{
+		id: 'f3-tipeo',
+		descripcion: 'Apellido mal escrito: el censo encuentra al más parecido y lo aclara',
+		turnos: [
+			{
+				mensaje: 'dónde está Sanabira',
+				ruta: '/dashboard',
+				espera: { tools: ['buscar_internado'], texto: [/SANABRIA/, /parecid/i], maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-por-cama',
+		descripcion: 'Ubicar por número de cama y sector',
+		turnos: [
+			{
+				mensaje: 'quién está en la cama 03 de terapia intensiva?',
+				ruta: '/dashboard/beds',
+				espera: { algunaDe: ['buscar_internado', 'listar_internados'], texto: [/MIRANDA/], maxLlamadas: 2 },
+			},
+		],
+	},
+	{
+		id: 'f3-pase',
+		descripcion: 'Pase de guardia de un sector: armado en el servidor, una sola llamada al modelo',
+		turnos: [
+			{
+				mensaje: 'armame el pase de guardia de terapia intensiva',
+				ruta: '/dashboard/beds',
+				espera: { tools: ['pase_de_guardia'], texto: [/MIRANDA/, /Cama 03/], pendientes: 0, maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-listar',
+		descripcion: 'Censo de un sector',
+		turnos: [
+			{
+				mensaje: 'qué pacientes hay internados en clínica médica 1?',
+				ruta: '/dashboard',
+				espera: { tools: ['listar_internados'], texto: [/MEZA/], noTexto: [/SANABRIA/], maxLlamadas: 1 },
+			},
+		],
+	},
+	{
+		id: 'f3-resumen',
+		descripcion: 'Resumen clínico en una sola tool',
+		turnos: [
+			{
+				mensaje: 'resumime cómo está Sanabria',
+				ruta: '/dashboard',
+				espera: { tools: ['resumen_internacion'], noTools: ['ver_historia_clinica'], texto: [/neumon|TC|tomograf|afebril/i], maxLlamadas: 2 },
+			},
+		],
+	},
+	{
+		id: 'f3-saludo',
+		descripcion: 'Saludo y gracias: sin llamar al modelo',
+		turnos: [
+			{ mensaje: 'hola', ruta: '/dashboard', espera: { texto: [/ayudo/], maxLlamadas: 0 } },
+			{ mensaje: 'ok gracias!', ruta: '/dashboard', espera: { texto: [/nada/], maxLlamadas: 0 } },
+		],
+	},
+	{
+		id: 'turnos-no-activo',
+		descripcion: 'Acción de un módulo que no opera: no inventa el turno',
+		turnos: [
+			{
+				mensaje: 'dame un turno para mañana con cardiología para Meza',
+				ruta: '/dashboard',
+				espera: { pendientes: 0, noTexto: [/(te )?(di|agend[eé]|reserv[eé]) (el|un) turno/i] },
+			},
+		],
+	},
+];
+
+/* ───────────── Runner ───────────── */
+
+function argumento(nombre, def) {
+	const a = process.argv.find((x) => x.startsWith(`--${nombre}=`));
+	return a ? a.split('=').slice(1).join('=') : def;
+}
+
+function reqFalso({ mensaje, ruta, pantalla, idConversacion, permisos }) {
+	return {
+		body: {
+			mensaje,
+			rutaActual: ruta,
+			idConversacion,
+			pantalla: { url: ruta, seccion: new URLSearchParams(String(ruta).split('?')[1] || '').get('seccion'), ...(pantalla || {}) },
+			debug: true,
+		},
+		headers: { authorization: 'Bearer eval' },
+		ip: '127.0.0.1',
+		idEmpresa: 1,
+		valorPersonal: 900,
+		rolNombre: 'MEDICO',
+		matricula: 4521,
+		auth: { usuario: { apellido: 'EVAL', nombre: 'Médico', codOperador: 900 } },
+		_permisosEval: permisos,
+	};
+}
+
+async function turno(req) {
+	let status = 200;
+	let cuerpo = null;
+	const res = {
+		status(s) {
+			status = s;
+			return this;
+		},
+		json(b) {
+			cuerpo = b;
+			return this;
+		},
+	};
+	await controller.mensaje(req, res);
+	return { status, cuerpo };
+}
+
+function revisar(espera, r) {
+	const fallas = [];
+	const usadas = (r.traza || []).map((t) => t.nombre);
+	for (const t of espera.tools || []) if (!usadas.includes(t)) fallas.push(`no llamó ${t}`);
+	for (const t of espera.noTools || []) if (usadas.includes(t)) fallas.push(`llamó ${t}`);
+	if (espera.algunaDe && !espera.algunaDe.some((t) => usadas.includes(t))) fallas.push(`no llamó ninguna de ${espera.algunaDe.join(', ')}`);
+	const llamadasModelo = r.consumo?.llamadas || 0;
+	if (espera.maxLlamadas != null && llamadasModelo > espera.maxLlamadas) {
+		fallas.push(`${llamadasModelo} llamadas al modelo (máx. ${espera.maxLlamadas})`);
+	}
+	for (const [nombre, ok] of Object.entries(espera.args || {})) {
+		const llamadas = (r.traza || []).filter((t) => t.nombre === nombre);
+		if (llamadas.length && !llamadas.some((t) => ok(t.args || {}))) fallas.push(`${nombre} con args inesperados: ${JSON.stringify(llamadas.map((t) => t.args))}`);
+	}
+	if (espera.insercionEn) {
+		const en = (r.inserciones || []).map((i) => i.campoId);
+		if (en.length !== 1 || en[0] !== espera.insercionEn) fallas.push(`tarjetas de texto en ${JSON.stringify(en)} (esperaba solo ${espera.insercionEn})`);
+	}
+	const texto = String(r.texto || '');
+	for (const re of espera.texto || []) if (!re.test(texto)) fallas.push(`el texto no cumple ${re}`);
+	for (const re of espera.noTexto || []) if (re.test(texto)) fallas.push(`el texto cumple ${re}`);
+	const pend = r.pendientes || [];
+	if (espera.pendientes != null && pend.length !== espera.pendientes) fallas.push(`${pend.length} tarjetas (esperaba ${espera.pendientes})`);
+	if (espera.pendienteDe && !pend.some((p) => espera.pendienteDe.test(p.resumen || ''))) fallas.push(`ninguna tarjeta es de ${espera.pendienteDe}`);
+	if (espera.navega && !(r.navegaciones || []).some((n) => String(n.href).startsWith(espera.navega))) fallas.push(`no navegó a ${espera.navega}`);
+	return { fallas, usadas };
+}
+
+async function correrCaso(caso) {
+	sesion.resetStore();
+	pendientes.resetStore();
+	let idConversacion = null;
+	const salida = [];
+	for (const t of caso.turnos) {
+		const req = reqFalso({ ...t, idConversacion, permisos: caso.permisos || MEDICO });
+		const { status, cuerpo } = await turno(req);
+		if (status >= 400 || !cuerpo?.success) {
+			salida.push({ mensaje: t.mensaje, fallas: [`HTTP ${status}: ${cuerpo?.mensaje || 'sin cuerpo'}`], usadas: [], texto: '' });
+			break;
+		}
+		idConversacion = cuerpo.idConversacion;
+		const { fallas, usadas } = revisar(t.espera || {}, cuerpo);
+		salida.push({ mensaje: t.mensaje, fallas, usadas, texto: cuerpo.texto, paquetes: cuerpo.paquetes, costo: cuerpo.consumo?.costoUsd, consumo: cuerpo.consumo });
+	}
+	return salida;
+}
+
+function nuevoGasto() {
+	return { turnos: 0, llamadas: 0, entrada: 0, cacheadas: 0, salida: 0, usd: 0, partes: {} };
+}
+
+function acumular(g, c) {
+	if (!c) return;
+	g.turnos += 1;
+	g.llamadas += c.llamadas || 0;
+	g.entrada += c.tokens?.entrada || 0;
+	g.cacheadas += c.tokens?.cacheadas || 0;
+	g.salida += c.tokens?.salida || 0;
+	g.usd += c.costoUsd || 0;
+	for (const [k, v] of Object.entries(c.composicionEntrada || {})) g.partes[k] = (g.partes[k] || 0) + (v.tokens || 0);
+}
+
+/** Dónde se va la plata: lo que se optimiza se mide acá. */
+function imprimirGasto(g) {
+	if (!g.turnos) return;
+	const p = (n) => Math.round(n / g.turnos);
+	console.log(
+		`Total de la corrida (para comparar con el dashboard de OpenAI): ${g.llamadas} requests · ${g.entrada + g.salida} tokens · USD ${g.usd.toFixed(4)}`,
+	);
+	console.log(
+		`Por mensaje: USD ${(g.usd / g.turnos).toFixed(5)} · ${(g.llamadas / g.turnos).toFixed(2)} llamadas · ${p(g.entrada)} tokens in (${Math.round((g.cacheadas / Math.max(1, g.entrada)) * 100)}% cache) · ${p(g.salida)} out`,
+	);
+	const total = Object.values(g.partes).reduce((s, x) => s + x, 0) || 1;
+	console.log(
+		`Entrada: ${Object.entries(g.partes)
+			.sort((a, b) => b[1] - a[1])
+			.map(([k, v]) => `${k} ${Math.round((v / total) * 100)}% (${p(v)})`)
+			.join(' · ')}`,
+	);
+}
+
+async function main() {
+	if (!openai.isConfigured()) {
+		console.error('Falta ASISTENTE_OPENAI_API_KEY / OPENAI_API_KEY: las evals corren contra el modelo real.');
+		process.exit(2);
+	}
+	contexto.permisosDeReq = async (req) => req._permisosEval || MEDICO;
+
+	const veces = Math.max(1, Number(argumento('veces', 1)) || 1);
+	const filtro = argumento('caso', '');
+	const excluir = argumento('excluir', '');
+	const casos = CASOS.filter((c) => (!filtro || c.id.includes(filtro)) && (!excluir || !c.id.includes(excluir)));
+	console.log(`Modelo ${openai.getModel()} · ${casos.length} casos × ${veces}\n`);
+
+	let ok = 0;
+	let total = 0;
+	let costo = 0;
+	const gasto = nuevoGasto();
+	const inestables = [];
+	for (const caso of casos) {
+		let verdes = 0;
+		for (let n = 1; n <= veces; n++) {
+			total += 1;
+			const turnos = await correrCaso(caso);
+			const fallo = turnos.some((t) => t.fallas.length);
+			if (!fallo) verdes += 1;
+			for (const t of turnos) {
+				costo += Number(t.costo) || 0;
+				acumular(gasto, t.consumo);
+			}
+			const marca = fallo ? '✘' : '✔';
+			console.log(`${marca} ${caso.id}${veces > 1 ? ` (#${n})` : ''} — ${caso.descripcion}`);
+			for (const t of turnos) {
+				console.log(`    «${t.mensaje}» → [${(t.paquetes || []).join('+')}] ${t.usadas.join(', ') || '(sin tools)'}`);
+				if (t.fallas.length) {
+					for (const f of t.fallas) console.log(`      · ${f}`);
+					console.log(`      respuesta: ${String(t.texto || '').replace(/\s+/g, ' ').slice(0, 220)}`);
+				}
+			}
+		}
+		ok += verdes;
+		if (verdes && verdes < veces) inestables.push(`${caso.id} ${verdes}/${veces}`);
+	}
+	console.log(`\n${ok}/${total} en verde · costo ≈ USD ${costo.toFixed(4)}`);
+	imprimirGasto(gasto);
+	if (inestables.length) console.log(`Inestables: ${inestables.join(', ')}`);
+	process.exit(ok === total ? 0 : 1);
+}
+
+main().catch((err) => {
+	console.error(err);
+	process.exit(1);
+});

@@ -165,6 +165,7 @@ const obtenerProximoId = async (_req, res) => {
 	}
 };
 
+/** Alta de personal (médico, enfermero, administrativo). No da de alta / egresa pacientes internados. */
 const crear = async (req, res) => {
 	try {
 		if (!String(req.body?.ApellidoNombre || '').trim()) {
@@ -274,6 +275,10 @@ const listarServicios = _catalogoHandler(
 const listarCatalogoSectores = _catalogoHandler(
 	personalService.listarCatalogoSectores,
 	'sectores',
+);
+const listarCatalogoServiciosNube = _catalogoHandler(
+	personalService.listarCatalogoServiciosNube,
+	'servicios (nube)',
 );
 const listarCategorias = _catalogoHandler(
 	personalService.listarCategorias,
@@ -783,6 +788,7 @@ module.exports = {
 	repararCuentasSoloNube,
 	listarEspecialidades,
 	listarCatalogoSectores,
+	listarCatalogoServiciosNube,
 	listarFunciones,
 	listarServicios,
 	listarCategorias,

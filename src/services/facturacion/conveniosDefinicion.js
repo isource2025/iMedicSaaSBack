@@ -173,29 +173,6 @@ const PESTANAS = {
 		ajustables: ['Valor'],
 		ajusteSoloFijos: true,
 	},
-	/** Valor por categoría profesional (imCategorias): la base admite una fila por categoría. */
-	categorias: {
-		id: 'categorias',
-		titulo: 'Categorías',
-		tabla: 'imClientesConvCateg',
-		identidad: 'Id',
-		unica: ['ValorCategoria'],
-		columnas: [
-			col('ValorCategoria', 'TinyInt', { kind: 'categoria', label: 'Categoría', required: true, min: 1 }),
-			col('Desde', 'Int', { kind: 'practica', label: 'Desde', min: 0, defecto: 0 }),
-			col('Hasta', 'Int', { kind: 'practica', label: 'Hasta', min: 0, defecto: 0 }),
-			col('Descripcion', 'VarChar', { length: 255, label: 'Descripción' }),
-			col('Funcion', 'TinyInt', { kind: 'funcion', label: 'Función', defecto: 0 }),
-			col('TipoValor', 'Char', { length: 1, kind: 'tipoValor', label: 'Tipo', defecto: '$' }),
-			col('Valor', 'Real', { kind: 'importe', label: 'Valor', min: 0 }),
-			flag('Ambulatorio', 'Amb.'),
-			flag('Internacion', 'Int.'),
-		],
-		orden: 't.ValorCategoria, t.Id',
-		paginada: false,
-		ajustables: ['Valor'],
-		ajusteSoloFijos: true,
-	},
 	complejidad: {
 		id: 'complejidad',
 		titulo: 'Anestesistas',
@@ -399,9 +376,6 @@ function normalizarFila(pestana, fila, catalogos = {}) {
 	}
 	if (columna(pestana, 'Funcion') && catalogos.funciones && valores.Funcion != null && !catalogos.funciones.has(valores.Funcion)) {
 		errores.push(`La función ${valores.Funcion} no existe`);
-	}
-	if (columna(pestana, 'ValorCategoria') && catalogos.categorias && !catalogos.categorias.has(valores.ValorCategoria)) {
-		errores.push(`La categoría ${valores.ValorCategoria} no existe`);
 	}
 	return { valores, errores };
 }

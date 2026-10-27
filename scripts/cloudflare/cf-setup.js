@@ -30,6 +30,8 @@ const API = 'https://api.cloudflare.com/client/v4';
 const DOMINIO = (process.env.IMEDIC_DOMINIO || 'imedic.com.ar').trim();
 
 const TOKEN = (process.env.CF_API_TOKEN || '').trim();
+const DNS_TOKEN = (process.env.CF_DNS_TOKEN || '').trim();
+const ZONE_ID_ENV = (process.env.CF_ZONE_ID || '').trim();
 const EMAIL = (process.env.CF_API_EMAIL || '').trim();
 const GLOBAL_KEY = (process.env.CF_GLOBAL_API_KEY || '').trim();
 
@@ -42,6 +44,13 @@ function authHeaders() {
 	if (EMAIL && GLOBAL_KEY) return { 'X-Auth-Email': EMAIL, 'X-Auth-Key': GLOBAL_KEY };
 	if (TOKEN) return { Authorization: `Bearer ${TOKEN}` };
 	return null;
+}
+
+/** Token con Zone/DNS Edit (a veces distinto del de Tunnel). */
+function dnsAuthHeaders() {
+	if (EMAIL && GLOBAL_KEY) return { 'X-Auth-Email': EMAIL, 'X-Auth-Key': GLOBAL_KEY };
+	if (DNS_TOKEN) return { Authorization: `Bearer ${DNS_TOKEN}` };
+	return authHeaders();
 }
 
 const MODO_AUTH = EMAIL && GLOBAL_KEY ? `Global API Key (${EMAIL})` : TOKEN ? 'API token' : 'sin credenciales';
@@ -79,10 +88,11 @@ const dato = (m) => console.log(`       ${c.dim}${m}${c.reset}`);
 // ---------------------------------------------------------------- api client
 
 async function cf(ruta, opciones = {}) {
+	const headersAuth = opciones.dns ? dnsAuthHeaders() : authHeaders();
 	const res = await fetch(`${API}${ruta}`, {
 		...opciones,
 		headers: {
-			...authHeaders(),
+			...headersAuth,
 			'Content-Type': 'application/json',
 			...(opciones.headers || {}),
 		},
@@ -164,8 +174,15 @@ async function getCuenta() {
 
 /** Devuelve null tanto si la zona no existe como si el token no puede verla. */
 async function getZona() {
+	if (ZONE_ID_ENV) {
+		try {
+			return await cf(`/zones/${ZONE_ID_ENV}`, { dns: true });
+		} catch {
+			/* sigue con busqueda por nombre */
+		}
+	}
 	try {
-		const zonas = await cf(`/zones?name=${encodeURIComponent(DOMINIO)}`);
+		const zonas = await cf(`/zones?name=${encodeURIComponent(DOMINIO)}`, { dns: true });
 		return zonas[0] || null;
 	} catch {
 		return null;
@@ -173,7 +190,7 @@ async function getZona() {
 }
 
 async function getRegistros(zonaId) {
-	return cf(`/zones/${zonaId}/dns_records?per_page=500`);
+	return cf(`/zones/${zonaId}/dns_records?per_page=500`, { dns: true });
 }
 
 async function getTuneles(cuentaId) {
@@ -199,11 +216,12 @@ async function upsertRegistro(zonaId, existentes, { nombre, tipo, contenido, pro
 	if (actual) {
 		await cf(`/zones/${zonaId}/dns_records/${actual.id}`, {
 			method: 'PUT',
+			dns: true,
 			body: JSON.stringify(payload),
 		});
 		return { estado: 'actualizado', fqdn };
 	}
-	await cf(`/zones/${zonaId}/dns_records`, { method: 'POST', body: JSON.stringify(payload) });
+	await cf(`/zones/${zonaId}/dns_records`, { method: 'POST', dns: true, body: JSON.stringify(payload) });
 	return { estado: 'creado', fqdn };
 }
 

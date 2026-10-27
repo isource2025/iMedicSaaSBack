@@ -30,11 +30,19 @@ empresa_columns.txt
 query_result.txt
 scripts/tunnel/.vidal-tunnel-token.txt
 scripts/tunnel/.sarmiento-tunnel-token.txt
+scripts/tunnel/.colman-tunnel-token.txt
 scripts/tunnel/*.tunnel-token.txt
 scripts/tunnel/vidal-pc/tunnel-token.txt
 scripts/tunnel/vidal-pc/Instalar-Vidal-UnaVez.ps1
 scripts/tunnel/sarmiento-pc/tunnel-token.txt
 scripts/tunnel/sarmiento-pc/Instalar-Sarmiento-UnaVez.ps1
 scripts/tunnel/sarmiento-pc/*-con-token.ps1
+scripts/tunnel/colman-pc/tunnel-token.txt
+scripts/tunnel/colman-pc/Instalar-Colman-UnaVez.ps1
+scripts/tunnel/colman-pc/*-con-token.ps1
+scripts/tunnel/.materno-tunnel-token.txt
+scripts/tunnel/materno-pc/tunnel-token.txt
+scripts/tunnel/materno-pc/Instalar-Materno-UnaVez.ps1
+scripts/tunnel/materno-pc/*-con-token.ps1
 
 

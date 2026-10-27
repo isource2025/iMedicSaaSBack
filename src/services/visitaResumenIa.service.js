@@ -96,8 +96,12 @@ async function generarResumenVisita(numeroVisita) {
 		'- pendientes: 0 a 4 cosas abiertas o alertas (estudios sin resultado, interconsultas sin respuesta, valores alterados, indicaciones suspendidas relevantes). Máx. 120 caracteres cada una. Lista vacía si no hay.',
 	].join('\n');
 
+	let uso = null;
 	try {
 		const json = await botOpenai.chatJson({
+			onUsage: (u) => {
+				uso = u;
+			},
 			system,
 			messages: [{ role: 'user', content: `Resumí esta visita:\n\n${epicrisisIa.buildContextText(dossier)}` }],
 			temperature: 0.2,
@@ -111,6 +115,7 @@ async function generarResumenVisita(numeroVisita) {
 			generadoConIA: true,
 			fuente: 'openai',
 			modelo: botOpenai.getModel(),
+			uso,
 		};
 	} catch (e) {
 		return {

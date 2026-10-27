@@ -27,6 +27,7 @@ const ROL_SISTEMA_POR_ID = Object.freeze({
 });
 // Carga diferida: evita ciclos de dependencias y no toca la BD si no se usa.
 const rolesCustom = () => require('./rolesCustom.service');
+const personalPermisos = () => require('./personalPermisos.service');
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutos
 const _cache = new Map(); // idRol -> { permisos: string[], expira: number }
@@ -138,17 +139,34 @@ function esErrorConexionTenant(error) {
 	);
 }
 
-/** Permisos efectivos del usuario logueado (por valorPersonal + empresa del JWT). */
+/**
+ * Unión de plantillas de una lista de roles ya mapeados ({ idRol, nombre }).
+ * No aplica overrides.
+ */
+async function baseDeRoles(mappedRoles) {
+	const set = new Set();
+	for (const mapped of mappedRoles || []) {
+		const lista = await permisosDeRol(mapped.idRol ?? mapped.IdRol, mapped.nombre ?? mapped.Nombre);
+		for (const c of lista) set.add(c);
+	}
+	return [...set];
+}
+
+/**
+ * Permisos efectivos del usuario logueado (por valorPersonal + empresa del JWT).
+ * Con auth central: (unión roles ∪ GRANT) − DENY.
+ * Si la tabla de overrides no existe o falla, quedan sólo los roles (fail-safe).
+ */
 async function permisosDeUsuario(valorPersonal) {
 	if (!Number.isFinite(Number(valorPersonal))) {
-		return { rol: null, roles: [], permisos: [] };
+		return { rol: null, roles: [], permisos: [], base: [], grants: [], denies: [] };
 	}
 	const vp = Number(valorPersonal);
 	const idEmpresa = getTenantId();
 
 	if (authCentralService.isAuthCentralEnabled()) {
 		if (idEmpresa == null || !Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) <= 0) {
-			return { rol: null, roles: [], permisos: [] };
+			return { rol: null, roles: [], permisos: [], base: [], grants: [], denies: [] };
 		}
 		try {
 			const mappedRoles = await authCentralService.listarRolesDeValorPersonal(
@@ -156,11 +174,17 @@ async function permisosDeUsuario(valorPersonal) {
 				vp,
 			);
 			if (mappedRoles.length) {
-				const set = new Set();
-				for (const mapped of mappedRoles) {
-					const lista = await permisosDeRol(mapped.idRol, mapped.nombre);
-					for (const c of lista) set.add(c);
+				const base = await baseDeRoles(mappedRoles);
+				let grants = [];
+				let denies = [];
+				try {
+					const ov = await personalPermisos().listarOverrides(Number(idEmpresa), vp);
+					grants = ov.grants;
+					denies = ov.denies;
+				} catch (e) {
+					console.warn('[permisos] overrides no aplicados (se usan sólo roles):', e.message);
 				}
+				const permisos = personalPermisos().aplicar(base, grants, denies);
 				const principal = mappedRoles.find((r) => r.EsPrincipal || r.esPrincipal) || mappedRoles[0];
 				return {
 					rol: {
@@ -174,7 +198,10 @@ async function permisosDeUsuario(valorPersonal) {
 						nivel: r.nivel ?? r.Nivel ?? 0,
 						esPrincipal: !!(r.EsPrincipal || r.esPrincipal),
 					})),
-					permisos: [...set],
+					permisos,
+					base,
+					grants,
+					denies,
 				};
 			}
 		} catch (e) {
@@ -182,7 +209,7 @@ async function permisosDeUsuario(valorPersonal) {
 				console.warn('[permisos] auth central permisosDeUsuario:', e.message);
 			}
 		}
-		return { rol: null, roles: [], permisos: [] };
+		return { rol: null, roles: [], permisos: [], base: [], grants: [], denies: [] };
 	}
 
 	try {
@@ -245,6 +272,7 @@ function tienePermiso(permisos, codigo) {
 module.exports = {
 	permisosDeRol,
 	permisosDeUsuario,
+	baseDeRoles,
 	invalidarCache,
 	tienePermiso,
 };

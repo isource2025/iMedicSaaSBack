@@ -1,5 +1,5 @@
 const protocolosService = require('../services/protocolos.service');
-const { firmarORechazar } = require('../identidad/contrato');
+const { requireOperadorCarga, quitarAutorDelBody } = require('../utils/sessionIdentity');
 
 function _err(res, err) {
 	const code = err?.statusCode || 500;
@@ -113,7 +113,9 @@ async function crear(req, res) {
 		const firma = firmarORechazar(req, res);
 		if (!firma) return;
 		const body = req.body || {};
-		const idOperador = firma.para('HCProtocolosPtes.IdOperador');
+		quitarAutorDelBody(body);
+		const idOperador = requireOperadorCarga(req, res);
+		if (idOperador == null) return;
 
 		const data = await protocolosService.crearProtocolo({
 			numeroVisita: Number(body.numeroVisita),
@@ -151,6 +153,9 @@ async function actualizar(req, res) {
 		const firma = firmarORechazar(req, res);
 		if (!firma) return;
 		const body = req.body || {};
+		quitarAutorDelBody(body);
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await protocolosService.actualizarProtocolo(id, {
 			texto: body.texto,
 			tecnica: body.tecnica,
@@ -164,7 +169,7 @@ async function actualizar(req, res) {
 			practicas: body.practicas,
 			medicamentos: body.medicamentos,
 			profesionales: body.profesionales,
-			codOperador: firma.para('imFacPracticas.CodOperador'),
+			codOperador,
 		});
 		return res.json({ success: true, data });
 	} catch (err) {

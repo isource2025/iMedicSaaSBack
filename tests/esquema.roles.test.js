@@ -120,6 +120,7 @@ function reiniciar(opciones) {
 	db = nuevaBase(opciones);
 	habilitadoCentral = true;
 	delete process.env.ROLES_PERSONALIZADOS_ENABLED;
+	process.env.ROLES_PLANTILLAS_CONGELADAS = 'false'; // tests de escritura de plantillas
 	schema._reiniciarCache();
 	flags._reiniciarCache();
 	auditoria._reiniciarCache();
@@ -341,4 +342,11 @@ test('crearRol: con esquema instalado, toda empresa sin fila pasa las compuertas
 	await schema.aplicar(consultar);
 	await assert.rejects(() => alta({ nombre: '' }), (e) => e.statusCode === 400);
 	await assert.rejects(() => alta({ idEmpresa: 100, nombre: '' }), (e) => e.statusCode === 400);
+});
+
+test('crearRol: plantillas congeladas responde 403', async () => {
+	reiniciar();
+	await schema.aplicar(consultar);
+	process.env.ROLES_PLANTILLAS_CONGELADAS = 'true';
+	await assert.rejects(() => alta(), (e) => e.statusCode === 403 && /congelad/i.test(e.message));
 });

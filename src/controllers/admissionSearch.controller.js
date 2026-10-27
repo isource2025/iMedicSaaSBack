@@ -1,6 +1,7 @@
 const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
 const visitaResumenIaService = require('../services/visitaResumenIa.service');
+const asistenteAuditoria = require('../asistente/auditoria');
 const { jsonSafe } = require('../utils/jsonSafe');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
@@ -204,7 +205,16 @@ async function coberturas(req, res) {
 const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
 async function resumenIa(req, res) {
   try {
-    const data = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
+    const { uso, ...data } = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
+    if (uso) {
+      await asistenteAuditoria.registrarConsumoIa({
+        req,
+        accion: 'RESUMEN_VISITA_IA',
+        idEntidad: req.params.numeroVisita,
+        modelo: uso.modelo,
+        usage: uso.usage,
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en resumen IA de visita:', error);

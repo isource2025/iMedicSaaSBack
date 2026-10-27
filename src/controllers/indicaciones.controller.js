@@ -362,7 +362,9 @@ const updateIndicacion = async (req, res) => {
                 mensaje: "Número de indicación inválido",
             });
         }
-        const data = req.body;
+        const data = req.body || {};
+        const { quitarAutorDelBody } = require('../utils/sessionIdentity');
+        quitarAutorDelBody(data);
         await indicacionesService.updateIndicacion(nroIndicacionInt, data);
         res.json({
             success: true,
@@ -484,11 +486,14 @@ const crearIndicacionHija = async (req, res) => {
             });
         }
         
-        const firma = firmarSesion(req, res);
-        if (firma == null) return;
-        data.operadorCarga = firma.codOperador;
-        data.profesionalAsiste = firma.valorPersonal;
-
+        const { quitarAutorDelBody, requireOperadorCarga, requireProfesional } = require('../utils/sessionIdentity');
+        quitarAutorDelBody(data);
+        const OperadorCarga = requireOperadorCarga(req, res);
+        if (OperadorCarga == null) return;
+        const ProfesionalAsiste = requireProfesional(req, res);
+        if (ProfesionalAsiste == null) return;
+        data.OperadorCarga = OperadorCarga;
+        data.ProfesionalAsiste = ProfesionalAsiste;
         const resultado = await indicacionesService.crearIndicacionHija(data);
         
         res.status(201).json({

@@ -1,4 +1,5 @@
 const hcIngresoService = require("../services/hcIngreso.service");
+const { quitarAutorDelBody } = require('../utils/sessionIdentity');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -73,7 +74,8 @@ const obtenerHCIngresoPorId = async (req, res) => {
  */
 const crearHCIngreso = async (req, res) => {
     try {
-        const data = req.body;
+        const data = req.body || {};
+        quitarAutorDelBody(data);
 
         if (!data.NumeroVisita) {
             return res.status(400).json({
@@ -105,7 +107,8 @@ const crearHCIngreso = async (req, res) => {
 const actualizarHCIngreso = async (req, res) => {
     try {
         const { id } = req.params;
-        const data = req.body;
+        const data = req.body || {};
+        quitarAutorDelBody(data);
 
         if (!id) {
             return res.status(400).json({

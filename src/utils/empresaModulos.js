@@ -28,7 +28,7 @@ const PACKS_PRINCIPALES = Object.freeze([
 	{
 		codigo: 'ALMACEN',
 		label: 'Almacén / Abastecimiento',
-		descripcion: 'Solicitudes, órdenes de provisión, actas de recepción y stock.',
+		descripcion: 'Productos y remitos de mercadería.',
 		modulos: ['ALMACEN'],
 		orden: 4,
 	},

@@ -37,7 +37,7 @@ function resolveCodOperador(decoded) {
 	for (const c of candidates) {
 		if (c == null || c === '') continue;
 		const n = Number(c);
-		if (Number.isFinite(n)) return n;
+		if (Number.isFinite(n) && n > 0) return n;
 	}
 	return null;
 }

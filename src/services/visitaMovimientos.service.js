@@ -312,7 +312,15 @@ const SQL_MOVIMIENTO_JOINS = `
             )
           )), '')
         ) AS OperadorNombre,
-        0 AS prio
+        CASE
+          WHEN LTRIM(RTRIM(CAST(pw.CodOperador AS varchar(40)))) = LTRIM(RTRIM(m.Operador))
+            OR (
+              TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int) IS NOT NULL
+              AND TRY_CAST(CAST(pw.CodOperador AS varchar(40)) AS int) = TRY_CAST(LTRIM(RTRIM(m.Operador)) AS int)
+            )
+          THEN 0
+          ELSE 2
+        END AS prio
         FROM dbo.imPassword pw
         LEFT JOIN dbo.imPersonal per ON per.Valor = pw.ValorPersonal
         WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
@@ -330,7 +338,7 @@ const SQL_MOVIMIENTO_JOINS = `
             OR LOWER(LTRIM(RTRIM(ISNULL(pw.NombreRed, '')))) = LOWER(LTRIM(RTRIM(m.Operador)))
           )
         UNION ALL
-        SELECT LTRIM(RTRIM(per2.ApellidoNombre)) AS OperadorNombre, 1 AS prio
+        SELECT LTRIM(RTRIM(per2.ApellidoNombre)) AS OperadorNombre, 3 AS prio
         FROM dbo.imPersonal per2
         WHERE LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> ''
           AND LTRIM(RTRIM(ISNULL(m.Operador, ''))) <> '0'
@@ -386,14 +394,17 @@ async function queryMovimientosPorNumero(num) {
         m.ValorSector,
         m.ServicioHospital,
         COALESCE(
-          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))), ''), '0'),
-          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
           CASE
-            WHEN ROW_NUMBER() OVER (ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC) = 1
-             AND ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
+            WHEN ISNULL(TRY_CAST(m.FechaEgreso AS int), 0) > 0
+              OR (
+                ROW_NUMBER() OVER (ORDER BY m.FechaAdmision DESC, m.HoraAdmision DESC) = 1
+                AND ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
+              )
             THEN NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0')
             ELSE NULL
           END,
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))), ''), '0'),
+          NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
           ''
         ) AS Operador,
         m.FechaCarga,
@@ -437,6 +448,11 @@ async function queryMovimientoInicialDesdeCabecera(num) {
         LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS ValorSector,
         v.ServicioHospital,
         COALESCE(
+          CASE
+            WHEN ISNULL(TRY_CAST(v.FechaEgreso AS int), 0) > 0
+            THEN NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0')
+            ELSE NULL
+          END,
           NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OPERADOR AS varchar(40)), ''))), ''), '0'),
           NULLIF(NULLIF(LTRIM(RTRIM(ISNULL(CAST(v.OperadorEgreso AS varchar(40)), ''))), ''), '0'),
           ''
@@ -557,10 +573,14 @@ async function completarNombresOperador(rows) {
     const nom = _nombreVisibleOperador(r);
     if (!nom) continue;
     put(r.CodOperador, nom);
-    put(r.ValorPersonal, nom);
-    put(r.NombreRed, nom);
     const nCod = Number(r.CodOperador);
     if (Number.isFinite(nCod)) put(String(nCod), nom);
+  }
+  for (const r of found || []) {
+    const nom = _nombreVisibleOperador(r);
+    if (!nom) continue;
+    put(r.ValorPersonal, nom);
+    put(r.NombreRed, nom);
     const nVp = Number(r.ValorPersonal);
     if (Number.isFinite(nVp)) put(String(nVp), nom);
   }
@@ -693,7 +713,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
     throw new Error('Faltan datos obligatorios: fecha y hora de egreso');
   }
 
-  const codOpRaw = datosEgreso.codOperador ?? datosEgreso.operadorEgreso ?? datosEgreso.OperadorEgreso;
+  const codOpRaw = datosEgreso.codOperador;
   const codOperador = Number(codOpRaw);
   if (!Number.isFinite(codOperador) || codOperador <= 0) {
     throw new Error('Falta CodOperador de sesión para registrar el egreso');
@@ -746,11 +766,7 @@ async function actualizarUltimoMovimientoVisita(numeroVisita, datosEgreso) {
         HoraEgreso = @heg,
         DisposicionEgreso = CASE WHEN @disp = 0 THEN m.DisposicionEgreso ELSE @disp END,
         Diagnostico = CASE WHEN LTRIM(RTRIM(@diag)) = '' THEN m.Diagnostico ELSE @diag END,
-        Operador = CASE
-          WHEN LTRIM(RTRIM(ISNULL(CAST(m.Operador AS varchar(40)), ''))) IN ('', '0')
-          THEN @op
-          ELSE m.Operador
-        END
+        Operador = @op
       FROM dbo.imVisitaMovimiento m
       INNER JOIN actual a
         ON m.NumeroVisita = a.NumeroVisita

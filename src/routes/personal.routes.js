@@ -22,6 +22,7 @@ router.get('/catalogos/sectores', requirePermiso('CONFIGURACION.PERSONAL.VER'), 
 router.get('/catalogos/especialidades', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarEspecialidades);
 router.get('/catalogos/funciones', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarFunciones);
 router.get('/catalogos/servicios', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarServicios);
+router.get('/catalogos/servicios-nube', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCatalogoServiciosNube);
 router.get('/catalogos/categorias', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarCategorias);
 router.get('/catalogos/clases', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarClases);
 router.get('/catalogos/empresas', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarEmpresasCatalogo);

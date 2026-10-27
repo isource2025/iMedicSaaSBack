@@ -19,7 +19,6 @@ const {
 	convertirHoraClarionAString,
 } = require('../../utils/dateUtils');
 const auditoria = require('../auditoria.service');
-const { sqlAutor } = require('../../identidad/contrato');
 
 const TAM_PAGINA = 50;
 const MAX_TAM_PAGINA = 500;
@@ -141,13 +140,13 @@ const SELECT_CABECERA = `
 	RTRIM(cli.RazonSocial) AS RazonSocial, r.idConvenio, RTRIM(cc.Descripcion) AS ConvenioDescripcion,
 	cc.Valor AS ConvenioObraSocial, r.Periodo, r.Honorarios, r.Gastos, r.Medicamentos, r.OtrosServicios,
 	r.Visitas, r.FechaCierre, r.HoraCierre, r.OperCierre, r.Observaciones, r.IdEmpresa, r.IdSucursal,
-	RTRIM(op.NombreCompleto) AS OperadorNombre, ${SQL_ESTADO} AS Estado, ${SQL_TOTAL} AS Total`;
+	RTRIM(op.ApellidoNombre) AS OperadorNombre, ${SQL_ESTADO} AS Estado, ${SQL_TOTAL} AS Total`;
 
 const FROM_CABECERA = `
 	FROM dbo.imRendiciones r
 	LEFT JOIN dbo.imClientes cli ON cli.Valor = r.idCliente
 	LEFT JOIN dbo.imClientesConvenios cc ON cc.Codigo = r.idConvenio
-	${sqlAutor('imRendiciones.OperGraba', 'r.OperGraba', 'op')}`;
+	OUTER APPLY (SELECT TOP 1 p.ApellidoNombre FROM dbo.imPersonal p WHERE p.Valor = r.OperGraba) op`;
 
 function cabecera(f) {
 	const tipo = texto(f.IdTipoCliente);
@@ -173,8 +172,6 @@ function cabecera(f) {
 		},
 		visitas: num(f.Visitas),
 		observaciones: texto(f.Observaciones),
-		empresa: num(f.IdEmpresa),
-		sucursal: num(f.IdSucursal),
 		estado: f.Estado,
 		cierre: cerrada
 			? {
@@ -374,9 +371,7 @@ async function visitas(idCrudo, query = {}) {
 			GROUP BY d.NUMEROVISITA
 		)
 		SELECT x.*, v.IDPACIENTE, RTRIM(pac.ApellidoyNombre) AS Paciente, RTRIM(v.CLASEPACIENTE) AS Clase,
-		       RTRIM(cp.Descripcion) AS ClaseDescripcion, RTRIM(pac.TipoDocumento) AS TipoDocumento,
-		       pac.NumeroDocumento, CONVERT(char(10), v.FECHAADMISIONS, 23) AS Ingreso, v.FECHAEGRESO AS Egreso,
-		       COUNT(*) OVER () AS TotalFilas
+		       RTRIM(cp.Descripcion) AS ClaseDescripcion, COUNT(*) OVER () AS TotalFilas
 		FROM x
 		LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = x.NumeroVisita
 		LEFT JOIN dbo.imPacientes pac ON pac.IdPaciente = v.IDPACIENTE
@@ -389,14 +384,8 @@ async function visitas(idCrudo, query = {}) {
 	return {
 		filas: filas.map((f) => ({
 			numeroVisita: num(f.NumeroVisita),
-			paciente: {
-				id: num(f.IDPACIENTE),
-				nombre: texto(f.Paciente) || null,
-				documento: num(f.NumeroDocumento) > 0 ? { tipo: texto(f.TipoDocumento) || null, numero: num(f.NumeroDocumento) } : null,
-			},
+			paciente: { id: num(f.IDPACIENTE), nombre: texto(f.Paciente) || null },
 			clase: f.Clase ? { valor: texto(f.Clase), descripcion: texto(f.ClaseDescripcion) || texto(f.Clase) } : null,
-			ingreso: texto(f.Ingreso) && !texto(f.Ingreso).startsWith('1800') ? texto(f.Ingreso) : null,
-			egreso: num(f.Egreso) > 0 ? clarionAIsoCalendario(f.Egreso) : null,
 			desde: clarionAIsoCalendario(f.Desde),
 			hasta: clarionAIsoCalendario(f.Hasta),
 			lineas: num(f.Lineas),
@@ -460,7 +449,6 @@ async function lineas(idCrudo, query = {}) {
 		        d.IMPORTEBONIFICACION, d.PORCENTAJEBONIFICACION,
 		        COALESCE(NULLIF(RTRIM(d.DESCRIPCION), ''), RTRIM(nom.Descripcion), RTRIM(mo.Descripcion),
 		                 RTRIM(CASE WHEN va.Alias = '' THEN va.Nombre ELSE va.Alias END)) AS Practica,
-		        RTRIM(COALESCE(nom.Tipo, mo.Tipo)) AS TipoPractica,
 		        RTRIM(prof.ApellidoNombre) AS Profesional, RTRIM(fn.Descripcion) AS FuncionDescripcion,
 		        RTRIM(pac.ApellidoyNombre) AS Paciente,
 		        CASE RTRIM(d.IDMODULO) WHEN 'NO' THEN rn.TipoValor WHEN 'MO' THEN rm.TipoValor END AS ReglaTipo,
@@ -503,7 +491,7 @@ async function lineas(idCrudo, query = {}) {
 				paciente: texto(f.Paciente) || null,
 				tipo: { valor: tipoP, descripcion: TIPOS_PRESTACION[tipoP] || tipoP || 'Sin tipo' },
 				modulo: { valor: modulo, descripcion: MODULOS[modulo] || modulo || '—' },
-				practica: { codigo: num(f.IDPRACTICA), descripcion: texto(f.Practica) || null, tipo: texto(f.TipoPractica) || null },
+				practica: { codigo: num(f.IDPRACTICA), descripcion: texto(f.Practica) || null },
 				profesional: num(f.MATRICULA) > 0 ? { matricula: num(f.MATRICULA), nombre: texto(f.Profesional) || null } : null,
 				funcion: tipoP === 'H' ? { valor: num(f.FUNCION), descripcion: texto(f.FuncionDescripcion) || null } : null,
 				fecha: clarionAIsoCalendario(f.FECHA),
@@ -597,7 +585,7 @@ async function crear(body, ctx) {
 		 VALUES (GETDATE(), @p0, @p1, @p2, 0, @p3, @p4, 0, 0, 0, 0, 0, 0, 0, 0, @p5, ISNULL(@emp, 1), ISNULL(@suc, 1));
 		 SELECT CONVERT(int, SCOPE_IDENTITY()) AS IdRendicion;`,
 		[
-			{ value: Number(ctx?.operador) || 0, type: 'SmallInt' },
+			{ value: Number(ctx?.actor) || 0, type: 'SmallInt' },
 			{ value: d.tipoCliente, type: 'VarChar', length: 3 },
 			{ value: d.idCliente, type: 'Int' },
 			{ value: d.idConvenio, type: 'Int' },

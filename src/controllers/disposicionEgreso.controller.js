@@ -2,7 +2,8 @@ const { executeQuery } = require('../models/db');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
- * Controlador para obtener todas las disposiciones de egreso
+ * Catálogo de motivos de egreso (alta médica, derivación, óbito).
+ * No da de alta a un paciente: solo lista las opciones.
  */
 const getDisposicionesEgreso = async (req, res) => {
   try {
@@ -33,7 +34,7 @@ const getDisposicionesEgreso = async (req, res) => {
 };
 
 /**
- * Controlador para crear una nueva disposición de egreso
+ * ABM del catálogo de motivos de egreso. No egresa ni da de alta pacientes.
  */
 const createDisposicionEgreso = async (req, res) => {
   try {

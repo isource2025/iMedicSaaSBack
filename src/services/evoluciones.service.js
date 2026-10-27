@@ -10,23 +10,25 @@ const { sqlAutor } = require("../identidad/contrato");
 const SQL_APPLY_PROFESIONAL = sqlAutor("imHCEvolucion.Profecional", "ev.Profecional", "prof");
 
 /**
- * Glucemia desde controles frecuentes (Hgt puede ser int o texto legacy en BD).
- * Sin TRY_CONVERT (requiere SQL 2012+): solo dígitos vía PATINDEX, luego CAST — compatible SQL 2005.
+ * Glucemia desde controles frecuentes. Hgt es texto libre en BD («138MG/DL.», «165  MG / DL»,
+ * «HGT 80», «116»): se toma el primer número. Sin TRY_CONVERT (requiere SQL 2012+): PATINDEX
+ * y CAST — compatible SQL 2005. Fuera de 20–1500 no es una glucemia.
  */
 const SQL_GLUCEMIA_OUTER_APPLY = `
         OUTER APPLY (
             SELECT TOP 1 g.Glucemia AS Glucemia
             FROM (
                 SELECT
-                    CASE
-                        WHEN cf.Hgt IS NULL THEN NULL
-                        WHEN LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200)))) = '' THEN NULL
-                        WHEN PATINDEX('%[^0-9]%', LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200))))) > 0 THEN NULL
-                        ELSE CAST(LTRIM(RTRIM(CAST(cf.Hgt AS VARCHAR(200)))) AS INT)
-                    END AS Glucemia,
+                    CASE WHEN LEN(hd.digitos) BETWEEN 2 AND 4 THEN CAST(hd.digitos AS INT) END AS Glucemia,
                     cf.FechaControl,
                     cf.HoraControl
                 FROM dbo.imInterCtrlFrecuente AS cf
+                CROSS APPLY (SELECT LTRIM(RTRIM(ISNULL(CAST(cf.Hgt AS VARCHAR(200)), ''))) AS txt) AS ht
+                CROSS APPLY (
+                    SELECT CASE WHEN PATINDEX('%[0-9]%', ht.txt) > 0
+                                THEN SUBSTRING(ht.txt, PATINDEX('%[0-9]%', ht.txt), 200) ELSE '' END AS desde
+                ) AS hn
+                CROSS APPLY (SELECT LEFT(hn.desde, PATINDEX('%[^0-9]%', hn.desde + 'x') - 1) AS digitos) AS hd
                 WHERE cf.NumeroVisita = ev.IdVisita
                   AND (
                     cf.FechaControl < ev.FechaEv
@@ -36,7 +38,7 @@ const SQL_GLUCEMIA_OUTER_APPLY = `
                     )
                   )
             ) AS g
-            WHERE g.Glucemia IS NOT NULL AND g.Glucemia <> 0
+            WHERE g.Glucemia BETWEEN 20 AND 1500
             ORDER BY g.FechaControl DESC, g.HoraControl DESC
         ) AS glu`;
 

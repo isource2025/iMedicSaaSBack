@@ -66,7 +66,7 @@ const MODULOS = Object.freeze([
 		label: 'Turnos',
 		submodulos: [
 			{ id: 'AGENDA',        label: 'Agenda',           path: '/dashboard/turnos/agenda',        acciones: [...CRUD] },
-			{ id: 'ADMIN',         label: 'Admin de Turnos',  path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
+			{ id: 'ADMIN',         label: 'Gestión de turnos', path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
 			{ id: 'EXCEPCIONES',   label: 'Excepciones',      path: '/dashboard/turnos/excepciones',   acciones: [...CRUD] },
 			{ id: 'CONFIGURACION', label: 'Configuración',    path: '/dashboard/turnos/configuracion', acciones: [ACCIONES.VER, ACCIONES.EDITAR, ACCIONES.GESTIONAR] },
 			{ id: 'TABLA',         label: 'Tabla de Turnos',  path: '/dashboard/turnos/tabla',         acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
@@ -77,7 +77,7 @@ const MODULOS = Object.freeze([
 		label: 'Admisión',
 		submodulos: [
 			{ id: 'PACIENTES', label: 'Pacientes',          path: '/dashboard/patients',         acciones: [...CRUD] },
-			{ id: 'BUSQUEDA',  label: 'Consultar Historia Clínica',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
+			{ id: 'BUSQUEDA',  label: 'Consulta general de admisiones',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
 			{ id: 'NUEVA',     label: 'Nueva Admisión',     path: '/dashboard/admission/new',    acciones: [ACCIONES.CREAR] },
 			{ id: 'TABLA',     label: 'Tabla de Admisiones',path: '/dashboard/admission/tables', acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
 		],
@@ -128,14 +128,8 @@ const MODULOS = Object.freeze([
 		id: 'ALMACEN',
 		label: 'Almacén',
 		submodulos: [
-			{ id: 'STOCK',       label: 'Stock',                  path: '/dashboard/almacen',                          acciones: [ACCIONES.VER, ACCIONES.GESTIONAR, ACCIONES.EXPORTAR] },
-			{ id: 'ARTICULOS',   label: 'Artículos',              path: '/dashboard/almacen?tab=articulos',             acciones: [...CRUD] },
-			{ id: 'PROVEEDORES', label: 'Proveedores',            path: '/dashboard/almacen?tab=proveedores',           acciones: [...CRUD] },
-			{ id: 'SOLICITUDES', label: 'Solicitudes de provisión', path: '/dashboard/almacen?tab=solicitudes',         acciones: [...CRUD, ACCIONES.GESTIONAR, ACCIONES.IMPRIMIR] },
-			{ id: 'ORDENES',     label: 'Órdenes de provisión',   path: '/dashboard/almacen?tab=ordenes',               acciones: [...CRUD, ACCIONES.IMPRIMIR] },
-			{ id: 'ACTAS',       label: 'Actas de recepción',     path: '/dashboard/almacen?tab=actas',                 acciones: [...CRUD, ACCIONES.IMPRIMIR] },
-			{ id: 'MOVIMIENTOS', label: 'Historial de movimientos', path: '/dashboard/almacen?tab=movimientos',           acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
-			{ id: 'CONFIG',     label: 'Configuración',          path: '/dashboard/almacen?tab=config',                 acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
+			{ id: 'PRODUCTOS', label: 'Productos', path: '/dashboard/almacen/productos', acciones: [...CRUD] },
+			{ id: 'REMITOS',   label: 'Remitos',   path: '/dashboard/almacen/remitos',   acciones: [...CRUD] },
 		],
 	},
 	{
@@ -156,6 +150,7 @@ const MODULOS = Object.freeze([
 			// Sólo lo incluyen ADMIN y SUPER_ADMIN (plantillas generadas); nunca
 			// puede asignarse a un rol personalizado.
 			{ id: 'ROLES',    label: 'Matriz de permisos', path: '/dashboard/configuracion/permisos', acciones: [...CRUD] },
+			{ id: 'CONSUMO_IA', label: 'Consumo IA', path: '/dashboard/configuracion/consumo-ia', acciones: [ACCIONES.VER] },
 			{ id: 'INSTITUCION', label: 'Institución', path: '/dashboard/configuracion/institucion', acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
 		],
 	},
@@ -334,7 +329,9 @@ const PLANTILLAS = Object.freeze({
 		..._soloVer('ADMISION'),
 		..._soloVer('INTERNACION', ['AUDITORIA_HC']),
 		..._soloVer('FACTURACION'),
-		..._soloVer('ALMACEN'),
+		// Almacén operativo: catálogo y remitos (sin escritura clínica).
+		..._todas('ALMACEN', 'PRODUCTOS'),
+		..._todas('ALMACEN', 'REMITOS'),
 		// Reportes → Facturación (producción del hospital) muestra montos por
 		// profesional y cobertura: queda reservado a ADMIN.
 		..._soloVer('REPORTES', ['FACTURACION']),

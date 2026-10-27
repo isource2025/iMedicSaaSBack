@@ -1,5 +1,5 @@
 const service = require('../services/visitaAcompanantes.service');
-const { resolveCodOperador } = require('../utils/sessionIdentity');
+const { requireOperadorCarga } = require('../utils/sessionIdentity');
 const { statusDeError } = require('../utils/httpError');
 
 function fallar(res, error, mensajePorDefecto) {
@@ -32,8 +32,10 @@ async function panel(req, res) {
 
 async function agregarAcompanante(req, res) {
 	try {
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await service.agregarAcompanante(req.params.numeroVisita, req.body || {}, {
-			codOperador: resolveCodOperador(req),
+			codOperador,
 		});
 		res.status(201).json({ success: true, data });
 	} catch (error) {
@@ -67,8 +69,10 @@ async function guardarObservacion(req, res) {
 
 async function agregarNovedad(req, res) {
 	try {
+		const codOperador = requireOperadorCarga(req, res);
+		if (codOperador == null) return;
 		const data = await service.agregarNovedad(req.params.numeroVisita, req.body?.novedad, {
-			codOperador: resolveCodOperador(req),
+			codOperador,
 		});
 		res.status(201).json({ success: true, data });
 	} catch (error) {

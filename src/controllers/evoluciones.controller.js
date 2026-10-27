@@ -1,4 +1,5 @@
 const evolucionesService = require("../services/evoluciones.service");
+const { requireProfesional, quitarAutorDelBody } = require('../utils/sessionIdentity');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 /**
@@ -65,7 +66,11 @@ const obtenerEvolucionesPorVisitaYFecha = async (req, res) => {
  */
 const crearEvolucion = async (req, res) => {
     try {
-        const data = req.body;
+        const data = req.body || {};
+        quitarAutorDelBody(data);
+        const Profecional = requireProfesional(req, res);
+        if (Profecional == null) return;
+        data.Profecional = Profecional;
 
         // Validaciones básicas
         if (!data.IdVisita) {
@@ -217,7 +222,8 @@ const actualizarEvolucion = async (req, res) => {
             });
         }
 
-        const data = req.body;
+        const data = req.body || {};
+        quitarAutorDelBody(data);
 
         await evolucionesService.actualizarEvolucion(idNum, data);
 
