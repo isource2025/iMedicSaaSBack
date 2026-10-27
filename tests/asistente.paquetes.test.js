@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// Este archivo valida el paquete Internación; en runtime de prod va apagado (opt-in).
+process.env.ASISTENTE_INTERNACION_LISTO = '1';
 const orquestador = require('../src/asistente/agentes/orquestador');
 const catalogo = require('../src/asistente/catalogo');
 const contexto = require('../src/asistente/contexto');

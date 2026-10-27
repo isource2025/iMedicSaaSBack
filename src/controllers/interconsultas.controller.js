@@ -286,6 +286,31 @@ async function actualizar(req, res) {
 	}
 }
 
+async function eliminar(req, res) {
+	try {
+		const idPedido = Number(req.params.idPedido);
+		const matricula = await _matriculaSesion(req);
+		if (!matricula) {
+			return res.status(400).json({
+				success: false,
+				mensaje: 'No se pudo resolver la matrícula del operador',
+			});
+		}
+		const origen = String(req.query.origen || req.body?.origen || 'LEGACY').toUpperCase();
+		const data = await interconsultasService.eliminar({
+			idPedido,
+			origen: origen === 'WEB' ? 'WEB' : 'LEGACY',
+			matricula,
+			valorPersonal: req.valorPersonal != null ? Number(req.valorPersonal) : null,
+			codOperador: _codOperadorSesion(req),
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[interconsultas] eliminar:', err.message);
+		return _err(res, err);
+	}
+}
+
 module.exports = {
 	listarPorVisita,
 	listarSectores,
@@ -297,4 +322,5 @@ module.exports = {
 	cumplir,
 	actualizarRespuesta,
 	actualizar,
+	eliminar,
 };

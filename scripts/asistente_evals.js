@@ -15,7 +15,8 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 // La base queda simulada: ningún módulo del asistente llega a abrir una conexión.
 for (const k of Object.keys(process.env)) if (/^(DB_|AUTH_DB|MYSQL)/.test(k)) delete process.env[k];
 delete process.env.ASISTENTE_INTERNACION_ESCRITURA;
-delete process.env.ASISTENTE_INTERNACION_LISTO;
+// Las evals cubren Internación; en producción el default es apagado (opt-in con =1).
+process.env.ASISTENTE_INTERNACION_LISTO = '1';
 
 const src = (p) => path.join(__dirname, '..', 'src', p);
 

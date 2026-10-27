@@ -31,4 +31,4 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 Health esperado: `encoding=ps1-unc-v2`, `uncReachable=true`.
 
-**Importante:** el file server corre como el usuario que instaló (acceso al share UNC). SYSTEM no sirve para `\\server\...`.
+**Arranque:** si `UncRoot` es disco local (`D:\...`), la tarea corre como **SYSTEM al boot** (sin iniciar sesión). Si es share UNC (`\\server\...`), corre como el usuario que instaló al loguearse — SYSTEM no ve la red.

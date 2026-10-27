@@ -2,14 +2,29 @@
  * Controlador del módulo Almacén
  */
 const svc = require('../services/almacen.service');
+const productosSvc = require('../services/almacen.productos.service');
+const remitosSvc = require('../services/almacen.remitos.service');
+
+function esMensajeTecnico(msg) {
+	return /FOREIGN KEY|INSERT statement|UPDATE statement|constraint|Violation of|RequestError|dbo\.|SQLSTATE|ECONN|ETIMEDOUT|status code/i.test(
+		String(msg || ''),
+	);
+}
 
 function handleError(res, error, fallback) {
 	const status = error.statusCode || 500;
 	console.error(fallback, error);
+	const raw = error.message || '';
+	const mensaje =
+		error.statusCode && raw && !esMensajeTecnico(raw)
+			? raw
+			: esMensajeTecnico(raw) || status >= 500
+				? fallback
+				: raw || fallback;
 	return res.status(status).json({
 		success: false,
-		mensaje: error.message || fallback,
-		error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+		mensaje,
+		error: process.env.NODE_ENV === 'development' ? raw : undefined,
 	});
 }
 
@@ -548,6 +563,192 @@ const ctrl = {
 			return res.json({ success: true, data, mensaje: 'Orden anulada' });
 		} catch (e) {
 			return handleError(res, e, 'Error al anular orden');
+		}
+	},
+
+	// ── Productos (tabla legacy Productos) ───────────────────────────────
+	async listarProductosLegacy(req, res) {
+		try {
+			const data = await productosSvc.listar({
+				search: req.query.search || '',
+				campo: req.query.campo || 'descripcion',
+				idRubro: req.query.idRubro || null,
+				idSubRubro: req.query.idSubRubro || null,
+				page: req.query.page,
+				pageSize: req.query.pageSize,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar productos');
+		}
+	},
+
+	async obtenerProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.obtener(req.params.id);
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al obtener producto');
+		}
+	},
+
+	async catalogosProductosLegacy(req, res) {
+		try {
+			const data = await productosSvc.catalogos();
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al cargar catálogos de productos');
+		}
+	},
+
+	async listarCuentasProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.listarCuentas({
+				search: req.query.search || '',
+				limit: req.query.limit,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al buscar cuentas contables');
+		}
+	},
+
+	async crearProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.crear(req.body || {}, req.auth || req.user);
+			return res.status(201).json({ success: true, data, mensaje: 'Producto creado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al crear producto');
+		}
+	},
+
+	async actualizarProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.actualizar(req.params.id, req.body || {});
+			return res.json({ success: true, data, mensaje: 'Producto actualizado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al actualizar producto');
+		}
+	},
+
+	async eliminarProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.eliminar(req.params.id);
+			return res.json({ success: true, data, mensaje: 'Producto eliminado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al eliminar producto');
+		}
+	},
+
+	// ── Remitos (Remitos / RemitosItems / Tipos_Remitos / Depositos) ─────
+	async listarRemitosLegacy(req, res) {
+		try {
+			const data = await remitosSvc.listar({
+				search: req.query.search || '',
+				tipo: req.query.tipo || '',
+				idDeposito: req.query.idDeposito || null,
+				desde: req.query.desde || null,
+				hasta: req.query.hasta || null,
+				page: req.query.page,
+				pageSize: req.query.pageSize,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar remitos');
+		}
+	},
+
+	async obtenerRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.obtener(req.params.id);
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al obtener remito');
+		}
+	},
+
+	async crearRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.crear(req.body || {}, req.auth || req.user);
+			return res.status(201).json({ success: true, data, mensaje: 'Remito creado' });
+		} catch (e) {
+			return handleError(res, e, 'No se pudo guardar el remito. Intentá de nuevo.');
+		}
+	},
+
+	async actualizarRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.actualizar(req.params.id, req.body || {}, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: 'Remito actualizado' });
+		} catch (e) {
+			return handleError(res, e, 'No se pudo actualizar el remito. Intentá de nuevo.');
+		}
+	},
+
+	async eliminarRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.eliminar(req.params.id);
+			return res.json({ success: true, data, mensaje: 'Remito eliminado' });
+		} catch (e) {
+			return handleError(res, e, 'No se pudo eliminar el remito. Intentá de nuevo.');
+		}
+	},
+
+	async catalogosRemitosLegacy(req, res) {
+		try {
+			const [tipos, depositos, proveedores] = await Promise.all([
+				remitosSvc.listarTipos({ soloOperativos: true }),
+				remitosSvc.listarDepositos(),
+				remitosSvc.listarProveedores({ limit: 120 }),
+			]);
+			return res.json({ success: true, data: { tipos, depositos, proveedores } });
+		} catch (e) {
+			return handleError(res, e, 'Error al cargar catálogos de remitos');
+		}
+	},
+
+	async listarProveedoresRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.listarProveedores({
+				search: req.query.search || '',
+				limit: req.query.limit,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar proveedores');
+		}
+	},
+
+	async listarClientesRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.listarClientes({
+				search: req.query.search || '',
+				limit: req.query.limit,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar clientes');
+		}
+	},
+
+	async listarPacientesRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.listarPacientes({
+				search: req.query.search || '',
+				limit: req.query.limit,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar pacientes');
+		}
+	},
+
+	async proximoNroRemitoLegacy(req, res) {
+		try {
+			const data = await remitosSvc.proximoNro(req.query.tipo, req.query.grupo);
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al obtener próximo número de remito');
 		}
 	},
 };

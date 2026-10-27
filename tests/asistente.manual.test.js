@@ -62,12 +62,51 @@ test('ranking: preguntas reales de usuarios encuentran el artículo correcto pri
 		['cómo doy de alta un médico nuevo', 'personal'],
 		['revertir egreso', 'revertir-egreso'],
 		['cómo admitir un paciente', 'nueva-admision'],
+		['cómo hago un ingreso', 'nueva-admision'],
+		['cómo hago un ingreso de un paciente', 'nueva-admision'],
+		['nuevo ingreso', 'nueva-admision'],
+		['cómo cargo la hc de ingreso', 'hc-ingreso'],
+		['historia clinica de ingreso', 'hc-ingreso'],
+		['h.c. de ingreso', 'hc-ingreso'],
 		['dashboard de consumo ia', 'consumo-ia'],
+		['no puedo borrar la rendición', 'rendiciones'],
+		['ajuste de precios del convenio', 'convenios'],
 	];
 	for (const [q, id] of casos) {
 		const hits = manual.buscar(q, 3);
 		assert.equal(hits[0]?.id, id, `«${q}» → ${hits.map((h) => h.id).join(', ')}`);
 	}
+});
+
+test('frases del corpus separan módulos sin hardcodear la pregunta', () => {
+	// Misma palabra «ingreso», distinta frase → distinto módulo (ranking dinámico).
+	const admision = manual.buscar('cómo hago un ingreso', 3);
+	assert.equal(admision[0]?.id, 'nueva-admision');
+	assert.equal(admision[0]?.modulo, 'ADMISION');
+
+	const hc = manual.buscar('cómo cargo la hc de ingreso', 3);
+	assert.equal(hc[0]?.id, 'hc-ingreso');
+	assert.equal(hc[0]?.modulo, 'INTERNACION');
+
+	const historia = manual.buscar('historia clinica de ingreso', 3);
+	assert.equal(historia[0]?.id, 'hc-ingreso');
+
+	// Variante verbal (hago ≈ hacer) sigue al mismo artículo de admisión.
+	assert.equal(manual.buscar('quiero hacer un ingreso', 1)[0]?.id, 'nueva-admision');
+
+	// Unigrama ambiguo detectado en el corpus (aparece en frases de 2+ módulos).
+	const ambiguos = manual._interno.ambiguosDe(
+		manual.ARTICULOS.map((a) => ({
+			a,
+			frases: (a.tags || []).map((t) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')).filter((t) => t.includes(' ')),
+		})),
+	);
+	assert.ok(ambiguos.has('ingre') || ambiguos.has(manual._interno.raiz('ingreso')), 'ingreso debe marcarse ambiguo entre módulos');
+
+	assert.equal(
+		manual.buscar('cómo cargo', 1, { ruta: '/dashboard/beds/12?seccion=hcIngreso' })[0]?.id,
+		'hc-ingreso',
+	);
 });
 
 test('raíces y sinónimos: plural, verbo y palabra del usuario', () => {

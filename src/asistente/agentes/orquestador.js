@@ -43,7 +43,7 @@ const REGLAS = Object.freeze([
 	},
 	{
 		id: 'ADMISION',
-		re: /\b(admit|admisi[oó]n|nuevo ingreso|paciente nuevo|padr[oó]n|renaper|cobertura|obra social)/i,
+		re: /\b(admit|admisi[oó]n|nuevo ingreso|internar|ingresar|paciente nuevo|padr[oó]n|renaper|cobertura|obra social)/i,
 	},
 	{
 		id: 'TURNOS',
@@ -51,7 +51,7 @@ const REGLAS = Object.freeze([
 	},
 	{
 		id: 'ALMACEN',
-		re: /\b(stock|almac[eé]n|art[ií]culo|proveedor|solicitud de provis|orden de provis)/i,
+		re: /\b(stock|almac[eé]n|producto|remito|art[ií]culo|proveedor|solicitud de provis|orden de provis)/i,
 	},
 	{
 		id: 'FACTURACION',

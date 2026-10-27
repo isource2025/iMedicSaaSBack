@@ -1,7 +1,7 @@
 /**
  * Manual operativo de la plataforma: el contenido vive en ./manual/*.js (un archivo por área)
- * y acá se indexa en memoria con BM25 sobre raíces de palabras y sinónimos.
- * El modelo busca acá para responder "cómo hago X", "dónde está Y" o "por qué no me deja".
+ * y acá se indexa en memoria con BM25 sobre raíces, sinónimos y frases del corpus.
+ * El ranking es dinámico: no hay preguntas hardcodeadas → artículo.
  */
 const { MODULOS } = require('../utils/permisos');
 const { tienePermiso: tienePermisoBase } = require('../services/permisos.service');
@@ -27,12 +27,54 @@ const STOP = new Set(
 	).split(' '),
 );
 
+/**
+ * En frases se dejan verbos y las preposiciones que cambian el sentido
+ * («alta de paciente» ≠ «alta a un paciente» / «dar el alta»).
+ */
+const STOP_FRASE = new Set([
+	'el', 'la', 'los', 'las', 'del', 'un', 'una', 'al', 'y', 'o', 'en', 'con', 'por', 'para', 'que',
+	'le', 'lo', 'me', 'te', 'mi', 'mis', 'tu', 'tus', 'su', 'sus',
+]);
+
+/** Variantes de verbo → lema, para que «hago un ingreso» = «hacer un ingreso». */
+const LEMAS = {
+	hago: 'hacer',
+	hace: 'hacer',
+	hacen: 'hacer',
+	hacemos: 'hacer',
+	hacer: 'hacer',
+	realizo: 'hacer',
+	realiza: 'hacer',
+	realizar: 'hacer',
+	doy: 'dar',
+	da: 'dar',
+	dan: 'dar',
+	dar: 'dar',
+	darle: 'dar',
+	cargo: 'cargar',
+	carga: 'cargar',
+	cargar: 'cargar',
+	cambio: 'cambiar',
+	cambia: 'cambiar',
+	cambiar: 'cambiar',
+	paso: 'pasar',
+	pasa: 'pasar',
+	pasar: 'pasar',
+	muevo: 'mover',
+	mueve: 'mover',
+	mover: 'mover',
+	abro: 'abrir',
+	abre: 'abrir',
+	abrir: 'abrir',
+};
+
 /** Palabras del usuario → términos que usa el manual. */
 const SINONIMOS = {
-	internar: 'admision ingreso',
-	ingresar: 'admision ingreso',
-	alta: 'egreso',
-	externar: 'egreso',
+	internar: 'admision nueva admision',
+	ingresar: 'admision nueva admision',
+	admitir: 'admision nueva admision',
+	// «alta» es polisémica (egreso vs alta de personal/paciente): solo frases del corpus.
+	externar: 'egreso egresar',
 	cita: 'turno',
 	doy: 'dar asignar',
 	dar: 'asignar',
@@ -105,6 +147,11 @@ function raiz(palabra) {
 	return w.slice(0, 5);
 }
 
+function lema(palabra) {
+	const n = normalizar(palabra);
+	return LEMAS[n] || n;
+}
+
 function palabras(s) {
 	return normalizar(s)
 		.split(/[^a-z0-9]+/)
@@ -113,6 +160,27 @@ function palabras(s) {
 
 function tokens(s) {
 	return palabras(s).map(raiz);
+}
+
+/** Clave de frase comparable: lemas + raíces, sin nexos. «hago un ingreso» = «hacer ingreso». */
+function claveFrase(s) {
+	return normalizar(s)
+		.split(/[^a-z0-9]+/)
+		.filter((w) => w.length >= 2 && !STOP_FRASE.has(w))
+		.map((w) => raiz(lema(w)))
+		.filter(Boolean)
+		.join(' ');
+}
+
+function ngramas(q, maxN = 4) {
+	const parts = normalizar(q)
+		.split(/[^a-z0-9]+/)
+		.filter(Boolean);
+	const out = [];
+	for (let n = 2; n <= Math.min(maxN, parts.length); n++) {
+		for (let i = 0; i <= parts.length - n; i++) out.push(parts.slice(i, i + n).join(' '));
+	}
+	return out;
 }
 
 const PESO = { titulo: 3, tags: 3, sintoma: 2, texto: 1, pasos: 1, causa: 1, comoLlegar: 1 };
@@ -130,6 +198,25 @@ function camposDe(a) {
 	};
 }
 
+/**
+ * Unigrama «ambiguo»: aparece en frases-tag de 2+ módulos distintos.
+ * Esas palabras solas (ej. «ingreso») no deciden; ganan las frases del corpus.
+ */
+function ambiguosDe(docs) {
+	const mods = new Map();
+	for (const d of docs) {
+		for (const f of d.frases) {
+			for (const t of claveFrase(f).split(' ').filter(Boolean)) {
+				if (!mods.has(t)) mods.set(t, new Set());
+				mods.get(t).add(d.a.modulo);
+			}
+		}
+	}
+	const out = new Set();
+	for (const [t, set] of mods) if (set.size >= 2) out.add(t);
+	return out;
+}
+
 function construirIndice(articulos) {
 	const docs = articulos.map((a) => {
 		const tf = new Map();
@@ -142,12 +229,14 @@ function construirIndice(articulos) {
 			}
 		}
 		const frases = (a.tags || []).map(normalizar).filter((t) => t.includes(' '));
-		return { a, tf, largo, frases };
+		const clavesFrase = new Set(frases.map(claveFrase).filter((k) => k.includes(' ')));
+		return { a, tf, largo, frases, clavesFrase };
 	});
 	const df = new Map();
 	for (const d of docs) for (const t of d.tf.keys()) df.set(t, (df.get(t) || 0) + 1);
 	const promedio = docs.reduce((s, d) => s + d.largo, 0) / Math.max(1, docs.length);
-	return { docs, df, promedio, n: docs.length };
+	const ambiguos = ambiguosDe(docs);
+	return { docs, df, promedio, n: docs.length, ambiguos };
 }
 
 let indice = null;
@@ -161,7 +250,7 @@ function terminosDe(pregunta) {
 	const out = new Map();
 	const sumar = (t, w) => out.set(t, Math.max(out.get(t) || 0, w));
 	for (const w of palabras(pregunta)) {
-		sumar(raiz(w), 1);
+		sumar(raiz(lema(w)), 1);
 		const extra = SINONIMOS[w];
 		if (extra) for (const t of tokens(extra)) sumar(t, 0.5);
 	}
@@ -171,15 +260,42 @@ function terminosDe(pregunta) {
 const K1 = 1.2;
 const B = 0.75;
 
-function bm25(doc, terminos, { df, promedio, n }) {
+function bm25(doc, terminos, { df, promedio, n, ambiguos }, { tokensEnFrase }) {
 	let s = 0;
 	for (const [t, w] of terminos) {
 		const f = doc.tf.get(t);
 		if (!f) continue;
+		let peso = w;
+		// Palabra compartida entre módulos: solo pesa si este artículo matcheó una frase que la contiene.
+		if (ambiguos.has(t) && !tokensEnFrase.has(t)) peso *= 0.12;
 		const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
-		s += w * idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * doc.largo) / promedio)));
+		s += peso * idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * doc.largo) / promedio)));
 	}
 	return s;
+}
+
+/** Cuántas frases del artículo cubre la pregunta (subcadena o misma clave lematizada). */
+function scoreFrases(doc, q, clavesQuery) {
+	let s = 0;
+	const tokensHit = new Set();
+	for (const f of doc.frases) {
+		let hit = false;
+		const kf = claveFrase(f);
+		const largo = kf ? kf.split(' ').filter(Boolean).length : 0;
+		if (q.includes(f)) {
+			s += 3 + largo;
+			hit = true;
+		} else if (kf && clavesQuery.has(kf)) {
+			s += 2.5 + largo;
+			hit = true;
+		} else if (kf && largo >= 2 && [...clavesQuery].some((cq) => cq === kf || (cq.split(' ').length >= largo && cq.includes(kf)))) {
+			// Solo si la frase del artículo cabe completa en un n-grama de la pregunta (no al revés).
+			s += 1.5 + largo;
+			hit = true;
+		}
+		if (hit) for (const t of claveFrase(f).split(' ').filter(Boolean)) tokensHit.add(t);
+	}
+	return { s, tokensHit };
 }
 
 /** "/dashboard/beds/12?seccion=evoluciones" → { base: '/dashboard/beds', seccion: 'evoluciones' }. */
@@ -209,12 +325,13 @@ function buscar(pregunta, limite = 4, opts = {}) {
 	const { base, seccion } = pantallaDe(opts.ruta);
 	if (!terminos.size && !seccion) return [];
 	const q = normalizar(pregunta);
+	const clavesQuery = new Set(ngramas(q).map(claveFrase).filter((k) => k.includes(' ')));
 	const ranked = [];
 	for (const d of ix.docs) {
-		let s = bm25(d, terminos, ix);
+		const { s: sFrase, tokensHit } = scoreFrases(d, q, clavesQuery);
+		let s = bm25(d, terminos, ix, { tokensEnFrase: tokensHit }) + sFrase;
 		const enSeccion = Boolean(seccion) && d.a.path === base && d.a.seccion === seccion;
 		if (!s && !enSeccion) continue;
-		s += d.frases.filter((f) => q.includes(f)).length * 1.5;
 		// La sección abierta responde las preguntas genéricas («cómo cargo», «no me deja»).
 		if (enSeccion) s = s * 3 + 1;
 		else if (base && d.a.path === base) s *= 1.2;
@@ -238,6 +355,7 @@ function paraModelo(articulos, maxChars = 3500) {
 	for (const [i, a] of articulos.entries()) {
 		const item = {
 			id: a.id,
+			modulo: a.modulo,
 			titulo: a.titulo,
 			comoLlegar: a.comoLlegar,
 			path: a.path + (a.seccion ? `?seccion=${a.seccion}` : ''),
@@ -281,5 +399,5 @@ module.exports = {
 	buscar,
 	paraModelo,
 	pantallasDesdePermisos,
-	_interno: { normalizar, raiz, tokens, terminosDe, pantallaDe },
+	_interno: { normalizar, raiz, tokens, terminosDe, pantallaDe, claveFrase, ngramas, ambiguosDe },
 };

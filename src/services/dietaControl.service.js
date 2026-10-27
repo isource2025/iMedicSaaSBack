@@ -28,7 +28,8 @@ const SELECT_DIETA = `
     op.NombreCompleto AS OperadorFullName,
     d.Profesional,
     COALESCE(prof.NombreCompleto, op.NombreCompleto) AS ProfesionalFullName,
-    COALESCE(prof.Matricula, op.Matricula) AS Matricula
+    COALESCE(prof.Matricula, op.Matricula) AS Matricula,
+    COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
   FROM dbo.imInterCtrlDieta AS d
   LEFT JOIN dbo.imTipoDieta AS td ON td.Valor = d.TipoDieta
   ${sqlApplyNombrePersona('d.OperadorCarga', 'op')}

@@ -14,8 +14,10 @@ const guardia = require('../guardia');
 const censo = require('../censo');
 
 const ID = 'INTERNACION';
-// ASISTENTE_INTERNACION_LISTO=0 lo apaga sin redeploy (vuelve a caer a Soporte).
-const LISTO = process.env.ASISTENTE_INTERNACION_LISTO !== '0';
+/** Opt-in: solo Soporte en producción. ASISTENTE_INTERNACION_LISTO=1 lo habilita (se lee en cada chequeo). */
+function estaListo() {
+	return process.env.ASISTENTE_INTERNACION_LISTO === '1';
+}
 
 /**
  * ASISTENTE_INTERNACION_ESCRITURA: sin valor = lectura + altas del menú médico (tools con `alta`);
@@ -750,7 +752,9 @@ function instruccionesAyuda() {
 
 module.exports = {
 	ID,
-	LISTO,
+	get LISTO() {
+		return estaListo();
+	},
 	HERRAMIENTAS,
 	HERRAMIENTAS_AYUDA,
 	instrucciones,

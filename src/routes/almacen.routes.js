@@ -94,4 +94,52 @@ router.get('/actas', requirePermiso('ALMACEN.ACTAS.VER'), ctrl.listarActas);
 router.get('/actas/:id', requirePermiso('ALMACEN.ACTAS.VER'), ctrl.obtenerActa);
 router.post('/actas', requirePermiso('ALMACEN.ACTAS.CREAR'), ctrl.crearActa);
 
+// ── Productos & Remitos (tablas legacy Clarion) ──────────────────────────
+router.get('/productos', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.listarProductosLegacy);
+router.get(
+	'/productos/catalogos',
+	requirePermiso('ALMACEN.PRODUCTOS.VER'),
+	ctrl.catalogosProductosLegacy,
+);
+router.get(
+	'/productos/cuentas',
+	requirePermiso('ALMACEN.PRODUCTOS.VER'),
+	ctrl.listarCuentasProductoLegacy,
+);
+router.get('/productos/:id', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.obtenerProductoLegacy);
+router.post('/productos', requirePermiso('ALMACEN.PRODUCTOS.CREAR'), ctrl.crearProductoLegacy);
+router.put('/productos/:id', requirePermiso('ALMACEN.PRODUCTOS.EDITAR'), ctrl.actualizarProductoLegacy);
+router.delete(
+	'/productos/:id',
+	requirePermiso('ALMACEN.PRODUCTOS.ELIMINAR'),
+	ctrl.eliminarProductoLegacy,
+);
+
+router.get('/remitos', requirePermiso('ALMACEN.REMITOS.VER'), ctrl.listarRemitosLegacy);
+router.get('/remitos/catalogos', requirePermiso('ALMACEN.REMITOS.VER'), ctrl.catalogosRemitosLegacy);
+router.get(
+	'/remitos/proveedores',
+	requirePermiso('ALMACEN.REMITOS.VER'),
+	ctrl.listarProveedoresRemitoLegacy,
+);
+router.get(
+	'/remitos/clientes',
+	requirePermiso('ALMACEN.REMITOS.VER'),
+	ctrl.listarClientesRemitoLegacy,
+);
+router.get(
+	'/remitos/pacientes',
+	requirePermiso('ALMACEN.REMITOS.VER'),
+	ctrl.listarPacientesRemitoLegacy,
+);
+router.get(
+	'/remitos/proximo-nro',
+	requirePermiso('ALMACEN.REMITOS.CREAR'),
+	ctrl.proximoNroRemitoLegacy,
+);
+router.get('/remitos/:id', requirePermiso('ALMACEN.REMITOS.VER'), ctrl.obtenerRemitoLegacy);
+router.post('/remitos', requirePermiso('ALMACEN.REMITOS.CREAR'), ctrl.crearRemitoLegacy);
+router.put('/remitos/:id', requirePermiso('ALMACEN.REMITOS.EDITAR'), ctrl.actualizarRemitoLegacy);
+router.delete('/remitos/:id', requirePermiso('ALMACEN.REMITOS.ELIMINAR'), ctrl.eliminarRemitoLegacy);
+
 module.exports = router;

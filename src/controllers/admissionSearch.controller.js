@@ -1,13 +1,8 @@
 const admissionSearchService = require('../services/admissionSearch.service');
 const agendaService = require('../services/agenda.service');
-const empresaService = require('../services/empresa.service');
 const visitaResumenIaService = require('../services/visitaResumenIa.service');
 const asistenteAuditoria = require('../asistente/auditoria');
 const { jsonSafe } = require('../utils/jsonSafe');
-const {
-  buildSelectiveExportPdf,
-  buildMultiVisitExportPdf,
-} = require('../services/admissionSearchExportPdf');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 
 function publicErrorDetail(error) {
@@ -59,6 +54,10 @@ async function buscar(req, res) {
       nombreApellido = '',
       fechaInicio = '',
       fechaFin = '',
+      porEgreso = '',
+      porIngreso = '',
+      tipoAtencion = '',
+      cliente = '',
       page = 1,
       limit = 25,
     } = req.query;
@@ -69,6 +68,10 @@ async function buscar(req, res) {
       nombreApellido,
       fechaInicio,
       fechaFin,
+      porEgreso,
+      porIngreso,
+      tipoAtencion,
+      cliente,
       page: Number(page),
       limit: Number(limit),
     });
@@ -186,18 +189,20 @@ async function catalogosAdmision(req, res) {
   }
 }
 
-const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
-
-/** Datos de la institución para el encabezado del PDF (no bloquea el export si falla). */
-async function empresaParaPdf(req) {
+async function coberturas(req, res) {
   try {
-    return await empresaService.obtenerInfoEmpresa(req.idEmpresa ?? req.auth?.idEmpresa ?? null);
-  } catch (err) {
-    console.warn('[admission-search export] sin datos de empresa:', err?.message || err);
-    return null;
+    const data = await admissionSearchService.listarCoberturas();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error al listar coberturas para búsqueda:', error);
+    res.status(statusDeError(error)).json({
+      success: false,
+      message: 'Error al listar coberturas',
+    });
   }
 }
 
+const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
 async function resumenIa(req, res) {
   try {
     const { uso, ...data } = await visitaResumenIaService.generarResumenVisita(req.params.numeroVisita);
@@ -220,6 +225,33 @@ async function resumenIa(req, res) {
   }
 }
 
+/**
+ * Criterios del export (secciones, período, filtro de evoluciones) desde el body.
+ * Devuelve `{ error }` con el mensaje para el usuario si son inválidos.
+ */
+function parseCriteriosExport(body, exportAllPorDefecto) {
+  const rawSections = Array.isArray(body.sections) ? body.sections : [];
+  const sections = rawSections.map(String).filter((s) => EXPORT_SECTIONS.has(s));
+  if (sections.length === 0) return { error: 'Seleccioná al menos un tipo de dato para exportar' };
+
+  const exportAll = body.exportAll == null ? exportAllPorDefecto : Boolean(body.exportAll);
+  const fechaInicio = body.fechaInicio != null ? String(body.fechaInicio).trim() : '';
+  const fechaFin = body.fechaFin != null ? String(body.fechaFin).trim() : '';
+  if (!exportAll && sectionsRequireDateFilter(sections) && !fechaInicio && !fechaFin) {
+    return { error: 'Indicá fecha desde y/o hasta, o elegí "Toda la visita"' };
+  }
+  return {
+    sections,
+    exportAll,
+    fechaInicio,
+    fechaFin,
+    evolucionServicioIds: parseEvolucionServicioIds(body),
+    evolucionSectorIds: parseEvolucionSectorIds(body),
+    paraPdf: true,
+  };
+}
+
+/** Datos de la visita para el PDF global (lo arma el front con los mismos módulos de cada sección). */
 async function exportSelectivo(req, res) {
   try {
     const numeroVisita = Number(req.params.numeroVisita);
@@ -230,43 +262,12 @@ async function exportSelectivo(req, res) {
       });
     }
 
-    const body = req.body || {};
-    const rawSections = Array.isArray(body.sections) ? body.sections : [];
-    const sections = rawSections.map(String).filter((s) => EXPORT_SECTIONS.has(s));
-
-    if (sections.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Seleccioná al menos un tipo de dato para exportar',
-      });
+    const criterios = parseCriteriosExport(req.body || {}, false);
+    if (criterios.error) {
+      return res.status(400).json({ success: false, message: criterios.error });
     }
 
-    const exportAll = Boolean(body.exportAll);
-    const fechaInicio = body.fechaInicio != null ? String(body.fechaInicio).trim() : '';
-    const fechaFin = body.fechaFin != null ? String(body.fechaFin).trim() : '';
-    const evolucionSectorIds = parseEvolucionSectorIds(body);
-    const evolucionServicioIds = parseEvolucionServicioIds(body);
-
-    const needDates = sectionsRequireDateFilter(sections);
-    if (!exportAll && needDates && !fechaInicio && !fechaFin) {
-      return res.status(400).json({
-        success: false,
-        message: 'Indicá fecha desde y/o hasta, o elegí "Toda la visita"',
-      });
-    }
-
-    const [payload, empresa] = await Promise.all([
-      admissionSearchService.exportarAdmisionSelectivo(numeroVisita, {
-        sections,
-        exportAll,
-        fechaInicio,
-        fechaFin,
-        evolucionServicioIds,
-        evolucionSectorIds,
-      }),
-      empresaParaPdf(req),
-    ]);
-
+    const payload = await admissionSearchService.exportarAdmisionSelectivo(numeroVisita, criterios);
     if (!payload) {
       return res.status(404).json({
         success: false,
@@ -274,11 +275,7 @@ async function exportSelectivo(req, res) {
       });
     }
 
-    const pdfBuf = await buildSelectiveExportPdf({ ...payload, empresa });
-    const fileName = `visita_${numeroVisita}_export_${new Date().toISOString().slice(0, 10)}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.send(pdfBuf);
+    res.json({ success: true, data: payload });
   } catch (error) {
     if (error.code === 'NO_SECTIONS') {
       return res.status(400).json({
@@ -320,6 +317,7 @@ module.exports = {
   datosPrincipales,
   actualizarDatosPrincipales,
   catalogosAdmision,
+  coberturas,
   exportSelectivo,
   resumenIa,
   turnosActivosPaciente,
@@ -336,58 +334,26 @@ async function exportGeneralPaciente(req, res) {
       });
     }
 
-    const body = req.body || {};
-    const rawSections = Array.isArray(body.sections) ? body.sections : [];
-    const sections = rawSections.map(String).filter((s) => EXPORT_SECTIONS.has(s));
-    if (sections.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Seleccioná al menos un tipo de dato para exportar',
-      });
+    const criterios = parseCriteriosExport(req.body || {}, true);
+    if (criterios.error) {
+      return res.status(400).json({ success: false, message: criterios.error });
     }
 
-    const exportAll = body.exportAll !== false;
-    const fechaInicio = body.fechaInicio != null ? String(body.fechaInicio).trim() : '';
-    const fechaFin = body.fechaFin != null ? String(body.fechaFin).trim() : '';
-    const evolucionSectorIds = parseEvolucionSectorIds(body);
-    const evolucionServicioIds = parseEvolucionServicioIds(body);
-
-    const needDates = sectionsRequireDateFilter(sections);
-    if (!exportAll && needDates && !fechaInicio && !fechaFin) {
-      return res.status(400).json({
-        success: false,
-        message: 'Indicá fecha desde y/o hasta, o elegí "Toda la visita"',
-      });
-    }
-
-    const visitas = await admissionSearchService.listarNumerosVisitaPaciente(idPaciente, 80);
-    if (!visitas.length) {
+    const numeros = await admissionSearchService.listarNumerosVisitaPaciente(idPaciente, 80);
+    if (!numeros.length) {
       return res.status(404).json({
         success: false,
         message: 'El paciente no tiene visitas para exportar',
       });
     }
 
-    const empresa = await empresaParaPdf(req);
-    const pdfBuffers = [];
-    for (const nv of visitas) {
-      const payload = await admissionSearchService.exportarAdmisionSelectivo(nv, {
-        sections,
-        exportAll,
-        fechaInicio,
-        fechaFin,
-        evolucionServicioIds,
-        evolucionSectorIds,
-      });
-      if (!payload) continue;
-      pdfBuffers.push(await buildSelectiveExportPdf({ ...payload, empresa }));
+    const visitas = [];
+    for (const nv of numeros) {
+      const payload = await admissionSearchService.exportarAdmisionSelectivo(nv, criterios);
+      if (payload) visitas.push(payload);
     }
 
-    const pdfBuf = await buildMultiVisitExportPdf(pdfBuffers);
-    const fileName = `paciente_${idPaciente}_carpeta_${new Date().toISOString().slice(0, 10)}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.send(pdfBuf);
+    res.json({ success: true, data: { idPaciente, visitas } });
   } catch (error) {
     if (error.code === 'NO_SECTIONS' || error.code === 'NO_VISITS') {
       return res.status(400).json({

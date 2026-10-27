@@ -12,7 +12,8 @@ const SQL_APPLY_PERSONAS = `
     ${sqlApplyNombrePersona("mc.Profesional", "profFicha", ["valor", "matricula", "operador"])}
     OUTER APPLY (
       SELECT CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.NombreCompleto ELSE profFicha.NombreCompleto END AS NombreCompleto,
-             CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula
+             CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.Matricula ELSE profFicha.Matricula END AS Matricula,
+             CASE WHEN mc.Profesional = mc.OperadorCarga THEN op.ValorPersonal ELSE profFicha.ValorPersonal END AS ValorPersonal
     ) prof`;
 
 /**
@@ -58,7 +59,9 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
       ind.FormaAdicional,
-      COALESCE(op.Matricula, prof.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula,
+      prof.Matricula AS MatriculaProfesional,
+      COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
@@ -205,7 +208,9 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha, days) => {
       v.Descripcion AS DescripcionMedicamento,
       ind.NroAdicional,
       ind.FormaAdicional,
-      COALESCE(op.Matricula, prof.Matricula) AS Matricula
+      COALESCE(op.Matricula, prof.Matricula) AS Matricula,
+      prof.Matricula AS MatriculaProfesional,
+      COALESCE(prof.ValorPersonal, op.ValorPersonal) AS ValorPersonalProfesional
     FROM dbo.imInterCtrlMedicamento AS mc
     LEFT JOIN dbo.imVademecum AS v ON mc.Troquel = v.Troquel
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion

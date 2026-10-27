@@ -77,7 +77,7 @@ const MODULOS = Object.freeze([
 		label: 'Admisión',
 		submodulos: [
 			{ id: 'PACIENTES', label: 'Pacientes',          path: '/dashboard/patients',         acciones: [...CRUD] },
-			{ id: 'BUSQUEDA',  label: 'Consultar Historia Clínica',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
+			{ id: 'BUSQUEDA',  label: 'Consulta general de admisiones',  path: '/dashboard/admission/search', acciones: [ACCIONES.VER] },
 			{ id: 'NUEVA',     label: 'Nueva Admisión',     path: '/dashboard/admission/new',    acciones: [ACCIONES.CREAR] },
 			{ id: 'TABLA',     label: 'Tabla de Admisiones',path: '/dashboard/admission/tables', acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
 		],
@@ -128,14 +128,8 @@ const MODULOS = Object.freeze([
 		id: 'ALMACEN',
 		label: 'Almacén',
 		submodulos: [
-			{ id: 'STOCK',       label: 'Stock',                  path: '/dashboard/almacen',                          acciones: [ACCIONES.VER, ACCIONES.GESTIONAR, ACCIONES.EXPORTAR] },
-			{ id: 'ARTICULOS',   label: 'Artículos',              path: '/dashboard/almacen?tab=articulos',             acciones: [...CRUD] },
-			{ id: 'PROVEEDORES', label: 'Proveedores',            path: '/dashboard/almacen?tab=proveedores',           acciones: [...CRUD] },
-			{ id: 'SOLICITUDES', label: 'Solicitudes de provisión', path: '/dashboard/almacen?tab=solicitudes',         acciones: [...CRUD, ACCIONES.GESTIONAR, ACCIONES.IMPRIMIR] },
-			{ id: 'ORDENES',     label: 'Órdenes de provisión',   path: '/dashboard/almacen?tab=ordenes',               acciones: [...CRUD, ACCIONES.IMPRIMIR] },
-			{ id: 'ACTAS',       label: 'Actas de recepción',     path: '/dashboard/almacen?tab=actas',                 acciones: [...CRUD, ACCIONES.IMPRIMIR] },
-			{ id: 'MOVIMIENTOS', label: 'Historial de movimientos', path: '/dashboard/almacen?tab=movimientos',           acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
-			{ id: 'CONFIG',     label: 'Configuración',          path: '/dashboard/almacen?tab=config',                 acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
+			{ id: 'PRODUCTOS', label: 'Productos', path: '/dashboard/almacen/productos', acciones: [...CRUD] },
+			{ id: 'REMITOS',   label: 'Remitos',   path: '/dashboard/almacen/remitos',   acciones: [...CRUD] },
 		],
 	},
 	{
@@ -301,6 +295,7 @@ const PLANTILLAS = Object.freeze({
 		'INTERNACION.INDICACIONES.VER',
 		'INTERNACION.INDICACIONES.APLICAR',  // marcar como aplicada
 		'INTERNACION.EVOLUCIONES.VER',
+		'INTERNACION.INTERCONSULTAS.VER',
 		'INTERNACION.ESTUDIOS.VER',
 		'INTERNACION.PROTOCOLOS.VER',
 		'INTERNACION.PROCEDIMIENTOS.VER',
@@ -334,7 +329,9 @@ const PLANTILLAS = Object.freeze({
 		..._soloVer('ADMISION'),
 		..._soloVer('INTERNACION', ['AUDITORIA_HC']),
 		..._soloVer('FACTURACION'),
-		..._soloVer('ALMACEN'),
+		// Almacén operativo: catálogo y remitos (sin escritura clínica).
+		..._todas('ALMACEN', 'PRODUCTOS'),
+		..._todas('ALMACEN', 'REMITOS'),
 		// Reportes → Facturación (producción del hospital) muestra montos por
 		// profesional y cobertura: queda reservado a ADMIN.
 		..._soloVer('REPORTES', ['FACTURACION']),

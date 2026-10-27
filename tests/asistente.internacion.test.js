@@ -8,6 +8,7 @@ const path = require('path');
 const src = (p) => path.join(__dirname, '..', 'src', p);
 
 // Las tools de escritura se prueban con la escritura habilitada; el modo solo lectura tiene su test.
+process.env.ASISTENTE_INTERNACION_LISTO = '1';
 process.env.ASISTENTE_INTERNACION_ESCRITURA = '1';
 
 let filasDb = [];

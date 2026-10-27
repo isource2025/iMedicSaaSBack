@@ -509,7 +509,11 @@ async function prepararProtocolo(args, ctx) {
 		const ts = tokens(qPractica).filter((t) => t.length > 2).sort((a, b) => b.length - a.length);
 		let lista = [];
 		for (const q of [norm(qPractica), ...ts.slice(0, 2)]) {
-			const d = await listaDe(ctx, '/api/protocolos/practicas/buscar', { q, limit: 40 });
+			const d = await listaDe(ctx, '/api/protocolos/practicas/buscar', {
+				q,
+				limit: 40,
+				numeroVisita: c.numeroVisita,
+			});
 			lista = Array.isArray(d) ? d : [];
 			if (lista.length) break;
 		}

@@ -25,7 +25,7 @@ Antes era «un mensaje = un especialista»: si el router se equivocaba, el usuar
 | Agente | `LISTO` | Qué hace hoy |
 |---|---|---|
 | **SOPORTE** (capa base) | **sí** | Manual, pantallas, navegar, escribir en campo y `diagnosticar` («no me deja / me da error»). Va en todos los turnos. |
-| **INTERNACION** | **sí** (`ASISTENTE_INTERNACION_LISTO=0` lo apaga) | 24 tools: ubicar (nombre, DNI, visita o cama), censo y pase de guardia, resumen y lecturas, cargas del menú médico y movimientos (estos con `ASISTENTE_INTERNACION_ESCRITURA=1`). Testeado con mocks y evals. **Falta correr `scripts/asistente_internacion.js` en una copia de la BD y la prueba de un usuario.** |
+| **INTERNACION** | **no en produ** (opt-in: `ASISTENTE_INTERNACION_LISTO=1`) | 24 tools: ubicar (nombre, DNI, visita o cama), censo y pase de guardia, resumen y lecturas, cargas del menú médico y movimientos (estos con `ASISTENTE_INTERNACION_ESCRITURA=1`). Testeado con mocks y evals. **Falta correr `scripts/asistente_internacion.js` en una copia de la BD y la prueba de un usuario.** Rollout actual: solo Soporte. |
 | ADMISION | no | Solo regla de ruteo |
 | TURNOS | no | Solo regla de ruteo |
 | ALMACEN | no | Solo regla de ruteo |
@@ -219,7 +219,7 @@ Chat: `cómo hago un ingreso` → `qué pantallas tengo` → `llevame al mapa de
 
 ## 8. Módulo INTERNACIÓN (activo)
 
-Prendido por defecto. `ASISTENTE_INTERNACION_LISTO=0` en el env del backend lo apaga sin redeploy (los pedidos vuelven a Soporte).
+Apagado por defecto (rollout solo Soporte). `ASISTENTE_INTERNACION_LISTO=1` en el env del backend lo prende sin redeploy.
 
 **Modos (`ASISTENTE_INTERNACION_ESCRITURA`):**
 

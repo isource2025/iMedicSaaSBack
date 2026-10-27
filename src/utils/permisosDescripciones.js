@@ -77,7 +77,7 @@ const SUBMODULOS = Object.freeze({
 		},
 	},
 	'ADMISION.BUSQUEDA': {
-		descripcion: 'Consultar Historia Clínica: búsqueda de pacientes y de sus admisiones.',
+		descripcion: 'Consulta general de admisiones: búsqueda de pacientes y de sus admisiones.',
 		acciones: { VER: 'Buscar pacientes y consultar su historia clínica' },
 	},
 	'ADMISION.NUEVA': {
@@ -111,7 +111,7 @@ const SUBMODULOS = Object.freeze({
 		descripcion: 'Indicaciones médicas del paciente internado.',
 		acciones: {
 			CREAR: 'Indicar (prescribir) nuevas indicaciones médicas',
-			EDITAR: 'Modificar indicaciones médicas',
+			EDITAR: 'Modificar indicaciones médicas (dejar sin efecto incluido)',
 			ELIMINAR: 'Eliminar indicaciones médicas',
 			APLICAR: 'Marcar una indicación como aplicada (tarea de enfermería)',
 		},
@@ -176,39 +176,8 @@ const SUBMODULOS = Object.freeze({
 	},
 
 	// ── Almacén ───────────────────────────────────────────────────────────
-	'ALMACEN.STOCK': {
-		descripcion: 'Stock de almacén.',
-		acciones: {
-			VER: 'Ver el stock',
-			GESTIONAR: 'Ajustar y mover stock',
-			EXPORTAR: 'Descargar el stock',
-		},
-	},
-	'ALMACEN.ARTICULOS': { descripcion: 'Catálogo de artículos del almacén.' },
-	'ALMACEN.PROVEEDORES': { descripcion: 'Proveedores del almacén.' },
-	'ALMACEN.SOLICITUDES': {
-		descripcion: 'Solicitudes de provisión al almacén.',
-		acciones: {
-			GESTIONAR: 'Aprobar y gestionar solicitudes de provisión',
-			IMPRIMIR: 'Imprimir solicitudes',
-		},
-	},
-	'ALMACEN.ORDENES': {
-		descripcion: 'Órdenes de provisión a proveedores.',
-		acciones: { IMPRIMIR: 'Imprimir órdenes de provisión' },
-	},
-	'ALMACEN.ACTAS': {
-		descripcion: 'Actas de recepción de mercadería.',
-		acciones: { IMPRIMIR: 'Imprimir actas de recepción' },
-	},
-	'ALMACEN.MOVIMIENTOS': {
-		descripcion: 'Historial de movimientos del almacén.',
-		acciones: { VER: 'Ver el historial de movimientos', EXPORTAR: 'Descargar el historial de movimientos' },
-	},
-	'ALMACEN.CONFIG': {
-		descripcion: 'Configuración del almacén.',
-		acciones: { VER: 'Ver la configuración del almacén', EDITAR: 'Modificar la configuración del almacén' },
-	},
+	'ALMACEN.PRODUCTOS': { descripcion: 'Catálogo de productos del almacén.' },
+	'ALMACEN.REMITOS': { descripcion: 'Remitos de mercadería (cabecera e ítems).' },
 
 	// ── Reportes ──────────────────────────────────────────────────────────
 	'REPORTES.ESTADISTICAS': { descripcion: 'Reportes estadísticos de la actividad.' },

@@ -31,7 +31,15 @@ async function buscarPracticas(req, res) {
 	try {
 		const q = String(req.query.q || '').trim();
 		const limit = req.query.limit != null ? Number(req.query.limit) : 30;
-		const data = await protocolosService.buscarPracticas({ q, limit });
+		const numeroVisita =
+			req.query.numeroVisita != null && req.query.numeroVisita !== ''
+				? Number(req.query.numeroVisita)
+				: null;
+		const idConvenio =
+			req.query.idConvenio != null && req.query.idConvenio !== ''
+				? Number(req.query.idConvenio)
+				: null;
+		const data = await protocolosService.buscarPracticas({ q, limit, numeroVisita, idConvenio });
 		return res.json({ success: true, data: data || [] });
 	} catch (err) {
 		console.error('[protocolos] practicas:', err.message);

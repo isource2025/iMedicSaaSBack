@@ -149,6 +149,7 @@ function instrucciones({ avisos, avisoModulo, ayuda = false, paquetes = [ID], co
 		'- Toda duda de uso del sistema (cómo se hace, dónde está, qué es, contraseña, sesión, menú): llamá buscar_en_manual ANTES de responder. Nunca contestes de memoria ni mandes a «soporte» sin buscar.',
 		'- “No aparece”, “se me borró”, “no lo encuentro”: buscar_en_manual (casi siempre es el filtro de fecha/período). diagnosticar es para errores y botones que no deja usar. Si podés leer el dato (ver_*) y existe, decile cuándo se cargó y que en la pantalla cambie el día del calendario o el período («Semana», «Todas»).',
 		'- “¿Cómo hago…?” / “¿dónde queda…?” / “¿qué es…?”: buscar_en_manual. Contestá con «comoLlegar» y los «pasos» del artículo, con los nombres de botones tal cual (entre «»). Si no hay artículo, decilo y no inventes pasos ni botones.',
+		'- Si vienen varios artículos, elegí el del módulo que corresponde al pedido (campo «modulo») y el título más específico. Ej.: «HC / historia clínica de ingreso» ≠ «nueva admisión / ingreso administrativo». No mezcles pantallas de módulos distintos.',
 		'- Si el usuario describe un problema que coincide con un «problemas[].sintoma» del artículo, dale esa causa y la solución.',
 		'- accesible:false = el usuario no tiene permiso para esa pantalla: decíselo y quién se lo habilita, además de los pasos.',
 		'- Si el artículo dice que algo no existe o está por implementar, decilo claro; no sugieras un atajo inventado.',

@@ -395,46 +395,69 @@ async function obtenerProForma(tipoProtocolo) {
 }
 
 /**
- * Busca prácticas en moduladas + nomenclador y calcula roles requeridos
- * según *Unidad > 0 (misma regla que ACLYSA).
+ * Convenio de la visita (imVisita.CONTRATO → imPracticasXConvenios.IdConvenio).
+ * Si el convenio no tiene filas sincronizadas, cae a IdConvenio = 0 (catálogo base).
  */
-async function buscarPracticas({ q, limit = 30 }) {
+async function _convenioParaBusqueda({ idConvenio, numeroVisita }) {
+	let conv = idConvenio != null && idConvenio !== '' ? Number(idConvenio) : NaN;
+	if ((!Number.isFinite(conv) || conv < 0) && numeroVisita != null && numeroVisita !== '') {
+		const nv = Number(numeroVisita);
+		if (Number.isFinite(nv) && nv > 0) {
+			const rows = await executeQuery(
+				`SELECT TOP 1 ISNULL(CONTRATO, 0) AS convenio
+				 FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
+				[{ value: nv, type: 'Int' }],
+			);
+			conv = Number(rows?.[0]?.convenio) || 0;
+		}
+	}
+	if (!Number.isFinite(conv) || conv < 0) conv = 0;
+	if (conv > 0) {
+		const hay = await executeQuery(
+			`SELECT TOP 1 1 AS ok FROM dbo.imPracticasXConvenios WHERE IdConvenio = @p0`,
+			[{ value: conv, type: 'Int' }],
+		);
+		if (!hay?.length) conv = 0;
+	}
+	return conv;
+}
+
+/**
+ * Busca prácticas en imPracticasXConvenios (tabla derivada del convenio) y calcula
+ * roles requeridos según *Unidad > 0 en moduladas/nomenclador (misma regla que ACLYSA).
+ * AliasTabla: MOD/CLMOD → MO, NOM/CLNOM → NO.
+ */
+async function buscarPracticas({ q, limit = 30, numeroVisita, idConvenio }) {
 	const term = String(q || '').trim();
 	const lim = Math.min(Math.max(Number(limit) || 30, 1), 80);
 	if (term.length < 2) return [];
 	const like = `%${term}%`;
 	const exactId = /^\d+$/.test(term) ? term : null;
+	const convenio = await _convenioParaBusqueda({ idConvenio, numeroVisita });
 	const rows = await executeQuery(
-		`SELECT TOP ${lim} *
-		 FROM (
-		   SELECT
-		     m.IDPractica AS idPractica,
-		     'MO' AS tipoPractica,
-		     LTRIM(RTRIM(ISNULL(m.Descripcion, ''))) AS descripcion,
-		     ISNULL(m.EspUnidad, 0) AS espUnidad,
-		     ISNULL(m.Adte1Unidad, 0) AS adte1Unidad,
-		     ISNULL(m.Adte2Unidad, 0) AS adte2Unidad,
-		     ISNULL(m.AstaUnidad, 0) AS astaUnidad
-		   FROM dbo.imModuladas m
-		   WHERE m.Descripcion LIKE @p0
-		      OR CAST(m.IDPractica AS VARCHAR(20)) LIKE @p0
-		   UNION ALL
-		   SELECT
-		     n.IDPractica,
-		     'NO',
-		     LTRIM(RTRIM(ISNULL(n.Descripcion, ''))),
-		     ISNULL(n.EspUnidad, 0),
-		     ISNULL(n.Adte1Unidad, 0),
-		     ISNULL(n.Adte2Unidad, 0),
-		     ISNULL(n.AstaUnidad, 0)
-		   FROM dbo.imNomenclador n
-		   WHERE n.Descripcion LIKE @p0
-		      OR CAST(n.IDPractica AS VARCHAR(20)) LIKE @p0
-		 ) x
+		`SELECT TOP ${lim}
+		   x.IdPractica AS idPractica,
+		   CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN 'MO' ELSE 'NO' END AS tipoPractica,
+		   LTRIM(RTRIM(ISNULL(x.Descripcion, ''))) AS descripcion,
+		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.EspUnidad ELSE n.EspUnidad END, 0) AS espUnidad,
+		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.Adte1Unidad ELSE n.Adte1Unidad END, 0) AS adte1Unidad,
+		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.Adte2Unidad ELSE n.Adte2Unidad END, 0) AS adte2Unidad,
+		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.AstaUnidad ELSE n.AstaUnidad END, 0) AS astaUnidad
+		 FROM dbo.imPracticasXConvenios x
+		 LEFT JOIN dbo.imModuladas m
+		   ON x.AliasTabla IN ('MOD', 'CLMOD') AND m.IDPractica = x.IdPractica
+		 LEFT JOIN dbo.imNomenclador n
+		   ON x.AliasTabla IN ('NOM', 'CLNOM') AND n.IDPractica = x.IdPractica
+		 WHERE x.IdConvenio = @p0
+		   AND (
+		     x.Descripcion LIKE @p1
+		     OR CAST(x.IdPractica AS VARCHAR(20)) LIKE @p1
+		   )
 		 ORDER BY
-		   CASE WHEN @p1 IS NOT NULL AND CAST(x.idPractica AS VARCHAR(20)) = @p1 THEN 0 ELSE 1 END,
-		   x.descripcion`,
+		   CASE WHEN @p2 IS NOT NULL AND CAST(x.IdPractica AS VARCHAR(20)) = @p2 THEN 0 ELSE 1 END,
+		   x.Descripcion`,
 		[
+			{ value: convenio, type: 'Int' },
 			{ value: like, type: 'VarChar' },
 			{ value: exactId, type: 'VarChar' },
 		],

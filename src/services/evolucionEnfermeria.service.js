@@ -19,6 +19,8 @@ const SELECT_EVOLUCION = `
       CASE WHEN ev.Profesional = ev.OperadorCarga THEN op.NombreCompleto
            ELSE COALESCE(prof.NombreCompleto, op.NombreCompleto) END AS ProfesionalApellido,
       CAST(NULL AS VARCHAR(80)) AS ProfesionalNombres,
+      CASE WHEN ev.Profesional = ev.OperadorCarga THEN op.ValorPersonal
+           ELSE COALESCE(prof.ValorPersonal, op.ValorPersonal) END AS ValorPersonalProfesional,
       CONVERT(varchar(10), DATEADD(day, ev.FechaControl, '1800-12-28'), 23) AS FechaControl,
       CONVERT(varchar(5), DATEADD(ms, (ev.HoraControl - 1) * 10, 0), 108) AS HoraControl,
       ev.FechaControl AS FechaControlClarion,

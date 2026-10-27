@@ -153,6 +153,54 @@ async function subirArchivoRequisito(req, res) {
  * file server de la clínica y cae al disco local si el archivo quedó ahí por el
  * fallback de subida.
  */
+async function enviarArchivo(res, archivo) {
+	const candidatos = pathLookupCandidates(archivo.ruta);
+	const contentType = contentTypeForAdjuntoFileName(archivo.nombreArchivo);
+	const cabeceras = () => {
+		res.setHeader('Content-Type', contentType);
+		res.setHeader(
+			'Content-Disposition',
+			`inline; filename="${archivo.nombreArchivo}"; filename*=UTF-8''${encodeURIComponent(
+				archivo.nombreArchivo,
+			)}`,
+		);
+		res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+	};
+
+	try {
+		const fileServerUrl = await resolveFileServerUrl();
+		let respuesta = null;
+		let ultimoError = null;
+		for (const ruta of candidatos) {
+			try {
+				respuesta = await axios.get(fileServerFileUrl(fileServerUrl, ruta), {
+					responseType: 'stream',
+					headers: fileServerHeaders(),
+					timeout: FILE_SERVER_TIMEOUT_MS,
+					validateStatus: (s) => s >= 200 && s < 300,
+				});
+				break;
+			} catch (e) {
+				ultimoError = e;
+			}
+		}
+		if (!respuesta) throw ultimoError || new Error('Archivo no encontrado');
+		cabeceras();
+		return respuesta.data.pipe(res);
+	} catch (errorArchivo) {
+		const local = candidatos.find((p) => fsSync.existsSync(p));
+		if (local) {
+			cabeceras();
+			return fsSync.createReadStream(local).pipe(res);
+		}
+		console.error('No se pudo obtener el archivo del requisito:', errorArchivo.message);
+		return res.status(503).json({
+			success: false,
+			message: describeFileServerError(errorArchivo),
+		});
+	}
+}
+
 async function verArchivoRequisito(req, res) {
 	try {
 		const archivo = await admissionNuevaService.obtenerArchivoRequisito(
@@ -164,55 +212,37 @@ async function verArchivoRequisito(req, res) {
 				.status(404)
 				.json({ success: false, message: 'El requisito todavía no tiene archivo' });
 		}
-
-		const candidatos = pathLookupCandidates(archivo.ruta);
-		const contentType = contentTypeForAdjuntoFileName(archivo.nombreArchivo);
-		const cabeceras = () => {
-			res.setHeader('Content-Type', contentType);
-			res.setHeader(
-				'Content-Disposition',
-				`inline; filename="${archivo.nombreArchivo}"; filename*=UTF-8''${encodeURIComponent(
-					archivo.nombreArchivo,
-				)}`,
-			);
-			res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-		};
-
-		try {
-			const fileServerUrl = await resolveFileServerUrl();
-			let respuesta = null;
-			let ultimoError = null;
-			for (const ruta of candidatos) {
-				try {
-					respuesta = await axios.get(fileServerFileUrl(fileServerUrl, ruta), {
-						responseType: 'stream',
-						headers: fileServerHeaders(),
-						timeout: FILE_SERVER_TIMEOUT_MS,
-						validateStatus: (s) => s >= 200 && s < 300,
-					});
-					break;
-				} catch (e) {
-					ultimoError = e;
-				}
-			}
-			if (!respuesta) throw ultimoError || new Error('Archivo no encontrado');
-			cabeceras();
-			return respuesta.data.pipe(res);
-		} catch (errorArchivo) {
-			const local = candidatos.find((p) => fsSync.existsSync(p));
-			if (local) {
-				cabeceras();
-				return fsSync.createReadStream(local).pipe(res);
-			}
-			console.error('No se pudo obtener el archivo del requisito:', errorArchivo.message);
-			return res.status(503).json({
-				success: false,
-				message: describeFileServerError(errorArchivo),
-			});
-		}
+		return enviarArchivo(res, archivo);
 	} catch (error) {
 		console.error('Error al ver el archivo del requisito:', error);
 		fallar(res, error, 'Error al ver el archivo del requisito');
+	}
+}
+
+async function documentosPaciente(req, res) {
+	try {
+		const data = await admissionNuevaService.documentosDelPaciente(req.params.idPaciente);
+		res.json({ success: true, data });
+	} catch (error) {
+		console.error('Error al listar los documentos del paciente:', error);
+		fallar(res, error, 'Error al listar los documentos del paciente');
+	}
+}
+
+async function verArchivoDocumentoPaciente(req, res) {
+	try {
+		const archivo = await admissionNuevaService.obtenerArchivoDocumentoPaciente(
+			req.params.idPaciente,
+			req.params.numeroVisita,
+			req.params.valor,
+		);
+		if (!archivo) {
+			return res.status(404).json({ success: false, message: 'Documento no encontrado' });
+		}
+		return enviarArchivo(res, archivo);
+	} catch (error) {
+		console.error('Error al ver el documento del paciente:', error);
+		fallar(res, error, 'Error al ver el documento del paciente');
 	}
 }
 
@@ -222,9 +252,12 @@ module.exports = {
 	requisitosCatalogo,
 	ultimaVisita,
 	verArchivoRequisito,
+	documentosPaciente,
+	verArchivoDocumentoPaciente,
 	crear,
 	requisitosVisita,
 	agregarRequisito,
 	quitarRequisito,
 	subirArchivoRequisito,
 };
+
