@@ -23,6 +23,11 @@ const ACCION_GENERICA = Object.freeze({
 	APLICAR: 'Marcar como aplicado o cumplido',
 	EXPORTAR: 'Descargar la información (Excel/PDF)',
 	IMPRIMIR: 'Imprimir el documento',
+	EDITAR_AJENOS: 'Editar o eliminar registros de otro profesional',
+	CERRAR: 'Cerrar el registro o la atención',
+	MARCAR_VISTO: 'Marcar como visto',
+	VER_TODOS: 'Ver de todos los sectores',
+	SOLO_PROPIA: 'Limitar el alcance a lo propio',
 });
 
 /**
@@ -44,6 +49,9 @@ const SUBMODULOS = Object.freeze({
 			CREAR: 'Dar turnos nuevos',
 			EDITAR: 'Modificar, mover o cambiar el estado de un turno',
 			ELIMINAR: 'Cancelar o eliminar turnos',
+			CERRAR: 'Cerrar un turno y editar la atención post-cierre',
+			SOLO_PROPIA: 'Limitar la agenda a la matrícula propia (sin GESTIONAR, fuerza alcance propio)',
+			GESTIONAR: 'Operar agendas de cualquier profesional (por id de turno)',
 		},
 	},
 	'TURNOS.ADMIN': {
@@ -64,6 +72,10 @@ const SUBMODULOS = Object.freeze({
 	'TURNOS.TABLA': {
 		descripcion: 'Tabla de turnos para consulta y exportación.',
 		acciones: { VER: 'Ver la tabla de turnos', EXPORTAR: 'Descargar la tabla de turnos' },
+	},
+	'TURNOS.CONVERSACIONES': {
+		descripcion: 'Bandeja de conversaciones WhatsApp vinculadas a turnos.',
+		acciones: { VER: 'Ver y atender conversaciones de WhatsApp' },
 	},
 
 	// ── Admisión ──────────────────────────────────────────────────────────
@@ -114,10 +126,16 @@ const SUBMODULOS = Object.freeze({
 			EDITAR: 'Modificar indicaciones médicas (dejar sin efecto incluido)',
 			ELIMINAR: 'Eliminar indicaciones médicas',
 			APLICAR: 'Marcar una indicación como aplicada (tarea de enfermería)',
+			MARCAR_VISTO: 'Marcar indicaciones nuevas como vistas al salir de la ficha',
 		},
 	},
 	'INTERNACION.EVOLUCIONES': { descripcion: 'Evoluciones médicas del paciente internado.' },
-	'INTERNACION.INTERCONSULTAS': { descripcion: 'Interconsultas solicitadas a otros profesionales.' },
+	'INTERNACION.INTERCONSULTAS': {
+		descripcion: 'Interconsultas solicitadas a otros profesionales.',
+		acciones: {
+			VER_TODOS: 'Ver la bandeja de interconsultas de todos los sectores',
+		},
+	},
 	'INTERNACION.EVOLUCION_ENFERMERIA': { descripcion: 'Evolución de enfermería del paciente internado.' },
 	'INTERNACION.SIGNOS_VITALES': {
 		descripcion: 'Controles frecuentes y signos vitales del paciente.',
@@ -132,6 +150,15 @@ const SUBMODULOS = Object.freeze({
 	'INTERNACION.INSUMOS': { descripcion: 'Insumos utilizados en el paciente internado.' },
 	'INTERNACION.ESTUDIOS': {
 		descripcion: 'Pedidos de estudios complementarios (laboratorio, imágenes) y su bandeja de cumplimiento.',
+		acciones: {
+			VER_TODOS: 'Ver la bandeja de estudios de todos los sectores',
+		},
+	},
+	'INTERNACION.REGISTROS': {
+		descripcion: 'Registros clínicos cargados por otro profesional.',
+		acciones: {
+			EDITAR_AJENOS: 'Editar o eliminar registros clínicos creados por otro profesional',
+		},
 	},
 	'INTERNACION.PROTOCOLOS': { descripcion: 'Protocolos registrados del paciente internado.' },
 	'INTERNACION.PROCEDIMIENTOS': { descripcion: 'Procedimientos realizados al paciente internado.' },
@@ -215,6 +242,15 @@ const SUBMODULOS = Object.freeze({
 			VER: 'Ver los datos y el logo de la institución',
 			EDITAR: 'Corregir los datos de la institución y subir, cambiar o quitar el logo',
 		},
+	},
+	'CONFIGURACION.OPCGRD': {
+		descripcion: 'Opciones de grilla (catálogo técnico de columnas y vistas).',
+	},
+
+	// ── Asistente ─────────────────────────────────────────────────────────
+	'ASISTENTE.SQL': {
+		descripcion: 'Consultas SQL de solo lectura del asistente sobre la base del establecimiento.',
+		acciones: { VER: 'Ejecutar consultas SELECT de solo lectura vía el asistente' },
 	},
 
 	// ── Plataforma (solo super administradores) ───────────────────────────

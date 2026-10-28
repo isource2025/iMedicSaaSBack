@@ -382,15 +382,8 @@ const updateIndicacion = async (req, res) => {
 
 const dejarSinEfecto = async (req, res) => {
 	try {
-		const rol = String(req.rolNombre || req.auth?.rol?.nombre || '')
-			.trim()
-			.toUpperCase();
-		if (rol !== 'MEDICO' && rol !== 'ADMIN' && rol !== 'SUPER_ADMIN') {
-			return res.status(403).json({
-				success: false,
-				mensaje: 'Solo médicos pueden dejar una indicación sin efecto',
-			});
-		}
+		// Autorización: requirePermiso('INTERNACION.INDICACIONES.EDITAR') en la ruta
+		// (incluye roles privados/custom con ese permiso).
 
 		const { nroIndicacion } = req.params;
 		const nroIndicacionInt = parseInt(nroIndicacion, 10);
@@ -512,13 +505,11 @@ const crearIndicacionHija = async (req, res) => {
 
 const marcarVistoEnfermeria = async (req, res) => {
 	try {
-		const rol = String(req.rolNombre || req.auth?.rol?.nombre || '')
-			.trim()
-			.toUpperCase();
-		if (rol !== 'ENFERMERO') {
+		const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
+		if (!(await reqTienePermiso(req, 'INTERNACION.INDICACIONES.MARCAR_VISTO'))) {
 			return res.status(403).json({
 				success: false,
-				mensaje: 'Solo enfermería puede limpiar el estado Nueva de las indicaciones',
+				mensaje: 'Permiso requerido: INTERNACION.INDICACIONES.MARCAR_VISTO',
 			});
 		}
 

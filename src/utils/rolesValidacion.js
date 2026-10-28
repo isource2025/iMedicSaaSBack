@@ -95,20 +95,21 @@ function indiceCatalogo() {
 }
 
 /**
- * Valida y normaliza el conjunto de permisos de un rol personalizado.
+ * Valida y normaliza el conjunto de permisos de un rol.
  *
  * Reglas:
  *  - todo código debe existir en el catálogo;
- *  - no se admiten permisos restringidos (PLATAFORMA.*, CONFIGURACION.ROLES.*);
+ *  - no se admiten permisos restringidos (PLATAFORMA.*, CONFIGURACION.ROLES.*)
+ *    salvo `permitirRestringidos` (plantillas del sistema, p. ej. ADMIN);
  *  - el actor sólo puede otorgar permisos que él mismo tiene;
  *  - si un submódulo tiene VER y se marca otra acción, se agrega VER.
  *
  * @param {string[]} codigos
- * @param {{ permisosActor?: Iterable<string>|null }} [opciones]
+ * @param {{ permisosActor?: Iterable<string>|null, permitirRestringidos?: boolean }} [opciones]
  *   permisosActor: null/undefined = no se comprueba (uso interno).
  * @returns {{ ok: boolean, permisos: string[], agregados: string[], errores: string[] }}
  */
-function normalizarPermisos(codigos, { permisosActor = null } = {}) {
+function normalizarPermisos(codigos, { permisosActor = null, permitirRestringidos = false } = {}) {
 	const { orden, info, tieneVer } = indiceCatalogo();
 	const actor = permisosActor ? new Set(permisosActor) : null;
 	const errores = [];
@@ -123,7 +124,7 @@ function normalizarPermisos(codigos, { permisosActor = null } = {}) {
 		if (!c) continue;
 		if (!info.has(c)) {
 			errores.push(`Permiso desconocido: ${c}`);
-		} else if (esPermisoRestringido(c)) {
+		} else if (esPermisoRestringido(c) && !permitirRestringidos) {
 			errores.push(`El permiso ${c} no se puede asignar a un rol personalizado`);
 		} else {
 			elegidos.add(c);

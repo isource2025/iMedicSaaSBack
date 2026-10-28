@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Identidad clínica desde JWT (no confiar en campos del body).
  *
  * CodOperador (cuenta) y ValorPersonal (ficha imPersonal.Valor) son claves independientes
@@ -8,6 +8,24 @@
 function resolveCodOperador(req) {
 	const u = req.auth?.usuario || {};
 	const candidates = [u.codOperador, u.idCodOperador, u.CodOperador, req.codOperador];
+	for (const c of candidates) {
+		if (c == null || c === '') continue;
+		const n = Number(c);
+		if (Number.isFinite(n) && n > 0) return n;
+	}
+	return null;
+}
+
+function resolveValorPersonal(req) {
+	const u = req.auth?.usuario || {};
+	const candidates = [
+		req.valorPersonal,
+		u.id,
+		u.idValorpersonal,
+		u.idValorPersonal,
+		u.valorPersonal,
+		u.ValorPersonal,
+	];
 	for (const c of candidates) {
 		if (c == null || c === '') continue;
 		const n = Number(c);
@@ -32,7 +50,7 @@ function resolveOperadorCarga(req) {
 	return resolveCodOperador(req);
 }
 
-/** Matrícula profesional; si no hay, usa CodOperador (enfermería / admin). */
+/** Ficha (imPersonal.Valor) para ProfesionalAsiste / columnas "Profesional". */
 function resolveProfesional(req) {
 	return resolveValorPersonal(req);
 }
@@ -88,15 +106,15 @@ function quitarAutorDelBody(data) {
 
 /**
  * Identidad para grabar: siempre el usuario de la sesión.
- * @returns {{ codOperador: number, profesional: number, matricula: number|null } | null}
+ * `valorPersonal` es 0 ("sin profesional" en Clarion) si la cuenta no tiene ficha.
+ * @returns {{ codOperador: number, valorPersonal: number, matricula: number|null } | null}
  */
 function firmarSesion(req, res) {
 	const codOperador = requireOperadorCarga(req, res);
 	if (codOperador == null) return null;
-	const profesional = resolveProfesional(req) ?? codOperador;
 	return {
 		codOperador,
-		profesional,
+		valorPersonal: resolveValorPersonal(req) ?? 0,
 		matricula: resolveMatricula(req),
 	};
 }

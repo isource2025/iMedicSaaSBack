@@ -81,10 +81,13 @@ async function llamarTurno(req, res) {
 		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
+		const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
+		const solo = await reqTienePermiso(req, 'TURNOS.AGENDA.SOLO_PROPIA');
+		const gestiona = await reqTienePermiso(req, 'TURNOS.AGENDA.GESTIONAR');
 		const data = await turneroService.registrarLlamado({
 			matricula: m,
 			idTurno,
-			porIdTurno: req.rolNombre !== 'MEDICO',
+			porIdTurno: !(solo && !gestiona),
 		});
 		res.json({ success: true, data });
 	} catch (e) {

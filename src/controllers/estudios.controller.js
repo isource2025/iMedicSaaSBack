@@ -1,14 +1,11 @@
 const estudiosService = require('../services/estudios.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
-const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
 const { resolveCodOperador } = require('../utils/sessionIdentity');
 
 async function _veTodosLosServicios(req) {
-	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
-	const id = Number(req.auth?.rol?.id);
-	if (rn === 'SUPER_ADMIN' || id === 5) return true;
-	return esAdminClinico(req);
+	return reqTienePermiso(req, 'INTERNACION.ESTUDIOS.VER_TODOS');
 }
 
 function _codOperadorSesion(req) {

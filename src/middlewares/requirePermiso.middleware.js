@@ -22,23 +22,32 @@ const ROLES_MATRIZ = new Set([
 	'PANEL_DATOS',
 ]);
 
-async function _resolverPermisosReq(req) {
+async function resolverPermisosReq(req) {
+	if (Array.isArray(req.permisos) && req.permisos.length) return req.permisos;
 	try {
 		const r = await permisosService.permisosDeUsuario(req.valorPersonal);
 		const permisos = Array.isArray(r) ? r : r?.permisos || [];
-		if (permisos.length) return permisos;
+		if (permisos.length) {
+			req.permisos = permisos;
+			return permisos;
+		}
 	} catch (e) {
 		console.warn('[requirePermiso] permisosDeUsuario falló:', e.message);
 	}
 
 	const rn = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
-	if (ROLES_MATRIZ.has(rn)) {
-		return matriz.permisosDeRol(rn);
+	let permisos = [];
+	if (ROLES_MATRIZ.has(rn) || rn) {
+		permisos = matriz.permisosDeRol(rn);
 	}
-	if (rn) {
-		return matriz.permisosDeRol(rn);
-	}
-	return [];
+	req.permisos = permisos;
+	return permisos;
+}
+
+/** ¿El request tiene el código? Resuelve y cachea `req.permisos`. */
+async function reqTienePermiso(req, codigo) {
+	const permisos = await resolverPermisosReq(req);
+	return permisosService.tienePermiso(permisos, codigo);
 }
 
 function requirePermiso(codigo) {
@@ -51,10 +60,9 @@ function requirePermiso(codigo) {
 				return res.status(401).json({ success: false, mensaje: 'No autorizado' });
 			}
 
-			const permisos = await _resolverPermisosReq(req);
+			const permisos = await resolverPermisosReq(req);
 
 			if (permisosService.tienePermiso(permisos, codigo)) {
-				req.permisos = permisos;
 				return next();
 			}
 			return res
@@ -78,10 +86,9 @@ function requireAnyPermiso(...codigos) {
 			if (!req.auth) {
 				return res.status(401).json({ success: false, mensaje: 'No autorizado' });
 			}
-			const permisos = await _resolverPermisosReq(req);
+			const permisos = await resolverPermisosReq(req);
 			const ok = lista.some((c) => permisosService.tienePermiso(permisos, c));
 			if (ok) {
-				req.permisos = permisos;
 				return next();
 			}
 			return res.status(403).json({
@@ -95,4 +102,4 @@ function requireAnyPermiso(...codigos) {
 	};
 }
 
-module.exports = { requirePermiso, requireAnyPermiso };
+module.exports = { requirePermiso, requireAnyPermiso, resolverPermisosReq, reqTienePermiso };

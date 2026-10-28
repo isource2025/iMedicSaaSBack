@@ -85,24 +85,21 @@ async function permisosDeRol(idRol, nombreRol) {
 		}
 	}
 
-	// Roles de sistema: matriz completa por nombre o por id (1..7).
-	// Evita imRolPermisos incompleto en auth central / BD tenant.
+	// Roles de sistema: preferir imRolPermisos (plantilla editable); fallback a PLANTILLAS.
 	const idNum =
 		idRol != null && Number.isFinite(Number(idRol)) ? Number(idRol) : null;
 	const nombre =
 		(nombreRol ? String(nombreRol).trim().toUpperCase() : '') ||
 		(idNum != null ? ROL_SISTEMA_POR_ID[idNum] || '' : '');
-	if (
+	const esSistemaConocido =
 		nombre === 'ADMIN' ||
 		nombre === 'SUPER_ADMIN' ||
 		nombre === 'MEDICO' ||
 		nombre === 'ADMINISTRATIVO' ||
 		nombre === 'ENFERMERO' ||
 		nombre === 'CARGA_HC' ||
-		nombre === 'PANEL_DATOS'
-	) {
-		return [...matriz.permisosDeRol(nombre)];
-	}
+		nombre === 'PANEL_DATOS';
+
 	if (idNum == null) {
 		return matriz.permisosDeRol(nombreRol || null);
 	}
@@ -118,9 +115,10 @@ async function permisosDeRol(idRol, nombreRol) {
 		console.warn('[permisos.service] Falla leyendo BD, uso matriz hardcoded:', e.message);
 	}
 
-	// Fallback si la BD aún no está sembrada
-	if (!permisos.length && nombreRol) {
-		permisos = matriz.permisosDeRol(nombreRol);
+	// Fallback si la BD aún no tiene filas (o no se editó la plantilla)
+	if (!permisos.length) {
+		if (esSistemaConocido) permisos = [...matriz.permisosDeRol(nombre)];
+		else if (nombreRol) permisos = matriz.permisosDeRol(nombreRol);
 	}
 
 	_cache.set(id, { permisos, expira: _ahora() + TTL_MS });

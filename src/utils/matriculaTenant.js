@@ -4,6 +4,7 @@
  * de la usada en imPersonalHorarios / imAgenda → grilla vacía / todo sobreturno.
  */
 const { executeQuery } = require('../models/db');
+const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
 
 async function resolverMatriculaTenant(valorPersonal) {
 	const vp = Number(valorPersonal);
@@ -18,14 +19,17 @@ async function resolverMatriculaTenant(valorPersonal) {
 }
 
 /**
- * Para rol MEDICO: fuerza matrícula desde imPersonal tenant (ignora path/JWT stale).
- * Para el resto: valida el path param.
+ * Alcance de agenda:
+ * - Con `TURNOS.AGENDA.SOLO_PROPIA` y sin `TURNOS.AGENDA.GESTIONAR`: fuerza matrícula propia.
+ * - Con GESTIONAR (o sin SOLO_PROPIA): usa el path param.
  * @returns {Promise<number|null>} null si ya se respondió el error HTTP
  */
 async function matriculaAlcanceAgenda(req, res, matriculaParam) {
-	const esMedico = String(req.rolNombre || '').toUpperCase() === 'MEDICO';
+	const soloPropia = await reqTienePermiso(req, 'TURNOS.AGENDA.SOLO_PROPIA');
+	const gestiona = await reqTienePermiso(req, 'TURNOS.AGENDA.GESTIONAR');
+	const forzarPropia = soloPropia && !gestiona;
 
-	if (esMedico) {
+	if (forzarPropia) {
 		let mat =
 			req.matricula != null && Number(req.matricula) > 0 ? Number(req.matricula) : null;
 		if (req.valorPersonal != null) {

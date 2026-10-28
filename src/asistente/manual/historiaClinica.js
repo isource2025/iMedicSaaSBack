@@ -90,7 +90,7 @@ module.exports = [
 		],
 		problemas: [
 			{ sintoma: '«Complete los campos obligatorios (Medicamento y Cantidad) antes de agregar»', causa: 'Faltan el ítem o la cantidad.' },
-			{ sintoma: 'No aparece «Dejar sin efecto»', causa: 'Requiere rol MEDICO o ADMIN y INTERNACION.INDICACIONES.EDITAR.' },
+			{ sintoma: 'No aparece «Dejar sin efecto»', causa: 'Requiere INTERNACION.INDICACIONES.EDITAR (también en roles privados/custom).' },
 			{ sintoma: 'No aparece «Aplicar indicación»', causa: 'Requiere INTERNACION.INDICACIONES.APLICAR.' },
 			{ sintoma: '«Esta indicación de única vez ya fue aplicada»', causa: 'Las de única vez se aplican una sola vez.' },
 			AUTORIA,

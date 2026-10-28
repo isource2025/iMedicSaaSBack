@@ -22,7 +22,8 @@ const path = require('path');
 
 const RUTAS_DIR = path.join(__dirname, '..', 'src', 'routes');
 const BASELINE = path.join(__dirname, 'audit_rutas_permisos.baseline.json');
-const GUARDIAS = ['requirePermiso', 'requireAnyPermiso', 'adminMiddleware', 'requireBotApiKey'];
+// adminMiddleware está deprecado (stub 403): ya no cuenta como protección.
+const GUARDIAS = ['requirePermiso', 'requireAnyPermiso', 'requireBotApiKey'];
 const METODOS = ['get', 'post', 'put', 'delete', 'patch'];
 
 /** Devuelve el texto entre paréntesis balanceados a partir de `inicio` (posición del "("). */

@@ -34,6 +34,8 @@
 	"disposicionEgreso.routes.js POST /",
 	"disposicionEgreso.routes.js PUT /:Valor",
 	"empresa.routes.js GET /",
+	"empresa.routes.js GET /logo",
+	"empresa.routes.js GET /pdf-diseno",
 	"estadoAmbulatorio.routes.js DELETE /:Valor",
 	"estadoAmbulatorio.routes.js GET /",
 	"estadoAmbulatorio.routes.js GET /:Valor",

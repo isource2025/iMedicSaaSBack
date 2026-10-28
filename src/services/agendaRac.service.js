@@ -223,8 +223,15 @@ async function actualizarTriage(idTurno, { idClasificacionTriage, observaciones 
 
 async function assertAlcanceTurno(idTurno, req) {
 	const turno = await _obtenerTurno(_validarIdTurno(idTurno));
-	const rol = req.rolNombre ? String(req.rolNombre).trim().toUpperCase() : '';
-	if (rol === 'MEDICO' && req.matricula != null && Number(turno.profesional) !== Number(req.matricula)) {
+	const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
+	const solo = await reqTienePermiso(req, 'TURNOS.AGENDA.SOLO_PROPIA');
+	const gestiona = await reqTienePermiso(req, 'TURNOS.AGENDA.GESTIONAR');
+	if (
+		solo &&
+		!gestiona &&
+		req.matricula != null &&
+		Number(turno.profesional) !== Number(req.matricula)
+	) {
 		const e = new Error('Sólo podés acceder al RAC de turnos de tu agenda');
 		e.statusCode = 403;
 		throw e;

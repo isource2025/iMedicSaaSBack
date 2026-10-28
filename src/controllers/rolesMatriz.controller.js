@@ -1,6 +1,7 @@
 /**
- * Matriz de permisos: administración de roles personalizados de la clínica.
- * Los 7 roles del sistema son de sólo lectura (se pueden duplicar).
+ * Matriz de permisos: plantillas de roles del sistema (editables) y roles
+ * personalizados de la clínica. La asignación fina por persona también se
+ * gestiona desde la UI de matriz (endpoints /permisos/personal).
  */
 const rolesCustom = require('../services/rolesCustom.service');
 const { catalogoConDescripciones } = require('../utils/permisosDescripciones');

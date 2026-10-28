@@ -9,8 +9,9 @@ const { repararStringsDeep } = require('../utils/clarionText');
 
 const MAX_FILAS = Number(process.env.ASISTENTE_SQL_MAX_FILAS) || 200;
 const TIMEOUT_MS = Number(process.env.ASISTENTE_SQL_TIMEOUT_MS) || 20000;
+/** @deprecated Preferir permiso ASISTENTE.SQL.VER en la matriz. Env sólo como override de emergencia. */
 const ROLES_SQL = new Set(
-	String(process.env.ASISTENTE_SQL_ROLES || 'ADMIN,SUPER_ADMIN,MEDICO')
+	String(process.env.ASISTENTE_SQL_ROLES || '')
 		.split(',')
 		.map((s) => s.trim().toUpperCase())
 		.filter(Boolean),
@@ -84,9 +85,9 @@ function validar(consulta) {
 }
 
 function puedeUsarSql(rolNombre, permisos) {
+	if (Array.isArray(permisos) && permisos.includes('ASISTENTE.SQL.VER')) return true;
 	const rol = String(rolNombre || '').toUpperCase();
-	if (ROLES_SQL.has(rol)) return true;
-	return Array.isArray(permisos) && permisos.includes('ASISTENTE.SQL.VER');
+	return ROLES_SQL.size > 0 && ROLES_SQL.has(rol);
 }
 
 function limpiarFila(row) {

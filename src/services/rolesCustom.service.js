@@ -1,7 +1,8 @@
 /**
  * Roles personalizados por empresa (auth central, MySQL en Railway).
  *
- * - Los roles del sistema (IdRol 1..999, IdEmpresa = 0) son de solo lectura.
+ * - Los roles del sistema (IdRol 1..999, IdEmpresa = 0) tienen plantilla editable
+ *   en `imRolPermisos` / `imPermisos` (auth central).
  * - Los roles personalizados (IdRol >= 1000) pertenecen a UNA empresa y guardan
  *   sus permisos como códigos en `imRolPermisosCustom`.
  * - Toda modificación queda en la auditoría general (`imAuditoria`, Modulo = ROLES).
@@ -15,6 +16,7 @@ const v = require('../utils/rolesValidacion');
 const schema = require('./rolesCustomSchema.service');
 const auditoria = require('./auditoria.service');
 const featureFlags = require('./featureFlags.service');
+const permisosService = () => require('./permisos.service');
 
 const CACHE_TTL_MS = 30 * 1000;
 const MAX_ROLES_POR_EMPRESA = 50;
@@ -162,6 +164,33 @@ async function contarUsuariosPorRol(idEmpresa) {
 	return conteo;
 }
 
+/** Permisos de plantillas de sistema: BD si hay filas; si no, PLANTILLAS hardcoded. */
+async function permisosPlantillaSistema(ids) {
+	const mapa = new Map(ids.map((id) => [id, null]));
+	if (!ids.length) return mapa;
+	try {
+		const filas = await consultar(
+			`SELECT rp.IdRol AS idRol, p.Codigo AS codigo
+       FROM imRolPermisos rp
+       INNER JOIN imPermisos p ON p.IdPermiso = rp.IdPermiso
+       WHERE rp.IdRol IN (?)
+       ORDER BY p.Codigo`,
+			[ids],
+		);
+		const validos = codigosValidos();
+		for (const f of filas) {
+			const id = Number(f.idRol);
+			const c = String(f.codigo || '');
+			if (!validos.has(c)) continue;
+			if (!mapa.get(id)) mapa.set(id, []);
+			mapa.get(id).push(c);
+		}
+	} catch (e) {
+		console.warn('[rolesCustom] permisosPlantillaSistema:', e.message);
+	}
+	return mapa;
+}
+
 /** Roles del sistema + personalizados de la empresa, con sus permisos. */
 async function listarMatriz(idEmpresa) {
 	if (!isAuthCentralEnabled()) {
@@ -179,22 +208,28 @@ async function listarMatriz(idEmpresa) {
 		`SELECT IdRol AS idRol, Nombre AS nombre, Descripcion AS descripcion, Nivel AS nivel
      FROM imRoles
      WHERE Activo = 1 AND UPPER(TRIM(Nombre)) <> 'SUPER_ADMIN' ${filtroSistema}
+       AND IdRol < ?
      ORDER BY Nivel DESC, Nombre ASC`,
+		[v.ID_ROL_PERSONALIZADO_MIN],
 	);
 	const usuarios = await contarUsuariosPorRol(idEmpresa);
+	const idsSistema = filas.map((r) => Number(r.idRol));
+	const permisosBd = await permisosPlantillaSistema(idsSistema);
 
 	const sistema = filas.map((r) => {
 		const nombre = String(r.nombre || '').trim().toUpperCase();
+		const id = Number(r.idRol);
+		const deBd = permisosBd.get(id);
 		return {
-			idRol: Number(r.idRol),
+			idRol: id,
 			nombre: String(r.nombre || '').trim(),
 			descripcion: String(r.descripcion || '').trim(),
 			nivel: Number(r.nivel ?? 0),
 			esSistema: true,
-			editable: false,
+			editable: true,
 			rolBase: BASE_DE_ROL_SISTEMA[nombre] || (nombre === 'ADMIN' ? null : 'NINGUNO'),
-			permisos: [...matriz.permisosDeRol(nombre)],
-			usuarios: usuarios.get(Number(r.idRol)) || 0,
+			permisos: deBd && deBd.length ? deBd : [...matriz.permisosDeRol(nombre)],
+			usuarios: usuarios.get(id) || 0,
 		};
 	});
 
@@ -381,9 +416,138 @@ async function crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permis
 	}
 }
 
+// ─── Edición de plantillas del sistema ──────────────────────────────────────
+
+async function obtenerRolSistema(idRol) {
+	const id = Number(idRol);
+	if (!Number.isFinite(id) || id <= 0 || id >= v.ID_ROL_PERSONALIZADO_MIN) {
+		throw error(400, 'Id de rol inválido');
+	}
+	const rows = await consultar(
+		`SELECT IdRol AS idRol, Nombre AS nombre, Descripcion AS descripcion, Nivel AS nivel
+     FROM imRoles
+     WHERE IdRol = ? AND Activo = 1 AND (IdEmpresa = 0 OR IdEmpresa IS NULL)
+     LIMIT 1`,
+		[id],
+	);
+	if (!rows.length) throw error(404, 'Rol no encontrado');
+	const nombre = String(rows[0].nombre || '').trim().toUpperCase();
+	if (nombre === 'SUPER_ADMIN') throw error(403, 'Este rol no se puede modificar');
+	const deBd = await permisosPlantillaSistema([id]);
+	const permisos = deBd.get(id)?.length ? deBd.get(id) : [...matriz.permisosDeRol(nombre)];
+	return { idRol: id, nombre: String(rows[0].nombre || '').trim(), descripcion: rows[0].descripcion, permisos };
+}
+
+/** Asegura filas en imPermisos para los códigos y devuelve Codigo → IdPermiso. */
+async function asegurarCodigosImPermisos(conn, codigos) {
+	const unicos = [...new Set(codigos.map((c) => String(c || '').trim()).filter(Boolean))];
+	const mapa = new Map();
+	if (!unicos.length) return mapa;
+
+	const [existentes] = await conn.query(
+		`SELECT IdPermiso AS idPermiso, Codigo AS codigo FROM imPermisos WHERE Codigo IN (?)`,
+		[unicos],
+	);
+	for (const r of existentes) mapa.set(String(r.codigo), Number(r.idPermiso));
+
+	const faltan = unicos.filter((c) => !mapa.has(c));
+	if (!faltan.length) return mapa;
+
+	const [[mx]] = await conn.query(`SELECT COALESCE(MAX(IdPermiso), 0) AS m FROM imPermisos`);
+	let next = Number(mx.m) + 1;
+	for (const c of faltan) {
+		const [mod, sub, acc] = c.split('.');
+		await conn.query(
+			`INSERT INTO imPermisos (IdPermiso, Codigo, Modulo, Submodulo, Accion, Descripcion)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+			[next, c, mod || '', sub || '', acc || ''],
+		);
+		mapa.set(c, next);
+		next += 1;
+	}
+	return mapa;
+}
+
+async function sincronizarImRolPermisos(conn, idRol, permisos) {
+	const mapa = await asegurarCodigosImPermisos(conn, permisos);
+	await conn.query(`DELETE FROM imRolPermisos WHERE IdRol = ?`, [Number(idRol)]);
+	if (!permisos.length) return;
+	await conn.query(
+		`INSERT INTO imRolPermisos (IdRol, IdPermiso, FechaAsignacion) VALUES ?`,
+		[permisos.map((c) => [Number(idRol), mapa.get(c), new Date()])],
+	);
+}
+
+/**
+ * Actualiza la plantilla de un rol del sistema (sólo permisos).
+ * No depende de roles personalizados / plantillas congeladas.
+ */
+async function actualizarPlantillaSistema(idRol, { idEmpresa, actor, permisos }) {
+	if (!isAuthCentralEnabled()) {
+		throw error(409, 'La autenticación central es necesaria para editar plantillas del sistema');
+	}
+	if (permisos === undefined) {
+		throw error(400, 'Indicá los permisos de la plantilla');
+	}
+	const actual = await obtenerRolSistema(idRol);
+	const nombreUpper = String(actual.nombre || '').trim().toUpperCase();
+	const perm = v.normalizarPermisos(permisos, {
+		permitirRestringidos: nombreUpper === 'ADMIN',
+	});
+	if (!perm.ok) throw error(400, perm.errores.join('. '));
+
+	const noOtorgables = permisosNoOtorgables(perm.permisos, actual.permisos, actor?.permisos);
+	if (noOtorgables.length) {
+		throw error(400, noOtorgables.map((c) => `No podés otorgar el permiso ${c} porque no lo tenés`).join('. '));
+	}
+
+	const antes = new Set(actual.permisos);
+	const despues = new Set(perm.permisos);
+	const agregados = perm.permisos.filter((c) => !antes.has(c));
+	const quitados = actual.permisos.filter((c) => !despues.has(c));
+	if (!agregados.length && !quitados.length) {
+		return { idRol: Number(idRol), sinCambios: true, agregadosAuto: perm.agregados };
+	}
+
+	const pool = await getAuthCentralPool();
+	const conn = await pool.getConnection();
+	try {
+		await conn.beginTransaction();
+		await sincronizarImRolPermisos(conn, idRol, perm.permisos);
+		if (await schema.esquemaListo()) {
+			await registrarAuditoria(conn, {
+				idEmpresa: Number(idEmpresa) || 0,
+				idRol: Number(idRol),
+				accion: 'EDITAR',
+				actor: actor?.valorPersonal,
+				detalle: { plantillaSistema: true, nombre: actual.nombre, permisos: { agregados, quitados } },
+			});
+		}
+		await conn.commit();
+	} catch (e) {
+		try { await conn.rollback(); } catch (_) { /* ya cerrada */ }
+		throw mapearErrorSql(e);
+	} finally {
+		conn.release();
+	}
+
+	invalidarCache(idRol);
+	try { permisosService().invalidarCache(idRol); } catch (_) { /* no crítico */ }
+	return {
+		idRol: Number(idRol),
+		sinCambios: false,
+		cambios: { permisos: { agregados, quitados } },
+		agregadosAuto: perm.agregados,
+	};
+}
+
 // ─── Edición ────────────────────────────────────────────────────────────────
 
 async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rolBase, permisos }) {
+	const id = Number(idRol);
+	if (Number.isFinite(id) && id > 0 && id < v.ID_ROL_PERSONALIZADO_MIN) {
+		return actualizarPlantillaSistema(id, { idEmpresa, actor, permisos });
+	}
 	await exigirHabilitado(idEmpresa);
 	const actual = await obtenerRolPropio(idRol, idEmpresa);
 
@@ -612,6 +776,7 @@ async function auditoriaDeRol(idRol, idEmpresa, limite = 100) {
 	if (!(await schema.esquemaListo())) return [];
 	const id = Number(idRol);
 	if (id >= v.ID_ROL_PERSONALIZADO_MIN) await obtenerRolPropio(id, idEmpresa);
+	else await obtenerRolSistema(id);
 	return auditoria.listar({
 		idEmpresa,
 		modulo: MODULO_AUDITORIA,

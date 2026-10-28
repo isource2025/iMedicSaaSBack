@@ -24,8 +24,7 @@ router.put(
 	ctrl.asignarAPersonal,
 );
 
-// ─── Matriz de permisos: roles personalizados de la clínica ─────────────────
-// Los roles del sistema son de sólo lectura; se pueden duplicar.
+// ─── Matriz de permisos: plantillas de sistema (editables) + custom ─────────
 const matrizCtrl = require('../controllers/rolesMatriz.controller');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 

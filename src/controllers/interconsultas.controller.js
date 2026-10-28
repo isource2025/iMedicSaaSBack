@@ -1,6 +1,6 @@
 const interconsultasService = require('../services/interconsultas.service');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
-const { esAdminClinico } = require('../middlewares/propietario.middleware');
+const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');
 const { resolveCodOperador } = require('../utils/sessionIdentity');
 
@@ -57,16 +57,13 @@ async function listarSectores(req, res) {
 	}
 }
 
-function _veTodos(req) {
-	const rn = String(req.rolNombre ?? req.auth?.rol?.nombre ?? '').trim().toUpperCase();
-	const id = Number(req.auth?.rol?.id);
-	if (rn === 'SUPER_ADMIN' || id === 5) return true;
-	return esAdminClinico(req);
+async function _veTodos(req) {
+	return reqTienePermiso(req, 'INTERNACION.INTERCONSULTAS.VER_TODOS');
 }
 
 async function listarPendientes(req, res) {
 	try {
-		const todos = _veTodos(req);
+		const todos = await _veTodos(req);
 		const sector = String(req.query.sector || '').trim();
 		const estudiosService = require('../services/estudios.service');
 		let codigos;

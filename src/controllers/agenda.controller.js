@@ -4,6 +4,14 @@ const { matriculaAlcanceAgenda, resolverMatriculaTenant } = require('../utils/ma
 const { idSectorSesion } = require('../utils/sectoresSesion');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
 const { resolveCodOperador } = require('../utils/sessionIdentity');
+const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
+
+/** Opera por id de turno (staff) salvo alcance SOLO_PROPIA sin GESTIONAR. */
+async function porIdTurnoAgenda(req) {
+	const solo = await reqTienePermiso(req, 'TURNOS.AGENDA.SOLO_PROPIA');
+	const gestiona = await reqTienePermiso(req, 'TURNOS.AGENDA.GESTIONAR');
+	return !(solo && !gestiona);
+}
 
 function _codOperadorSesion(req) {
 	const op = resolveCodOperador(req);
@@ -219,11 +227,10 @@ async function cerrarTurno(req, res) {
 		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
-		// Enfermeros no pueden cerrar turnos (solo médico o administrativo)
-		if (req.rolNombre === 'ENFERMERO') {
+		if (!(await reqTienePermiso(req, 'TURNOS.AGENDA.CERRAR'))) {
 			return res
 				.status(403)
-				.json({ success: false, mensaje: 'Sólo médico o administrativo pueden cerrar turnos' });
+				.json({ success: false, mensaje: 'Permiso requerido: TURNOS.AGENDA.CERRAR' });
 		}
 		const body = req.body || {};
 		const data = await service.cerrarTurno({
@@ -238,7 +245,7 @@ async function cerrarTurno(req, res) {
 			procedimientos: body.procedimientos || null,
 			pedidosEstudios: body.pedidosEstudios || null,
 			pedidosInterconsultas: body.pedidosInterconsultas || null,
-			porIdTurno: req.rolNombre !== 'MEDICO',
+			porIdTurno: await porIdTurnoAgenda(req),
 		});
 		res.json({ success: true, data });
 	} catch (e) {
@@ -251,10 +258,10 @@ async function actualizarAtencionPostCierre(req, res) {
 		const m = await matriculaAlcanceAgenda(req, res, req.params.matricula);
 		if (m == null) return;
 		const idTurno = Number(req.params.idTurno);
-		if (req.rolNombre === 'ENFERMERO') {
+		if (!(await reqTienePermiso(req, 'TURNOS.AGENDA.CERRAR'))) {
 			return res
 				.status(403)
-				.json({ success: false, mensaje: 'Sólo médico o administrativo pueden editar la atención' });
+				.json({ success: false, mensaje: 'Permiso requerido: TURNOS.AGENDA.CERRAR' });
 		}
 		const body = req.body || {};
 		const data = await service.actualizarAtencionPostCierre({
@@ -268,7 +275,7 @@ async function actualizarAtencionPostCierre(req, res) {
 			procedimientos: body.procedimientos || null,
 			pedidosEstudios: body.pedidosEstudios || null,
 			pedidosInterconsultas: body.pedidosInterconsultas || null,
-			porIdTurno: req.rolNombre !== 'MEDICO',
+			porIdTurno: await porIdTurnoAgenda(req),
 		});
 		res.json({ success: true, data });
 	} catch (e) {
@@ -284,7 +291,7 @@ async function marcarLlegada(req, res) {
 		const data = await service.marcarLlegada({
 			matricula: m,
 			idTurno,
-			porIdTurno: req.rolNombre !== 'MEDICO',
+			porIdTurno: await porIdTurnoAgenda(req),
 			codOperador: _codOperadorSesion(req),
 		});
 		res.json({ success: true, data });
@@ -301,7 +308,7 @@ async function marcarIngreso(req, res) {
 		const data = await service.marcarIngreso({
 			matricula: m,
 			idTurno,
-			porIdTurno: req.rolNombre !== 'MEDICO',
+			porIdTurno: await porIdTurnoAgenda(req),
 			codOperador: _codOperadorSesion(req),
 		});
 		res.json({ success: true, data });
@@ -377,7 +384,9 @@ async function buscarTurnosPorPaciente(req, res) {
 			});
 		}
 		let matriculaMedico = null;
-		if (req.rolNombre === 'MEDICO') {
+		const soloPropia = await reqTienePermiso(req, 'TURNOS.AGENDA.SOLO_PROPIA');
+		const gestiona = await reqTienePermiso(req, 'TURNOS.AGENDA.GESTIONAR');
+		if (soloPropia && !gestiona) {
 			matriculaMedico =
 				req.matricula != null && Number(req.matricula) > 0 ? Number(req.matricula) : null;
 			if (req.valorPersonal != null) {
