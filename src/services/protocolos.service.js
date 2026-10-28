@@ -3,6 +3,7 @@ const {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
 	partesFechaHoraArgentina,
+	fechaClarionHoyArgentina,
 } = require('../utils/dateUtils');
 const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
 
@@ -395,80 +396,214 @@ async function obtenerProForma(tipoProtocolo) {
 	};
 }
 
-/**
- * Convenio de la visita (imVisita.CONTRATO → imPracticasXConvenios.IdConvenio).
- * Si el convenio no tiene filas sincronizadas, cae a IdConvenio = 0 (catálogo base).
- */
-async function _convenioParaBusqueda({ idConvenio, numeroVisita }) {
-	let conv = idConvenio != null && idConvenio !== '' ? Number(idConvenio) : NaN;
-	if ((!Number.isFinite(conv) || conv < 0) && numeroVisita != null && numeroVisita !== '') {
-		const nv = Number(numeroVisita);
-		if (Number.isFinite(nv) && nv > 0) {
-			const rows = await executeQuery(
-				`SELECT TOP 1 ISNULL(CONTRATO, 0) AS convenio
-				 FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
-				[{ value: nv, type: 'Int' }],
-			);
-			conv = Number(rows?.[0]?.convenio) || 0;
-		}
-	}
-	if (!Number.isFinite(conv) || conv < 0) conv = 0;
-	if (conv > 0) {
-		const hay = await executeQuery(
-			`SELECT TOP 1 1 AS ok FROM dbo.imPracticasXConvenios WHERE IdConvenio = @p0`,
-			[{ value: conv, type: 'Int' }],
-		);
-		if (!hay?.length) conv = 0;
-	}
-	return conv;
+function _sqlBusquedaNoDisponible(err) {
+	const n = Number(err?.number);
+	if (n === 208 || n === 207 || n === 402) return true;
+	return /Invalid object name|Invalid column name|incompatible in the like operator/i.test(
+		String(err?.message || ''),
+	);
 }
 
-/**
- * Busca prácticas en imPracticasXConvenios (tabla derivada del convenio) y calcula
- * roles requeridos según *Unidad > 0 en moduladas/nomenclador (misma regla que ACLYSA).
- * AliasTabla: MOD/CLMOD → MO, NOM/CLNOM → NO.
- */
-async function buscarPracticas({ q, limit = 30, numeroVisita, idConvenio }) {
-	const term = String(q || '').trim();
-	const lim = Math.min(Math.max(Number(limit) || 30, 1), 80);
-	if (term.length < 2) return [];
-	const like = `%${term}%`;
-	const exactId = /^\d+$/.test(term) ? term : null;
-	const convenio = await _convenioParaBusqueda({ idConvenio, numeroVisita });
-	const rows = await executeQuery(
-		`SELECT TOP ${lim}
-		   x.IdPractica AS idPractica,
-		   CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN 'MO' ELSE 'NO' END AS tipoPractica,
-		   LTRIM(RTRIM(ISNULL(x.Descripcion, ''))) AS descripcion,
-		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.EspUnidad ELSE n.EspUnidad END, 0) AS espUnidad,
-		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.Adte1Unidad ELSE n.Adte1Unidad END, 0) AS adte1Unidad,
-		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.Adte2Unidad ELSE n.Adte2Unidad END, 0) AS adte2Unidad,
-		   ISNULL(CASE WHEN x.AliasTabla IN ('MOD', 'CLMOD') THEN m.AstaUnidad ELSE n.AstaUnidad END, 0) AS astaUnidad
-		 FROM dbo.imPracticasXConvenios x
-		 LEFT JOIN dbo.imModuladas m
-		   ON x.AliasTabla IN ('MOD', 'CLMOD') AND m.IDPractica = x.IdPractica
-		 LEFT JOIN dbo.imNomenclador n
-		   ON x.AliasTabla IN ('NOM', 'CLNOM') AND n.IDPractica = x.IdPractica
-		 WHERE x.IdConvenio = @p0
-		   AND (
-		     x.Descripcion LIKE @p1
-		     OR CAST(x.IdPractica AS VARCHAR(20)) LIKE @p1
-		   )
-		 ORDER BY
-		   CASE WHEN @p2 IS NOT NULL AND CAST(x.IdPractica AS VARCHAR(20)) = @p2 THEN 0 ELSE 1 END,
-		   x.Descripcion`,
-		[
-			{ value: convenio, type: 'Int' },
-			{ value: like, type: 'VarChar' },
-			{ value: exactId, type: 'VarChar' },
-		],
-	);
+function _aliasMo(expr) {
+	return `LTRIM(RTRIM(CONVERT(VARCHAR(12), ${expr}))) IN ('MOD', 'CLMOD')`;
+}
+
+function _aliasNo(expr) {
+	return `LTRIM(RTRIM(CONVERT(VARCHAR(12), ${expr}))) IN ('NOM', 'CLNOM')`;
+}
+
+function _mapPracticaRows(rows) {
 	return (rows || []).map((r) => ({
 		idPractica: Number(r.idPractica),
 		tipoPractica: String(r.tipoPractica || 'NO').trim() || 'NO',
 		descripcion: String(r.descripcion || '').trim(),
 		funcionesRequeridas: _funcionesDesdeUnidades(r),
 	}));
+}
+
+/**
+ * Último convenio de la cobertura (imClientes.Valor): vigente primero, si hay empate
+ * el Codigo más alto (IDENTITY = el más nuevo).
+ */
+async function _ultimoConvenioDeCobertura(cobertura) {
+	const valor = Number(cobertura);
+	if (!Number.isFinite(valor) || valor <= 0) return 0;
+	try {
+		const rows = await executeQuery(
+			`SELECT TOP 1 c.Codigo AS convenio
+			 FROM dbo.imClientesConvenios c
+			 WHERE c.Valor = @p0
+			 ORDER BY
+			   CASE
+			     WHEN ISNULL(c.VigenciaDesde, 0) = 0 THEN 2
+			     WHEN @p1 < c.VigenciaDesde THEN 2
+			     WHEN ISNULL(c.VigenciaHasta, 0) <> 0 AND @p1 > c.VigenciaHasta THEN 2
+			     ELSE 0
+			   END,
+			   c.Codigo DESC`,
+			[
+				{ value: valor, type: 'Int' },
+				{ value: fechaClarionHoyArgentina(), type: 'Int' },
+			],
+		);
+		return Number(rows?.[0]?.convenio) || 0;
+	} catch (err) {
+		if (_sqlBusquedaNoDisponible(err)) return 0;
+		throw err;
+	}
+}
+
+/**
+ * Convenio para el buscador: cobertura del internado (imVisita.CLIENTE) → último
+ * convenio de esa obra social. idConvenio explícito pisa. Si no hay cobertura,
+ * se usa CONTRATO de la visita.
+ */
+async function _convenioParaBusqueda({ idConvenio, numeroVisita }) {
+	let conv = idConvenio != null && idConvenio !== '' ? Number(idConvenio) : NaN;
+	if (Number.isFinite(conv) && conv > 0) return conv;
+
+	if (numeroVisita != null && numeroVisita !== '') {
+		const nv = Number(numeroVisita);
+		if (Number.isFinite(nv) && nv > 0) {
+			const rows = await executeQuery(
+				`SELECT TOP 1 ISNULL(CLIENTE, 0) AS cobertura, ISNULL(CONTRATO, 0) AS contrato
+				 FROM dbo.imVisita WHERE NUMEROVISITA = @p0`,
+				[{ value: nv, type: 'Int' }],
+			);
+			const cobertura = Number(rows?.[0]?.cobertura) || 0;
+			const contratoVisita = Number(rows?.[0]?.contrato) || 0;
+			const ultimo = await _ultimoConvenioDeCobertura(cobertura);
+			if (ultimo > 0) return ultimo;
+			if (contratoVisita > 0) return contratoVisita;
+		}
+	}
+	return 0;
+}
+
+async function _convenioTienePracticas(convenio) {
+	try {
+		const hay = await executeQuery(
+			`SELECT TOP 1 1 AS ok FROM dbo.imPracticasXConvenios WHERE IdConvenio = @p0`,
+			[{ value: convenio, type: 'Int' }],
+		);
+		return !!hay?.length;
+	} catch (err) {
+		if (_sqlBusquedaNoDisponible(err)) return false;
+		throw err;
+	}
+}
+
+/**
+ * Busca en imPracticasXConvenios (CONVERT sobre Descripcion: en algunos SQL es ntext
+ * y `LIKE` varchar revienta). AliasTabla: MOD/CLMOD → MO, NOM/CLNOM → NO.
+ */
+async function _buscarEnConvenio(convenio, { like, exactId, idInt, lim }) {
+	const alias = 'x.AliasTabla';
+	const where = `x.IdConvenio = @p0
+		   AND (
+		     CONVERT(VARCHAR(255), x.Descripcion) LIKE @p1
+		     OR CAST(x.IdPractica AS VARCHAR(20)) LIKE @p1
+		     OR (@p3 IS NOT NULL AND x.IdPractica = @p3)
+		   )`;
+	try {
+		return await executeQuery(
+			`SELECT TOP ${lim}
+			   x.IdPractica AS idPractica,
+			   CASE WHEN ${_aliasMo(alias)} THEN 'MO' ELSE 'NO' END AS tipoPractica,
+			   LTRIM(RTRIM(ISNULL(CONVERT(VARCHAR(255), x.Descripcion), ''))) AS descripcion,
+			   ISNULL(CASE WHEN ${_aliasMo(alias)} THEN m.EspUnidad ELSE n.EspUnidad END, 0) AS espUnidad,
+			   ISNULL(CASE WHEN ${_aliasMo(alias)} THEN m.Adte1Unidad ELSE n.Adte1Unidad END, 0) AS adte1Unidad,
+			   ISNULL(CASE WHEN ${_aliasMo(alias)} THEN m.Adte2Unidad ELSE n.Adte2Unidad END, 0) AS adte2Unidad,
+			   ISNULL(CASE WHEN ${_aliasMo(alias)} THEN m.AstaUnidad ELSE n.AstaUnidad END, 0) AS astaUnidad
+			 FROM dbo.imPracticasXConvenios x
+			 LEFT JOIN dbo.imModuladas m
+			   ON ${_aliasMo(alias)} AND m.IDPractica = x.IdPractica
+			 LEFT JOIN dbo.imNomenclador n
+			   ON ${_aliasNo(alias)} AND n.IDPractica = x.IdPractica
+			 WHERE ${where}
+			 ORDER BY
+			   CASE WHEN @p2 IS NOT NULL AND CAST(x.IdPractica AS VARCHAR(20)) = @p2 THEN 0 ELSE 1 END,
+			   CONVERT(VARCHAR(255), x.Descripcion)`,
+			[
+				{ value: convenio, type: 'Int' },
+				{ value: like, type: 'VarChar' },
+				{ value: exactId, type: 'VarChar' },
+				{ value: idInt, type: 'Int' },
+			],
+		);
+	} catch (err) {
+		if (_sqlBusquedaNoDisponible(err)) return null;
+		throw err;
+	}
+}
+
+/** Catálogo clínico (imModuladas + imNomenclador), el que usaba el modal antes del arreglo por convenio. */
+async function _buscarEnCatalogos({ like, exactId, idInt, lim }) {
+	return executeQuery(
+		`SELECT TOP ${lim} *
+		 FROM (
+		   SELECT
+		     m.IDPractica AS idPractica,
+		     'MO' AS tipoPractica,
+		     LTRIM(RTRIM(ISNULL(CONVERT(VARCHAR(255), m.Descripcion), ''))) AS descripcion,
+		     ISNULL(m.EspUnidad, 0) AS espUnidad,
+		     ISNULL(m.Adte1Unidad, 0) AS adte1Unidad,
+		     ISNULL(m.Adte2Unidad, 0) AS adte2Unidad,
+		     ISNULL(m.AstaUnidad, 0) AS astaUnidad
+		   FROM dbo.imModuladas m
+		   WHERE CONVERT(VARCHAR(255), m.Descripcion) LIKE @p0
+		      OR CAST(m.IDPractica AS VARCHAR(20)) LIKE @p0
+		      OR (@p2 IS NOT NULL AND m.IDPractica = @p2)
+		   UNION ALL
+		   SELECT
+		     n.IDPractica,
+		     'NO',
+		     LTRIM(RTRIM(ISNULL(CONVERT(VARCHAR(255), n.Descripcion), ''))),
+		     ISNULL(n.EspUnidad, 0),
+		     ISNULL(n.Adte1Unidad, 0),
+		     ISNULL(n.Adte2Unidad, 0),
+		     ISNULL(n.AstaUnidad, 0)
+		   FROM dbo.imNomenclador n
+		   WHERE CONVERT(VARCHAR(255), n.Descripcion) LIKE @p0
+		      OR CAST(n.IDPractica AS VARCHAR(20)) LIKE @p0
+		      OR (@p2 IS NOT NULL AND n.IDPractica = @p2)
+		 ) x
+		 ORDER BY
+		   CASE WHEN @p1 IS NOT NULL AND CAST(x.idPractica AS VARCHAR(20)) = @p1 THEN 0 ELSE 1 END,
+		   x.descripcion`,
+		[
+			{ value: like, type: 'VarChar' },
+			{ value: exactId, type: 'VarChar' },
+			{ value: idInt, type: 'Int' },
+		],
+	);
+}
+
+/**
+ * Busca prácticas para el modal de protocolo.
+ * 1) Último convenio de la cobertura del internado → imPracticasXConvenios.
+ * 2) Si ese convenio no tiene prácticas (o la tabla no está), nomenclador + moduladas.
+ * 3) Si el convenio tiene prácticas y el término no coincide, lista vacía (no se mezcla).
+ */
+async function buscarPracticas({ q, limit = 30, numeroVisita, idConvenio }) {
+	const term = String(q || '').trim();
+	const lim = Math.min(Math.max(Number(limit) || 30, 1), 80);
+	if (!term) return [];
+	const like = `%${term}%`;
+	const exactId = /^\d+$/.test(term) ? term : null;
+	const idInt = exactId != null ? Number(exactId) : null;
+	const convenio = await _convenioParaBusqueda({ idConvenio, numeroVisita });
+	const usaConvenio = convenio > 0 && (await _convenioTienePracticas(convenio));
+	if (usaConvenio) {
+		const rows = await _buscarEnConvenio(convenio, { like, exactId, idInt, lim });
+		if (rows?.length) return _mapPracticaRows(rows);
+		if (rows === null) {
+			const cat = await _buscarEnCatalogos({ like, exactId, idInt, lim });
+			if (cat?.length) return _mapPracticaRows(cat);
+		}
+		return [];
+	}
+	return _mapPracticaRows(await _buscarEnCatalogos({ like, exactId, idInt, lim }));
 }
 
 async function detallePractica(idPractica, tipoPractica = 'NO') {

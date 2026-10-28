@@ -3,18 +3,23 @@
  * IdProtocolo con su propio equipo; la fecha de la práctica es la de fin del procedimiento.
  * Acá se prueban los helpers puros (sin SQL).
  */
-const test = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
 const src = (p) => path.join(__dirname, '..', 'src', p);
 
 const dbPath = require.resolve(src('models/db.js'));
+let executeQueryImpl = async () => [];
 require.cache[dbPath] = {
 	id: dbPath,
 	filename: dbPath,
 	loaded: true,
-	exports: { executeQuery: async () => [], getRequestPool: async () => ({}), sql: {} },
+	exports: {
+		executeQuery: (...args) => executeQueryImpl(...args),
+		getRequestPool: async () => ({}),
+		sql: {},
+	},
 };
 
 const svc = require(src('services/protocolos.service.js'));
@@ -139,4 +144,132 @@ test('medicamentos: rubro como lo graba el escritorio (STRING 15) y orden de a 1
 	assert.equal(svc._normalizarMedicamentos(undefined), null);
 	assert.deepEqual(svc._normalizarMedicamentos([]), []);
 	assert.throws(() => svc._normalizarMedicamentos([{ idProducto: 0 }]), /no está identificado/);
+});
+
+const CATALOGO_12693 = {
+	idPractica: 12693,
+	tipoPractica: 'NO',
+	descripcion: 'CESAREA',
+	espUnidad: 1,
+	adte1Unidad: 0,
+	adte2Unidad: 0,
+	astaUnidad: 0,
+};
+
+function sqlMock(fn) {
+	executeQueryImpl = async (sql, params) => fn(String(sql || ''), params || []);
+}
+
+describe('buscarPracticas', { concurrency: 1 }, () => {
+test('buscarPracticas: vacío no consulta; un dígito sí', async () => {
+	let calls = 0;
+	sqlMock(() => {
+		calls += 1;
+		return [];
+	});
+	assert.deepEqual(await svc.buscarPracticas({ q: '' }), []);
+	assert.deepEqual(await svc.buscarPracticas({ q: ' ' }), []);
+	assert.equal(calls, 0);
+	await svc.buscarPracticas({ q: '1' });
+	assert.ok(calls > 0);
+});
+
+test('buscarPracticas: usa el último convenio de la cobertura del internado', async () => {
+	sqlMock((sql, params) => {
+		if (/imVisita/.test(sql)) return [{ cobertura: 20, contrato: 15 }];
+		if (/imClientesConvenios/.test(sql)) {
+			assert.equal(params[0].value, 20);
+			return [{ convenio: 77 }];
+		}
+		if (/SELECT TOP 1 1 AS ok FROM dbo\.imPracticasXConvenios/.test(sql)) {
+			assert.equal(params[0].value, 77);
+			return [{ ok: 1 }];
+		}
+		if (/imPracticasXConvenios x/.test(sql)) {
+			assert.equal(params[0].value, 77);
+			return [
+				{
+					idPractica: 420101,
+					tipoPractica: 'MO',
+					descripcion: 'PARTO',
+					espUnidad: 1,
+					adte1Unidad: 0,
+					adte2Unidad: 0,
+					astaUnidad: 0,
+				},
+			];
+		}
+		assert.fail(`SQL inesperado: ${sql.slice(0, 120)}`);
+		return [];
+	});
+	const rows = await svc.buscarPracticas({ q: 'parto', numeroVisita: 480169 });
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].idPractica, 420101);
+});
+
+test('buscarPracticas: si el último convenio no tiene prácticas, cae a nomenclador', async () => {
+	const seen = [];
+	sqlMock((sql, params) => {
+		seen.push(sql);
+		if (/imVisita/.test(sql)) return [{ cobertura: 10, contrato: 15 }];
+		if (/imClientesConvenios/.test(sql)) return [{ convenio: 99 }];
+		if (/SELECT TOP 1 1 AS ok FROM dbo\.imPracticasXConvenios/.test(sql)) {
+			assert.equal(params[0].value, 99);
+			return [];
+		}
+		if (/UNION ALL/.test(sql) && /imNomenclador/.test(sql)) {
+			assert.equal(params[2]?.value, 12693);
+			return [CATALOGO_12693];
+		}
+		assert.fail(`SQL inesperado: ${sql.slice(0, 120)}`);
+		return [];
+	});
+	const rows = await svc.buscarPracticas({ q: '12693', numeroVisita: 480169 });
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].idPractica, 12693);
+	assert.ok(seen.some((s) => /imNomenclador/.test(s)));
+	assert.ok(!seen.some((s) => /imPracticasXConvenios x/.test(s)));
+});
+
+test('buscarPracticas: tabla de convenio inexistente → nomenclador', async () => {
+	sqlMock((sql) => {
+		if (/imPracticasXConvenios/.test(sql)) {
+			const err = new Error("Invalid object name 'imPracticasXConvenios'.");
+			err.number = 208;
+			throw err;
+		}
+		if (/UNION ALL/.test(sql)) return [CATALOGO_12693];
+		return [];
+	});
+	const rows = await svc.buscarPracticas({ q: '12693', idConvenio: 3 });
+	assert.equal(rows[0].idPractica, 12693);
+});
+
+test('buscarPracticas: LIKE ntext incompatible → nomenclador', async () => {
+	sqlMock((sql) => {
+		if (/SELECT TOP 1 1 AS ok FROM dbo\.imPracticasXConvenios/.test(sql)) return [{ ok: 1 }];
+		if (/imPracticasXConvenios x/.test(sql)) {
+			const err = new Error(
+				'The data types ntext and varchar are incompatible in the like operator.',
+			);
+			err.number = 402;
+			throw err;
+		}
+		if (/UNION ALL/.test(sql)) return [CATALOGO_12693];
+		return [];
+	});
+	const rows = await svc.buscarPracticas({ q: 'cesarea', idConvenio: 3 });
+	assert.equal(rows[0].idPractica, 12693);
+});
+
+test('buscarPracticas: si el convenio tiene prácticas y el término no coincide, no mezcla nomenclador', async () => {
+	sqlMock((sql) => {
+		if (/SELECT TOP 1 1 AS ok FROM dbo\.imPracticasXConvenios/.test(sql)) return [{ ok: 1 }];
+		if (/imPracticasXConvenios x/.test(sql)) return [];
+		assert.fail('no debería ir al nomenclador si el convenio tiene prácticas');
+		return [];
+	});
+	const rows = await svc.buscarPracticas({ q: '12693', idConvenio: 8 });
+	assert.deepEqual(rows, []);
+});
 });
