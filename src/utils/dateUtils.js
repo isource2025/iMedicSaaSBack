@@ -335,6 +335,45 @@ function fechaHisWallIso(value) {
 	return s || null;
 }
 
+/**
+ * imFrecuenciasAdmin.Intervalo es Clarion TIME (centésimas de segundo + 1).
+ * 6 hs → 2.160.001; 24 hs → 8.640.001. Valores chicos (< 1 min en ticks) se
+ * interpretan como minutos ya convertidos.
+ * @param {number|string|null} clarionTime
+ * @returns {number|null} minutos
+ */
+function clarionTimeAMinutos(clarionTime) {
+	const n = Number(clarionTime);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	if (n >= 6000) return Math.max(1, Math.round((n - 1) / 6000));
+	return Math.max(1, Math.round(n));
+}
+
+/**
+ * Suma minutos a una fecha/hora de pared (sin zona). Usa UTC solo como
+ * aritmética de calendario para no correr 3 h si el proceso está en UTC.
+ * @param {string} fechaYmd YYYY-MM-DD
+ * @param {string} horaHms HH:MM o HH:MM:SS
+ * @param {number} minutos
+ * @returns {{ fecha: string, hora: string } | null}
+ */
+function sumarMinutosAFechaHoraWall(fechaYmd, horaHms, minutos) {
+	const ymd = String(fechaYmd || '').trim();
+	const hm = String(horaHms || '00:00:00').trim();
+	const mins = Number(minutos);
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd) || !Number.isFinite(mins)) return null;
+	const [y, mo, d] = ymd.split('-').map(Number);
+	const [hh = 0, mm = 0, ss = 0] = hm.split(':').map(Number);
+	if ([y, mo, d, hh, mm, ss].some((n) => !Number.isFinite(n))) return null;
+	const next = new Date(Date.UTC(y, mo - 1, d, hh, mm, ss) + mins * 60 * 1000);
+	if (Number.isNaN(next.getTime())) return null;
+	const pad = (n) => String(n).padStart(2, '0');
+	return {
+		fecha: `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`,
+		hora: `${pad(next.getUTCHours())}:${pad(next.getUTCMinutes())}:${pad(next.getUTCSeconds())}`,
+	};
+}
+
 module.exports = {
 	convertirFechaAClarion,
 	convertirHoraAClarion,
@@ -356,6 +395,8 @@ module.exports = {
 	formatHoraArgentina,
 	ahoraWallArgentinaParaSql,
 	fechaHisWallIso,
+	clarionTimeAMinutos,
+	sumarMinutosAFechaHoraWall,
 	TZ_ARGENTINA,
 	DIAS_AGENDA,
 };

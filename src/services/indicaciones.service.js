@@ -2,9 +2,13 @@ const { executeQuery } = require("../models/db");
 const {
     convertirFechaAClarion,
     convertirHoraAClarion,
-    convertirFechaClarionADate,
     convertirHoraClarionAString,
     filtroPeriodoClarion,
+    fechaCalendarioArgentina,
+    horaWallArgentina,
+    clarionAIsoCalendario,
+    clarionTimeAMinutos,
+    sumarMinutosAFechaHoraWall,
 } = require("../utils/dateUtils");
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
@@ -40,6 +44,79 @@ ${sqlApplyFicha('iim.ProfesionalAsiste', 'prof')}
 LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal`;
 
 const SQL_NOMBRE_PROFESIONAL = 'prof.NombreCompleto';
+
+/**
+ * Minutos entre tomas desde imFrecuenciasAdmin.Intervalo (Clarion TIME).
+ * 2.160.001 → 360 (6 hs). Si el valor ya viniera en minutos (< 1 min en ticks), se usa tal cual.
+ */
+const SQL_INTERVALO_MINUTOS = `CASE
+    WHEN fa.Intervalo IS NULL OR fa.Intervalo <= 0 THEN NULL
+    WHEN fa.Intervalo >= 6000 THEN CONVERT(int, ROUND((fa.Intervalo - 1) / 6000.0, 0))
+    ELSE fa.Intervalo
+  END`;
+
+/**
+ * Vigente desde = primera indicación de la cadena NroIndicacionAnterior.
+ * La copia diaria (reindicar) guarda FechaCarga de hoy para el filtro; en pantalla
+ * hay que mostrar cuándo se indicó por primera vez, no la hora del último "volver a indicar".
+ * Arranca en la visita (@param0) y sube padres aunque sean de días anteriores.
+ */
+const SQL_CTE_VIGENTE_DESDE = `
+WITH cadenaVigente AS (
+  SELECT
+    iim.NroIndicacion AS Hoja,
+    iim.NroIndicacion AS Actual,
+    ISNULL(iim.NroIndicacionAnterior, 0) AS Ant,
+    iim.FechaCarga,
+    iim.HoraCarga,
+    0 AS n
+  FROM dbo.imInterIndMedicas AS iim
+  WHERE iim.NumeroVisita = @param0
+  UNION ALL
+  SELECT
+    c.Hoja,
+    p.NroIndicacion,
+    ISNULL(p.NroIndicacionAnterior, 0),
+    p.FechaCarga,
+    p.HoraCarga,
+    c.n + 1
+  FROM cadenaVigente c
+  INNER JOIN dbo.imInterIndMedicas AS p ON p.NroIndicacion = c.Ant
+  WHERE c.Ant > 0
+    AND c.n < 80
+    AND p.NroIndicacion <> c.Actual
+),
+origenVigente AS (
+  SELECT Hoja, FechaCarga AS FechaVigente, HoraCarga AS HoraVigente
+  FROM (
+    SELECT
+      Hoja, FechaCarga, HoraCarga,
+      ROW_NUMBER() OVER (PARTITION BY Hoja ORDER BY n DESC) AS rn
+    FROM cadenaVigente
+  ) x
+  WHERE rn = 1
+)`;
+
+/**
+ * Próxima toma = última aplicación + intervalo de la frecuencia.
+ * Si nunca se aplicó, cae a FechaProximo/HoraProximo guardados.
+ */
+const SQL_PROXIMA_APLICACION = `CASE
+    WHEN iim.FechaCumplido IS NOT NULL AND iim.FechaCumplido > 0
+         AND ${SQL_INTERVALO_MINUTOS} IS NOT NULL AND ${SQL_INTERVALO_MINUTOS} > 0 THEN
+      CONVERT(varchar(19),
+        DATEADD(MINUTE, ${SQL_INTERVALO_MINUTOS},
+          DATEADD(ms, (ISNULL(NULLIF(iim.HoraCumplido, 0), 1) - 1) * 10,
+            DATEADD(day, iim.FechaCumplido, '1800-12-28')
+          )
+        ), 120)
+    WHEN iim.FechaProximo IS NOT NULL AND iim.FechaProximo > 0 THEN
+      CONVERT(varchar(19),
+        DATEADD(ms, (NULLIF(iim.HoraProximo, 0) - 1) * 10,
+          DATEADD(day, iim.FechaProximo, '1800-12-28')
+        ), 120)
+    ELSE NULL
+  END`;
 
 /**
  * Normaliza FormaAdicional para compatibilidad entre sistema viejo y nuevo
@@ -85,79 +162,30 @@ const normalizarFormaAdicional = (valor, paraGuardar = false) => {
     }
 };
 
-// ✅ Helper: obtener Date ajustado a Argentina (UTC-3)
-const getArgentinaDate = (date) => {
-    // Convertir a UTC y aplicar offset -3 horas
-    const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-    return new Date(utc + (-3 * 3600000));
-};
-
-// ✅ Helper para obtener fecha local Argentina sin problemas de zona horaria
-const getLocalDateString = (date) => {
-    const ar = getArgentinaDate(date);
-    const yyyy = ar.getFullYear();
-    const mm = String(ar.getMonth() + 1).padStart(2, '0');
-    const dd = String(ar.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-};
-
-// ✅ Helper para obtener hora local Argentina en formato HH:mm
-const getLocalTimeString = (date) => {
-    const ar = getArgentinaDate(date);
-    const hh = String(ar.getHours()).padStart(2, '0');
-    const mm = String(ar.getMinutes()).padStart(2, '0');
-    return `${hh}:${mm}`;
-};
-
 /**
- * Convierte fecha y hora Clarion a objeto Date JavaScript usando utilidades existentes
- * @param {number} fechaClarion - Fecha en formato Clarion (días desde 28/12/1800)
- * @param {number} horaClarion - Hora en formato Clarion TIME (milisegundos/10 + 1)
- * @returns {Date} Objeto Date
- */
-const convertirClarionADateCompleto = (fechaClarion, horaClarion) => {
-    // Usar utilidad existente para convertir fecha
-    const fecha = convertirFechaClarionADate(fechaClarion);
-    if (!fecha) return null;
-    
-    // Agregar hora si existe usando utilidad existente
-    if (horaClarion && horaClarion > 0) {
-        const horaStr = convertirHoraClarionAString(horaClarion);
-        if (horaStr) {
-            const [horas, minutos, segundos] = horaStr.split(':').map(Number);
-            fecha.setHours(horas, minutos, segundos, 0);
-        }
-    }
-    
-    return fecha;
-};
-
-/**
- * Calcula la próxima fecha/hora de aplicación basándose en la última aplicación y frecuencia
+ * Calcula la próxima fecha/hora de aplicación (última aplicación + intervalo).
+ * Trabaja en hora de pared: no convierte UTC-3 sobre un Date del proceso.
  * @param {number} fechaCumplido - Fecha Clarion de última aplicación
  * @param {number} horaCumplido - Hora Clarion de última aplicación
- * @param {number} intervaloMinutos - Intervalo en minutos desde imFrecuenciasAdmin
+ * @param {number} intervaloMinutos - Minutos entre tomas (ya convertidos de Clarion TIME)
  * @returns {Object} { fechaProximo, horaProximo } en formato Clarion
  */
 const calcularProximaAplicacion = (fechaCumplido, horaCumplido, intervaloMinutos) => {
     if (!fechaCumplido || fechaCumplido <= 0 || !intervaloMinutos || intervaloMinutos <= 0) {
         return { fechaProximo: null, horaProximo: null };
     }
-    
-    // ✅ CORREGIDO: Usar función actualizada con utilidades correctas
-    const fechaBase = convertirClarionADateCompleto(fechaCumplido, horaCumplido);
-    if (!fechaBase) {
+
+    const fechaIso = clarionAIsoCalendario(fechaCumplido);
+    const horaStr = convertirHoraClarionAString(horaCumplido) || '00:00:00';
+    const next = fechaIso && sumarMinutosAFechaHoraWall(fechaIso, horaStr, intervaloMinutos);
+    if (!next) {
         return { fechaProximo: null, horaProximo: null };
     }
-    
-    // Sumar intervalo en minutos
-    const proximaFecha = new Date(fechaBase.getTime() + (intervaloMinutos * 60 * 1000));
-    
-    // Convertir de vuelta a formato Clarion usando utilidades existentes
-    const fechaProximo = convertirFechaAClarion(getLocalDateString(proximaFecha));
-    const horaProximo = convertirHoraAClarion(getLocalTimeString(proximaFecha) + ':00');
-    
-    return { fechaProximo, horaProximo };
+
+    return {
+        fechaProximo: convertirFechaAClarion(next.fecha),
+        horaProximo: convertirHoraAClarion(next.hora),
+    };
 };
 
 /**
@@ -184,10 +212,10 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
             return 60;
         }
         
-        // Patrón: "X VECES P/DIA" o "X VECES POR DIA"
-        const vecesMatch = frecuenciaUpper.match(/(\d+)\s*VECES?\s*(P\/DIA|POR\s*DIA|P\/D)/);
+        // Patrón: "X VECES P/DIA", "X VEZ AL DIA", "X VECES POR DIA"
+        const vecesMatch = frecuenciaUpper.match(/(\d+)\s*(?:VECES?|VEZ)\s*(P\/DIA|POR\s*DIA|P\/D|AL\s*DIA)/);
         if (vecesMatch) {
-            const veces = parseInt(vecesMatch[1]);
+            const veces = parseInt(vecesMatch[1], 10);
             // X veces por día = 24 horas / X veces = intervalo en horas
             const intervaloHoras = 24 / veces;
             const intervaloMinutos = Math.round(intervaloHoras * 60);
@@ -212,15 +240,17 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
             return minutos;
         }
         
-        // Si no coincide con patrones textuales, buscar en la tabla
+        // Catálogo: Intervalo es Clarion TIME (centésimas de segundo + 1), no minutos.
+        // 4/24 hs = cada 6 hs → 2.160.001. Si se suma como minutos da ~1500 días (nov/dic).
         const result = await executeQuery(
-            'SELECT Intervalo FROM imFrecuenciasAdmin WHERE Valor = @p0',
-            [{ value: frecuencia }]
+            'SELECT Intervalo FROM imFrecuenciasAdmin WHERE LTRIM(RTRIM(Valor)) = LTRIM(RTRIM(@p0))',
+            [{ value: frecuencia.trim() }]
         );
         
         if (result && result[0] && result[0].Intervalo) {
-            // El Intervalo ya está en minutos según la tabla
-            return result[0].Intervalo;
+            const minutos = clarionTimeAMinutos(result[0].Intervalo);
+            console.log(`[FRECUENCIA] "${frecuencia}" Intervalo Clarion ${result[0].Intervalo} = ${minutos} minutos`);
+            return minutos;
         }
         
         console.warn(`[FRECUENCIA] No se pudo interpretar la frecuencia: "${frecuencia}"`);
@@ -271,6 +301,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     }
 
     const sql = `
+${SQL_CTE_VIGENTE_DESDE}
 SELECT ${topClause}
   iim.NroIndicacion,
   iim.NroAdicional,
@@ -288,11 +319,11 @@ SELECT ${topClause}
   
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaProximo,0), '1800-12-28'), 23) AS FechaProximoISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
-  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaCargaISO,
+  CONVERT(varchar(10), DATEADD(day, NULLIF(COALESCE(NULLIF(origenVigente.FechaVigente, 0), iim.FechaCarga), 0), '1800-12-28'), 23) AS FechaCargaISO,
   
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10, 0), 108) AS HoraProximo,
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraRevision,0) - 1) * 10, 0), 108) AS HoraRevision,
-  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraCarga,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(COALESCE(NULLIF(origenVigente.HoraVigente, 0), iim.HoraCarga), 0) - 1) * 10, 0), 108) AS HoraCarga,
   
   CASE 
     WHEN iim.FechaCumplido IS NOT NULL AND iim.FechaCumplido > 0 THEN
@@ -303,14 +334,7 @@ SELECT ${topClause}
     ELSE NULL
   END AS UltimaAplicacion,
   
-  CASE 
-    WHEN iim.FechaProximo IS NOT NULL AND iim.FechaProximo > 0 THEN
-      CONVERT(varchar(19), 
-        DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10,
-          DATEADD(day, iim.FechaProximo, '1800-12-28')
-        ), 120)
-    ELSE NULL
-  END AS ProximaAplicacion,
+  ${SQL_PROXIMA_APLICACION} AS ProximaAplicacion,
   
   iim.IdSector,
   iim.AliasMedicamento,
@@ -332,6 +356,7 @@ SELECT ${topClause}
     ELSE iim.AliasMedicamento
   END AS DescripcionIndicacion
 FROM dbo.imInterIndMedicas AS iim
+LEFT JOIN origenVigente ON origenVigente.Hoja = iim.NroIndicacion
 ${SQL_APPLY_PERSONAL_PROFESIONAL}
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 LEFT JOIN dbo.imFrecuenciasAdmin AS fa ON iim.Frecuencia = fa.Valor
@@ -341,7 +366,8 @@ LEFT JOIN dbo.imInterCtrlAsistenciales AS ca ON tit.Tipo = 'A' AND iim.Codigo = 
 LEFT JOIN dbo.imVademecum AS v ON tit.Tipo = 'M' AND iim.Codigo = v.Troquel
 LEFT JOIN dbo.imEspecialidad AS esp ON esp.Valor = per.ValorEspecialidad
 WHERE ${whereParts.join('\n  AND ')}
-ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC;
+ORDER BY tit.Orden ASC, iim.NroIndicacion ASC, iim.NroAdicional ASC
+OPTION (MAXRECURSION 80);
   `;
 
     const rows = normalizarFilas(await executeQuery(sql, params));
@@ -645,7 +671,7 @@ const addDaysYmd = (ymd, days) => {
 
 /** Hoy o mañana (fecha Argentina). Cualquier otra fecha se rechaza. */
 const resolverFechaCargaIndicacion = (fechaSolicitada) => {
-    const hoy = getLocalDateString(new Date());
+    const hoy = fechaCalendarioArgentina();
     const manana = addDaysYmd(hoy, 1);
     const ymd = parseYmd(fechaSolicitada) || hoy;
     if (ymd !== hoy && ymd !== manana) {
@@ -693,12 +719,7 @@ const nuevaIndicacion = async (data) => {
     const fechaCargaYmd = nroPadre
         ? await obtenerFechaCargaPadre(nroPadre)
         : resolverFechaCargaIndicacion(data.FechaCarga);
-    const ahora = new Date();
-    const arAhora = getArgentinaDate(ahora);
-    const horaActual =
-        `${String(arAhora.getHours()).padStart(2, '0')}:` +
-        `${String(arAhora.getMinutes()).padStart(2, '0')}:` +
-        `${String(arAhora.getSeconds()).padStart(2, '0')}`;
+    const horaActual = horaWallArgentina(true);
     
     let horaCarga = convertirHoraAClarion(horaActual);
     
@@ -1012,9 +1033,8 @@ FROM imInterIndMedicas
     const proximoNro = proximoRows[0].ProximoNro;
     
     // Preparar datos para inserción
-    const ahora = new Date();
-    const fechaCarga = convertirFechaAClarion(getLocalDateString(ahora));
-    const horaCarga = convertirHoraAClarion(ahora.toTimeString().slice(0, 8));
+    const fechaCarga = convertirFechaAClarion(fechaCalendarioArgentina());
+    const horaCarga = convertirHoraAClarion(horaWallArgentina(true));
     
     // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para campos numéricos
     // y strings vacíos en lugar de NULL para campos de texto.
@@ -1582,8 +1602,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             NumeroVisita: data.numeroVisita,
 
             // Convertir fechas y horas a formato Clarion
-            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(getLocalDateString(dateCarga)) : null,
-            HoraCarga: data.horaCumplido ? convertirHoraAClarion(getLocalTimeString(dateCarga)) : null,
+            FechaCarga: data.fechaCumplido ? convertirFechaAClarion(fechaCalendarioArgentina(dateCarga)) : null,
+            HoraCarga: data.horaCumplido ? convertirHoraAClarion(horaWallArgentina(true, dateCarga)) : null,
             FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
             HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
 
@@ -1668,8 +1688,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
 
             // Fecha/Hora Carga (Servidor) - según tu regla
             // Solo se graba si el front envió una fecha de cumplimiento
-            FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
-            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
+            FechaCarga: convertirFechaAClarion(fechaCalendarioArgentina(dateCarga)),
+            HoraCarga: convertirHoraAClarion(horaWallArgentina(true, dateCarga)),
 
             // Fecha/Hora Dieta (Front) - según tu regla
             FechaDieta: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
@@ -1742,8 +1762,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             OperadorCarga: toNumberOrNull(data.operadorCarga),
 
             //Fecha
-            HoraCarga: convertirHoraAClarion(getLocalTimeString(dateCarga)),
-            FechaCarga: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraCarga: convertirHoraAClarion(horaWallArgentina(true, dateCarga)),
+            FechaCarga: convertirFechaAClarion(fechaCalendarioArgentina(dateCarga)),
             HoraControl: data.horaCumplido ? convertirHoraAClarion(data.horaCumplido) : null,
             FechaControl: data.fechaCumplido ? convertirFechaAClarion(data.fechaCumplido) : null,
 
@@ -1850,8 +1870,8 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             NumeroVisita: indicacionActual.NumeroVisita,
             ValorSector: data.medidaAsistencial.valorSector,
             CodOperador: toNumberOrNull(data.operadorCarga),
-            HoraGraba: convertirHoraAClarion(getLocalTimeString(dateCarga)),
-            FechaGraba: convertirFechaAClarion(getLocalDateString(dateCarga)),
+            HoraGraba: convertirHoraAClarion(horaWallArgentina(true, dateCarga)),
+            FechaGraba: convertirFechaAClarion(fechaCalendarioArgentina(dateCarga)),
             Observaciones: limitLength(data.observaciones || '', 255),
         }
 
@@ -1905,4 +1925,6 @@ module.exports = {
     dejarSinEfecto,
     marcarVistoEnfermeria: vistoEnfermeria.marcarVistoPorVisita,
     listarNuevasEnfermeria: vistoEnfermeria.listarNuevasResumen,
+    calcularProximaAplicacion,
+    obtenerIntervaloFrecuencia,
 };
