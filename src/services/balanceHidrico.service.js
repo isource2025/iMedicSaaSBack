@@ -3,6 +3,7 @@ const { convertirHoraAClarion: horaAClarion } = require('../utils/dateUtils');
 const { normalizarTextoParaClarionAnsi: toAnsi } = require('../utils/clarionText');
 const { normalizarFilas } = require('../utils/codigoSector');
 const { sqlApplyFicha } = require('../utils/sqlNombrePersona');
+const { createTenantOnce } = require('../context/tenantCache');
 
 function num(v, fallback = 0) {
 	if (v == null || v === '') return fallback;
@@ -19,7 +20,64 @@ function sector4(v) {
 	return str(v, 4).toUpperCase();
 }
 
-/** Totales clínicos: cuentan los "Paso" (volumen efectivo) + egresos. */
+const TIPOS_TRANSFUSION = new Set(['GR', 'PLAQUETA', 'PLASMA']);
+
+function tipoTransfusion(v) {
+	const s = str(v, 40)
+		.trim()
+		.toUpperCase()
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/\s+/g, '_');
+	if (!s) return '';
+	if (['GR', 'GLOBULO_ROJO', 'GLOBULOS_ROJOS', 'GLOBULO', 'GLOBULOS'].includes(s)) return 'GR';
+	if (['PLAQUETA', 'PLAQUETAS'].includes(s)) return 'PLAQUETA';
+	if (s === 'PLASMA') return 'PLASMA';
+	return TIPOS_TRANSFUSION.has(s) ? s : '';
+}
+
+const COLS_EXTRA = [
+	{ name: 'Ing_Tranf_Tipo', ddl: 'VARCHAR(20) NULL' },
+	{ name: 'Egr_SNG', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Vomito', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Colostomia', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Ileostomia', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje1', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje1Tipo', ddl: 'VARCHAR(40) NULL' },
+	{ name: 'Egr_Drenaje2', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje2Tipo', ddl: 'VARCHAR(40) NULL' },
+	{ name: 'Egr_Drenaje3', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje3Tipo', ddl: 'VARCHAR(40) NULL' },
+	{ name: 'Egr_Drenaje4', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje4Tipo', ddl: 'VARCHAR(40) NULL' },
+	{ name: 'Egr_Drenaje5', ddl: 'FLOAT NULL' },
+	{ name: 'Egr_Drenaje5Tipo', ddl: 'VARCHAR(40) NULL' },
+];
+
+const ensureSchema = createTenantOnce(async () => {
+	const faltan = [];
+	for (const col of COLS_EXTRA) {
+		faltan.push(
+			`IF COL_LENGTH(N'dbo.imBalanceHidrico', N'${col.name}') IS NULL ALTER TABLE dbo.imBalanceHidrico ADD ${col.name} ${col.ddl}`,
+		);
+	}
+	for (const sql of faltan) await executeQuery(sql);
+});
+
+function sumaDrenajes(d) {
+	let s = 0;
+	for (let i = 1; i <= 5; i++) s += num(d[`Egr_Drenaje${i}`]);
+	return s || num(d.Egr_Drenajes);
+}
+
+function sumaSngVomito(d) {
+	const sng = num(d.Egr_SNG);
+	const vom = num(d.Egr_Vomito);
+	if (sng || vom) return sng + vom;
+	return num(d.Egr_SNG_Vomito);
+}
+
+/** Totales clínicos: "Paso" (volumen efectivo) + egresos desglosados. */
 function calcularTotales(d) {
 	const totalIngresos =
 		num(d.Ing_Par_Paso) +
@@ -29,8 +87,10 @@ function calcularTotales(d) {
 	const totalEgresos =
 		num(d.Egr_Diuresis) +
 		num(d.Egr_Catarsis) +
-		num(d.Egr_SNG_Vomito) +
-		num(d.Egr_Drenajes);
+		num(d.Egr_Colostomia) +
+		num(d.Egr_Ileostomia) +
+		sumaSngVomito(d) +
+		sumaDrenajes(d);
 	return {
 		TotalIngresos: totalIngresos,
 		TotalEgresos: totalEgresos,
@@ -60,13 +120,28 @@ const SELECT_BALANCE = `
     b.Ing_Apar_paso,
     b.Ing_Tranf_Ingreso,
     b.Ing_Tranf_paso,
+    b.Ing_Tranf_Tipo,
     b.Egr_Diuresis,
     b.Egr_Catarsis,
+    b.Egr_Colostomia,
+    b.Egr_Ileostomia,
+    ISNULL(b.Egr_SNG, CASE WHEN b.Egr_Vomito IS NULL THEN b.Egr_SNG_Vomito ELSE 0 END) AS Egr_SNG,
+    ISNULL(b.Egr_Vomito, 0) AS Egr_Vomito,
     b.Egr_SNG_Vomito,
+    b.Egr_Drenaje1,
+    b.Egr_Drenaje1Tipo,
+    b.Egr_Drenaje2,
+    b.Egr_Drenaje2Tipo,
+    b.Egr_Drenaje3,
+    b.Egr_Drenaje3Tipo,
+    b.Egr_Drenaje4,
+    b.Egr_Drenaje4Tipo,
+    b.Egr_Drenaje5,
+    b.Egr_Drenaje5Tipo,
     b.Egr_Drenajes,
     b.TotalIngresos,
-    b.TotalEgresos,
-    b.Total,
+    (ISNULL(b.TotalEgresos, 0) + ISNULL(b.Egr_Colostomia, 0) + ISNULL(b.Egr_Ileostomia, 0)) AS TotalEgresos,
+    (ISNULL(b.TotalIngresos, 0) - (ISNULL(b.TotalEgresos, 0) + ISNULL(b.Egr_Colostomia, 0) + ISNULL(b.Egr_Ileostomia, 0))) AS Total,
     b.Profesional,
     b.Sector,
     prof.NombreCompleto AS ProfesionalApellido,
@@ -83,6 +158,7 @@ const SELECT_BALANCE = `
  * @param {string} fecha YYYY-MM-DD
  */
 async function obtenerPorVisitaYFecha(numeroVisita, fecha) {
+	await ensureSchema();
 	const consulta = `
     ${SELECT_BALANCE}
     WHERE b.NumeroVisita = @param0
@@ -102,6 +178,7 @@ async function obtenerPorVisitaYFecha(numeroVisita, fecha) {
  * @param {{desde?: string, hasta?: string}} [rango]
  */
 async function obtenerPorVisita(numeroVisita, rango = {}) {
+	await ensureSchema();
 	const params = [{ value: numeroVisita }];
 	let where = 'WHERE b.NumeroVisita = @param0';
 	if (rango.desde) {
@@ -121,6 +198,7 @@ async function obtenerPorVisita(numeroVisita, rango = {}) {
 }
 
 async function obtenerPorId(id) {
+	await ensureSchema();
 	const consulta = `
     ${SELECT_BALANCE}
     WHERE b.IdBalanceHidrico = @param0
@@ -149,18 +227,87 @@ function mapPayload(data) {
 		Ing_Apar_paso: num(data.Ing_Apar_paso ?? data.Ing_Apar_Paso ?? data.ingAparPaso),
 		Ing_Tranf_Ingreso: num(data.Ing_Tranf_Ingreso ?? data.ingTranfIngreso),
 		Ing_Tranf_paso: num(data.Ing_Tranf_paso ?? data.Ing_Tranf_Paso ?? data.ingTranfPaso),
+		Ing_Tranf_Tipo: tipoTransfusion(data.Ing_Tranf_Tipo ?? data.ingTranfTipo),
 		Egr_Diuresis: num(data.Egr_Diuresis ?? data.egrDiuresis),
 		Egr_Catarsis: num(data.Egr_Catarsis ?? data.egrCatarsis),
-		Egr_SNG_Vomito: num(data.Egr_SNG_Vomito ?? data.egrSngVomito),
-		Egr_Drenajes: num(data.Egr_Drenajes ?? data.egrDrenajes),
+		Egr_Colostomia: num(data.Egr_Colostomia ?? data.egrColostomia),
+		Egr_Ileostomia: num(data.Egr_Ileostomia ?? data.egrIleostomia),
+		Egr_SNG: num(data.Egr_SNG ?? data.egrSng),
+		Egr_Vomito: num(data.Egr_Vomito ?? data.egrVomito),
+		Egr_SNG_Vomito: 0,
+		Egr_Drenajes: 0,
 		Profesional: num(data.Profesional ?? data.profesional, null),
 		Sector: sector4(data.Sector ?? data.sector ?? data.idSector),
 	};
+	for (let i = 1; i <= 5; i++) {
+		campos[`Egr_Drenaje${i}`] = num(data[`Egr_Drenaje${i}`] ?? data[`egrDrenaje${i}`]);
+		campos[`Egr_Drenaje${i}Tipo`] = str(
+			data[`Egr_Drenaje${i}Tipo`] ?? data[`egrDrenaje${i}Tipo`],
+			40,
+		);
+	}
+	const mandoSngVomito =
+		data.Egr_SNG != null ||
+		data.egrSng != null ||
+		data.Egr_Vomito != null ||
+		data.egrVomito != null;
+	if (!mandoSngVomito && !campos.Egr_SNG && !campos.Egr_Vomito) {
+		campos.Egr_SNG = num(data.Egr_SNG_Vomito ?? data.egrSngVomito);
+	}
+	campos.Egr_SNG_Vomito = campos.Egr_SNG + campos.Egr_Vomito;
+	const mandoDrenajes = [1, 2, 3, 4, 5].some(
+		(i) => data[`Egr_Drenaje${i}`] != null || data[`egrDrenaje${i}`] != null,
+	);
+	campos.Egr_Drenajes = sumaDrenajes(campos);
+	if (!mandoDrenajes && !campos.Egr_Drenajes) {
+		campos.Egr_Drenajes = num(data.Egr_Drenajes ?? data.egrDrenajes);
+		if (campos.Egr_Drenajes && !campos.Egr_Drenaje1) campos.Egr_Drenaje1 = campos.Egr_Drenajes;
+	}
 	const totales = calcularTotales(campos);
 	return { ...campos, ...totales };
 }
 
+const COLS_GRABAR = [
+	'NumeroVisita',
+	'Fecha',
+	'Hora',
+	'Medicacion',
+	'Via',
+	'Ing_Par_Ingreso',
+	'Ing_Par_Paso',
+	'Ing_Aent_Alimento',
+	'Ing_Aent_Ingreso',
+	'Ing_Aent_Paso',
+	'Ing_Apar_Solucion',
+	'Ing_Apar_Ingreso',
+	'Ing_Apar_paso',
+	'Ing_Tranf_Ingreso',
+	'Ing_Tranf_paso',
+	'Ing_Tranf_Tipo',
+	'Egr_Diuresis',
+	'Egr_Catarsis',
+	'Egr_Colostomia',
+	'Egr_Ileostomia',
+	'Egr_SNG',
+	'Egr_Vomito',
+	'Egr_SNG_Vomito',
+	'Egr_Drenaje1',
+	'Egr_Drenaje1Tipo',
+	'Egr_Drenaje2',
+	'Egr_Drenaje2Tipo',
+	'Egr_Drenaje3',
+	'Egr_Drenaje3Tipo',
+	'Egr_Drenaje4',
+	'Egr_Drenaje4Tipo',
+	'Egr_Drenaje5',
+	'Egr_Drenaje5Tipo',
+	'Egr_Drenajes',
+	'Profesional',
+	'Sector',
+];
+
 async function crear(data) {
+	await ensureSchema();
 	const p = mapPayload(data);
 	if (!p.NumeroVisita) throw new Error('NumeroVisita es requerido');
 	if (!p.Fecha) throw new Error('Fecha es requerida');
@@ -168,53 +315,16 @@ async function crear(data) {
 		throw new Error('Profesional es requerido');
 	}
 
+	const cols = COLS_GRABAR;
 	const sql = `
-    INSERT INTO dbo.imBalanceHidrico (
-      NumeroVisita, Fecha, Hora, Medicacion, Via,
-      Ing_Par_Ingreso, Ing_Par_Paso,
-      Ing_Aent_Alimento, Ing_Aent_Ingreso, Ing_Aent_Paso,
-      Ing_Apar_Solucion, Ing_Apar_Ingreso, Ing_Apar_paso,
-      Ing_Tranf_Ingreso, Ing_Tranf_paso,
-      Egr_Diuresis, Egr_Catarsis, Egr_SNG_Vomito, Egr_Drenajes,
-      Profesional, Sector
-    )
+    INSERT INTO dbo.imBalanceHidrico (${cols.join(', ')})
     OUTPUT INSERTED.IdBalanceHidrico
-    VALUES (
-      @param0, @param1, @param2, @param3, @param4,
-      @param5, @param6,
-      @param7, @param8, @param9,
-      @param10, @param11, @param12,
-      @param13, @param14,
-      @param15, @param16, @param17, @param18,
-      @param19, @param20
-    )
+    VALUES (${cols.map((_, i) => `@param${i}`).join(', ')})
   `;
-
-	const params = [
-		{ value: p.NumeroVisita },
-		{ value: p.Fecha },
-		{ value: p.Hora },
-		{ value: p.Medicacion },
-		{ value: p.Via },
-		{ value: p.Ing_Par_Ingreso },
-		{ value: p.Ing_Par_Paso },
-		{ value: p.Ing_Aent_Alimento },
-		{ value: p.Ing_Aent_Ingreso },
-		{ value: p.Ing_Aent_Paso },
-		{ value: p.Ing_Apar_Solucion },
-		{ value: p.Ing_Apar_Ingreso },
-		{ value: p.Ing_Apar_paso },
-		{ value: p.Ing_Tranf_Ingreso },
-		{ value: p.Ing_Tranf_paso },
-		{ value: p.Egr_Diuresis },
-		{ value: p.Egr_Catarsis },
-		{ value: p.Egr_SNG_Vomito },
-		{ value: p.Egr_Drenajes },
-		{ value: p.Profesional },
-		{ value: p.Sector },
-	];
-
-	const result = await executeQuery(sql, params);
+	const result = await executeQuery(
+		sql,
+		cols.map((c) => ({ value: p[c] })),
+	);
 	const id = result?.[0]?.IdBalanceHidrico;
 	return id ? obtenerPorId(id) : null;
 }
@@ -223,88 +333,49 @@ async function actualizar(id, data) {
 	const existing = await obtenerPorId(id);
 	if (!existing) return null;
 
+	const pick = (camel, pascal, extra) =>
+		data[pascal] ?? data[camel] ?? extra ?? existing[pascal];
 	const merged = {
 		NumeroVisita: existing.NumeroVisita,
-		Fecha: data.Fecha ?? data.fecha ?? existing.Fecha,
-		Hora: data.Hora ?? data.hora ?? existing.Hora,
-		Medicacion: data.Medicacion ?? data.medicacion ?? existing.Medicacion,
-		Via: data.Via ?? data.via ?? existing.Via,
-		Ing_Par_Ingreso: data.Ing_Par_Ingreso ?? data.ingParIngreso ?? existing.Ing_Par_Ingreso,
-		Ing_Par_Paso: data.Ing_Par_Paso ?? data.ingParPaso ?? existing.Ing_Par_Paso,
-		Ing_Aent_Alimento:
-			data.Ing_Aent_Alimento ?? data.ingAentAlimento ?? existing.Ing_Aent_Alimento,
-		Ing_Aent_Ingreso:
-			data.Ing_Aent_Ingreso ?? data.ingAentIngreso ?? existing.Ing_Aent_Ingreso,
-		Ing_Aent_Paso: data.Ing_Aent_Paso ?? data.ingAentPaso ?? existing.Ing_Aent_Paso,
-		Ing_Apar_Solucion:
-			data.Ing_Apar_Solucion ?? data.ingAparSolucion ?? existing.Ing_Apar_Solucion,
-		Ing_Apar_Ingreso:
-			data.Ing_Apar_Ingreso ?? data.ingAparIngreso ?? existing.Ing_Apar_Ingreso,
-		Ing_Apar_paso:
-			data.Ing_Apar_paso ?? data.Ing_Apar_Paso ?? data.ingAparPaso ?? existing.Ing_Apar_paso,
-		Ing_Tranf_Ingreso:
-			data.Ing_Tranf_Ingreso ?? data.ingTranfIngreso ?? existing.Ing_Tranf_Ingreso,
-		Ing_Tranf_paso:
-			data.Ing_Tranf_paso ??
-			data.Ing_Tranf_Paso ??
-			data.ingTranfPaso ??
-			existing.Ing_Tranf_paso,
-		Egr_Diuresis: data.Egr_Diuresis ?? data.egrDiuresis ?? existing.Egr_Diuresis,
-		Egr_Catarsis: data.Egr_Catarsis ?? data.egrCatarsis ?? existing.Egr_Catarsis,
-		Egr_SNG_Vomito: data.Egr_SNG_Vomito ?? data.egrSngVomito ?? existing.Egr_SNG_Vomito,
-		Egr_Drenajes: data.Egr_Drenajes ?? data.egrDrenajes ?? existing.Egr_Drenajes,
+		Fecha: pick('fecha', 'Fecha'),
+		Hora: pick('hora', 'Hora'),
+		Medicacion: pick('medicacion', 'Medicacion'),
+		Via: pick('via', 'Via'),
+		Ing_Par_Ingreso: pick('ingParIngreso', 'Ing_Par_Ingreso'),
+		Ing_Par_Paso: pick('ingParPaso', 'Ing_Par_Paso'),
+		Ing_Aent_Alimento: pick('ingAentAlimento', 'Ing_Aent_Alimento'),
+		Ing_Aent_Ingreso: pick('ingAentIngreso', 'Ing_Aent_Ingreso'),
+		Ing_Aent_Paso: pick('ingAentPaso', 'Ing_Aent_Paso'),
+		Ing_Apar_Solucion: pick('ingAparSolucion', 'Ing_Apar_Solucion'),
+		Ing_Apar_Ingreso: pick('ingAparIngreso', 'Ing_Apar_Ingreso'),
+		Ing_Apar_paso: data.Ing_Apar_paso ?? data.Ing_Apar_Paso ?? data.ingAparPaso ?? existing.Ing_Apar_paso,
+		Ing_Tranf_Ingreso: pick('ingTranfIngreso', 'Ing_Tranf_Ingreso'),
+		Ing_Tranf_paso: data.Ing_Tranf_paso ?? data.Ing_Tranf_Paso ?? data.ingTranfPaso ?? existing.Ing_Tranf_paso,
+		Ing_Tranf_Tipo: pick('ingTranfTipo', 'Ing_Tranf_Tipo'),
+		Egr_Diuresis: pick('egrDiuresis', 'Egr_Diuresis'),
+		Egr_Catarsis: pick('egrCatarsis', 'Egr_Catarsis'),
+		Egr_Colostomia: pick('egrColostomia', 'Egr_Colostomia'),
+		Egr_Ileostomia: pick('egrIleostomia', 'Egr_Ileostomia'),
+		Egr_SNG: pick('egrSng', 'Egr_SNG'),
+		Egr_Vomito: pick('egrVomito', 'Egr_Vomito'),
+		Egr_SNG_Vomito: pick('egrSngVomito', 'Egr_SNG_Vomito'),
+		Egr_Drenajes: pick('egrDrenajes', 'Egr_Drenajes'),
 		Profesional: existing.Profesional,
 		Sector: data.Sector ?? data.sector ?? data.idSector ?? existing.Sector,
 	};
+	for (let i = 1; i <= 5; i++) {
+		merged[`Egr_Drenaje${i}`] = pick(`egrDrenaje${i}`, `Egr_Drenaje${i}`);
+		merged[`Egr_Drenaje${i}Tipo`] = pick(`egrDrenaje${i}Tipo`, `Egr_Drenaje${i}Tipo`);
+	}
 
 	const p = mapPayload(merged);
-
+	const cols = COLS_GRABAR.filter((c) => c !== 'NumeroVisita' && c !== 'Profesional');
 	const sql = `
     UPDATE dbo.imBalanceHidrico SET
-      Fecha = @param1,
-      Hora = @param2,
-      Medicacion = @param3,
-      Via = @param4,
-      Ing_Par_Ingreso = @param5,
-      Ing_Par_Paso = @param6,
-      Ing_Aent_Alimento = @param7,
-      Ing_Aent_Ingreso = @param8,
-      Ing_Aent_Paso = @param9,
-      Ing_Apar_Solucion = @param10,
-      Ing_Apar_Ingreso = @param11,
-      Ing_Apar_paso = @param12,
-      Ing_Tranf_Ingreso = @param13,
-      Ing_Tranf_paso = @param14,
-      Egr_Diuresis = @param15,
-      Egr_Catarsis = @param16,
-      Egr_SNG_Vomito = @param17,
-      Egr_Drenajes = @param18,
-      Sector = @param19
+      ${cols.map((c, i) => `${c} = @param${i + 1}`).join(',\n      ')}
     WHERE IdBalanceHidrico = @param0
   `;
-
-	await executeQuery(sql, [
-		{ value: Number(id) },
-		{ value: p.Fecha },
-		{ value: p.Hora },
-		{ value: p.Medicacion },
-		{ value: p.Via },
-		{ value: p.Ing_Par_Ingreso },
-		{ value: p.Ing_Par_Paso },
-		{ value: p.Ing_Aent_Alimento },
-		{ value: p.Ing_Aent_Ingreso },
-		{ value: p.Ing_Aent_Paso },
-		{ value: p.Ing_Apar_Solucion },
-		{ value: p.Ing_Apar_Ingreso },
-		{ value: p.Ing_Apar_paso },
-		{ value: p.Ing_Tranf_Ingreso },
-		{ value: p.Ing_Tranf_paso },
-		{ value: p.Egr_Diuresis },
-		{ value: p.Egr_Catarsis },
-		{ value: p.Egr_SNG_Vomito },
-		{ value: p.Egr_Drenajes },
-		{ value: p.Sector },
-	]);
+	await executeQuery(sql, [{ value: Number(id) }, ...cols.map((c) => ({ value: p[c] }))]);
 
 	return obtenerPorId(id);
 }
@@ -335,8 +406,10 @@ function resumirDia(rows) {
 		sumEgr +=
 			num(r.Egr_Diuresis) +
 			num(r.Egr_Catarsis) +
-			num(r.Egr_SNG_Vomito) +
-			num(r.Egr_Drenajes);
+			num(r.Egr_Colostomia) +
+			num(r.Egr_Ileostomia) +
+			sumaSngVomito(r) +
+			sumaDrenajes(r);
 	}
 
 	const balances = list.filter((r) => isBalance(r.Medicacion));
@@ -369,4 +442,5 @@ module.exports = {
 	eliminar,
 	resumirDia,
 	calcularTotales,
+	tipoTransfusion,
 };
