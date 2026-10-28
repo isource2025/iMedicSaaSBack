@@ -41,3 +41,9 @@ test('controles frecuentes no copian OperadorCarga en Profesional', () => {
 	assert.equal(/data\.operadorCarga \|\| 0 \},?\s+\/\/ @param4/.test(t), false);
 	assert.equal(/data\.profesional/.test(t), true);
 });
+
+test('indicaciones une ProfesionalAsiste con sqlApplyFicha (alias prof)', () => {
+	const t = fs.readFileSync(path.join(src, 'services', 'indicaciones.service.js'), 'utf8');
+	assert.match(t, /sqlApplyFicha\(\s*'iim\.ProfesionalAsiste'\s*,\s*'prof'\s*\)/);
+	assert.match(t, /SQL_NOMBRE_PROFESIONAL = 'prof\.NombreCompleto'/);
+});

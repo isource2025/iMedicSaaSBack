@@ -112,3 +112,11 @@ test('el adicional incrementa HoraCarga según los adicionales ya existentes', a
 	assert.ok(Number.isInteger(insertDe().params[3].value));
 	assert.ok(insertDe().params[3].value > 0);
 });
+
+test('byDate resuelve el profesional con alias prof (sqlApplyFicha)', async () => {
+	await servicio.getByVisitaAndDate(480169, '2026-10-28', { incluirSuspendidas: true });
+	const q = llamadas.find((l) => /FullName/.test(l.sql) && /iim\.NumeroVisita/.test(l.sql));
+	assert.ok(q, 'debe consultar indicaciones por visita y fecha');
+	assert.match(q.sql, /prof\.NombreCompleto/);
+	assert.match(q.sql, /per\.Valor = prof\.ValorPersonal/);
+});

@@ -104,11 +104,11 @@ test('firmarSesion usa JWT y no el body', () => {
 	};
 	const req = {
 		codOperador: 25,
-		auth: { usuario: { codOperador: 99, matricula: 8625 } },
+		auth: { usuario: { codOperador: 99, id: 29, matricula: 8625 } },
 		matricula: 8625,
 	};
 	const sesion = firmarSesion(req, res);
 	assert.equal(sesion.codOperador, 99);
-	assert.equal(sesion.profesional, 8625);
+	assert.equal(sesion.valorPersonal, 29);
 	assert.equal(sesion.matricula, 8625);
 });

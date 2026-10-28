@@ -9,7 +9,7 @@ const {
 const { normalizarTextoParaClarionAnsi } = require("../utils/clarionText");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { resolverPresionMedia } = require("../utils/presionArterial");
-const { sqlApplyNombrePersona } = require("../utils/sqlNombrePersona");
+const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 const vistoEnfermeria = require("./indicacionesVistoEnfermeria.service");
 
 /** Recorta texto ya normalizado para ANSI/Clarion (saltos CRLF + CP1252). */
@@ -36,16 +36,8 @@ const SQL_EXCLUIR_SIN_EFECTO =
  * Expone `prof` (nombre) y `per` (ficha); usar después de FROM imInterIndMedicas AS iim.
  */
 const SQL_APPLY_PERSONAL_PROFESIONAL = `
-OUTER APPLY (
-  SELECT TOP 1
-    per0.Valor,
-    per0.Matricula,
-    per0.ApellidoNombre,
-    per0.ValorEspecialidad
-  FROM dbo.imPersonal AS per0
-  WHERE per0.Valor = iim.ProfesionalAsiste OR per0.Matricula = iim.ProfesionalAsiste
-  ORDER BY CASE WHEN per0.Valor = iim.ProfesionalAsiste THEN 0 ELSE 1 END
-) per`;
+${sqlApplyFicha('iim.ProfesionalAsiste', 'prof')}
+LEFT JOIN dbo.imPersonal AS per ON per.Valor = prof.ValorPersonal`;
 
 const SQL_NOMBRE_PROFESIONAL = 'prof.NombreCompleto';
 
@@ -484,7 +476,7 @@ FROM dbo.imInterIndMedicas AS iim
 LEFT JOIN dbo.imPassword AS p ON p.CodOperador = iim.OperadorCarga
 INNER JOIN dbo.imInterTipoIndicacion AS tit ON iim.TipoIndicacion = tit.Valor
 INNER JOIN dbo.imVademecum AS v ON iim.Codigo = v.Troquel
-${sqlApplyNombrePersona('iim.OperadorCarga', 'op')}
+${sqlApplyOperador('iim.OperadorCarga', 'op')}
 WHERE iim.NumeroVisita = @param0
   ${periodo.sql ? `AND ${periodo.sql}` : ''}
   AND iim.TipoIndicacion = 9
