@@ -195,10 +195,45 @@ async function listar({ idEmpresa, modulo, entidad, idEntidad, actor, limite = 1
 	});
 }
 
+/** Cuántos eventos coinciden. 0 si no hay tabla o la empresa no es válida. */
+async function contar({ idEmpresa, modulo, entidad, accion, actor, desde }) {
+	if (!(await esquemaListo())) return 0;
+	if (!Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) < 0) return 0;
+	const where = ['a.IdEmpresa = ?'];
+	const params = [Number(idEmpresa)];
+	if (modulo) {
+		where.push('a.Modulo = ?');
+		params.push(texto(modulo, 30));
+	}
+	if (entidad) {
+		where.push('a.Entidad = ?');
+		params.push(texto(entidad, 40));
+	}
+	if (accion) {
+		where.push('a.Accion = ?');
+		params.push(texto(accion, 30));
+	}
+	if (actor == null || actor === '') {
+		where.push('a.Actor IS NULL');
+	} else {
+		where.push('a.Actor = ?');
+		params.push(Number(actor));
+	}
+	if (desde) {
+		where.push('a.Fecha >= ?');
+		params.push(String(desde));
+	}
+	const rows = await consultar(
+		`SELECT COUNT(*) AS n FROM imAuditoria a WHERE ${where.join(' AND ')}`,
+		params,
+	);
+	return Number(rows[0]?.n) || 0;
+}
+
 /** Sólo para tests. */
 function _reiniciarCache() {
 	listo = false;
 	ultimoChequeo = 0;
 }
 
-module.exports = { DDL_TABLA, esquemaListo, registrar, registrarSeguro, listar, _reiniciarCache };
+module.exports = { DDL_TABLA, esquemaListo, registrar, registrarSeguro, listar, contar, _reiniciarCache };

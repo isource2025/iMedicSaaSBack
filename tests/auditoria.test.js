@@ -11,6 +11,7 @@ const src = (p) => path.join(__dirname, '..', 'src', p);
 const consultas = [];
 let existeTabla = true;
 let filasListar = [];
+let filasCount = 0;
 let habilitado = true;
 
 const dbPath = require.resolve(src('config/authCentralDb.js'));
@@ -24,6 +25,7 @@ require.cache[dbPath] = {
 			query: async (sql, params = []) => {
 				consultas.push({ sql, params });
 				if (/information_schema\.TABLES/.test(sql)) return [existeTabla ? [{ ok: 1 }] : []];
+				if (/SELECT COUNT\(\*\)/.test(sql)) return [[{ n: filasCount }]];
 				if (/FROM imAuditoria/.test(sql)) return [filasListar];
 				return [[]];
 			},
@@ -37,6 +39,7 @@ function reiniciar() {
 	consultas.length = 0;
 	existeTabla = true;
 	filasListar = [];
+	filasCount = 0;
 	habilitado = true;
 	auditoria._reiniciarCache();
 }
@@ -129,6 +132,36 @@ test('listar limita el maximo de filas y parsea el detalle', async () => {
 	assert.equal(r[0].actorNombre, 'Ana');
 	assert.equal(r[1].detalle, null);
 	assert.equal(r[1].actor, null);
+});
+
+test('contar filtra por empresa, modulo, entidad, accion, actor y desde', async () => {
+	reiniciar();
+	filasCount = 4;
+	const n = await auditoria.contar({
+		idEmpresa: 9,
+		modulo: 'asistente',
+		entidad: 'mensaje',
+		accion: 'mensaje',
+		actor: 12,
+		desde: '2026-10-28',
+	});
+	assert.equal(n, 4);
+	const q = consultas.find((c) => /SELECT COUNT\(\*\)/.test(c.sql));
+	assert.match(q.sql, /a\.IdEmpresa = \?/);
+	assert.match(q.sql, /a\.Fecha >= \?/);
+	assert.deepEqual(q.params, [9, 'ASISTENTE', 'MENSAJE', 'MENSAJE', 12, '2026-10-28']);
+});
+
+test('contar sin actor usa IS NULL y sin tabla devuelve 0', async () => {
+	reiniciar();
+	filasCount = 2;
+	const n = await auditoria.contar({ idEmpresa: 1, actor: null });
+	assert.equal(n, 2);
+	const q = consultas.find((c) => /SELECT COUNT\(\*\)/.test(c.sql));
+	assert.match(q.sql, /a\.Actor IS NULL/);
+	existeTabla = false;
+	auditoria._reiniciarCache();
+	assert.equal(await auditoria.contar({ idEmpresa: 1, actor: 1 }), 0);
 });
 
 test('el servidor nunca crea ni modifica tablas (la instalacion es explicita)', async () => {

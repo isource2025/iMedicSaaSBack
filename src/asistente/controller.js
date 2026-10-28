@@ -23,6 +23,7 @@ const intencionMod = require('./intencion');
 const directas = require('./directas');
 const internacion = require('./agentes/internacion');
 const fechas = require('./fechas');
+const cuota = require('./cuota');
 
 const MAX_ITER = Number(process.env.ASISTENTE_MAX_ITER || 10);
 
@@ -75,6 +76,7 @@ async function registrarMensaje(req, { prep, ctx, result, error, stream }) {
 		},
 		ip: ipDe(req),
 	});
+	if (!error) cuota.consumir(req);
 	return resumen;
 }
 
@@ -411,7 +413,13 @@ async function mensaje(req, res) {
 		const atajo = respuestaAfirmaPendiente(prep.mensaje, req, prep.conv) || respuestaSocial(prep.mensaje, prep.conv);
 		const result = atajo || (await correrModelo({ ...prep, ctx }));
 		await registrarMensaje(req, { prep, ctx, result });
-		return res.json({ success: true, ...result, foco: focoParaCliente(prep.conv), consumo: consumoParaCliente(ctx) });
+		return res.json({
+			success: true,
+			...result,
+			foco: focoParaCliente(prep.conv),
+			consumo: consumoParaCliente(ctx),
+			cuota: await cuota.estadoDe(req),
+		});
 	} catch (err) {
 		if (ctx) await registrarMensaje(req, { prep, ctx, error: err });
 		const status = err.statusCode || 500;
@@ -469,7 +477,11 @@ async function mensajeStream(req, res) {
 				onEvento: (evt) => writeSse(res, evt.tipo || 'estado', evt),
 			}));
 		await registrarMensaje(req, { prep, ctx, result, stream: true });
-		writeSse(res, 'done', { ...result, foco: focoParaCliente(prep.conv) });
+		writeSse(res, 'done', {
+			...result,
+			foco: focoParaCliente(prep.conv),
+			cuota: await cuota.estadoDe(req),
+		});
 		res.end();
 	} catch (err) {
 		if (ctx) await registrarMensaje(req, { prep, ctx, error: err, stream: true });
@@ -640,6 +652,7 @@ async function capacidades(req, res) {
 			runStream: 'POST /api/asistente/mensaje/stream',
 			confirmar: 'POST /api/asistente/confirmar',
 		},
+		cuota: await cuota.estadoDe(req),
 	});
 }
 

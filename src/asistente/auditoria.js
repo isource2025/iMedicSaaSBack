@@ -88,4 +88,23 @@ async function registrarConsumoBot({ modelo, usage, capa }) {
 	});
 }
 
-module.exports = { registrarUso, registrarConsumoIa, registrarConsumoBot, origenDe, HEADER_ORIGEN };
+/** Mensajes de chat exitosos de este usuario en la empresa (para la cuota de prueba). */
+async function contarMensajes({ idEmpresa, actor, desde }) {
+	return auditoria.contar({
+		idEmpresa,
+		modulo: 'ASISTENTE',
+		entidad: 'MENSAJE',
+		accion: 'MENSAJE',
+		actor,
+		desde,
+	});
+}
+
+module.exports = {
+	registrarUso,
+	registrarConsumoIa,
+	registrarConsumoBot,
+	contarMensajes,
+	origenDe,
+	HEADER_ORIGEN,
+};
