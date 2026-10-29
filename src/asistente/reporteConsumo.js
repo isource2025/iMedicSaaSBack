@@ -2,6 +2,8 @@
  * Reporte de consumo de OpenAI a partir de imAuditoria (Modulo = ASISTENTE).
  *   - Entidad MENSAJE: cada pedido al chat, con detalle.consumo (incluye llamadas internas como la epicrisis).
  *   - Entidad CONSUMO_IA: funciones IA fuera del chat. Si origen = 'asistente' ya está dentro de un MENSAJE.
+ *
+ * Sin idEmpresa (null) agrega todas las empresas — uso Super Admin.
  */
 const { getAuthCentralPool } = require('../config/authCentralDb');
 const auditoria = require('../services/auditoria.service');
@@ -61,32 +63,57 @@ function cerrar(a) {
 	};
 }
 
-function whereConsumo({ idEmpresa, desde, hasta, actor }) {
+function empresaIdOpcional(idEmpresa) {
+	if (idEmpresa == null || idEmpresa === '' || idEmpresa === 'todas') return null;
+	const n = Number(idEmpresa);
+	return Number.isFinite(n) ? n : null;
+}
+
+function whereConsumo({ idEmpresa, desde, hasta, actor, q }) {
 	const where = [
-		'a.IdEmpresa = ?',
 		"a.Modulo = 'ASISTENTE'",
 		"((a.Entidad = 'MENSAJE' AND a.Accion IN ('MENSAJE','MENSAJE_ERROR')) OR a.Entidad = 'CONSUMO_IA')",
 		'a.Fecha >= ?',
 		'a.Fecha < DATE_ADD(?, INTERVAL 1 DAY)',
 	];
-	const params = [Number(idEmpresa), desde, hasta];
-	if (actor != null) {
+	const params = [desde, hasta];
+	const emp = empresaIdOpcional(idEmpresa);
+	if (emp != null) {
+		where.unshift('a.IdEmpresa = ?');
+		params.unshift(emp);
+	}
+	if (actor != null && actor !== '') {
 		where.push('a.Actor = ?');
 		params.push(Number(actor));
 	}
+	const busqueda = String(q || '').trim();
+	if (busqueda) {
+		where.push('a.Detalle LIKE ?');
+		params.push(`%${busqueda.slice(0, 200)}%`);
+	}
 	return { sql: where.join(' AND '), params };
 }
+
+const SELECT_FILA = `a.IdAuditoria AS id, a.IdEmpresa AS idEmpresa, a.IdEntidad AS idConversacion,
+            a.Entidad AS entidad, a.Accion AS accion, a.Actor AS actor, a.Ip AS ip,
+            DATE_FORMAT(a.Fecha, '%Y-%m-%d %H:%i:%s') AS fecha, a.Detalle AS detalle,
+            p.ApellidoNombre AS actorNombre,
+            COALESCE(e.DESCRIPCION, CONCAT('Empresa ', a.IdEmpresa)) AS empresaNombre`;
+
+const JOINS = `FROM imAuditoria a
+     LEFT JOIN imPersonal p ON p.IdEmpresa = a.IdEmpresa AND p.Valor = a.Actor
+     LEFT JOIN Empresas e ON e.IDEMPRESA = a.IdEmpresa`;
 
 async function leerFilas(filtros) {
 	const pool = await getAuthCentralPool();
 	const w = whereConsumo(filtros);
 	const params = [...w.params, MAX_FILAS];
 	const [rows] = await pool.query(
-		`SELECT a.Entidad AS entidad, a.Accion AS accion, a.Actor AS actor,
+		`SELECT a.IdEmpresa AS idEmpresa, a.Entidad AS entidad, a.Accion AS accion, a.Actor AS actor,
             DATE_FORMAT(a.Fecha, '%Y-%m-%d') AS dia, a.Detalle AS detalle,
-            p.ApellidoNombre AS actorNombre
-     FROM imAuditoria a
-     LEFT JOIN imPersonal p ON p.IdEmpresa = a.IdEmpresa AND p.Valor = a.Actor
+            p.ApellidoNombre AS actorNombre,
+            COALESCE(e.DESCRIPCION, CONCAT('Empresa ', a.IdEmpresa)) AS empresaNombre
+     ${JOINS}
      WHERE ${w.sql}
      ORDER BY a.Fecha
      LIMIT ?`,
@@ -102,13 +129,20 @@ function filaMensaje(f) {
 	const desdeAsistente = f.entidad === 'CONSUMO_IA' && d.origen === 'asistente';
 	return {
 		id: Number(f.id),
+		idEmpresa: f.idEmpresa == null ? null : Number(f.idEmpresa),
+		empresaNombre: String(f.empresaNombre || '').trim() || null,
+		idConversacion: f.idConversacion || d.idConversacion || null,
 		fecha: f.fecha,
 		actor: f.actor == null ? null : Number(f.actor),
 		nombre: String(f.actorNombre || '').trim(),
 		tipo: f.entidad === 'CONSUMO_IA' ? f.accion : 'CHAT',
 		error: f.accion === 'MENSAJE_ERROR' ? d.error || 'Error' : null,
 		pregunta: d.pregunta || null,
+		respuesta: d.respuesta || null,
+		agente: d.agente || null,
+		modo: d.modo || null,
 		ruta: d.ruta || null,
+		ip: f.ip || null,
 		herramientas: Array.isArray(d.herramientas) ? d.herramientas : [],
 		modelo: c?.modelo || null,
 		llamadas: c ? Number(c.llamadas || 0) + Number(c.llamadasExternas || 0) : 0,
@@ -116,23 +150,21 @@ function filaMensaje(f) {
 		costoUsd: c ? Number(c.costoUsd || 0) : null,
 		incluidoEnChat: desdeAsistente,
 		ms: c?.ms ?? null,
+		consumo: c || null,
 	};
 }
 
-async function listarMensajes({ idEmpresa, desde, hasta, actor, limite, pagina }) {
+async function listarMensajes({ idEmpresa, desde, hasta, actor, q, limite, pagina }) {
 	const r = rango(desde, hasta);
 	if (!(await auditoria.esquemaListo())) return { ...r, disponible: false, filas: [], total: 0 };
 	const lim = Math.min(Math.max(Number(limite) || 50, 1), 200);
 	const pag = Math.max(Number(pagina) || 1, 1);
 	const pool = await getAuthCentralPool();
-	const w = whereConsumo({ idEmpresa, desde: r.desde, hasta: r.hasta, actor });
+	const w = whereConsumo({ idEmpresa, desde: r.desde, hasta: r.hasta, actor, q });
 	const [[cuenta]] = await pool.query(`SELECT COUNT(*) AS total FROM imAuditoria a WHERE ${w.sql}`, w.params);
 	const [rows] = await pool.query(
-		`SELECT a.IdAuditoria AS id, a.Entidad AS entidad, a.Accion AS accion, a.Actor AS actor,
-            DATE_FORMAT(a.Fecha, '%Y-%m-%d %H:%i:%s') AS fecha, a.Detalle AS detalle,
-            p.ApellidoNombre AS actorNombre
-     FROM imAuditoria a
-     LEFT JOIN imPersonal p ON p.IdEmpresa = a.IdEmpresa AND p.Valor = a.Actor
+		`SELECT ${SELECT_FILA}
+     ${JOINS}
      WHERE ${w.sql}
      ORDER BY a.Fecha DESC, a.IdAuditoria DESC
      LIMIT ? OFFSET ?`,
@@ -148,9 +180,26 @@ async function listarMensajes({ idEmpresa, desde, hasta, actor, limite, pagina }
 	};
 }
 
+async function obtenerMensaje(idAuditoria) {
+	if (!(await auditoria.esquemaListo())) return null;
+	const id = Number(idAuditoria);
+	if (!Number.isFinite(id) || id <= 0) return null;
+	const pool = await getAuthCentralPool();
+	const [rows] = await pool.query(
+		`SELECT ${SELECT_FILA}
+     ${JOINS}
+     WHERE a.IdAuditoria = ? AND a.Modulo = 'ASISTENTE'
+     LIMIT 1`,
+		[id],
+	);
+	const row = rows?.[0];
+	return row ? filaMensaje(row) : null;
+}
+
 function agregar(filas, { dias }) {
 	const total = acumulador();
 	const porUsuario = new Map();
+	const porEmpresa = new Map();
 	const porDia = new Map();
 	const porModelo = new Map();
 	const porHerramienta = new Map();
@@ -188,9 +237,23 @@ function agregar(filas, { dias }) {
 		sumar(total, c);
 		costosPedido.push(Number(c.costoUsd || 0));
 
-		const u = de(porUsuario, f.actor ?? 'sin_actor', () => ({ ...acumulador(), actor: f.actor, nombre: String(f.actorNombre || '').trim() }));
+		const u = de(porUsuario, `${f.idEmpresa ?? 'x'}:${f.actor ?? 'sin_actor'}`, () => ({
+			...acumulador(),
+			actor: f.actor,
+			nombre: String(f.actorNombre || '').trim(),
+			idEmpresa: f.idEmpresa == null ? null : Number(f.idEmpresa),
+			empresaNombre: String(f.empresaNombre || '').trim() || null,
+		}));
 		u.pedidos += 1;
 		sumar(u, c);
+
+		const emp = de(porEmpresa, f.idEmpresa ?? 'sin', () => ({
+			...acumulador(),
+			idEmpresa: f.idEmpresa == null ? null : Number(f.idEmpresa),
+			nombre: String(f.empresaNombre || '').trim() || `Empresa ${f.idEmpresa ?? '?'}`,
+		}));
+		emp.pedidos += 1;
+		sumar(emp, c);
 
 		const dd = de(porDia, f.dia, acumulador);
 		dd.pedidos += 1;
@@ -229,14 +292,24 @@ function agregar(filas, { dias }) {
 			pctCache: total.entrada ? Math.round((total.cacheadas / total.entrada) * 1000) / 10 : 0,
 			errores,
 			costoArs: ars ? Math.round(total.usd * ars * 100) / 100 : null,
+			empresas: porEmpresa.size,
 		},
 		proyeccionMensual: {
 			costoUsd: costos.redondear(proyeccionUsd),
 			costoArs: ars ? Math.round(proyeccionUsd * ars * 100) / 100 : null,
 			base: `promedio diario de ${dias} día(s) × 30`,
 		},
+		porEmpresa: [...porEmpresa.values()]
+			.map((e) => ({ idEmpresa: e.idEmpresa, nombre: e.nombre, ...cerrar(e) }))
+			.sort((a, b) => b.costoUsd - a.costoUsd),
 		porUsuario: [...porUsuario.values()]
-			.map((u) => ({ actor: u.actor, nombre: u.nombre, ...cerrar(u) }))
+			.map((u) => ({
+				actor: u.actor,
+				nombre: u.nombre,
+				idEmpresa: u.idEmpresa,
+				empresaNombre: u.empresaNombre,
+				...cerrar(u),
+			}))
 			.sort((a, b) => b.costoUsd - a.costoUsd),
 		porDia: [...porDia.entries()].map(([dia, a]) => ({ dia, ...cerrar(a) })),
 		porModelo: [...porModelo.entries()].map(([modelo, a]) => ({ modelo, ...cerrar(a) })),
@@ -266,13 +339,13 @@ function agregar(filas, { dias }) {
 	};
 }
 
-async function generar({ idEmpresa, desde, hasta, actor }) {
+async function generar({ idEmpresa, desde, hasta, actor, q }) {
 	const r = rango(desde, hasta);
 	if (!(await auditoria.esquemaListo())) {
 		return { ...r, disponible: false, mensaje: 'La tabla de auditoría no está instalada' };
 	}
-	const filas = await leerFilas({ idEmpresa, desde: r.desde, hasta: r.hasta, actor });
+	const filas = await leerFilas({ idEmpresa, desde: r.desde, hasta: r.hasta, actor, q });
 	return { ...r, disponible: true, ...agregar(filas, r) };
 }
 
-module.exports = { generar, listarMensajes, agregar, rango, filaMensaje };
+module.exports = { generar, listarMensajes, obtenerMensaje, agregar, rango, filaMensaje, empresaIdOpcional };

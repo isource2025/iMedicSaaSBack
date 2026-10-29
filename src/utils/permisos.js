@@ -192,6 +192,7 @@ const MODULOS = Object.freeze([
 			{ id: 'CONFIG',     label: 'Configuración', path: '/dashboard/super-admin/configuracion', acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
 			{ id: 'SEGURIDAD',  label: 'Seguridad',   path: '/dashboard/super-admin/seguridad',       acciones: [ACCIONES.VER, ACCIONES.GESTIONAR] },
 			{ id: 'ANALITICA',  label: 'Analítica',   path: '/dashboard/super-admin/analitica',       acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
+			{ id: 'CHATS_IA',   label: 'Chats IA',    path: '/dashboard/super-admin/chats-ia',        acciones: [ACCIONES.VER] },
 		],
 	},
 	{

@@ -59,6 +59,10 @@ router.delete('/servicios/:valor', requirePermiso('PLATAFORMA.ONBOARDING.GESTION
 
 router.get('/usuarios', requirePermiso('PLATAFORMA.USUARIOS.VER'), ctrl.listarUsuarios);
 
+router.get('/chats-ia', requirePermiso('PLATAFORMA.CHATS_IA.VER'), ctrl.reporteChatsIa);
+router.get('/chats-ia/mensajes', requirePermiso('PLATAFORMA.CHATS_IA.VER'), ctrl.mensajesChatsIa);
+router.get('/chats-ia/mensajes/:id', requirePermiso('PLATAFORMA.CHATS_IA.VER'), ctrl.detalleChatIa);
+
 router.post(
 	'/auth-reconcile',
 	requirePermiso('PLATAFORMA.CONFIG.GESTIONAR'),

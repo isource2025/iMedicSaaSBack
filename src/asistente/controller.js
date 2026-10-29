@@ -60,6 +60,8 @@ async function registrarMensaje(req, { prep, ctx, result, error, stream }) {
 	const resumen = r && (r.llamadas || r.llamadasExternas) ? r : null;
 	const linea = consumo.lineaLog(resumen);
 	if (linea) console.log(`${linea}${error ? ' · ERROR' : ''}`);
+	const pregunta = prep?.mensaje ? String(prep.mensaje).slice(0, 2000) : undefined;
+	const respuesta = result?.texto ? String(result.texto).slice(0, 4000) : undefined;
 	await auditoria.registrarUso({
 		idEmpresa: req.idEmpresa,
 		actor: req.valorPersonal,
@@ -68,8 +70,10 @@ async function registrarMensaje(req, { prep, ctx, result, error, stream }) {
 		detalle: {
 			herramientas: result?.herramientas,
 			modo: result?.modo,
+			agente: result?.agente || undefined,
 			ruta: prep?.rutaActual,
-			pregunta: prep?.mensaje ? prep.mensaje.slice(0, 160) : undefined,
+			pregunta,
+			respuesta,
 			stream: stream || undefined,
 			error: error ? String(error.message || error).slice(0, 300) : undefined,
 			consumo: resumen || undefined,

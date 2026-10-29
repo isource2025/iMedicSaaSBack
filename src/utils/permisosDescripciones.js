@@ -262,6 +262,10 @@ const SUBMODULOS = Object.freeze({
 	'PLATAFORMA.CONFIG': { descripcion: 'Configuración de la plataforma.' },
 	'PLATAFORMA.SEGURIDAD': { descripcion: 'Seguridad de la plataforma.' },
 	'PLATAFORMA.ANALITICA': { descripcion: 'Analítica de uso de la plataforma.' },
+	'PLATAFORMA.CHATS_IA': {
+		descripcion: 'Monitoreo global de conversaciones con el asistente de IA en todas las empresas.',
+		acciones: { VER: 'Ver mensajes, costos y detalle de chats IA de toda la plataforma' },
+	},
 
 	// ── Mi perfil ─────────────────────────────────────────────────────────
 	'USUARIO.PERFIL': {

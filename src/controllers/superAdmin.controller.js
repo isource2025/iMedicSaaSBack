@@ -349,6 +349,71 @@ async function authReconcile(req, res) {
 	}
 }
 
+function filtrosChatsIa(req) {
+	const actorQ = req.query?.actor;
+	const actor = actorQ != null && actorQ !== '' ? Number(actorQ) : null;
+	if (actor != null && !Number.isFinite(actor)) {
+		const err = new Error('actor inválido');
+		err.statusCode = 400;
+		throw err;
+	}
+	const empQ = req.query?.idEmpresa;
+	const idEmpresa =
+		empQ == null || empQ === '' || empQ === 'todas' ? null : Number(empQ);
+	if (idEmpresa != null && !Number.isFinite(idEmpresa)) {
+		const err = new Error('idEmpresa inválido');
+		err.statusCode = 400;
+		throw err;
+	}
+	return {
+		idEmpresa,
+		desde: req.query?.desde,
+		hasta: req.query?.hasta,
+		actor,
+		q: req.query?.q,
+	};
+}
+
+async function reporteChatsIa(req, res) {
+	try {
+		const reporte = require('../asistente/reporteConsumo');
+		const data = await reporte.generar(filtrosChatsIa(req));
+		return res.json({ success: true, data });
+	} catch (err) {
+		if (err.statusCode === 400) return res.status(400).json({ success: false, mensaje: err.message });
+		console.error('[superAdmin.reporteChatsIa]', err);
+		return res.status(500).json({ success: false, mensaje: 'No se pudo generar el reporte de chats IA' });
+	}
+}
+
+async function mensajesChatsIa(req, res) {
+	try {
+		const reporte = require('../asistente/reporteConsumo');
+		const data = await reporte.listarMensajes({
+			...filtrosChatsIa(req),
+			limite: req.query?.limite,
+			pagina: req.query?.pagina,
+		});
+		return res.json({ success: true, data });
+	} catch (err) {
+		if (err.statusCode === 400) return res.status(400).json({ success: false, mensaje: err.message });
+		console.error('[superAdmin.mensajesChatsIa]', err);
+		return res.status(500).json({ success: false, mensaje: 'No se pudo listar los mensajes de chats IA' });
+	}
+}
+
+async function detalleChatIa(req, res) {
+	try {
+		const reporte = require('../asistente/reporteConsumo');
+		const data = await reporte.obtenerMensaje(req.params.id);
+		if (!data) return res.status(404).json({ success: false, mensaje: 'Mensaje no encontrado' });
+		return res.json({ success: true, data });
+	} catch (err) {
+		console.error('[superAdmin.detalleChatIa]', err);
+		return res.status(500).json({ success: false, mensaje: 'No se pudo obtener el detalle del mensaje' });
+	}
+}
+
 module.exports = {
 	dashboard,
 	catalogos,
@@ -384,4 +449,7 @@ module.exports = {
 	modulosEmpresa,
 	configPlataforma,
 	authReconcile,
+	reporteChatsIa,
+	mensajesChatsIa,
+	detalleChatIa,
 };
