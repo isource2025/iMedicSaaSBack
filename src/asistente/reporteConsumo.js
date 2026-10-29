@@ -9,6 +9,7 @@ const { getAuthCentralPool } = require('../config/authCentralDb');
 const auditoria = require('../services/auditoria.service');
 const costos = require('./costos');
 const { CATEGORIAS } = require('./consumo');
+const { partesFechaHoraArgentina, fechaCalendarioArgentina } = require('../utils/dateUtils');
 
 const MAX_FILAS = 50000;
 const DIA_MS = 24 * 60 * 60 * 1000;
@@ -19,12 +20,45 @@ function fechaIso(v, porDefecto) {
 }
 
 function rango(desde, hasta) {
-	const hoy = new Date();
-	const iso = (d) => d.toISOString().slice(0, 10);
-	const h = fechaIso(hasta, iso(hoy));
-	const d = fechaIso(desde, iso(new Date(new Date(`${h}T00:00:00Z`).getTime() - 29 * DIA_MS)));
-	const dias = Math.max(1, Math.round((new Date(`${h}T00:00:00Z`) - new Date(`${d}T00:00:00Z`)) / DIA_MS) + 1);
+	const h = fechaIso(hasta, fechaCalendarioArgentina());
+	const base = new Date(`${h}T12:00:00-03:00`);
+	base.setTime(base.getTime() - 29 * DIA_MS);
+	const d = fechaIso(desde, fechaCalendarioArgentina(base));
+	const dias = Math.max(
+		1,
+		Math.round((new Date(`${h}T00:00:00-03:00`) - new Date(`${d}T00:00:00-03:00`)) / DIA_MS) + 1,
+	);
 	return { desde: d, hasta: h, dias };
+}
+
+/**
+ * Railway guarda imAuditoria.Fecha con NOW() en UTC.
+ * Devolvemos wall-clock Argentina: 'YYYY-MM-DD HH:mm:ss'.
+ */
+function utcSqlAArgentina(s) {
+	if (s == null || s === '') return s;
+	let d;
+	if (s instanceof Date) {
+		d = s;
+	} else {
+		const raw = String(s).trim();
+		const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?/);
+		if (!m) return raw;
+		const hora = `${m[2]}:${m[3] || '00'}`;
+		d = new Date(`${m[1]}T${hora}Z`);
+	}
+	if (Number.isNaN(d.getTime())) return String(s);
+	const p = partesFechaHoraArgentina(d);
+	return `${p.fecha} ${p.hora}`;
+}
+
+/** Límites UTC del rango de días calendario en Argentina (fin exclusivo). */
+function boundsUtcDeRangoAr(desde, hasta) {
+	const inicio = new Date(`${desde}T00:00:00-03:00`);
+	const finExcl = new Date(`${hasta}T00:00:00-03:00`);
+	finExcl.setTime(finExcl.getTime() + DIA_MS);
+	const fmt = (x) => x.toISOString().slice(0, 19).replace('T', ' ');
+	return { inicioUtc: fmt(inicio), finUtcExcl: fmt(finExcl) };
 }
 
 function percentil(ordenados, p) {
@@ -70,13 +104,14 @@ function empresaIdOpcional(idEmpresa) {
 }
 
 function whereConsumo({ idEmpresa, desde, hasta, actor, q }) {
+	const { inicioUtc, finUtcExcl } = boundsUtcDeRangoAr(desde, hasta);
 	const where = [
 		"a.Modulo = 'ASISTENTE'",
 		"((a.Entidad = 'MENSAJE' AND a.Accion IN ('MENSAJE','MENSAJE_ERROR')) OR a.Entidad = 'CONSUMO_IA')",
 		'a.Fecha >= ?',
-		'a.Fecha < DATE_ADD(?, INTERVAL 1 DAY)',
+		'a.Fecha < ?',
 	];
-	const params = [desde, hasta];
+	const params = [inicioUtc, finUtcExcl];
 	const emp = empresaIdOpcional(idEmpresa);
 	if (emp != null) {
 		where.unshift('a.IdEmpresa = ?');
@@ -110,7 +145,7 @@ async function leerFilas(filtros) {
 	const params = [...w.params, MAX_FILAS];
 	const [rows] = await pool.query(
 		`SELECT a.IdEmpresa AS idEmpresa, a.Entidad AS entidad, a.Accion AS accion, a.Actor AS actor,
-            DATE_FORMAT(a.Fecha, '%Y-%m-%d') AS dia, a.Detalle AS detalle,
+            DATE_FORMAT(a.Fecha, '%Y-%m-%d %H:%i:%s') AS fechaUtc, a.Detalle AS detalle,
             p.ApellidoNombre AS actorNombre,
             COALESCE(e.DESCRIPCION, CONCAT('Empresa ', a.IdEmpresa)) AS empresaNombre
      ${JOINS}
@@ -119,7 +154,14 @@ async function leerFilas(filtros) {
      LIMIT ?`,
 		params,
 	);
-	return rows || [];
+	return (rows || []).map((row) => {
+		const fechaAr = utcSqlAArgentina(row.fechaUtc);
+		return {
+			...row,
+			dia: String(fechaAr || '').slice(0, 10),
+			fecha: fechaAr,
+		};
+	});
 }
 
 /** Una fila por mensaje (y por epicrisis IA generada desde la pantalla), más nuevo primero. */
@@ -132,7 +174,7 @@ function filaMensaje(f) {
 		idEmpresa: f.idEmpresa == null ? null : Number(f.idEmpresa),
 		empresaNombre: String(f.empresaNombre || '').trim() || null,
 		idConversacion: f.idConversacion || d.idConversacion || null,
-		fecha: f.fecha,
+		fecha: utcSqlAArgentina(f.fecha),
 		actor: f.actor == null ? null : Number(f.actor),
 		nombre: String(f.actorNombre || '').trim(),
 		tipo: f.entidad === 'CONSUMO_IA' ? f.accion : 'CHAT',
