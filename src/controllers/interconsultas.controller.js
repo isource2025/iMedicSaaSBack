@@ -1,4 +1,5 @@
 const interconsultasService = require('../services/interconsultas.service');
+const { firmarORechazar } = require('../identidad/contrato');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
 const { sectorEnSesion, codigosParaFiltro, idSectorSesion } = require('../utils/sectoresSesion');

@@ -1,6 +1,7 @@
 const svc = require('../services/solicitudesEstudios.service');
 const diagnosticoEstudios = require('../services/diagnosticoEstudios.service');
 const estudiosService = require('../services/estudios.service');
+const { firmarORechazar } = require('../identidad/contrato');
 const { runWithTenant } = require('../context/tenantContext');
 const { resolverMatriculaTenant } = require('../utils/matriculaTenant');
 const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');

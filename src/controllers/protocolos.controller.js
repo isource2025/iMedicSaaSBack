@@ -1,4 +1,5 @@
 const protocolosService = require('../services/protocolos.service');
+const { firmarORechazar } = require('../identidad/contrato');
 const { requireOperadorCarga, quitarAutorDelBody } = require('../utils/sessionIdentity');
 
 function _err(res, err) {
