@@ -757,7 +757,8 @@ async function listarPorVisita(numeroVisita) {
 		   dxPos.Descripcion AS DiagnosticoPosDescripcion
 		 FROM dbo.HCProtocolosPtes p
 		 LEFT JOIN dbo.HCTiposProtocolos tp
-		   ON LTRIM(RTRIM(tp.TipoProtocolo)) = LTRIM(RTRIM(p.TipoProtocolo))
+		   ON LTRIM(RTRIM(ISNULL(p.TipoProtocolo, ''))) <> ''
+		  AND LTRIM(RTRIM(tp.TipoProtocolo)) = LTRIM(RTRIM(p.TipoProtocolo))
 		 ${SQL_APPLY_OPERADOR_PROTOCOLO}
 		 ${sqlApplyDiagnostico('p.DiagnosticoPreProcedimiento', 'dxPre')}
 		 ${sqlApplyDiagnostico('p.DiagnosticoPosProcedimiento', 'dxPos')}
@@ -896,8 +897,14 @@ async function listarPorVisita(numeroVisita) {
 			numeroVisita: Number(p.NumeroVisita),
 			idPaciente: Number(p.IDPaciente),
 			fecha: _isoPared(p.Fecha),
+			// Código vacío = "Sin tipo". En Clarion hay una fila de catálogo con
+			// TipoProtocolo='' (p.ej. "kit uti"); no la usamos como descripción.
 			tipoProtocolo: String(p.TipoProtocolo || '').trim(),
-			tipoDescripcion: p.TipoDescripcion ? String(p.TipoDescripcion).trim() : null,
+			tipoDescripcion: String(p.TipoProtocolo || '').trim()
+				? p.TipoDescripcion
+					? String(p.TipoDescripcion).trim()
+					: null
+				: null,
 			fechaHoraInicio: _isoPared(p.FechaHoraInicio),
 			fechaHoraFin: _isoPared(p.FechaHoraFin),
 			diagnosticoPre: String(p.DiagnosticoPre || '').trim() || null,
