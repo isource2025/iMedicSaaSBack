@@ -1337,14 +1337,14 @@ async function syncRolesDesdeFisico(idEmpresa, pool) {
 const ROL_INFORME_LABEL = {
 	1: { uno: 'admin', muchos: 'admins', nombre: 'ADMIN', etiqueta: 'Administrador' },
 	2: { uno: 'médico', muchos: 'médicos', nombre: 'MEDICO', etiqueta: 'Médico' },
-	3: { uno: 'enfermero', muchos: 'enfermeros', nombre: 'ENFERMERO', etiqueta: 'Enfermero' },
+	3: { uno: 'enfermero', muchos: 'enfermeros', nombre: 'ENFERMERO', etiqueta: 'Enfermería' },
 	4: {
 		uno: 'administrativo',
 		muchos: 'administrativos',
 		nombre: 'ADMINISTRATIVO',
 		etiqueta: 'Administrativo',
 	},
-	6: { uno: 'carga HC', muchos: 'carga HC', nombre: 'CARGA_HC', etiqueta: 'Carga de adjuntos' },
+	6: { uno: 'carga HC', muchos: 'carga HC', nombre: 'CARGA_HC', etiqueta: 'Carga de adjunto' },
 	7: { uno: 'panel de datos', muchos: 'panel de datos', nombre: 'PANEL_DATOS', etiqueta: 'Panel de datos' },
 };
 

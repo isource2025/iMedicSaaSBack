@@ -1791,6 +1791,18 @@ async function cambiarPasswordCuentaPersonal(id, nuevaPassword) {
 	return true;
 }
 
+function esCuentaSistemaSoloNube(row) {
+	const vp = Number(row.ValorPersonal);
+	const nr = String(row.NombreRed || '')
+		.trim()
+		.toUpperCase();
+	if (!Number.isFinite(vp) || vp <= 0) return true;
+	if (vp >= ADMIN_VALOR_THRESHOLD) return true;
+	if (vp === 1) return true;
+	if (nr === 'ADMIN' || nr === 'ADMINISTRADOR' || nr === 'ADMINISTRADOR DEL SISTEMA') return true;
+	return false;
+}
+
 /**
  * Cuentas en la nube (login MySQL) sin ficha en el SQL del hospital.
  * Es el caso "puede loguearse pero no aparece en Administrador de Personal".
@@ -1816,15 +1828,50 @@ async function listarCuentasSoloNube() {
 	).catch(() => []);
 	const have = new Set((fisico || []).map((r) => Number(r.Valor)));
 
-	return (rows || [])
-		.filter((r) => !have.has(Number(r.ValorPersonal)))
-		.map((r) => ({
+	const candidatas = (rows || []).filter((r) => {
+		const vp = Number(r.ValorPersonal);
+		if (!Number.isFinite(vp) || vp <= 0) return false;
+		if (have.has(vp)) return false;
+		if (esCuentaSistemaSoloNube(r)) return false;
+		return true;
+	});
+
+	const out = [];
+	for (const r of candidatas) {
+		const numeroRaw = r.Numero != null ? Number(r.Numero) : numOrNull(r.NumeroDocumento);
+		const numero = Number.isFinite(numeroRaw) && numeroRaw > 0 ? numeroRaw : null;
+		let valorDestino = null;
+		let sugerencia = 'recrear';
+		if (numero != null) {
+			const porDni = await executeQuery(
+				`SELECT TOP 1 Valor, ApellidoNombre FROM dbo.imPersonal
+          WHERE Numero = @p0 AND Valor < ${ADMIN_VALOR_THRESHOLD}
+          ORDER BY Valor`,
+				[{ value: numero, type: 'Int' }],
+			).catch(() => []);
+			if (porDni?.[0]?.Valor != null) {
+				const dest = Number(porDni[0].Valor);
+				const yaTienePw = await usersService.obtenerCuentaPorPersonal(dest).catch(() => null);
+				if (!yaTienePw?.tieneCuenta) {
+					valorDestino = dest;
+					sugerencia = 'vincular';
+				} else {
+					sugerencia = 'conflicto_dni';
+					valorDestino = dest;
+				}
+			}
+		}
+		out.push({
 			valor: Number(r.ValorPersonal),
 			nombreRed: strOrNull(r.NombreRed),
 			apellidoNombre: apellidoNombreDesdeNube(r),
-			numeroDocumento: r.Numero != null ? Number(r.Numero) : numOrNull(r.NumeroDocumento),
+			numeroDocumento: numero,
 			ocultoPorIdReservado: Number(r.ValorPersonal) >= ADMIN_VALOR_THRESHOLD,
-		}));
+			sugerencia,
+			valorDestino,
+		});
+	}
+	return out;
 }
 
 async function repararUnaCuentaSoloNube(row, emp) {
@@ -1832,10 +1879,48 @@ async function repararUnaCuentaSoloNube(row, emp) {
 	if (!Number.isFinite(valor) || valor <= 0) {
 		throw new Error('ID de personal inválido');
 	}
+	if (esCuentaSistemaSoloNube(row)) {
+		return { valor, accion: 'omitido_sistema' };
+	}
 	if (await existeFichaFisica(valor)) return { valor, accion: 'ya_existia' };
 
 	const apellidoNombre = truncStr(apellidoNombreDesdeNube(row), 80) || `Usuario ${valor}`;
-	const numero = numOrNull(row.Numero != null ? row.Numero : row.NumeroDocumento);
+	const numeroRaw = numOrNull(row.Numero != null ? row.Numero : row.NumeroDocumento);
+	const numero = Number.isFinite(numeroRaw) && numeroRaw > 0 ? numeroRaw : null;
+
+	// Caso Arreche: login huérfano en VP X, ficha real con mismo DNI en VP Y → vincular.
+	if (numero != null) {
+		const porDni = await executeQuery(
+			`SELECT TOP 1 Valor, ApellidoNombre FROM dbo.imPersonal
+        WHERE Numero = @p0 AND Valor < ${ADMIN_VALOR_THRESHOLD}
+        ORDER BY Valor`,
+			[{ value: numero, type: 'Int' }],
+		);
+		if (porDni?.[0]?.Valor != null) {
+			const destino = Number(porDni[0].Valor);
+			if (destino !== valor) {
+				const yaTienePw = await usersService.obtenerCuentaPorPersonal(destino).catch(() => null);
+				if (yaTienePw?.tieneCuenta) {
+					throw new Error(
+						`El DNI ${numero} ya está en personal ${destino} y ese ID ya tiene usuario. Revisá a mano el login ${strOrNull(row.NombreRed) || valor}.`,
+					);
+				}
+				await usersService.reasignarPasswordValorPersonal(valor, destino);
+				try {
+					await authCentralSync.vincularUsuarioEmpresaTenant(emp, destino);
+				} catch (vErr) {
+					console.warn(`[personal.reparar] vínculo Valor=${destino}:`, vErr.message);
+				}
+				return {
+					valor: destino,
+					valorOrigen: valor,
+					accion: 'vinculado',
+					apellidoNombre: strOrNull(porDni[0].ApellidoNombre) || apellidoNombre,
+				};
+			}
+		}
+	}
+
 	const matricula = numOrNull(row.Matricula) || valor;
 	const input = {
 		TipoDocumento: truncStr(row.TipoDocumento, 10) || 'DNI',
@@ -1885,6 +1970,12 @@ async function repararUnaCuentaSoloNube(row, emp) {
 		console.warn(`[personal.reparar] vínculo Valor=${valor}:`, vErr.message);
 	}
 
+	try {
+		await authCentralSync.syncUserLoginBundle(emp, valor);
+	} catch (syncErr) {
+		console.warn(`[personal.reparar] sync login Valor=${valor}:`, syncErr.message);
+	}
+
 	const idRol = numOrNull(row.Rol);
 	if (idRol) {
 		try {
@@ -1916,13 +2007,17 @@ async function repararCuentasSoloNube() {
 	for (const row of rows || []) {
 		const valor = Number(row.ValorPersonal);
 		if (!Number.isFinite(valor) || valor <= 0) continue;
+		if (esCuentaSistemaSoloNube(row)) continue;
 		if (await existeFichaFisica(valor)) continue;
 		try {
 			const r = await repararUnaCuentaSoloNube(row, emp);
+			if (r.accion === 'omitido_sistema' || r.accion === 'ya_existia') continue;
 			reparados.push({
 				valor: r.valor,
+				valorOrigen: r.valorOrigen ?? null,
+				accion: r.accion,
 				nombreRed: strOrNull(row.NombreRed),
-				apellidoNombre: apellidoNombreDesdeNube(row),
+				apellidoNombre: r.apellidoNombre || apellidoNombreDesdeNube(row),
 			});
 		} catch (err) {
 			errores.push({
@@ -1983,4 +2078,5 @@ module.exports = {
 	cambiarPasswordCuentaPersonal,
 	listarCuentasSoloNube,
 	repararCuentasSoloNube,
+	repararUnaCuentaSoloNube,
 };

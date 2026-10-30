@@ -298,23 +298,171 @@ async function insertImPasswordConIdentity(fechaTipo, baseParamsSinCodOperador, 
   return id;
 }
 
+async function passwordSinFichaFisica(valorPersonal) {
+  const vp = Number(valorPersonal);
+  if (!Number.isFinite(vp) || vp <= 0) return true;
+  const rows = await executeQuery(
+    `SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Valor = @p0`,
+    [{ value: vp, type: 'Int' }],
+  );
+  return rows.length === 0;
+}
+
+/**
+ * Filas imPassword con ese NombreRed. Marca sinFicha si no hay imPersonal.Valor.
+ */
+async function listarNombreRedOcupaciones(nombreRed) {
+  const rows = await executeQuery(
+    `SELECT ValorPersonal, CodOperador, Apellido, Nombres, NumeroDocumento
+       FROM dbo.imPassword
+      WHERE UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0)))`,
+    [{ value: String(nombreRed || ''), type: 'VarChar' }],
+  );
+  const out = [];
+  for (const r of rows || []) {
+    const vp = Number(r.ValorPersonal);
+    const sinFicha = !Number.isFinite(vp) || vp <= 0 || (await passwordSinFichaFisica(vp));
+    out.push({
+      ValorPersonal: Number.isFinite(vp) ? vp : 0,
+      CodOperador: r.CodOperador,
+      Apellido: r.Apellido,
+      Nombres: r.Nombres,
+      NumeroDocumento: r.NumeroDocumento,
+      sinFicha,
+    });
+  }
+  return out;
+}
+
 /**
  * imPassword (Clarion) no tiene índice único en NombreRed: sin este control se duplican
  * cuentas y el login termina eligiendo una fila arbitraria.
  */
 async function assertNombreRedLibre(nombreRed) {
-  const rows = await executeQuery(
-    `SELECT TOP 1 ValorPersonal FROM dbo.imPassword
-      WHERE UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0)))`,
-    [{ value: String(nombreRed || ''), type: 'VarChar' }],
+  const ocupaciones = await listarNombreRedOcupaciones(nombreRed);
+  if (!ocupaciones.length) return;
+  const conFicha = ocupaciones.find((o) => !o.sinFicha);
+  const row = conFicha || ocupaciones[0];
+  const quien = [row.Apellido, row.Nombres].filter(Boolean).join(' ').trim();
+  const vpLabel = row.ValorPersonal > 0 ? String(row.ValorPersonal) : 'vacío';
+  const huerfanoHint = !conFicha
+    ? ' Esa cuenta no tiene ficha de personal: usá "Reparar cuentas sin ficha" o elegí otro usuario.'
+    : '';
+  const e = new Error(
+    `Ya existe un usuario con el nombre de acceso "${String(nombreRed).trim()}" (ValorPersonal ${vpLabel}${quien ? `, ${quien}` : ''}). Elegí otro.${huerfanoHint}`,
   );
-  if (rows.length) {
+  e.statusCode = 409;
+  e.valorPersonal = row.ValorPersonal;
+  e.sinFicha = !conFicha;
+  throw e;
+}
+
+/**
+ * Reasigna un login huérfano (NombreRed sin ficha en imPersonal) al ValorPersonal destino.
+ * Devuelve true si reclamó; false si no había ocupación; lanza 409 si hay ficha real.
+ */
+async function reclamarNombreRedSinFicha(nombreRed, targetVp, password, cols) {
+  const ocupaciones = await listarNombreRedOcupaciones(nombreRed);
+  if (!ocupaciones.length) return false;
+
+  const conFicha = ocupaciones.filter((o) => !o.sinFicha);
+  if (conFicha.length) {
+    const row = conFicha[0];
+    const quien = [row.Apellido, row.Nombres].filter(Boolean).join(' ').trim();
     const e = new Error(
-      `Ya existe un usuario con el nombre de acceso "${String(nombreRed).trim()}" (ValorPersonal ${rows[0].ValorPersonal ?? 'vacío'}). Elegí otro.`,
+      `Ya existe un usuario con el nombre de acceso "${String(nombreRed).trim()}" (ValorPersonal ${row.ValorPersonal}${quien ? `, ${quien}` : ''}). Elegí otro.`,
     );
     e.statusCode = 409;
     throw e;
   }
+
+  const vp = Number(targetVp);
+  const primary = ocupaciones[0];
+  const oldVp = Number(primary.ValorPersonal) || 0;
+  const codType = typeof primary.CodOperador === 'number' ? 'Int' : 'VarChar';
+  const limpiarHash = colInfo(cols, 'PasswordHash') ? ', PasswordHash = NULL' : '';
+
+  // PK de imPassword legacy es CodOperador: se puede reasignar ValorPersonal.
+  if (password != null && String(password).length) {
+    await executeQuery(
+      `UPDATE dbo.imPassword SET ValorPersonal = @p0, Password = @p1${limpiarHash}
+        WHERE CodOperador = @p2`,
+      [
+        { value: vp, type: 'Int' },
+        bindPasswordString(cols, 'Password', password, 255),
+        { value: primary.CodOperador, type: codType },
+      ],
+    );
+  } else {
+    await executeQuery(
+      `UPDATE dbo.imPassword SET ValorPersonal = @p0 WHERE CodOperador = @p1`,
+      [
+        { value: vp, type: 'Int' },
+        { value: primary.CodOperador, type: codType },
+      ],
+    );
+  }
+
+  for (const extra of ocupaciones.slice(1)) {
+    await executeQuery(`DELETE FROM dbo.imPassword WHERE CodOperador = @p0`, [
+      {
+        value: extra.CodOperador,
+        type: typeof extra.CodOperador === 'number' ? 'Int' : 'VarChar',
+      },
+    ]).catch(() => {});
+  }
+
+  if (oldVp > 0 && oldVp !== vp) {
+    const emp = getTenantId();
+    if (emp != null && Number(emp) > 0) {
+      try {
+        await authCentralSync.purgePersonalAuth(oldVp, Number(emp));
+      } catch (purgeErr) {
+        console.warn(
+          `[users.reclamarNombreRedSinFicha] purge MySQL VP=${oldVp}:`,
+          purgeErr.message,
+        );
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Mueve la fila imPassword de un ValorPersonal huérfano a una ficha existente.
+ */
+async function reasignarPasswordValorPersonal(fromVp, toVp) {
+  const from = Number(fromVp);
+  const to = Number(toVp);
+  if (!Number.isFinite(from) || from <= 0 || !Number.isFinite(to) || to <= 0 || from === to) {
+    const e = new Error('ValorPersonal origen/destino inválido para reasignar login');
+    e.statusCode = 400;
+    throw e;
+  }
+  if (await existeImPasswordPorValorPersonal(to)) {
+    const e = new Error(
+      `El personal ${to} ya tiene usuario de acceso; no se puede vincular el login huérfano ${from}`,
+    );
+    e.statusCode = 409;
+    throw e;
+  }
+  const updated = await executeQuery(
+    `UPDATE dbo.imPassword SET ValorPersonal = @p0 WHERE ValorPersonal = @p1`,
+    [
+      { value: to, type: 'Int' },
+      { value: from, type: 'Int' },
+    ],
+  );
+  const emp = getTenantId();
+  if (emp != null && Number(emp) > 0) {
+    try {
+      await authCentralSync.purgePersonalAuth(from, Number(emp));
+    } catch (purgeErr) {
+      console.warn(`[users.reasignarPassword] purge MySQL VP=${from}:`, purgeErr.message);
+    }
+  }
+  await afterUserMutation(to);
+  return updated;
 }
 
 function splitApellidoNombre(apellidoNombre) {
@@ -951,36 +1099,24 @@ async function crearImPasswordParaPersonal(valorPersonal, data, options = {}) {
   const { apellido, nombres } = splitApellidoNombre(data.ApellidoNombre || data.apellidoNombre);
   const cols = await getImPasswordColumns();
 
-  // Usuario de Clarion sin persona (ValorPersonal vacío o 0): se vincula en vez de duplicarlo.
-  const filtroHuerfano = `UPPER(LTRIM(RTRIM(NombreRed))) = UPPER(LTRIM(RTRIM(@p0))) AND ISNULL(ValorPersonal, 0) = 0`;
-  const huerfano = await executeQuery(
-    `SELECT TOP 1 NombreRed FROM dbo.imPassword WHERE ${filtroHuerfano}`,
-    [{ value: nombreRed, type: 'VarChar' }],
-  );
-  if (huerfano.length) {
-    const limpiarHash = colInfo(cols, 'PasswordHash') ? ', PasswordHash = NULL' : '';
-    try {
-      await executeQuery(
-        `UPDATE TOP (1) dbo.imPassword SET ValorPersonal = @p1, Password = @p2${limpiarHash} WHERE ${filtroHuerfano}`,
-        [
-          { value: nombreRed, type: 'VarChar' },
-          { value: vp, type: 'Int' },
-          bindPasswordString(cols, 'Password', password, 255),
-        ],
-      );
-    } catch (err) {
-      const dup = mapDuplicateKeyErrorToHttp(err);
-      if (dup) {
-        const e = new Error(dup.message);
-        e.statusCode = dup.statusCode;
-        throw e;
+  // Login Clarion sin ficha (ValorPersonal 0/NULL o VP sin imPersonal): se reasigna al personal.
+  try {
+    const reclamado = await reclamarNombreRedSinFicha(nombreRed, vp, password, cols);
+    if (reclamado) {
+      if (!options.skipAuthSync) {
+        await afterUserMutation(vp);
       }
-      throw err;
+      return obtenerUsuarioPorId(vp);
     }
-    if (!options.skipAuthSync) {
-      await afterUserMutation(vp);
+  } catch (err) {
+    if (err?.statusCode === 409) throw err;
+    const dup = mapDuplicateKeyErrorToHttp(err);
+    if (dup) {
+      const e = new Error(dup.message);
+      e.statusCode = dup.statusCode;
+      throw e;
     }
-    return obtenerUsuarioPorId(vp);
+    throw err;
   }
 
   await assertNombreRedLibre(nombreRed);
@@ -1077,5 +1213,9 @@ module.exports = {
   cambiarPasswordPropia,
   asignarSector,
   quitarSector,
-  actualizarUsuario
+  actualizarUsuario,
+  passwordSinFichaFisica,
+  listarNombreRedOcupaciones,
+  reclamarNombreRedSinFicha,
+  reasignarPasswordValorPersonal,
 };

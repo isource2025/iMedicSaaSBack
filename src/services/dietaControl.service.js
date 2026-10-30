@@ -9,8 +9,9 @@ const {
 const { normalizarTextoParaClarionAnsi: toAnsi } = require('../utils/clarionText');
 const { sqlApplyOperador, sqlApplyFicha } = require('../utils/sqlNombrePersona');
 
-/** Las filas que genera la indicación no traen FechaDieta: se ubican por la fecha de carga. */
-const COL_FECHA = 'COALESCE(NULLIF(d.FechaDieta, 0), d.FechaCarga)';
+/** Solo dietas suministradas (con FechaDieta). Las “indicadas” sin cumplir no se listan. */
+const COL_FECHA = 'd.FechaDieta';
+const SOLO_SUMINISTRADAS = 'NULLIF(d.FechaDieta, 0) IS NOT NULL';
 
 const SELECT_DIETA = `
   SELECT
@@ -41,6 +42,7 @@ async function obtenerPorVisitaYFecha(numeroVisita, fecha, days) {
 	const consulta = `
     ${SELECT_DIETA}
     WHERE d.NumeroVisita = @param0
+      AND ${SOLO_SUMINISTRADAS}
       ${periodo.sql ? `AND ${periodo.sql}` : ''}
     ORDER BY ${COL_FECHA} ASC, COALESCE(NULLIF(d.HoraDieta, 0), d.HoraCarga) ASC, d.Valor ASC
   `;

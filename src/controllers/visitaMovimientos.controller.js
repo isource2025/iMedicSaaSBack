@@ -363,7 +363,7 @@ const intercambiarCamasPacientes = async (req, res) => {
 };
 
 /**
- * Obtiene los movimientos de internación más recientes para el dashboard
+ * Actividad reciente del dashboard: último evento por paciente (sin repetir).
  * @param {Object} req - Objeto de solicitud Express
  * @param {Object} res - Objeto de respuesta Express
  */

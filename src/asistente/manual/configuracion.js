@@ -12,7 +12,7 @@ module.exports = [
 		permisos: ['DASHBOARD.INICIO.VER'],
 		tags: ['inicio', 'panel', 'panel de control', 'resumen', 'tablero', 'home', 'actividad reciente'],
 		texto:
-			'Resumen del hospital con tarjetas «Análisis de Camas», «Análisis de Pacientes» y «Actividad Ambulatoria» (cada una abre su análisis), «Actividad Reciente» y accesos a pedidos pendientes, camas libres, agenda del día y consumo de IA.',
+			'Resumen del hospital con tarjetas «Análisis de Camas», «Análisis de Pacientes» y «Actividad Ambulatoria» (cada una abre su análisis), «Actividad Reciente» (último ingreso, traslado o alta por paciente, sin repetir) y accesos a pedidos pendientes, camas libres, agenda del día y consumo de IA.',
 		problemas: [{ sintoma: 'Al entrar me lleva a Mi Perfil y no al Inicio', causa: 'El rol no tiene DASHBOARD.INICIO.VER.' }],
 	},
 	{
