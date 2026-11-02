@@ -158,7 +158,7 @@ async function obtenerHorariosPorMatricula(matricula) {
  *
  * payload:
  *   {
- *     intervaloMin: 30,                          // requerido (entero positivo)
+ *     intervaloMin: 30,                          // >= 0 (0 = a demanda, sin slots)
  *     consultorio:  'CAR' | null,
  *     servicio:     'CAR' | null,
  *     dias: [
@@ -174,8 +174,8 @@ async function obtenerHorariosPorMatricula(matricula) {
 async function reemplazarHorarios(matricula, payload) {
 	const m = _validarMatricula(matricula);
 	const intervaloMin = Number(payload?.intervaloMin);
-	if (!Number.isFinite(intervaloMin) || intervaloMin <= 0) {
-		const e = new Error('intervaloMin requerido (entero positivo en minutos)');
+	if (!Number.isFinite(intervaloMin) || intervaloMin < 0) {
+		const e = new Error('intervaloMin requerido (>= 0 minutos; 0 = a demanda)');
 		e.statusCode = 400;
 		throw e;
 	}
@@ -188,6 +188,7 @@ async function reemplazarHorarios(matricula, payload) {
 	const consultorio = payload.consultorio ? String(payload.consultorio).trim().slice(0, 4) : '';
 	const servicio = payload.servicio ? String(payload.servicio).trim().slice(0, 4) : '';
 	const intervaloClarion = intervaloMinAClarion(intervaloMin);
+	const aDemanda = intervaloMin === 0;
 
 	// Validación + normalización
 	const cambios = []; // [{ dia, rangos:[{HoraDesde, HoraHasta}] }]
@@ -220,10 +221,8 @@ async function reemplazarHorarios(matricula, payload) {
 				e.statusCode = 400;
 				throw e;
 			}
-			// Múltiplo del intervalo
-			const duracionUnidad = (fin - ini); // en mismas unidades Clarion (centésimas+1)
-			// duracion en minutos = (fin-ini) / 6000 aprox. Validar divisibilidad por intervalo.
-			if ((fin - ini) % (intervaloMin * 6000) !== 0) {
+			// Múltiplo del intervalo (no aplica en a demanda)
+			if (!aDemanda && (fin - ini) % (intervaloMin * 6000) !== 0) {
 				const e = new Error(
 					`Día ${dia}: el rango ${r.inicio}-${r.fin} no es múltiplo de ${intervaloMin} min`,
 				);

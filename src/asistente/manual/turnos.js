@@ -81,7 +81,7 @@ module.exports = [
 		texto:
 			'Pestañas «Pantalla turnero», «Horarios agenda», «Sector / servicio» y «Bot WhatsApp». Se entra con permisos de Gestión de turnos (TURNOS.ADMIN), no de TURNOS.CONFIGURACION.',
 		pasos: [
-			'Horarios de un profesional: «Horarios agenda» → «Profesional», «Intervalo de consulta», «Consultorio», «Servicio» → por día «Jornada simple» o «Doble jornada» con sus rangos → «Guardar configuración».',
+			'Horarios de un profesional: «Horarios agenda» → «Profesional», «Intervalo de consulta» (o «A demanda» sin slots), «Consultorio», «Servicio» → por día «Jornada simple» o «Doble jornada» con sus rangos → «Guardar configuración».',
 			'Ausencias (licencia, viaje…): misma pestaña → «Ausencias / No-horarios» → motivo, fechas o «Día completo» → «Agregar ausencia».',
 			'Agenda de un sector o servicio: «Sector / servicio» → «Tipo», «Código», «Intervalo (min)», días → «Guardar».',
 			'Pantalla de llamados (TV): «Pantalla turnero» → «+ Nueva» → plantilla, colores, sonido → «Guardar cambios»; «Copiar URL» para abrirla en la TV.',
@@ -89,7 +89,7 @@ module.exports = [
 		],
 		problemas: [
 			{ sintoma: '«No tenés permiso para configurar turnos.»', causa: 'Requiere TURNOS.ADMIN.VER (permisos de Gestión de turnos).' },
-			{ sintoma: '«el rango … es inválido» / «no es múltiplo…» / «los rangos se solapan»', causa: 'El horario debe coincidir con el intervalo de consulta y los rangos no pueden pisarse.' },
+			{ sintoma: '«el rango … es inválido» / «no es múltiplo…» / «los rangos se solapan»', causa: 'Con intervalo > 0 el horario debe ser múltiplo del intervalo; en «A demanda» no aplica. Los rangos no pueden pisarse.' },
 			{ sintoma: '«La fecha desde es obligatoria»', causa: 'Falta la fecha de inicio de la ausencia.' },
 		],
 	},

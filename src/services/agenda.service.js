@@ -965,12 +965,51 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 			continue;
 		}
 
+		const intervalosDia = diaCfg.rangos.map((r) => {
+			if (r.intervaloMin != null && Number.isFinite(Number(r.intervaloMin))) {
+				return Number(r.intervaloMin);
+			}
+			if (horarios.intervaloMin != null && Number.isFinite(Number(horarios.intervaloMin))) {
+				return Number(horarios.intervaloMin);
+			}
+			return 30;
+		});
+		const aDemanda = intervalosDia.length > 0 && intervalosDia.every((n) => n === 0);
+		if (aDemanda) {
+			const jornadasAd = _buildJornadasMeta(diaCfg.rangos);
+			const slotsAd = [];
+			if (!ligero) {
+				_agregarSobreturnosEnSlots(
+					slotsAd,
+					fechaIso,
+					turnosData.rows,
+					sectorPersonalMed,
+					diaCfg.rangos,
+				);
+				_ordenarSlotsAgenda(slotsAd);
+			}
+			diasOut.push({
+				fecha: fechaIso,
+				dia: diaNombre,
+				bloqueado: false,
+				motivo: 'a_demanda',
+				jornadas: jornadasAd,
+				slots: slotsAd,
+			});
+			cursor.setDate(cursor.getDate() + 1);
+			continue;
+		}
+
 		const jornadas = _buildJornadasMeta(diaCfg.rangos);
 		const slots = [];
 		for (let jornadaIndex = 0; jornadaIndex < diaCfg.rangos.length; jornadaIndex++) {
 			const rango = diaCfg.rangos[jornadaIndex];
 			const intervaloMin =
-				rango.intervaloMin || horarios.intervaloMin || clarionAIntervaloMin(180001) || 30;
+				rango.intervaloMin != null && Number(rango.intervaloMin) > 0
+					? Number(rango.intervaloMin)
+					: horarios.intervaloMin != null && Number(horarios.intervaloMin) > 0
+						? Number(horarios.intervaloMin)
+						: clarionAIntervaloMin(180001) || 30;
 			const step = clarionPasoMinutos(intervaloMin);
 			const { ini: t0, fin: finClarion } = _rangoClarionBounds(rango);
 			let t = t0;
@@ -1058,7 +1097,11 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 async function listarDiasConAgenda(matricula, desdeIso, hastaIso) {
 	const data = await generarSlots(matricula, desdeIso, hastaIso, { ligero: true });
 	const fechas = (data.dias || [])
-		.filter((d) => !d.bloqueado && Array.isArray(d.slots) && d.slots.length > 0)
+		.filter(
+			(d) =>
+				!d.bloqueado &&
+				((Array.isArray(d.slots) && d.slots.length > 0) || d.motivo === 'a_demanda'),
+		)
 		.map((d) => String(d.fecha).slice(0, 10));
 	const feriados = (data.dias || [])
 		.filter((d) => d.motivo === 'feriado')
@@ -1242,7 +1285,7 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 	for (const r of horarioFiltrado) {
 		const mat = Number(r.Matricula);
 		if (matBloqueadas.has(mat)) continue;
-		const intervaloMin = clarionAIntervaloMin(r.IntervaloConsulta) || 30;
+		const intervaloRaw = clarionAIntervaloMin(r.IntervaloConsulta);
 		const inicio = _hhmm(r.HoraDesde);
 		const fin = _hhmm(r.HoraHasta);
 		if (!inicio || !fin) continue;
@@ -1250,13 +1293,19 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 		const [hf, mf] = fin.split(':').map(Number);
 		const minutos = hf * 60 + mf - (hi * 60 + mi);
 		if (minutos <= 0) continue;
+		if (r.ApellidoNombre && !nombrePorMat.has(mat)) {
+			nombrePorMat.set(mat, String(r.ApellidoNombre).trim());
+		}
+		// A demanda (intervalo 0): figura en el listado sin cupos de grilla.
+		if (intervaloRaw === 0) {
+			if (!totalPorMat.has(mat)) totalPorMat.set(mat, 0);
+			continue;
+		}
+		const intervaloMin = intervaloRaw != null && intervaloRaw > 0 ? intervaloRaw : 30;
 		// +1 para incluir el slot que inicia exactamente en HoraHasta
 		// (igual que el sistema legacy y que la grilla generada por generarSlots).
 		const slots = Math.floor(minutos / intervaloMin) + 1;
 		totalPorMat.set(mat, (totalPorMat.get(mat) || 0) + slots);
-		if (r.ApellidoNombre && !nombrePorMat.has(mat)) {
-			nombrePorMat.set(mat, String(r.ApellidoNombre).trim());
-		}
 	}
 
 	const out = [];

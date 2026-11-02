@@ -154,7 +154,7 @@ async function obtenerHorarios(tipo, valor) {
 	return {
 		tipo: t,
 		valor: v,
-		intervaloMin: intervaloMin || 30,
+		intervaloMin: intervaloMin == null ? 30 : intervaloMin,
 		consultorio,
 		servicio: servicio || (t === 'SERVICIO' ? v : null),
 		dias,
@@ -165,7 +165,9 @@ async function reemplazarHorarios(tipo, valor, payload = {}) {
 	await ensureTable();
 	const t = _normTipo(tipo);
 	const v = _normValor(valor);
-	const intervaloMin = Number(payload.intervaloMin) || 30;
+	const intervaloParsed = Number(payload.intervaloMin);
+	const intervaloMin = Number.isFinite(intervaloParsed) && intervaloParsed >= 0 ? intervaloParsed : 30;
+	const aDemanda = intervaloMin === 0;
 	const intervaloClarion = intervaloMinAClarion(intervaloMin);
 	const consultorio = payload.consultorio != null ? String(payload.consultorio).trim().slice(0, 4) : '';
 	const servicio =
@@ -196,7 +198,7 @@ async function reemplazarHorarios(tipo, valor, payload = {}) {
 				e.statusCode = 400;
 				throw e;
 			}
-			if ((fin - ini) % (intervaloMin * 6000) !== 0) {
+			if (!aDemanda && (fin - ini) % (intervaloMin * 6000) !== 0) {
 				const e = new Error(
 					`Día ${dia}: el rango ${r.inicio}-${r.fin} no es múltiplo de ${intervaloMin} min`,
 				);
@@ -398,8 +400,34 @@ async function generarSlots(tipo, valor, desdeIso, hastaIso) {
 		const slots = [];
 
 		if (diaCfg?.rangos?.length) {
+			const intervalosDia = diaCfg.rangos.map((r) => {
+				if (r.intervaloMin != null && Number.isFinite(Number(r.intervaloMin))) {
+					return Number(r.intervaloMin);
+				}
+				if (horarios.intervaloMin != null && Number.isFinite(Number(horarios.intervaloMin))) {
+					return Number(horarios.intervaloMin);
+				}
+				return 30;
+			});
+			const aDemanda = intervalosDia.length > 0 && intervalosDia.every((n) => n === 0);
+			if (aDemanda) {
+				diasOut.push({
+					fecha: fechaIso,
+					dia: diaNombre,
+					bloqueado: false,
+					motivo: 'a_demanda',
+					slots: [],
+				});
+				cursor.setDate(cursor.getDate() + 1);
+				continue;
+			}
 			for (const rango of diaCfg.rangos) {
-				const intervaloMin = rango.intervaloMin || horarios.intervaloMin || 30;
+				const intervaloMin =
+					rango.intervaloMin != null && Number(rango.intervaloMin) > 0
+						? Number(rango.intervaloMin)
+						: horarios.intervaloMin != null && Number(horarios.intervaloMin) > 0
+							? Number(horarios.intervaloMin)
+							: 30;
 				const step = clarionPasoMinutos(intervaloMin);
 				const ini = convertirHoraAClarion(rango.inicio);
 				const fin = convertirHoraAClarion(rango.fin);

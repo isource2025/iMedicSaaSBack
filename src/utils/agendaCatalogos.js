@@ -56,27 +56,30 @@ const TIPO_TURNO = Object.freeze({
 const TIPO_TURNO_GRILLA = 0;
 const TIPO_TURNO_SOBRETURNO = 1;
 
-// Intervalos sugeridos en minutos para la UI (el back acepta cualquier int positivo).
-const INTERVALOS_SUGERIDOS = Object.freeze([5, 10, 15, 20, 30, 45, 60]);
+// Intervalos sugeridos en minutos para la UI (0 = a demanda; el back acepta >= 0).
+const INTERVALOS_SUGERIDOS = Object.freeze([0, 5, 10, 15, 20, 30, 45, 60]);
 
 /**
  * Convierte un entero de minutos al Clarion TIME usado en
  * imPersonalHorarios.IntervaloConsulta (HoraDesde/HoraHasta usan el mismo formato).
  *   30 min → 180001  (verificado contra datos reales)
+ *   0 min  → 0       (agenda a demanda: horarios sin grilla de slots)
  */
 function intervaloMinAClarion(min) {
 	const n = Math.round(Number(min));
-	if (!Number.isFinite(n) || n <= 0) {
-		throw new Error('intervaloMin debe ser un entero positivo');
+	if (!Number.isFinite(n) || n < 0) {
+		throw new Error('intervaloMin debe ser un entero >= 0 (0 = a demanda)');
 	}
+	if (n === 0) return 0;
 	return n * 6000 + 1;
 }
 
-/** Inverso aproximado: Clarion TIME (intervalo) → minutos (redondea). */
+/** Inverso aproximado: Clarion TIME (intervalo) → minutos (redondea). 0 = a demanda. */
 function clarionAIntervaloMin(clarionTime) {
 	if (clarionTime == null) return null;
 	const n = Number(clarionTime);
-	if (!Number.isFinite(n) || n <= 0) return null;
+	if (!Number.isFinite(n) || n < 0) return null;
+	if (n === 0) return 0;
 	return Math.round((n - 1) / 6000);
 }
 
