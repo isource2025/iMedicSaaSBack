@@ -1,10 +1,35 @@
 /**
  * Controlador CRUD de Personal (tabla imPersonal) - sección Datos Personales.
  */
+const path = require('path');
+const fs = require('fs');
+const fsPromises = require('fs').promises;
+const FormData = require('form-data');
+const axios = require('axios');
 const personalService = require('../services/personal.service');
 const personalSyncService = require('../services/personalSync.service');
 const { getTenantId } = require('../context/tenantContext');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const {
+	resolveFileServerUrl,
+	fileServerHeaders,
+	pickUploadedFilePath,
+	fileServerUploadOk,
+	isFileServerUnreachable,
+	describeFileServerError,
+} = require('../utils/fileServerUrl');
+const {
+	formDataFileOptions,
+	sanitizeWindowsFileName,
+	fileServerFileUrl,
+	pathLookupCandidates,
+} = require('../utils/fileNameEncoding');
+
+const FILE_SERVER_TIMEOUT_MS = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
+const FILE_SERVER_FALLBACK_LOCAL =
+	process.env.FILE_SERVER_FALLBACK_LOCAL === '1' ||
+	process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
+	process.env.NODE_ENV !== 'production';
 
 const listarCamposExport = async (_req, res) => {
 	try {
@@ -461,6 +486,208 @@ const eliminarFirmaPersonal = async (req, res) => {
 	}
 };
 
+/**
+ * GET /api/personal/:id/foto
+ * Sirve la foto desde el file server de la clínica (túnel), carpeta Personal\{id}\.
+ */
+const obtenerFotoPersonal = async (req, res) => {
+	try {
+		const id = _idInt(req);
+		if (id == null) {
+			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+		}
+		const meta = await personalService.obtenerFotoPersonal(id);
+		if (!meta.hasFoto || !meta.path) {
+			return res.status(404).json({ success: false, mensaje: 'Sin foto' });
+		}
+
+		const ruta = String(meta.path);
+		if (FILE_SERVER_FALLBACK_LOCAL && path.isAbsolute(ruta) && fs.existsSync(ruta)) {
+			const ext = path.extname(ruta).toLowerCase();
+			const mime =
+				ext === '.png'
+					? 'image/png'
+					: ext === '.gif'
+						? 'image/gif'
+						: ext === '.webp'
+							? 'image/webp'
+							: 'image/jpeg';
+			res.setHeader('Content-Type', mime);
+			res.setHeader('Cache-Control', 'private, max-age=300');
+			return fs.createReadStream(ruta).pipe(res);
+		}
+
+		const fileServerUrl = await resolveFileServerUrl();
+		const candidates = pathLookupCandidates(ruta);
+		let lastErr = null;
+		for (const candidato of candidates.length ? candidates : [ruta]) {
+			try {
+				const url = fileServerFileUrl(fileServerUrl, candidato);
+				const remote = await axios.get(url, {
+					headers: fileServerHeaders(),
+					responseType: 'stream',
+					timeout: FILE_SERVER_TIMEOUT_MS,
+					validateStatus: (s) => s >= 200 && s < 500,
+				});
+				if (remote.status === 404) continue;
+				if (remote.status >= 400) {
+					lastErr = new Error(`file server HTTP ${remote.status}`);
+					continue;
+				}
+				res.setHeader('Content-Type', remote.headers['content-type'] || 'image/jpeg');
+				res.setHeader('Cache-Control', 'private, max-age=300');
+				return remote.data.pipe(res);
+			} catch (e) {
+				lastErr = e;
+			}
+		}
+		throw lastErr || new Error('No se pudo leer la foto en el servidor de archivos');
+	} catch (error) {
+		console.error('[personal.obtenerFotoPersonal] ERROR:', error.message);
+		if (!res.headersSent) {
+			res.status(statusDeError(error)).json({
+				success: false,
+				mensaje: describeFileServerError(error) || error.message || 'Error al obtener foto',
+			});
+		}
+	}
+};
+
+/**
+ * PUT /api/personal/:id/foto
+ * Sube la foto al file server: {root}/Personal/{id}/… y guarda la ruta en imPersonal.image.
+ */
+const actualizarFotoPersonal = async (req, res) => {
+	try {
+		const id = _idInt(req);
+		if (id == null) {
+			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+		}
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		if (!req.file) {
+			return res.status(400).json({ success: false, mensaje: 'Archivo de foto requerido' });
+		}
+
+		const originalName = sanitizeWindowsFileName(req.file.originalname || 'foto.jpg');
+		const relativePath = personalService.rutaRelativaFotoPersonal(id, originalName);
+		let storedPath = relativePath;
+		const previaMeta = await personalService.obtenerFotoPersonal(id);
+
+		try {
+			const formData = new FormData();
+			const stream = fs.createReadStream(req.file.path);
+			formData.append('file', stream, formDataFileOptions(originalName, req.file.mimetype));
+			formData.append('path', relativePath);
+			formData.append('nombreArchivo', originalName);
+
+			const fileServerUrl = await resolveFileServerUrl();
+			const uploadResponse = await axios.post(`${fileServerUrl}/upload`, formData, {
+				headers: fileServerHeaders(formData.getHeaders()),
+				timeout: FILE_SERVER_TIMEOUT_MS,
+			});
+			if (!fileServerUploadOk(uploadResponse.data)) {
+				throw new Error(
+					uploadResponse.data?.error || 'Error al subir foto al servidor de archivos',
+				);
+			}
+			storedPath = pickUploadedFilePath(uploadResponse.data);
+			await fsPromises.unlink(req.file.path).catch(() => {});
+		} catch (remoteErr) {
+			if (FILE_SERVER_FALLBACK_LOCAL && isFileServerUnreachable(remoteErr)) {
+				const localDir = path.join(__dirname, '..', '..', 'uploads', 'personal', String(id));
+				await fsPromises.mkdir(localDir, { recursive: true });
+				const dest = path.join(localDir, path.basename(relativePath));
+				try {
+					await fsPromises.rename(req.file.path, dest);
+				} catch {
+					await fsPromises.copyFile(req.file.path, dest);
+					await fsPromises.unlink(req.file.path).catch(() => {});
+				}
+				storedPath = dest;
+				console.warn(`[personal.foto] file server no alcanzable; fallback local: ${storedPath}`);
+			} else {
+				await fsPromises.unlink(req.file.path).catch(() => {});
+				return res.status(503).json({
+					success: false,
+					mensaje: describeFileServerError(remoteErr),
+				});
+			}
+		}
+
+		await personalService.actualizarFotoPersonalPath(id, storedPath);
+
+		if (previaMeta.path && previaMeta.path !== storedPath) {
+			try {
+				if (
+					FILE_SERVER_FALLBACK_LOCAL &&
+					path.isAbsolute(previaMeta.path) &&
+					fs.existsSync(previaMeta.path)
+				) {
+					await fsPromises.unlink(previaMeta.path).catch(() => {});
+				} else {
+					const fileServerUrl = await resolveFileServerUrl();
+					await axios.delete(`${fileServerUrl}/file`, {
+						headers: fileServerHeaders(),
+						params: { path: previaMeta.path },
+						timeout: 15000,
+					});
+				}
+			} catch (e) {
+				console.warn('[personal.foto] no se pudo borrar la foto anterior:', e.message);
+			}
+		}
+
+		res.json({
+			success: true,
+			mensaje: 'Foto guardada',
+			data: { hasFoto: true, FotoURL: `/api/personal/${id}/foto` },
+		});
+	} catch (error) {
+		if (req.file?.path) await fsPromises.unlink(req.file.path).catch(() => {});
+		console.error('[personal.actualizarFotoPersonal] ERROR:', error.message);
+		res.status(statusDeError(error)).json({
+			success: false,
+			mensaje: error.message || 'Error al guardar foto',
+		});
+	}
+};
+
+const eliminarFotoPersonal = async (req, res) => {
+	try {
+		const id = _idInt(req);
+		if (id == null) {
+			return res.status(400).json({ success: false, mensaje: 'ID inválido' });
+		}
+		const p = await personalService.obtenerPorId(id);
+		if (!p) return res.status(404).json({ success: false, mensaje: 'Personal no encontrado' });
+		const { path: previa } = await personalService.eliminarFotoPersonal(id);
+		if (previa) {
+			try {
+				if (FILE_SERVER_FALLBACK_LOCAL && path.isAbsolute(previa) && fs.existsSync(previa)) {
+					await fsPromises.unlink(previa).catch(() => {});
+				} else {
+					const fileServerUrl = await resolveFileServerUrl();
+					await axios.delete(`${fileServerUrl}/file`, {
+						headers: fileServerHeaders(),
+						params: { path: previa },
+						timeout: 15000,
+					});
+				}
+			} catch (e) {
+				console.warn('[personal.eliminarFotoPersonal] FS:', e.message);
+			}
+		}
+		res.json({ success: true, mensaje: 'Foto eliminada' });
+	} catch (error) {
+		console.error('[personal.eliminarFotoPersonal] ERROR:', error.message);
+		res.status(statusDeError(error)).json({
+			success: false,
+			mensaje: error.message || 'Error al eliminar foto',
+		});
+	}
+};
+
 const listarSectoresPersonal = async (req, res) => {
 	const id = _idInt(req);
 	if (id == null) return res.status(400).json({ success: false, mensaje: 'ID inválido' });
@@ -804,6 +1031,9 @@ module.exports = {
 	obtenerFirmaPorIdPublic,
 	actualizarFirmaPersonal,
 	eliminarFirmaPersonal,
+	obtenerFotoPersonal,
+	actualizarFotoPersonal,
+	eliminarFotoPersonal,
 	listarSectoresPersonal,
 	agregarSectorPersonal,
 	quitarSectorPersonal,

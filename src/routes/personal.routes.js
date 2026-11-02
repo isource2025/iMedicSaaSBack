@@ -3,13 +3,26 @@ const multer = require('multer');
 const router = express.Router();
 const personalController = require('../controllers/personal.controller');
 const { requireAuth } = require('../middlewares/authJwt.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { restoreTenantFromRequest } = require('../context/tenantContext');
 
 const uploadFirma = multer({
 	storage: multer.memoryStorage(),
 	limits: { fileSize: 3 * 1024 * 1024 },
+});
+
+const pathFs = require('path');
+const fsSync = require('fs');
+const fotoTmpDir = pathFs.join(__dirname, '..', '..', 'uploads', '.tmp-personal-foto');
+fsSync.mkdirSync(fotoTmpDir, { recursive: true });
+const uploadFoto = multer({
+	dest: fotoTmpDir,
+	limits: { fileSize: 8 * 1024 * 1024 },
+	fileFilter: (_req, file, cb) => {
+		if (/^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype || '')) return cb(null, true);
+		cb(new Error('Solo se permiten imágenes (JPEG, PNG, GIF, WebP)'));
+	},
 });
 
 // Todas las rutas de personal requieren autenticación y tenant activo (SaaS).
@@ -54,6 +67,20 @@ router.put(
 	personalController.actualizarFirmaPersonal,
 );
 router.delete('/:id/firma', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.eliminarFirmaPersonal);
+
+router.get('/:id/foto', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.obtenerFotoPersonal);
+router.put(
+	'/:id/foto',
+	requireAnyPermiso('CONFIGURACION.PERSONAL.CREAR', 'CONFIGURACION.PERSONAL.EDITAR'),
+	uploadFoto.single('archivo'),
+	restoreTenantFromRequest,
+	personalController.actualizarFotoPersonal,
+);
+router.delete(
+	'/:id/foto',
+	requireAnyPermiso('CONFIGURACION.PERSONAL.EDITAR', 'CONFIGURACION.PERSONAL.ELIMINAR'),
+	personalController.eliminarFotoPersonal,
+);
 router.get('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.VER'), personalController.listarSectoresPersonal);
 router.post('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.agregarSectorPersonal);
 router.delete('/:id/sectores', requirePermiso('CONFIGURACION.PERSONAL.GESTIONAR'), personalController.quitarSectorPersonal);

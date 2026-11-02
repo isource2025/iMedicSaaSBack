@@ -173,6 +173,17 @@ function mapRow(row) {
 		Estado: row.Estado != null ? Number(row.Estado) : null,
 		CUIT: strOrNull(row.CUIT),
 		Observaciones: strOrNull(row.Observaciones),
+		hasFoto:
+			Number(row.hasFoto) === 1 ||
+			row.hasFoto === true ||
+			Boolean(strOrNull(row.image || row.FotoPath)),
+		/** URL relativa al API (proxy autenticado hacia el file server). */
+		FotoURL:
+			Number(row.hasFoto) === 1 ||
+			row.hasFoto === true ||
+			Boolean(strOrNull(row.image || row.FotoPath))
+				? `/api/personal/${row.Valor}/foto`
+				: null,
 		// Rol: en imPersonal.Rol (varchar(20)) se persiste el IdRol como string.
 		// La asignación se hace por el endpoint dedicado PUT /api/roles/personal/:valor.
 		Rol: (() => {
@@ -215,6 +226,11 @@ const SELECT_COLS = `
 	p.CUIT,
 	p.Observaciones,
 	p.Rol,
+	p.image,
+	CASE
+		WHEN NULLIF(LTRIM(RTRIM(CAST(p.image AS VARCHAR(1000)))), '') IS NOT NULL THEN 1
+		ELSE 0
+	END AS hasFoto,
 	CASE WHEN DATALENGTH(p.Firma) > 0 THEN 1 ELSE 0 END AS hasFirma
 `;
 
@@ -1301,6 +1317,56 @@ async function eliminarFirmaPersonal(valor) {
 	return { ok: true };
 }
 
+async function _leerRutaFoto(valor) {
+	const rows = await executeQuery(
+		`SELECT TOP 1 image FROM dbo.imPersonal WHERE Valor = @p0`,
+		[{ value: Number(valor), type: 'Int' }],
+	);
+	return strOrNull(rows[0]?.image);
+}
+
+async function _guardarRutaFoto(valor, ruta) {
+	const pathStr = ruta == null || ruta === '' ? null : String(ruta).slice(0, 1000);
+	await executeQuery(`UPDATE dbo.imPersonal SET image = @p1 WHERE Valor = @p0`, [
+		{ value: Number(valor), type: 'Int' },
+		{ value: pathStr, type: 'VarChar', length: 1000 },
+	]);
+}
+
+/**
+ * Carpeta relativa en el file server de la clínica:
+ *   Personal\{Valor}\foto.ext
+ */
+function rutaRelativaFotoPersonal(valor, fileName) {
+	const { sanitizeWindowsFileName } = require('../utils/fileNameEncoding');
+	const safe = sanitizeWindowsFileName(fileName || 'foto.jpg') || 'foto.jpg';
+	const ext = (safe.match(/\.[a-z0-9]+$/i) || ['.jpg'])[0].toLowerCase();
+	const base = safe.replace(/\.[a-z0-9]+$/i, '').slice(0, 40) || 'foto';
+	return `Personal\\${Number(valor)}\\${base}${ext}`;
+}
+
+async function obtenerFotoPersonal(valor) {
+	const ruta = await _leerRutaFoto(valor);
+	if (!ruta) return { hasFoto: false };
+	return { hasFoto: true, path: ruta };
+}
+
+async function actualizarFotoPersonalPath(valor, ruta) {
+	if (!ruta || !String(ruta).trim()) {
+		const e = new Error('Ruta de foto vacía');
+		e.statusCode = 400;
+		throw e;
+	}
+	await _guardarRutaFoto(valor, String(ruta).trim());
+	return { ok: true, path: String(ruta).trim() };
+}
+
+async function eliminarFotoPersonal(valor) {
+	const previa = await _leerRutaFoto(valor);
+	await _guardarRutaFoto(valor, null);
+	return { ok: true, path: previa || null };
+}
+
 const ensurePersonalSectoresTable = createTenantOnce(async () => {
 	try {
 		await executeQuery(`
@@ -2060,6 +2126,10 @@ module.exports = {
 	obtenerFirmaPorMatricula,
 	actualizarFirmaPersonal,
 	eliminarFirmaPersonal,
+	rutaRelativaFotoPersonal,
+	obtenerFotoPersonal,
+	actualizarFotoPersonalPath,
+	eliminarFotoPersonal,
 	listarSectoresPersonal,
 	agregarSectorPersonal,
 	quitarSectorPersonal,
