@@ -1282,6 +1282,7 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 	// Acumular total slots por médico
 	const totalPorMat = new Map();
 	const nombrePorMat = new Map();
+	const aDemandaPorMat = new Map();
 	for (const r of horarioFiltrado) {
 		const mat = Number(r.Matricula);
 		if (matBloqueadas.has(mat)) continue;
@@ -1299,8 +1300,10 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 		// A demanda (intervalo 0): figura en el listado sin cupos de grilla.
 		if (intervaloRaw === 0) {
 			if (!totalPorMat.has(mat)) totalPorMat.set(mat, 0);
+			if (!aDemandaPorMat.has(mat)) aDemandaPorMat.set(mat, true);
 			continue;
 		}
+		aDemandaPorMat.set(mat, false);
 		const intervaloMin = intervaloRaw != null && intervaloRaw > 0 ? intervaloRaw : 30;
 		// +1 para incluir el slot que inicia exactamente en HoraHasta
 		// (igual que el sistema legacy y que la grilla generada por generarSlots).
@@ -1309,15 +1312,19 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 	}
 
 	const out = [];
-	for (const [mat, total] of totalPorMat) {
+	for (const [mat, totalSlots] of totalPorMat) {
 		const ocupados = ocupadosPorMat.get(mat) || 0;
-		const libres = Math.max(0, total - ocupados);
+		const aDemanda = aDemandaPorMat.get(mat) === true && totalSlots === 0;
+		// A demanda: el "total" del día son los turnos cargados (sobreturnos), no cupos de grilla.
+		const total = aDemanda ? ocupados : totalSlots;
+		const libres = aDemanda ? 0 : Math.max(0, totalSlots - ocupados);
 		out.push({
 			matricula: mat,
 			nombre: nombrePorMat.get(mat) || `Matrícula ${mat}`,
 			total,
 			ocupados,
 			libres,
+			aDemanda,
 		});
 	}
 	out.sort((a, b) => a.nombre.localeCompare(b.nombre));
