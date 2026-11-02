@@ -31,9 +31,26 @@ const normalizarEstadoIndicacion = (estado) =>
 
 const esEstadoSinEfecto = (estado) => normalizarEstadoIndicacion(estado) === 'S';
 
-/** SQL: no listar indicaciones dejadas sin efecto (incluye 'S ' / CHAR). */
-const SQL_EXCLUIR_SIN_EFECTO =
-	"UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) <> 'S'";
+/**
+ * Clarion deja sin efecto con FechaExpiro/HoraExpiro (>0). Estado='S' casi no se usa
+ * en escritorio (en iSource: 0 filas Estado=S vs cientos de miles con FechaExpiro).
+ * La web también setea Estado='S' al anular; hay que reconocer ambos.
+ */
+const esSinEfecto = (rowOrEstado) => {
+	if (rowOrEstado != null && typeof rowOrEstado === 'object') {
+		if (esEstadoSinEfecto(rowOrEstado.Estado ?? rowOrEstado.estado)) return true;
+		const fe = Number(rowOrEstado.FechaExpiro ?? rowOrEstado.fechaExpiro ?? 0);
+		return Number.isFinite(fe) && fe > 0;
+	}
+	return esEstadoSinEfecto(rowOrEstado);
+};
+
+/** SQL: dejada sin efecto (Estado S o FechaExpiro Clarion > 0). */
+const SQL_ES_SIN_EFECTO =
+	"(UPPER(LTRIM(RTRIM(ISNULL(iim.Estado, '')))) = 'S' OR ISNULL(TRY_CAST(iim.FechaExpiro AS int), 0) > 0)";
+
+/** SQL: no listar indicaciones dejadas sin efecto. */
+const SQL_EXCLUIR_SIN_EFECTO = `NOT ${SQL_ES_SIN_EFECTO}`;
 
 /**
  * SQL: médico de la indicación (ProfesionalAsiste = imPersonal.Valor).
@@ -270,7 +287,7 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  * @param {Object} opciones - Opciones de filtrado
  * @param {string} [opciones.fecha] - Fecha en formato 'YYYY-MM-DD' para filtrar por FechaCarga
  * @param {number} [opciones.limit] - Límite de registros (TOP N)
- * @param {boolean} [opciones.incluirSuspendidas] - Incluir las dejadas sin efecto (Estado = 'S')
+ * @param {boolean} [opciones.incluirSuspendidas] - Incluir sin efecto (FechaExpiro>0 o Estado='S')
  * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
@@ -284,10 +301,32 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     const params = [{ value: numeroVisita }];
 
     if (fecha) {
-        const periodo = filtroPeriodoClarion('iim.FechaCarga', fecha, days, params.length);
-        if (periodo.sql) {
-            whereParts.push(periodo.sql);
-            params.push(...periodo.params);
+        if (incluirSuspendidas) {
+            // Vigentes del día (FechaCarga) + sin efecto del día (FechaExpiro), Clarion.
+            const periodoCarga = filtroPeriodoClarion('iim.FechaCarga', fecha, days, params.length);
+            const periodoExpiro = filtroPeriodoClarion(
+                'iim.FechaExpiro',
+                fecha,
+                days,
+                params.length + (periodoCarga.params?.length || 0),
+            );
+            if (periodoCarga.sql && periodoExpiro.sql) {
+                whereParts.push(`(
+  (${periodoCarga.sql} AND ${SQL_EXCLUIR_SIN_EFECTO})
+  OR
+  (${periodoExpiro.sql} AND ${SQL_ES_SIN_EFECTO})
+)`);
+                params.push(...periodoCarga.params, ...periodoExpiro.params);
+            } else if (periodoCarga.sql) {
+                whereParts.push(periodoCarga.sql);
+                params.push(...periodoCarga.params);
+            }
+        } else {
+            const periodo = filtroPeriodoClarion('iim.FechaCarga', fecha, days, params.length);
+            if (periodo.sql) {
+                whereParts.push(periodo.sql);
+                params.push(...periodo.params);
+            }
         }
     }
 
@@ -295,7 +334,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     whereParts.push('iim.TipoIndicacion <> 9');
     // Excluir descartables sin registro
     whereParts.push("(tit.Tipo <> 'M' OR v.TipoMedicamento IS NULL OR v.TipoMedicamento <> 'DESC' OR ISNULL(v.NROREG1, 0) > 0)");
-    // Tabla de cama: no listar indicaciones suspendidas (Estado = 'S')
+    // Tabla de cama: no listar sin efecto (FechaExpiro o Estado S)
     if (excluirSuspendidas && !incluirSuspendidas) {
         whereParts.push(SQL_EXCLUIR_SIN_EFECTO);
     }
@@ -316,14 +355,23 @@ SELECT ${topClause}
   fa.Intervalo,
   iim.Observaciones,
   iim.Estado,
+  iim.FechaExpiro,
+  iim.HoraExpiro,
   
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaProximo,0), '1800-12-28'), 23) AS FechaProximoISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(COALESCE(NULLIF(origenVigente.FechaVigente, 0), iim.FechaCarga), 0), '1800-12-28'), 23) AS FechaCargaISO,
+  CONVERT(varchar(10), DATEADD(day, NULLIF(TRY_CAST(iim.FechaExpiro AS int), 0), CONVERT(datetime, '18001228', 112)), 23) AS FechaExpiroISO,
   
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraProximo,0) - 1) * 10, 0), 108) AS HoraProximo,
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraRevision,0) - 1) * 10, 0), 108) AS HoraRevision,
   CONVERT(varchar(8), DATEADD(ms, (NULLIF(COALESCE(NULLIF(origenVigente.HoraVigente, 0), iim.HoraCarga), 0) - 1) * 10, 0), 108) AS HoraCarga,
+  CASE
+    WHEN ISNULL(TRY_CAST(iim.HoraExpiro AS int), 0) > 0
+      AND TRY_CAST(iim.HoraExpiro AS int) <= 8640001
+    THEN CONVERT(varchar(8), DATEADD(ms, (TRY_CAST(iim.HoraExpiro AS int) - 1) * 10.0, CONVERT(datetime, '19000101', 112)), 108)
+    ELSE NULL
+  END AS HoraExpiroISO,
   
   CASE 
     WHEN iim.FechaCumplido IS NOT NULL AND iim.FechaCumplido > 0 THEN
@@ -377,7 +425,7 @@ OPTION (MAXRECURSION 80);
     const indicacionesHijas = new Map();
     
     rows.forEach((r) => {
-        if (!incluirSuspendidas && esEstadoSinEfecto(r.Estado)) {
+        if (!incluirSuspendidas && esSinEfecto(r)) {
             return;
         }
 
@@ -385,6 +433,7 @@ OPTION (MAXRECURSION 80);
         
         if (nroAdicional === 0) {
             const estadoNorm = normalizarEstadoIndicacion(r.Estado);
+            const suspendida = esSinEfecto(r);
             indicacionesPadre.push({
                 id: String(r.NroIndicacion),
                 nroIndicacion: r.NroIndicacion,
@@ -407,6 +456,8 @@ OPTION (MAXRECURSION 80);
                 horaAnterior: r.HoraRevision,
                 vigenteDesde: r.FechaCargaISO,
                 horaCarga: r.HoraCarga,
+                fechaExpiro: r.FechaExpiroISO || null,
+                horaExpiro: r.HoraExpiroISO || null,
                 tipo: r.TipoIndicacion,
                 tipoDescripcion: r.TipoIndicacionDescripcion || null,
                 promptCodigo: r.PromptCodigo,
@@ -416,8 +467,8 @@ OPTION (MAXRECURSION 80);
                 medicamento: r.AliasMedicamento,
                 ultimaAplicacion: r.UltimaAplicacion,
                 proximaAplicacion: r.ProximaAplicacion,
-                estado: estadoNorm || r.Estado,
-                suspendida: estadoNorm === 'S',
+                estado: suspendida ? 'S' : (estadoNorm || r.Estado),
+                suspendida,
                 unicaVez: r.Frecuencia && (
                     r.Frecuencia.toUpperCase().includes('UNICA VEZ') || 
                     r.Frecuencia.toUpperCase().includes('ÚNICA VEZ') ||
@@ -1385,7 +1436,8 @@ WHERE NroIndicacion = @p31
 };
 
 /**
- * Dejar indicación sin efecto (Estado = 'S').
+ * Dejar indicación sin efecto.
+ * Clarion: FechaExpiro + HoraExpiro. Web también marca Estado='S'.
  * Registra en Observaciones quién y cuándo lo hizo.
  * @param {number} nroIndicacion
  * @param {{ nombreOperador: string }} meta
@@ -1393,7 +1445,7 @@ WHERE NroIndicacion = @p31
 const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
 	const rows = await executeQuery(
 		`
-    SELECT TOP 1 NroIndicacion, Estado, Observaciones
+    SELECT TOP 1 NroIndicacion, Estado, FechaExpiro, HoraExpiro, Observaciones
     FROM dbo.imInterIndMedicas
     WHERE NroIndicacion = @p0 AND ISNULL(NroAdicional, 0) = 0
     `,
@@ -1404,7 +1456,7 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
 		e.statusCode = 404;
 		throw e;
 	}
-	if (esEstadoSinEfecto(rows[0].Estado)) {
+	if (esSinEfecto(rows[0])) {
 		const e = new Error('La indicación ya está sin efecto');
 		e.statusCode = 400;
 		throw e;
@@ -1417,6 +1469,8 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
 	const nota = `Dejada sin efecto por ${nombre} el ${fechaIso} ${horaIso}`;
 	const obsPrev = String(rows[0].Observaciones || '').trim();
 	const observaciones = limitLength(obsPrev ? `${obsPrev} | ${nota}` : nota, 255);
+	const fechaExpiroClarion = convertirFechaAClarion(fechaIso);
+	const horaExpiroClarion = convertirHoraAClarion(horaIso.includes(':') && horaIso.split(':').length === 2 ? `${horaIso}:00` : horaIso);
 
 	await executeQuery(
 		`
@@ -1429,8 +1483,8 @@ const dejarSinEfecto = async (nroIndicacion, meta = {}) => {
     `,
 		[
 			{ value: Number(nroIndicacion) },
-			{ value: convertirFechaAClarion(fechaIso) },
-			{ value: convertirHoraAClarion(horaIso + ':00') },
+			{ value: fechaExpiroClarion },
+			{ value: horaExpiroClarion },
 		],
 	);
 
@@ -1459,7 +1513,7 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             throw new Error('Indicación no encontrada');
         }
 
-        if (esEstadoSinEfecto(indicacionActual.Estado)) {
+        if (esSinEfecto(indicacionActual)) {
             const e = new Error('No se puede aplicar una indicación dejada sin efecto');
             e.statusCode = 400;
             throw e;

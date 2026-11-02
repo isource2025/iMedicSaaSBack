@@ -1912,8 +1912,9 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
  * @param {number} limite - Máximo de pacientes a devolver (default: 10)
  * @returns {Promise<Array>}
  */
-async function obtenerMovimientosRecientes(limite = 10) {
-  const tope = Math.min(Math.max(parseInt(limite, 10) || 10, 1), 50);
+async function obtenerMovimientosRecientes(limite = 3) {
+  // Tope alto por si se pide listado; el panel usa 3 (1 por tipo de evento).
+  const tope = Math.min(Math.max(parseInt(limite, 10) || 3, 1), 50);
   // Ventana amplia para no barrer toda la tabla; alcanza para el feed del panel.
   const desde = new Date();
   desde.setDate(desde.getDate() - 90);
@@ -1997,6 +1998,17 @@ async function obtenerMovimientosRecientes(limite = 10) {
       FROM UltimoPorVisita
       WHERE FechaEvento IS NOT NULL AND FechaEvento > 0
         AND FechaEvento >= @p1
+    ),
+    -- Panel: 1 último ingreso + 1 último egreso + 1 último traslado (no un listado largo).
+    PorTipo AS (
+      SELECT
+        *,
+        ROW_NUMBER() OVER (
+          PARTITION BY TipoMovimiento
+          ORDER BY FechaEvento DESC, HoraEvento DESC, NumeroVisita DESC
+        ) AS RnTipo
+      FROM PorPaciente
+      WHERE RnPaciente = 1
     )
     SELECT TOP (@p0)
       NumeroVisita,
@@ -2014,9 +2026,17 @@ async function obtenerMovimientosRecientes(limite = 10) {
       TipoMovimiento,
       FechaEvento,
       HoraEvento
-    FROM PorPaciente
-    WHERE RnPaciente = 1
-    ORDER BY FechaEvento DESC, HoraEvento DESC, NumeroVisita DESC
+    FROM PorTipo
+    WHERE RnTipo = 1
+    ORDER BY
+      CASE TipoMovimiento
+        WHEN 'Ingreso' THEN 1
+        WHEN 'Egreso' THEN 2
+        ELSE 3
+      END,
+      FechaEvento DESC,
+      HoraEvento DESC,
+      NumeroVisita DESC
   `;
 
   try {

@@ -51,7 +51,7 @@ async function seccion(fn) {
  * @param {string[]} opts.permisos       permisos del usuario (req.permisos)
  * @param {string}   [opts.fechaInicio]  YYYY-MM-DD
  * @param {string}   [opts.fechaFin]     YYYY-MM-DD
- * @param {number}   [opts.limiteActividad=10]
+ * @param {number}   [opts.limiteActividad=3]  1 ingreso + 1 egreso + 1 traslado
  * @param {number|string} [opts.graciaMin]
  * @param {string[]} [opts.incluir]      subconjunto de secciones; por defecto todas
  */
@@ -61,7 +61,7 @@ async function obtenerResumenDashboard(opts = {}) {
 	const rango = rangoPorDefecto();
 	const fechaInicio = opts.fechaInicio || rango.fechaInicio;
 	const fechaFin = opts.fechaFin || rango.fechaFin;
-	const limiteActividad = Math.min(50, Math.max(1, Number(opts.limiteActividad) || 10));
+	const limiteActividad = Math.min(50, Math.max(1, Number(opts.limiteActividad) || 3));
 	const incluir = new Set(
 		Array.isArray(opts.incluir) && opts.incluir.length ? opts.incluir : Object.keys(PERMISO_SECCION),
 	);
