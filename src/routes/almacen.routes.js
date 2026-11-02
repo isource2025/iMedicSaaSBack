@@ -142,4 +142,18 @@ router.post('/remitos', requirePermiso('ALMACEN.REMITOS.CREAR'), ctrl.crearRemit
 router.put('/remitos/:id', requirePermiso('ALMACEN.REMITOS.EDITAR'), ctrl.actualizarRemitoLegacy);
 router.delete('/remitos/:id', requirePermiso('ALMACEN.REMITOS.ELIMINAR'), ctrl.eliminarRemitoLegacy);
 
+// ── Existencias Clarion (dbo.Stock) + Proveedores (dbo.PROVEEDORES) ─────
+// Rutas /existencias evitan colisión con el stack imAlmacén en /stock.
+router.get('/existencias', requirePermiso('ALMACEN.STOCK.VER'), ctrl.listarExistenciasClarion);
+router.get(
+	'/existencias/catalogos',
+	requirePermiso('ALMACEN.STOCK.VER'),
+	ctrl.catalogosExistenciasClarion,
+);
+router.get(
+	'/proveedores-clarion',
+	requirePermiso('ALMACEN.PROVEEDORES.VER'),
+	ctrl.listarProveedoresClarion,
+);
+
 module.exports = router;

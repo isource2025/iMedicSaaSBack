@@ -148,6 +148,13 @@ const MODULOS = Object.freeze([
 		submodulos: [
 			{ id: 'PRODUCTOS', label: 'Productos', path: '/dashboard/almacen/productos', acciones: [...CRUD] },
 			{ id: 'REMITOS',   label: 'Remitos',   path: '/dashboard/almacen/remitos',   acciones: [...CRUD] },
+			{ id: 'STOCK', label: 'Stock', path: '/dashboard/almacen/stock', acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
+			{
+				id: 'PROVEEDORES',
+				label: 'Proveedores',
+				path: '/dashboard/almacen/proveedores',
+				acciones: [ACCIONES.VER, ACCIONES.EXPORTAR],
+			},
 		],
 	},
 	{
@@ -371,6 +378,10 @@ const PLANTILLAS = Object.freeze({
 		// Almacén operativo: catálogo y remitos (sin escritura clínica).
 		..._todas('ALMACEN', 'PRODUCTOS'),
 		..._todas('ALMACEN', 'REMITOS'),
+		'ALMACEN.STOCK.VER',
+		'ALMACEN.STOCK.EXPORTAR',
+		'ALMACEN.PROVEEDORES.VER',
+		'ALMACEN.PROVEEDORES.EXPORTAR',
 		// Reportes → Facturación (producción del hospital) muestra montos por
 		// profesional y cobertura: queda reservado a ADMIN.
 		..._soloVer('REPORTES', ['FACTURACION']),

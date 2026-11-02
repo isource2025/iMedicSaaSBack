@@ -4,6 +4,7 @@
 const svc = require('../services/almacen.service');
 const productosSvc = require('../services/almacen.productos.service');
 const remitosSvc = require('../services/almacen.remitos.service');
+const existenciasSvc = require('../services/almacen.existencias.service');
 
 function esMensajeTecnico(msg) {
 	return /FOREIGN KEY|INSERT statement|UPDATE statement|constraint|Violation of|RequestError|dbo\.|SQLSTATE|ECONN|ETIMEDOUT|status code/i.test(
@@ -749,6 +750,47 @@ const ctrl = {
 			return res.json({ success: true, data });
 		} catch (e) {
 			return handleError(res, e, 'Error al obtener próximo número de remito');
+		}
+	},
+
+	// ── Existencias Clarion (dbo.Stock) ─────────────────────────────────
+	async listarExistenciasClarion(req, res) {
+		try {
+			const soloBajo = ['1', 'true', 'yes'].includes(
+				String(req.query.soloBajoMinimo || '').toLowerCase(),
+			);
+			const data = await existenciasSvc.listar({
+				search: req.query.search || '',
+				idDeposito: req.query.idDeposito || null,
+				soloBajoMinimo: soloBajo,
+				page: req.query.page,
+				pageSize: req.query.pageSize,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar existencias');
+		}
+	},
+
+	async catalogosExistenciasClarion(req, res) {
+		try {
+			const data = await existenciasSvc.catalogos();
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al cargar catálogos de existencias');
+		}
+	},
+
+	async listarProveedoresClarion(req, res) {
+		try {
+			const data = await existenciasSvc.listarProveedores({
+				search: req.query.search || '',
+				page: req.query.page,
+				pageSize: req.query.pageSize,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar proveedores');
 		}
 	},
 };

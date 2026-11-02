@@ -206,6 +206,8 @@ const SUBMODULOS = Object.freeze({
 	// ── Almacén ───────────────────────────────────────────────────────────
 	'ALMACEN.PRODUCTOS': { descripcion: 'Catálogo de productos del almacén.' },
 	'ALMACEN.REMITOS': { descripcion: 'Remitos de mercadería (cabecera e ítems).' },
+	'ALMACEN.STOCK': { descripcion: 'Existencias por depósito (dbo.Stock).' },
+	'ALMACEN.PROVEEDORES': { descripcion: 'Proveedores Clarion (dbo.PROVEEDORES).' },
 
 	// ── Reportes ──────────────────────────────────────────────────────────
 	'REPORTES.ESTADISTICAS': { descripcion: 'Reportes estadísticos de la actividad.' },
