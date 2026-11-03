@@ -196,7 +196,28 @@ function mapRow(row) {
 	};
 }
 
-const SELECT_COLS = `
+/**
+ * Ruta de foto en file server (VARCHAR(1000) en Vidal).
+ * Otras clínicas legacy no la traen: se crea on-demand para no romper GET /personal.
+ */
+const ensureImPersonalImageColumn = createTenantOnce(async () => {
+	try {
+		const cols = await executeQuery(
+			`SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS
+			 WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imPersonal' AND COLUMN_NAME = 'image'`,
+		);
+		if (!cols?.length) {
+			await executeQuery(`ALTER TABLE dbo.imPersonal ADD image VARCHAR(1000) NULL`);
+			console.log('[personal] Columna image agregada a imPersonal');
+		}
+		return true;
+	} catch (err) {
+		console.warn('[personal] ensureImPersonalImageColumn:', err?.message || err);
+		return false;
+	}
+});
+
+const SELECT_COLS_BASE = `
 	p.Valor,
 	p.TipoDocumento,
 	p.Numero,
@@ -225,14 +246,28 @@ const SELECT_COLS = `
 	p.Estado,
 	p.CUIT,
 	p.Observaciones,
-	p.Rol,
-	p.image,
+	p.Rol
+`;
+
+function selectColsSql(hasImage) {
+	const fotoCols = hasImage
+		? `p.image,
 	CASE
 		WHEN NULLIF(LTRIM(RTRIM(CAST(p.image AS VARCHAR(1000)))), '') IS NOT NULL THEN 1
 		ELSE 0
-	END AS hasFoto,
+	END AS hasFoto`
+		: `CAST(NULL AS VARCHAR(1000)) AS image,
+	0 AS hasFoto`;
+	return `${SELECT_COLS_BASE},
+	${fotoCols},
 	CASE WHEN DATALENGTH(p.Firma) > 0 THEN 1 ELSE 0 END AS hasFirma
 `;
+}
+
+async function resolveSelectCols() {
+	const hasImage = await ensureImPersonalImageColumn();
+	return selectColsSql(Boolean(hasImage));
+}
 
 /**
  * Listado paginado con búsqueda opcional.
@@ -241,11 +276,11 @@ async function listar(page = 1, limit = 30, search = '') {
 	const offset = (page - 1) * limit;
 	const searchTerm = `%${String(search || '').trim()}%`;
 	const hasSearch = String(search || '').trim().length > 0;
+	const selectCols = await resolveSelectCols();
 
 	const pool = await getRequestPool();
 
 	const whereParts = [`p.Valor < ${ADMIN_VALOR_THRESHOLD}`];
-	const whereArgs = [];
 	if (hasSearch) {
 		whereParts.push(
 			`(p.ApellidoNombre LIKE @search
@@ -277,7 +312,7 @@ async function listar(page = 1, limit = 30, search = '') {
 	if (hasSearch) reqData.input('search', sql.VarChar, searchTerm);
 
 	const dataRes = await reqData.query(`
-		SELECT ${SELECT_COLS}
+		SELECT ${selectCols}
 		FROM dbo.imPersonal p
 		WHERE ${whereSql}
 		ORDER BY p.ApellidoNombre
@@ -292,8 +327,9 @@ async function listar(page = 1, limit = 30, search = '') {
 }
 
 async function obtenerPorId(valor) {
+	const selectCols = await resolveSelectCols();
 	const rows = await executeQuery(
-		`SELECT ${SELECT_COLS} FROM dbo.imPersonal p WHERE p.Valor = @p0`,
+		`SELECT ${selectCols} FROM dbo.imPersonal p WHERE p.Valor = @p0`,
 		[{ value: valor, type: 'Int' }],
 	);
 	return rows.length ? _conDescripcionServicio(mapRow(rows[0])) : null;
@@ -1318,6 +1354,8 @@ async function eliminarFirmaPersonal(valor) {
 }
 
 async function _leerRutaFoto(valor) {
+	const ok = await ensureImPersonalImageColumn();
+	if (!ok) return null;
 	const rows = await executeQuery(
 		`SELECT TOP 1 image FROM dbo.imPersonal WHERE Valor = @p0`,
 		[{ value: Number(valor), type: 'Int' }],
@@ -1326,6 +1364,14 @@ async function _leerRutaFoto(valor) {
 }
 
 async function _guardarRutaFoto(valor, ruta) {
+	const ok = await ensureImPersonalImageColumn();
+	if (!ok) {
+		const e = new Error(
+			'La base de la clínica no tiene la columna image en imPersonal y no se pudo crear',
+		);
+		e.statusCode = 503;
+		throw e;
+	}
 	const pathStr = ruta == null || ruta === '' ? null : String(ruta).slice(0, 1000);
 	await executeQuery(`UPDATE dbo.imPersonal SET image = @p1 WHERE Valor = @p0`, [
 		{ value: Number(valor), type: 'Int' },

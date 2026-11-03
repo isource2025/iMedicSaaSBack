@@ -698,9 +698,11 @@ const ctrl = {
 	async catalogosRemitosLegacy(req, res) {
 		try {
 			const [tipos, depositos, proveedores] = await Promise.all([
-				remitosSvc.listarTipos({ soloOperativos: true }),
+				// Misma lista que Clarion Tipos_Remitos (sin filtrar a REM/RSM/RSP).
+				remitosSvc.listarTipos({ soloOperativos: false }),
 				remitosSvc.listarDepositos(),
-				remitosSvc.listarProveedores({ limit: 120 }),
+				// Catálogo completo Clarion (hoy ~330); el combo también busca por API.
+				remitosSvc.listarProveedores({ limit: 500 }),
 			]);
 			return res.json({ success: true, data: { tipos, depositos, proveedores } });
 		} catch (e) {
@@ -750,6 +752,28 @@ const ctrl = {
 			return res.json({ success: true, data });
 		} catch (e) {
 			return handleError(res, e, 'Error al obtener próximo número de remito');
+		}
+	},
+
+	async candidatosSalidaServicio(req, res) {
+		try {
+			const data = await remitosSvc.listarCandidatosSalidaServicio({
+				idDepositoDest: req.query.idDepositoDest || null,
+				valorSector: req.query.valorSector || null,
+				fecha: req.query.fecha || null,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al cargar medicación de internaciones');
+		}
+	},
+
+	async excluirIndicacionEntrega(req, res) {
+		try {
+			const data = await remitosSvc.excluirIndicacionDeEntrega(req.params.nroIndicacion);
+			return res.json({ success: true, data, mensaje: 'Indicación excluida de entrega' });
+		} catch (e) {
+			return handleError(res, e, 'Error al excluir de entrega');
 		}
 	},
 

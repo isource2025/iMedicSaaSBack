@@ -137,6 +137,16 @@ router.get(
 	requirePermiso('ALMACEN.REMITOS.CREAR'),
 	ctrl.proximoNroRemitoLegacy,
 );
+router.get(
+	'/remitos/candidatos-salida-servicio',
+	requirePermiso('ALMACEN.REMITOS.CREAR'),
+	ctrl.candidatosSalidaServicio,
+);
+router.post(
+	'/remitos/indicaciones/:nroIndicacion/excluir-entrega',
+	requirePermiso('ALMACEN.REMITOS.EDITAR'),
+	ctrl.excluirIndicacionEntrega,
+);
 router.get('/remitos/:id', requirePermiso('ALMACEN.REMITOS.VER'), ctrl.obtenerRemitoLegacy);
 router.post('/remitos', requirePermiso('ALMACEN.REMITOS.CREAR'), ctrl.crearRemitoLegacy);
 router.put('/remitos/:id', requirePermiso('ALMACEN.REMITOS.EDITAR'), ctrl.actualizarRemitoLegacy);
