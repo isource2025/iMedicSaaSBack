@@ -3,7 +3,14 @@
  * @module services/visitaMovimientos.service
  */
 const { executeQuery, getRequestPool, sql } = require('../models/db');
-const { convertirFechaAClarion, convertirHoraAClarion, convertirFechaClarionADate, convertirHoraClarionAString, clarionAIsoCalendario } = require('../utils/dateUtils');
+const {
+  convertirFechaAClarion,
+  convertirHoraAClarion,
+  convertirFechaClarionADate,
+  convertirHoraClarionAString,
+  clarionAIsoCalendario,
+  fechaClarionHoyArgentina,
+} = require('../utils/dateUtils');
 const { normalizarFilas } = require('../utils/codigoSector');
 
 function clarionInt(v) {
@@ -1905,30 +1912,28 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
 }
 
 /**
- * Actividad reciente del dashboard: un solo evento por paciente (el más reciente).
- * - Egreso: último movimiento de la visita ya cerrado
- * - Movimiento de cama: internación vigente con más de un pase
- * - Ingreso: internación vigente con un solo movimiento
- * @param {number} limite - Máximo de pacientes a devolver (default: 10)
+ * Actividad reciente del dashboard: 1 último ingreso + 1 último egreso + 1 último traslado.
+ * - Ingreso: primer movimiento de la visita (independiente de traslados posteriores)
+ * - Egreso: último segmento cerrado (FechaEgreso > 0)
+ * - Traslado: cualquier pase posterior al primero (RnAsc > 1)
+ * @param {number} limite - Máximo de filas (default 3 = una por tipo)
  * @returns {Promise<Array>}
  */
 async function obtenerMovimientosRecientes(limite = 3) {
-  // Tope alto por si se pide listado; el panel usa 3 (1 por tipo de evento).
   const tope = Math.min(Math.max(parseInt(limite, 10) || 3, 1), 50);
-  // Ventana amplia para no barrer toda la tabla; alcanza para el feed del panel.
-  const desde = new Date();
-  desde.setDate(desde.getDate() - 90);
-  const clarionDesde = convertirFechaAClarion(desde) || 1;
+  const clarionHoy = fechaClarionHoyArgentina() || convertirFechaAClarion(new Date()) || 1;
+  const clarionDesde = Math.max(1, clarionHoy - 90);
+  // +1 tolera Clarion grabado con reloj UTC (después de ~21:00 ART “mañana”).
+  const clarionHasta = clarionHoy + 1;
 
   const sql = `
     WITH VisitasRecientes AS (
-      -- Visitas con ingreso o egreso en la ventana (sin truncar el historial de pases)
       SELECT DISTINCT vm.NumeroVisita
       FROM dbo.imVisitaMovimiento vm
       WHERE TRY_CAST(vm.FechaAdmision AS int) BETWEEN 1 AND ${CLARION_FECHA_MAX}
         AND (
-          TRY_CAST(vm.FechaAdmision AS int) >= @p1
-          OR TRY_CAST(ISNULL(vm.FechaEgreso, 0) AS int) >= @p1
+          TRY_CAST(vm.FechaAdmision AS int) BETWEEN @p1 AND @p2
+          OR TRY_CAST(ISNULL(vm.FechaEgreso, 0) AS int) BETWEEN @p1 AND @p2
         )
     ),
     Base AS (
@@ -1945,11 +1950,14 @@ async function obtenerMovimientosRecientes(limite = 3) {
         p.ApellidoyNombre,
         p.NumeroDocumento,
         s.Descripcion AS SectorDescripcion,
-        COUNT(*) OVER (PARTITION BY vm.NumeroVisita) AS TotalMovimientos,
+        ROW_NUMBER() OVER (
+          PARTITION BY vm.NumeroVisita
+          ORDER BY vm.FechaAdmision ASC, vm.HoraAdmision ASC
+        ) AS RnAsc,
         ROW_NUMBER() OVER (
           PARTITION BY vm.NumeroVisita
           ORDER BY vm.FechaAdmision DESC, vm.HoraAdmision DESC
-        ) AS RnVisita
+        ) AS RnDesc
       FROM dbo.imVisitaMovimiento vm
       INNER JOIN VisitasRecientes vr ON vr.NumeroVisita = vm.NumeroVisita
       INNER JOIN dbo.imVisita v ON vm.NumeroVisita = v.NumeroVisita
@@ -1957,7 +1965,8 @@ async function obtenerMovimientosRecientes(limite = 3) {
       LEFT JOIN dbo.imSectores s ON vm.ValorSector = s.Valor
       WHERE TRY_CAST(vm.FechaAdmision AS int) BETWEEN 1 AND ${CLARION_FECHA_MAX}
     ),
-    UltimoPorVisita AS (
+    Eventos AS (
+      -- Último ingreso = primer segmento de la visita más reciente
       SELECT
         NumeroVisita,
         FechaAdmision,
@@ -1971,35 +1980,57 @@ async function obtenerMovimientosRecientes(limite = 3) {
         ApellidoyNombre,
         NumeroDocumento,
         SectorDescripcion,
-        TotalMovimientos,
-        CASE
-          WHEN ISNULL(TRY_CAST(FechaEgreso AS int), 0) > 0 THEN 'Egreso'
-          WHEN TotalMovimientos > 1 THEN 'Movimiento de cama'
-          ELSE 'Ingreso'
-        END AS TipoMovimiento,
-        CASE
-          WHEN ISNULL(TRY_CAST(FechaEgreso AS int), 0) > 0 THEN TRY_CAST(FechaEgreso AS int)
-          ELSE TRY_CAST(FechaAdmision AS int)
-        END AS FechaEvento,
-        CASE
-          WHEN ISNULL(TRY_CAST(FechaEgreso AS int), 0) > 0 THEN ISNULL(TRY_CAST(HoraEgreso AS int), 0)
-          ELSE ISNULL(TRY_CAST(HoraAdmision AS int), 0)
-        END AS HoraEvento
+        CAST('Ingreso' AS varchar(40)) AS TipoMovimiento,
+        TRY_CAST(FechaAdmision AS int) AS FechaEvento,
+        ISNULL(TRY_CAST(HoraAdmision AS int), 0) AS HoraEvento
       FROM Base
-      WHERE RnVisita = 1
-    ),
-    PorPaciente AS (
+      WHERE RnAsc = 1
+
+      UNION ALL
+
+      -- Último egreso = segmento vigente cerrado
       SELECT
-        *,
-        ROW_NUMBER() OVER (
-          PARTITION BY IDPaciente
-          ORDER BY FechaEvento DESC, HoraEvento DESC, NumeroVisita DESC
-        ) AS RnPaciente
-      FROM UltimoPorVisita
-      WHERE FechaEvento IS NOT NULL AND FechaEvento > 0
-        AND FechaEvento >= @p1
+        NumeroVisita,
+        FechaAdmision,
+        HoraAdmision,
+        FechaEgreso,
+        HoraEgreso,
+        ValorHabitacionCama,
+        ValorSector,
+        EstadoCama,
+        IDPaciente,
+        ApellidoyNombre,
+        NumeroDocumento,
+        SectorDescripcion,
+        CAST('Egreso' AS varchar(40)) AS TipoMovimiento,
+        TRY_CAST(FechaEgreso AS int) AS FechaEvento,
+        ISNULL(TRY_CAST(HoraEgreso AS int), 0) AS HoraEvento
+      FROM Base
+      WHERE RnDesc = 1
+        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) > 0
+
+      UNION ALL
+
+      -- Último traslado = pase posterior al ingreso
+      SELECT
+        NumeroVisita,
+        FechaAdmision,
+        HoraAdmision,
+        FechaEgreso,
+        HoraEgreso,
+        ValorHabitacionCama,
+        ValorSector,
+        EstadoCama,
+        IDPaciente,
+        ApellidoyNombre,
+        NumeroDocumento,
+        SectorDescripcion,
+        CAST('Movimiento de cama' AS varchar(40)) AS TipoMovimiento,
+        TRY_CAST(FechaAdmision AS int) AS FechaEvento,
+        ISNULL(TRY_CAST(HoraAdmision AS int), 0) AS HoraEvento
+      FROM Base
+      WHERE RnAsc > 1
     ),
-    -- Panel: 1 último ingreso + 1 último egreso + 1 último traslado (no un listado largo).
     PorTipo AS (
       SELECT
         *,
@@ -2007,8 +2038,9 @@ async function obtenerMovimientosRecientes(limite = 3) {
           PARTITION BY TipoMovimiento
           ORDER BY FechaEvento DESC, HoraEvento DESC, NumeroVisita DESC
         ) AS RnTipo
-      FROM PorPaciente
-      WHERE RnPaciente = 1
+      FROM Eventos
+      WHERE FechaEvento IS NOT NULL
+        AND FechaEvento BETWEEN @p1 AND @p2
     )
     SELECT TOP (@p0)
       NumeroVisita,
@@ -2041,37 +2073,52 @@ async function obtenerMovimientosRecientes(limite = 3) {
 
   try {
     const result = normalizarFilas(
-      await executeQuery(sql, [{ value: tope }, { value: clarionDesde }]),
+      await executeQuery(sql, [
+        { value: tope },
+        { value: clarionDesde },
+        { value: clarionHasta },
+      ]),
     );
 
-    const fechaLimiteFutura = new Date();
-    fechaLimiteFutura.setFullYear(fechaLimiteFutura.getFullYear() + 1);
+    const clampIso = (clarion) => {
+      const n = Number(clarion) || 0;
+      if (n <= 0) return null;
+      return clarionAIsoCalendario(Math.min(n, clarionHoy));
+    };
 
     const resultadoFinal = [];
     for (const row of result) {
-      const fechaAdmisionIso = clarionAIsoCalendario(row.FechaAdmision);
-      const fechaEgresoIso = clarionAIsoCalendario(row.FechaEgreso);
-      const fechaEventoIso = clarionAIsoCalendario(row.FechaEvento);
-
-      if (fechaEventoIso) {
-        const fechaEvento = new Date(fechaEventoIso);
-        if (fechaEvento > fechaLimiteFutura) {
-          console.warn(
-            `Registro saltado por fecha de evento futura: ${row.ApellidoyNombre} - ${fechaEventoIso}`,
-          );
-          continue;
-        }
+      const fechaEventoN = Number(row.FechaEvento) || 0;
+      // Basura real (más de un día adelante): descartar.
+      if (fechaEventoN > clarionHasta) {
+        console.warn(
+          `Registro saltado por fecha de evento futura: ${row.ApellidoyNombre} - ${clarionAIsoCalendario(fechaEventoN)}`,
+        );
+        continue;
       }
 
+      const admN = Number(row.FechaAdmision) || 0;
+      const egrN = Number(row.FechaEgreso) || 0;
       resultadoFinal.push({
         ...row,
-        FechaAdmisionFormateada: fechaAdmisionIso,
-        FechaEgresoFormateada: fechaEgresoIso,
+        // Clarion de display clampeado a hoy AR (evita “mañana” por UTC al grabar).
+        FechaAdmision: admN > 0 ? Math.min(admN, clarionHoy) : row.FechaAdmision,
+        FechaEgreso: egrN > 0 ? Math.min(egrN, clarionHoy) : row.FechaEgreso,
+        FechaEvento: Math.min(fechaEventoN, clarionHoy) || row.FechaEvento,
+        FechaAdmisionFormateada: clampIso(row.FechaAdmision),
+        FechaEgresoFormateada: clampIso(row.FechaEgreso),
+        FechaEventoFormateada: clampIso(row.FechaEvento),
         HoraAdmisionFormateada: convertirHoraClarionAString(row.HoraAdmision),
         HoraEgresoFormateada:
           row.HoraEgreso && Number(row.HoraEgreso) > 0
             ? convertirHoraClarionAString(row.HoraEgreso)
             : null,
+        HoraEventoFormateada:
+          row.TipoMovimiento === 'Egreso'
+            ? row.HoraEgreso && Number(row.HoraEgreso) > 0
+              ? convertirHoraClarionAString(row.HoraEgreso)
+              : null
+            : convertirHoraClarionAString(row.HoraAdmision),
       });
     }
 
