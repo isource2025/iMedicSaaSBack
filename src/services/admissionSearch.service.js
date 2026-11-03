@@ -657,11 +657,38 @@ function _clarionHoraHm(horaClarion) {
 	return s ? s.slice(0, 5) : null;
 }
 
+/**
+ * Descripción desde imPracticasXConvenios (códigos que no están en el nomenclador
+ * unificado, p.ej. prestaciones solo cargadas por convenio). Preferir el CONTRATO
+ * de la visita si coincide.
+ */
+function _sqlDescripcionPracticaXConvenio() {
+	return `(
+      SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))
+      FROM dbo.imPracticasXConvenios x
+      WHERE LTRIM(RTRIM(CONVERT(VARCHAR(50), x.IdPractica))) =
+            LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica)))
+        AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))), '') IS NOT NULL
+      ORDER BY
+        CASE
+          WHEN x.IdConvenio = (
+            SELECT TOP 1 ISNULL(v.CONTRATO, 0)
+            FROM dbo.imVisita v
+            WHERE v.NUMEROVISITA = fp.NumeroVisita
+          ) THEN 0
+          ELSE 1
+        END,
+        LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))) DESC
+    )`;
+}
+
 /** Una descripción por código (evita duplicados del nomenclador). */
 function _sqlDescripcionPractica(nomenclador) {
+	const xConv = _sqlDescripcionPracticaXConvenio();
 	if (!nomenclador) {
 		return `COALESCE(
       NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+      ${xConv},
       CONVERT(VARCHAR(50), fp.Practica)
     )`;
 	}
@@ -677,6 +704,7 @@ function _sqlDescripcionPractica(nomenclador) {
         LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}]))))
     ),
     NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
+    ${xConv},
     CONVERT(VARCHAR(50), fp.Practica)
   )`;
 }

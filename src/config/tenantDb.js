@@ -31,7 +31,8 @@ const empresaRowCache = new TtlCache({
 	nombre: 'empresaRow',
 });
 
-const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 12000;
+/** Túneles on-prem (Sarmiento :51433, etc.): 12s cortaba el handshake con frecuencia. */
+const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 20000;
 const REQUEST_MS = Number(process.env.TENANT_REQUEST_TIMEOUT_MS) || 120000;
 
 function isLocalDevOnly() {

@@ -23,7 +23,8 @@ const ACCION_GENERICA = Object.freeze({
 	APLICAR: 'Marcar como aplicado o cumplido',
 	EXPORTAR: 'Descargar la información (Excel/PDF)',
 	IMPRIMIR: 'Imprimir el documento',
-	EDITAR_AJENOS: 'Editar o eliminar registros de otro profesional',
+	EDITAR_AJENOS:
+		'Modificar o eliminar lo que cargó otro profesional (override tipo admin clínico)',
 	CERRAR: 'Cerrar el registro o la atención',
 	MARCAR_VISTO: 'Marcar como visto',
 	VER_TODOS: 'Ver de todos los sectores',
@@ -155,9 +156,11 @@ const SUBMODULOS = Object.freeze({
 		},
 	},
 	'INTERNACION.REGISTROS': {
-		descripcion: 'Registros clínicos cargados por otro profesional.',
+		descripcion:
+			'Permiso especial (tipo admin clínico) para intervenir sobre la historia clínica y demás registros cargados por otro profesional.',
 		acciones: {
-			EDITAR_AJENOS: 'Editar o eliminar registros clínicos creados por otro profesional',
+			EDITAR_AJENOS:
+				'Modificar o eliminar historia clínica, evoluciones, indicaciones, controles, dietas, adjuntos y demás registros clínicos creados por otro profesional',
 		},
 	},
 	'INTERNACION.PROTOCOLOS': { descripcion: 'Protocolos registrados del paciente internado.' },
@@ -174,8 +177,10 @@ const SUBMODULOS = Object.freeze({
 	'INTERNACION.ADJUNTOS': {
 		descripcion: 'Archivos adjuntos del paciente: resultados, imágenes y documentos.',
 		acciones: {
-			EDITAR: 'Modificar adjuntos propios (los ajenos solo los edita un administrador)',
-			ELIMINAR: 'Eliminar adjuntos propios (los ajenos solo los elimina un administrador)',
+			EDITAR:
+				'Modificar adjuntos propios (los ajenos requieren INTERNACION.REGISTROS.EDITAR_AJENOS)',
+			ELIMINAR:
+				'Eliminar adjuntos propios (los ajenos requieren INTERNACION.REGISTROS.EDITAR_AJENOS)',
 		},
 	},
 	'INTERNACION.EPICRISIS': {

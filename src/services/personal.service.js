@@ -1479,30 +1479,24 @@ async function agregarSectorPersonal(valor, idSector) {
 		e.statusCode = 400;
 		throw e;
 	}
-	const dup = await executeQuery(
-		`SELECT 1 FROM dbo.imPersonalSectores WHERE idPersonal = @p0 AND idSector = @p1`,
-		[
-			{ value: valor, type: 'Int' },
-			{ value: sid, type: 'VarChar' },
-		],
-	);
-	if (dup.length) {
-		const e = new Error('El sector ya está asignado');
-		e.statusCode = 409;
-		throw e;
-	}
+	const vp = Number(valor);
+	// Idempotente: evita PK_imPersonalSectores si ya existe (carrera o padding CHAR).
 	await executeQuery(
-		`INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@p0, @p1)`,
+		`IF NOT EXISTS (
+			SELECT 1 FROM dbo.imPersonalSectores WITH (UPDLOCK, HOLDLOCK)
+			WHERE idPersonal = @p0 AND LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) = LTRIM(RTRIM(@p1))
+		)
+		INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@p0, @p1)`,
 		[
-			{ value: valor, type: 'Int' },
-			{ value: sid, type: 'VarChar' },
+			{ value: vp, type: 'Int' },
+			{ value: sid, type: 'VarChar', length: 50 },
 		],
 	);
 	const tenantId = resolveTenantEmpresaId();
 	if (tenantId != null) {
-		await authCentralSync.syncPersonalSectores(tenantId, valor);
+		await authCentralSync.syncPersonalSectores(tenantId, vp);
 	}
-	return listarSectoresPersonal(valor);
+	return listarSectoresPersonal(vp);
 }
 
 async function quitarSectorPersonal(valor, idSector) {
@@ -1512,18 +1506,21 @@ async function quitarSectorPersonal(valor, idSector) {
 		e.statusCode = 400;
 		throw e;
 	}
+	const vp = Number(valor);
 	await executeQuery(
-		`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0 AND idSector = @p1`,
+		`DELETE FROM dbo.imPersonalSectores
+		 WHERE idPersonal = @p0
+		   AND LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) = LTRIM(RTRIM(@p1))`,
 		[
-			{ value: valor, type: 'Int' },
-			{ value: sid, type: 'VarChar' },
+			{ value: vp, type: 'Int' },
+			{ value: sid, type: 'VarChar', length: 50 },
 		],
 	);
 	const tenantId = resolveTenantEmpresaId();
 	if (tenantId != null) {
-		await authCentralSync.removePersonalSector(tenantId, valor, sid);
+		await authCentralSync.removePersonalSector(tenantId, vp, sid);
 	}
-	return listarSectoresPersonal(valor);
+	return listarSectoresPersonal(vp);
 }
 
 async function listarServiciosPedidosPersonal(valor) {
@@ -1542,21 +1539,39 @@ async function reemplazarAsignacionesPersonal(valor, { sectores, servicios, skip
 	const vp = Number(valor);
 	if (Array.isArray(sectores)) {
 		await ensurePersonalSectoresTable();
-		await executeQuery(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @p0`, [
-			{ value: vp, type: 'Int' },
-		]);
-		const seen = new Set();
-		for (const raw of sectores) {
-			const sid = strOrNull(raw);
-			if (!sid || seen.has(sid)) continue;
-			seen.add(sid);
-			await executeQuery(
-				`INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@p0, @p1)`,
-				[
-					{ value: vp, type: 'Int' },
-					{ value: sid, type: 'VarChar', length: 50 },
-				],
-			);
+		const pool = await getRequestPool();
+		const transaction = new sql.Transaction(pool);
+		await transaction.begin();
+		try {
+			const reqDel = new sql.Request(transaction);
+			reqDel.input('id', sql.Int, vp);
+			await reqDel.query(`DELETE FROM dbo.imPersonalSectores WHERE idPersonal = @id`);
+
+			const seen = new Set();
+			for (const raw of sectores) {
+				const sid = strOrNull(typeof raw === 'object' && raw != null ? raw.idSector ?? raw.IdSector ?? raw.valor : raw);
+				if (!sid || seen.has(sid.toUpperCase())) continue;
+				seen.add(sid.toUpperCase());
+				const reqIns = new sql.Request(transaction);
+				reqIns.input('id', sql.Int, vp);
+				reqIns.input('sec', sql.VarChar(50), sid);
+				await reqIns.query(`
+					IF NOT EXISTS (
+						SELECT 1 FROM dbo.imPersonalSectores WITH (UPDLOCK, HOLDLOCK)
+						WHERE idPersonal = @id
+						  AND LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) = LTRIM(RTRIM(@sec))
+					)
+					INSERT INTO dbo.imPersonalSectores (idPersonal, idSector) VALUES (@id, @sec)
+				`);
+			}
+			await transaction.commit();
+		} catch (err) {
+			try {
+				await transaction.rollback();
+			} catch (_) {
+				/* ignore */
+			}
+			throw err;
 		}
 		const tenantId = resolveTenantEmpresaId();
 		if (tenantId != null && !skipCloudSync) {

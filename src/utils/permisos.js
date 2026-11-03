@@ -127,8 +127,8 @@ const MODULOS = Object.freeze([
 			// Historial de cambios de la HC (quién modificó o borró qué). Solo lectura
 			// y reservado a ADMIN: se excluye a mano de la plantilla ADMINISTRATIVO.
 			{ id: 'AUDITORIA_HC',         label: 'Auditoría de historia clínica', acciones: [ACCIONES.VER] },
-			// Editar/eliminar registros clínicos creados por otro profesional.
-			{ id: 'REGISTROS',            label: 'Registros clínicos ajenos', acciones: [ACCIONES.EDITAR_AJENOS] },
+			// Override tipo admin clínico: editar/eliminar HC, evoluciones, etc. de otro profesional.
+			{ id: 'REGISTROS',            label: 'Modificar registros de otro profesional', acciones: [ACCIONES.EDITAR_AJENOS] },
 		],
 	},
 	{

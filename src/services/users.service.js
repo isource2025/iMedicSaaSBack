@@ -944,32 +944,24 @@ const cambiarPasswordPropia = async (valorPersonal, passwordActual, passwordNuev
  */
 const asignarSector = async (valorPersonal, idSector) => {
   try {
-    // Verificar si ya existe la asignación
-    const verificarConsulta = `
-      SELECT * FROM imPersonalSectores 
-      WHERE idPersonal = @p0 AND idSector = @p1
-    `;
-    
-    const existe = await executeQuery(verificarConsulta, [
-      { value: valorPersonal },
-      { value: idSector, type: 'VarChar' }
-    ]);
-    
-    if (existe && existe.length > 0) {
-      throw new Error('El usuario ya tiene asignado este sector');
-    }
-    
+    const sid = String(idSector ?? '').trim();
+    if (!sid) throw new Error('idSector es obligatorio');
+
+    // Idempotente: evita PK_imPersonalSectores en carreras / reintentos
     const consulta = `
-      INSERT INTO imPersonalSectores (idPersonal, idSector)
+      IF NOT EXISTS (
+        SELECT 1 FROM dbo.imPersonalSectores WITH (UPDLOCK, HOLDLOCK)
+        WHERE idPersonal = @p0
+          AND LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) = LTRIM(RTRIM(@p1))
+      )
+      INSERT INTO dbo.imPersonalSectores (idPersonal, idSector)
       VALUES (@p0, @p1)
     `;
-    
-    const parametros = [
-      { value: valorPersonal },
-      { value: idSector, type: 'VarChar' }
-    ];
-    
-    await executeQuery(consulta, parametros);
+
+    await executeQuery(consulta, [
+      { value: valorPersonal, type: 'Int' },
+      { value: sid, type: 'VarChar', length: 50 },
+    ]);
     await afterUserMutation(valorPersonal);
     return true;
   } catch (error) {
@@ -986,16 +978,18 @@ const asignarSector = async (valorPersonal, idSector) => {
  */
 const quitarSector = async (valorPersonal, idSector) => {
   try {
+    const sid = String(idSector ?? '').trim();
     const consulta = `
-      DELETE FROM imPersonalSectores 
-      WHERE idPersonal = @p0 AND idSector = @p1
+      DELETE FROM dbo.imPersonalSectores
+      WHERE idPersonal = @p0
+        AND LTRIM(RTRIM(CAST(idSector AS VARCHAR(50)))) = LTRIM(RTRIM(@p1))
     `;
-    
+
     const parametros = [
-      { value: valorPersonal },
-      { value: idSector, type: 'VarChar' }
+      { value: valorPersonal, type: 'Int' },
+      { value: sid, type: 'VarChar', length: 50 },
     ];
-    
+
     await executeQuery(consulta, parametros);
     const idEmpresa = getTenantId();
     if (idEmpresa != null && Number.isFinite(Number(idEmpresa)) && Number(idEmpresa) > 0) {
