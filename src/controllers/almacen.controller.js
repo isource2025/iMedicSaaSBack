@@ -768,6 +768,17 @@ const ctrl = {
 		}
 	},
 
+	async medicacionPendienteServicios(req, res) {
+		try {
+			const data = await remitosSvc.resumenMedicacionPendienteServicios({
+				fecha: req.query.fecha || null,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al consultar medicación pendiente por servicio');
+		}
+	},
+
 	async excluirIndicacionEntrega(req, res) {
 		try {
 			const data = await remitosSvc.excluirIndicacionDeEntrega(req.params.nroIndicacion);

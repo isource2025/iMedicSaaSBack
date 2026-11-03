@@ -142,6 +142,11 @@ router.get(
 	requirePermiso('ALMACEN.REMITOS.CREAR'),
 	ctrl.candidatosSalidaServicio,
 );
+router.get(
+	'/remitos/medicacion-pendiente-servicios',
+	requirePermiso('ALMACEN.REMITOS.VER'),
+	ctrl.medicacionPendienteServicios,
+);
 router.post(
 	'/remitos/indicaciones/:nroIndicacion/excluir-entrega',
 	requirePermiso('ALMACEN.REMITOS.EDITAR'),

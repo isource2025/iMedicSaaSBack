@@ -314,6 +314,89 @@ async function listarCandidatosSalidaServicio({
 	};
 }
 
+/**
+ * Resumen por servicio/sector: medicación Tipo M pendiente de entregar hoy
+ * (mismo criterio que listarCandidatosSalidaServicio).
+ */
+async function resumenMedicacionPendienteServicios({ fecha = null } = {}) {
+	const fechaIso = trim(fecha) || require('../utils/dateUtils').fechaCalendarioArgentina();
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaIso)) {
+		throw httpError('fecha debe ser YYYY-MM-DD');
+	}
+	const fechaClarion = convertirFechaAClarion(fechaIso);
+
+	const rows = await executeQuery(
+		`
+    ;WITH VisitasActivas AS (
+      SELECT DISTINCT
+        TRY_CAST(hc.NumeroVisita AS int) AS NumeroVisita,
+        LTRIM(RTRIM(hc.ValorSector)) AS ValorSector
+      FROM dbo.imHabitacionCamas hc WITH (NOLOCK)
+      INNER JOIN dbo.imVisita v WITH (NOLOCK) ON v.NumeroVisita = hc.NumeroVisita
+      WHERE TRY_CAST(hc.NumeroVisita AS int) > 0
+        AND LTRIM(RTRIM(ISNULL(hc.ValorSector, ''))) <> ''
+        AND UPPER(LTRIM(RTRIM(ISNULL(v.ClasePaciente, '')))) = 'I'
+        AND (v.FECHAEGRESO IS NULL OR TRY_CAST(v.FECHAEGRESO AS int) = 0)
+    ),
+    Pendientes AS (
+      SELECT
+        vs.ValorSector,
+        COUNT_BIG(*) AS Lineas,
+        COUNT(DISTINCT iim.NumeroVisita) AS Visitas,
+        COUNT(DISTINCT v.IDPaciente) AS Pacientes
+      FROM dbo.imInterIndMedicas iim WITH (NOLOCK)
+      INNER JOIN VisitasActivas vs ON vs.NumeroVisita = iim.NumeroVisita
+      INNER JOIN dbo.imInterTipoIndicacion tit WITH (NOLOCK)
+        ON tit.Valor = iim.TipoIndicacion AND UPPER(LTRIM(RTRIM(tit.Tipo))) = 'M'
+      INNER JOIN dbo.imVisita v WITH (NOLOCK) ON v.NumeroVisita = iim.NumeroVisita
+      WHERE ISNULL(iim.NroAdicional, 0) = 0
+        AND ISNULL(TRY_CAST(iim.FechaExpiro AS int), 0) = 0
+        AND ISNULL(iim.ExcluidoDeEntrega, 0) = 0
+        AND TRY_CAST(iim.FechaCarga AS int) = @p0
+        AND ISNULL(TRY_CAST(iim.Cantidad AS float), 0) > ISNULL(TRY_CAST(iim.CantidadEntregada AS float), 0)
+      GROUP BY vs.ValorSector
+    )
+    SELECT
+      p.ValorSector,
+      RTRIM(s.Descripcion) AS SectorNombre,
+      dep.IdDeposito,
+      RTRIM(dep.Descripcion) AS DepositoNombre,
+      CAST(p.Lineas AS int) AS Lineas,
+      CAST(p.Visitas AS int) AS Visitas,
+      CAST(p.Pacientes AS int) AS Pacientes
+    FROM Pendientes p
+    LEFT JOIN dbo.imSectores s WITH (NOLOCK)
+      ON RTRIM(s.Valor) = p.ValorSector
+    OUTER APPLY (
+      SELECT TOP 1 d.IdDeposito, d.Descripcion
+      FROM dbo.Depositos d WITH (NOLOCK)
+      WHERE RTRIM(ISNULL(d.IdSector, '')) = p.ValorSector
+      ORDER BY d.IdDeposito
+    ) dep
+    ORDER BY p.Lineas DESC, p.ValorSector
+    `,
+		[{ value: fechaClarion, type: 'Int' }],
+	);
+
+	const servicios = (rows || []).map((r) => ({
+		ValorSector: trim(r.ValorSector),
+		SectorNombre: trim(r.SectorNombre) || trim(r.ValorSector),
+		IdDeposito: r.IdDeposito != null ? Number(r.IdDeposito) : null,
+		DepositoNombre: trim(r.DepositoNombre),
+		Lineas: Number(r.Lineas) || 0,
+		Visitas: Number(r.Visitas) || 0,
+		Pacientes: Number(r.Pacientes) || 0,
+	}));
+
+	return {
+		fecha: fechaIso,
+		totalServicios: servicios.length,
+		totalLineas: servicios.reduce((acc, s) => acc + s.Lineas, 0),
+		totalVisitas: servicios.reduce((acc, s) => acc + s.Visitas, 0),
+		servicios,
+	};
+}
+
 async function excluirIndicacionDeEntrega(nroIndicacion) {
 	const nro = Number(nroIndicacion);
 	if (!Number.isFinite(nro) || nro <= 0) throw httpError('NroIndicacion inválido');
@@ -1173,5 +1256,6 @@ module.exports = {
 	proximoNro,
 	camposSegunTipo,
 	listarCandidatosSalidaServicio,
+	resumenMedicacionPendienteServicios,
 	excluirIndicacionDeEntrega,
 };
