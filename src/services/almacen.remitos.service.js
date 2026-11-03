@@ -221,6 +221,7 @@ async function listarCandidatosSalidaServicio({
       iim.Frecuencia,
       iim.TipoUnidad,
       iim.AliasMedicamento,
+      RTRIM(iim.Observaciones) AS Observaciones,
       iim.ParaFechaEntrega,
       RTRIM(iim.IdSector) AS IdSectorInd,
       vs.Cama,
@@ -242,18 +243,17 @@ async function listarCandidatosSalidaServicio({
     INNER JOIN dbo.imVisita v WITH (NOLOCK) ON v.NumeroVisita = iim.NumeroVisita
     LEFT JOIN dbo.imPacientes pac WITH (NOLOCK) ON pac.IDPaciente = v.IDPaciente
     LEFT JOIN dbo.imClientes cli WITH (NOLOCK) ON cli.Valor = v.CLIENTE
-    LEFT JOIN dbo.imVademecum vadem WITH (NOLOCK) ON vadem.Troquel = iim.Codigo
+    LEFT JOIN dbo.imVademecum vadem WITH (NOLOCK)
+      ON vadem.Troquel = iim.Codigo AND TRY_CAST(iim.Codigo AS int) > 0
     OUTER APPLY (
-      -- Preferir IdProducto=Codigo (como Clarion). Cod_Alternativo es troquel/proveedor
-      -- y puede colisionar (ej. producto 2711982 TRIFAMOX tiene CodAlt=1057 = AGUJA).
+      -- Solo IdProducto=Codigo (como Clarion). NUNCA Cod_Alternativo:
+      -- es troquel/proveedor y colisiona masivo (ej. Codigo=0 → cientos de productos
+      -- con CodAlt='0' → TOP 1 IdProducto=4 MEROPENEM; o CodAlt=1057 TRIFAMOX→AGUJA).
       SELECT TOP 1 pr.IdProducto, pr.Descripcion, pr.DescripcionC, pr.IdUnidad, pr.PrecioVenta
       FROM dbo.Productos pr WITH (NOLOCK)
-      WHERE pr.IdProducto = iim.Codigo
-         OR TRY_CAST(NULLIF(RTRIM(pr.Cod_Alternativo), '') AS int) = iim.Codigo
-      ORDER BY CASE
-        WHEN pr.IdProducto = iim.Codigo THEN 0
-        ELSE 1
-      END, pr.IdProducto
+      WHERE iim.Codigo IS NOT NULL
+        AND TRY_CAST(iim.Codigo AS int) > 0
+        AND pr.IdProducto = iim.Codigo
     ) p
     WHERE ISNULL(iim.NroAdicional, 0) = 0
       AND ISNULL(TRY_CAST(iim.FechaExpiro AS int), 0) = 0
@@ -289,7 +289,8 @@ async function listarCandidatosSalidaServicio({
 					trim(r.DescripcionProducto) ||
 					trim(r.DescripcionMedicacion) ||
 					trim(r.AliasMedicamento) ||
-					`Código ${r.Codigo}`,
+					trim(r.Observaciones) ||
+					(Number(r.Codigo) > 0 ? `Código ${r.Codigo}` : 'Sin medicamento'),
 				Frecuencia: trim(r.Frecuencia),
 				TipoIndicacionDescripcion: trim(r.TipoIndicacionDescripcion),
 				Cantidad: cantidad,
