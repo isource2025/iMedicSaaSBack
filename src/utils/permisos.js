@@ -175,7 +175,6 @@ const MODULOS = Object.freeze([
 			// Sólo lo incluyen ADMIN y SUPER_ADMIN (plantillas generadas); nunca
 			// puede asignarse a un rol personalizado.
 			{ id: 'ROLES',    label: 'Matriz de permisos', path: '/dashboard/configuracion/permisos', acciones: [...CRUD] },
-			{ id: 'CONSUMO_IA', label: 'Consumo IA', path: '/dashboard/configuracion/consumo-ia', acciones: [ACCIONES.VER] },
 			{ id: 'INSTITUCION', label: 'Institución', path: '/dashboard/configuracion/institucion', acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
 			{ id: 'OPCGRD', label: 'Opciones de grilla', acciones: [...CRUD] },
 		],

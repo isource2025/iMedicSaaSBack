@@ -1,6 +1,5 @@
 const express = require('express');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const { asistenteLimiter } = require('./rateLimit');
 const { exigirCuota } = require('./cuota');
 const controller = require('./controller');
@@ -21,7 +20,6 @@ router.post('/aplicar', controller.aplicar);
 router.post('/cancelar', controller.cancelar);
 router.post('/sesion', controller.nuevaSesion);
 router.get('/capacidades', controller.capacidades);
-router.get('/consumo', requirePermiso('CONFIGURACION.CONSUMO_IA.VER'), controller.reporteConsumo);
-router.get('/consumo/mensajes', requirePermiso('CONFIGURACION.CONSUMO_IA.VER'), controller.consumoMensajes);
+// Consumo IA ($/tokens) solo en superadmin: GET /api/super-admin/chats-ia*
 
 module.exports = router;

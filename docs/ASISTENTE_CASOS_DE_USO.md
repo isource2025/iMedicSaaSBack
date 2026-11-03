@@ -24,7 +24,7 @@ Modo de escritura por defecto (`altas`): se consulta todo y se preparan cargas d
 | «¿qué es una epicrisis?» / «para qué sirve el balance hídrico» | Lo explica y no arma nada. | 2 |
 | «cómo doy de alta un médico nuevo» | Configuración → Personal (no lo confunde con el egreso de un paciente). | 2 |
 | «cómo exporto la tabla de internación» | Pasos de la tabla, y avisa si no tiene permiso para esa pantalla. | 2 |
-| «dónde veo cuánto se gasta en IA» | Configuración → Consumo IA. | 2 |
+| «dónde veo cuánto se gasta en IA» | Solo superadmin: Plataforma → Chats IA. | 2 |
 | «cómo revierto un egreso» | Pasos y quién puede hacerlo (admin). | 2 |
 | «cómo intercambio dos pacientes de cama» | Pasos de la pantalla. | 2 |
 

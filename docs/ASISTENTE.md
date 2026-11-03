@@ -93,7 +93,7 @@ Prefijo: `/api/asistente`. Auth: Bearer JWT + tenant. Rate limit propio.
 | POST | `/aplicar` | Escribe el texto propuesto en un campo de pantalla + marca IA. |
 | POST | `/cancelar` | Tira el pendiente o la inserción. |
 | GET | `/capacidades` | Modelo, agente activo, agentes `{id,listo}`, tools visibles. |
-| GET | `/consumo` | Reporte (permiso `CONFIGURACION.CONSUMO_IA.VER`). |
+| GET | `/consumo` | *(retirado del cliente; ver superadmin `/api/super-admin/chats-ia`)* |
 | GET | `/consumo/mensajes` | Detalle por mensaje. |
 
 `debug: true` en el body (o `ASISTENTE_TRAZA=1`) agrega `traza` (tool + args + resultado) para logs de consola.
@@ -369,7 +369,7 @@ No: una tool por pantalla, una tool por handler, ni devolver el manifiesto al mo
 - `pantalla.ts`: manda campos `c1…`, internados visibles, visita/cama (`data-asistente-*`), y para diagnosticar: `errores` (últimos 5 errores de la API de los últimos 15 min), `alertas` (`role="alert"`) y `deshabilitados` (botones en gris, con su `title`).
 - `erroresRecientes.ts`: buffer en memoria que alimentan el interceptor de `services/axios.ts` y `apiFetch` (`utils/authFetch.ts`). Path sin host ni query y con los números como `:id` (no viaja un DNI ni una visita); excluye `/asistente`. `contexto.pantallaDeBody` lo vuelve a sanear en el backend.
 - `LoaderIa.tsx`: frases por nombre de tool.
-- Consumo: `/dashboard/configuracion/consumo-ia`.
+- Consumo IA (plataforma): `/dashboard/super-admin/chats-ia`.
 
 Al agregar tools, sumar etiqueta en `NOMBRES_HERRAMIENTA` / `FRASES_HERRAMIENTA`.
 

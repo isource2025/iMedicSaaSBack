@@ -9,8 +9,18 @@ const { tienePermiso } = require('../src/services/permisos.service');
 const diagnostico = require('../src/asistente/diagnostico');
 const { ejecutar } = require('../src/asistente/ejecutar');
 
-/** Pantallas sin contenido propio: un stub y dos redirecciones. */
-const SIN_ARTICULO = new Set(['/dashboard/bed-detail', '/dashboard/turnos/bandeja-pedidos', '/dashboard/turnos/bot']);
+/** Pantallas sin artículo propio (hubs, stubs, tablas o redirecciones). */
+const SIN_ARTICULO = new Set([
+	'/dashboard/bed-detail',
+	'/dashboard/turnos/bandeja-pedidos',
+	'/dashboard/turnos/bot',
+	'/dashboard/almacen',
+	'/dashboard/almacen/proveedores',
+	'/dashboard/almacen/stock',
+	'/dashboard/beds/vigentes',
+	'/dashboard/billing/tables',
+	'/dashboard/reports/facturacion',
+]);
 
 const SECCIONES_FRONT = path.join(__dirname, '..', '..', 'iMedicSaaSFront', 'src', 'app', 'components', 'beds', 'seccionesUrl.ts');
 
@@ -68,9 +78,8 @@ test('ranking: preguntas reales de usuarios encuentran el artículo correcto pri
 		['cómo cargo la hc de ingreso', 'hc-ingreso'],
 		['historia clinica de ingreso', 'hc-ingreso'],
 		['h.c. de ingreso', 'hc-ingreso'],
-		['dashboard de consumo ia', 'consumo-ia'],
-		['no puedo borrar la rendición', 'rendiciones'],
-		['ajuste de precios del convenio', 'convenios'],
+		['no puedo borrar la rendición', 'facturacion-rendiciones'],
+		['ajuste de precios del convenio', 'facturacion-convenios'],
 	];
 	for (const [q, id] of casos) {
 		const hits = manual.buscar(q, 3);

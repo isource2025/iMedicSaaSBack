@@ -34,7 +34,7 @@ test('links: rutas inventadas y prefijos de /dashboard no pasan', () => {
 	assert.equal(pathConocido('/dashboard/inventada/123'), false);
 	assert.equal(pathConocido('/dashboard/reports/ocupacion'), false);
 	assert.equal(pathConocido('/dashboard/super-admin/empresas'), false);
-	assert.equal(pathConocido('/dashboard/configuracion/consumo-ia'), true);
+	assert.equal(pathConocido('/dashboard/configuracion/consumo-ia'), false);
 	assert.equal(pathConocido('/dashboard/beds/12?seccion=evoluciones'), true);
 	assert.equal(pathConocido('/dashboard/visita/4512'), true);
 	assert.equal(pathConocido('/dashboard'), true);
@@ -42,12 +42,12 @@ test('links: rutas inventadas y prefijos de /dashboard no pasan', () => {
 
 test('manual y listar_pantallas sólo ofrecen pantallas que existen', () => {
 	for (const a of manual.ARTICULOS) assert.ok(rutasFront.existe(a.path), `artículo ${a.id}: ${a.path} no existe`);
-	const pantallas = manual.pantallasDesdePermisos(['REPORTES.OCUPACION.VER', 'CONFIGURACION.CONSUMO_IA.VER']);
+	const pantallas = manual.pantallasDesdePermisos(['REPORTES.OCUPACION.VER', 'CONFIGURACION.INSTITUCION.VER']);
 	assert.deepEqual(
 		pantallas.map((p) => p.path),
-		['/dashboard/configuracion/consumo-ia'],
+		['/dashboard/configuracion/institucion'],
 	);
-	assert.ok(manual.buscar('dashboard de consumo ia', 3).some((a) => a.id === 'consumo-ia'));
+	assert.ok(manual.buscar('logo de la institucion', 3).some((a) => a.id === 'institucion'));
 });
 
 test('sql: sumas de columnas de cantidades, sin ids ni fechas', () => {

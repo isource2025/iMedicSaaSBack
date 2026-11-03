@@ -234,10 +234,6 @@ const SUBMODULOS = Object.freeze({
 			ELIMINAR: 'Eliminar roles personalizados sin usuarios',
 		},
 	},
-	'CONFIGURACION.CONSUMO_IA': {
-		descripcion: 'Consumo y costo del asistente IA (OpenAI) por mensaje y por usuario.',
-		acciones: { VER: 'Ver el consumo de IA de toda la clínica' },
-	},
 	'CONFIGURACION.INSTITUCION': {
 		descripcion: 'Datos de la institución y logo que encabezan los PDFs.',
 		acciones: {

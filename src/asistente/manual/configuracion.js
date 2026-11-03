@@ -82,16 +82,6 @@ module.exports = [
 		],
 	},
 	{
-		id: 'consumo-ia',
-		titulo: 'Consumo IA',
-		path: '/dashboard/configuracion/consumo-ia',
-		modulo: 'CONFIGURACION',
-		comoLlegar: 'Menú: Configuración → Consumo IA (o tarjeta en Inicio).',
-		permisos: ['CONFIGURACION.CONSUMO_IA.VER'],
-		tags: ['consumo ia', 'costo ia', 'tokens', 'gasto asistente', 'uso de ia'],
-		texto: 'Costo real del asistente y de la epicrisis IA por período, usuario, herramienta y mensaje, con proyección mensual.',
-	},
-	{
 		id: 'institucion',
 		titulo: 'Institución (logo de los PDFs)',
 		path: '/dashboard/configuracion/institucion',

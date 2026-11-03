@@ -67,8 +67,16 @@ module.exports = [
 		modulo: 'FACTURACION',
 		comoLlegar: 'Facturación → «Convenios».',
 		permisos: ['FACTURACION.CONVENIOS.VER'],
-		tags: ['facturacion', 'convenio', 'obra social'],
-		texto: 'Gestión de convenios / coberturas para facturación.',
+		tags: [
+			'facturacion',
+			'convenio',
+			'convenios',
+			'obra social',
+			'ajuste de precios',
+			'precios del convenio',
+			'valores',
+		],
+		texto: 'Gestión de convenios / coberturas para facturación (valores, prácticas y ajuste de precios).',
 	},
 	{
 		id: 'facturacion-rendiciones',
@@ -77,7 +85,7 @@ module.exports = [
 		modulo: 'FACTURACION',
 		comoLlegar: 'Facturación → «Rendiciones».',
 		permisos: ['FACTURACION.RENDICIONES.VER'],
-		tags: ['facturacion', 'rendicion', 'rendiciones'],
+		tags: ['facturacion', 'rendicion', 'rendiciones', 'borrar rendicion'],
 		texto: 'Rendiciones a obras sociales / coberturas.',
 	},
 	{

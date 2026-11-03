@@ -16,7 +16,6 @@ const marca = require('./marca');
 const autoria = require('./autoria');
 const clinica = require('./clinica');
 const consumo = require('./consumo');
-const reporte = require('./reporteConsumo');
 const orquestador = require('./agentes/orquestador');
 const censo = require('./censo');
 const intencionMod = require('./intencion');
@@ -660,41 +659,6 @@ async function capacidades(req, res) {
 	});
 }
 
-function filtrosConsumo(req) {
-	const actorQ = req.query?.actor;
-	const actor = actorQ != null && actorQ !== '' ? Number(actorQ) : null;
-	if (actor != null && !Number.isFinite(actor)) {
-		throw Object.assign(new Error('actor inválido'), { statusCode: 400 });
-	}
-	return { idEmpresa: req.idEmpresa, desde: req.query?.desde, hasta: req.query?.hasta, actor };
-}
-
-async function reporteConsumo(req, res) {
-	try {
-		const data = await reporte.generar(filtrosConsumo(req));
-		return res.json({ success: true, data });
-	} catch (err) {
-		if (err.statusCode === 400) return res.status(400).json({ success: false, mensaje: err.message });
-		console.error('[asistente] reporte de consumo:', err);
-		return res.status(500).json({ success: false, mensaje: 'No se pudo generar el reporte de consumo' });
-	}
-}
-
-async function consumoMensajes(req, res) {
-	try {
-		const data = await reporte.listarMensajes({
-			...filtrosConsumo(req),
-			limite: req.query?.limite,
-			pagina: req.query?.pagina,
-		});
-		return res.json({ success: true, data });
-	} catch (err) {
-		if (err.statusCode === 400) return res.status(400).json({ success: false, mensaje: err.message });
-		console.error('[asistente] consumo por mensaje:', err);
-		return res.status(500).json({ success: false, mensaje: 'No se pudo listar el consumo por mensaje' });
-	}
-}
-
 function nuevaSesion(req, res) {
 	const conv = sesion.crear({
 		idEmpresa: req.idEmpresa,
@@ -712,6 +676,4 @@ module.exports = {
 	cancelar,
 	nuevaSesion,
 	capacidades,
-	reporteConsumo,
-	consumoMensajes,
 };
