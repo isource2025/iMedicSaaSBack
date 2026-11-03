@@ -36,6 +36,7 @@ const FUNCION_FALLBACK = {
 	5: 'Instrumentista',
 	6: 'Monitoreo',
 	11: 'Ayudante 3',
+	12: 'Patólogo',
 };
 
 function _httpError(message, statusCode = 400) {
