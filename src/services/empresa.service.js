@@ -178,14 +178,49 @@ async function resolverIdEmpresa(idEmpresa) {
   return Number(local?.id) > 0 ? Number(local.id) : 'local';
 }
 
-async function leerLogo(id) {
-  if (authCentralService.isAuthCentralEnabled()) return authCentralService.obtenerLogoEmpresa(id);
+/** En LOCAL_DEV el id de sesión a veces no coincide con el archivo subido (empresa-N.img). */
+async function leerLogoLocalFallback(idPedido) {
   try {
-    return await fs.readFile(archivoLogoLocal(id));
+    return await fs.readFile(archivoLogoLocal(idPedido));
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  let nombres = [];
+  try {
+    nombres = await fs.readdir(LOGOS_LOCALES_DIR);
   } catch (e) {
     if (e.code === 'ENOENT') return null;
     throw e;
   }
+  const candidatos = nombres
+    .filter((n) => /^empresa-.+\.img$/i.test(n))
+    .sort((a, b) => {
+      // Preferir el id pedido si aparece con otro formato; si no, el más reciente no aplica acá: orden estable.
+      if (a === `empresa-${idPedido}.img`) return -1;
+      if (b === `empresa-${idPedido}.img`) return 1;
+      return a.localeCompare(b);
+    });
+  for (const nombre of candidatos) {
+    try {
+      const buf = await fs.readFile(path.join(LOGOS_LOCALES_DIR, nombre));
+      if (buf?.length) {
+        if (String(idPedido) !== String(nombre.replace(/^empresa-|\.img$/gi, ''))) {
+          console.warn(
+            `[empresa.logo] LOCAL: no hay logo para empresa ${idPedido}; usando ${nombre}`,
+          );
+        }
+        return buf;
+      }
+    } catch {
+      /* siguiente */
+    }
+  }
+  return null;
+}
+
+async function leerLogo(id) {
+  if (authCentralService.isAuthCentralEnabled()) return authCentralService.obtenerLogoEmpresa(id);
+  return leerLogoLocalFallback(id);
 }
 
 async function escribirLogo(id, buffer) {

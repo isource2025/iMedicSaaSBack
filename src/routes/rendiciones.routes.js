@@ -23,5 +23,13 @@ router.delete('/:id', eliminar, c.eliminar);
 router.get('/:id/visitas', ver, c.visitas);
 router.get('/:id/lineas', ver, c.lineas);
 router.get('/:id/facturas', ver, c.facturas);
+router.get('/:id/reporte-resumen', exportar, c.reporteResumen);
+router.get('/:id/reporte-detalle', exportar, c.reporteDetalle);
+router.get('/:id/reporte-profesional', exportar, c.reporteProfesional);
+router.get('/:id/profesionales', ver, c.profesionales);
+router.get('/:id/reporte-profesional-sumario', exportar, c.reporteProfesionalSumario);
+router.get('/:id/opciones-practica-detalle', ver, c.opcionesPracticaDetalle);
+router.get('/:id/reporte-practica-detalle', exportar, c.reportePracticaDetalle);
+router.get('/:id/reporte-practica-resumen', exportar, c.reportePracticaResumen);
 
 module.exports = router;
