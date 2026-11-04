@@ -13,6 +13,13 @@ const ver = requireAnyPermiso(
 	'TURNOS.AGENDA.VER',
 	'INTERNACION.ADJUNTOS.VER',
 );
+/** Lectura de KPIs/bandeja del panel (conteo y listado pendientes). */
+const verBandejaPanel = requireAnyPermiso(
+	'INTERNACION.ESTUDIOS.VER',
+	'TURNOS.AGENDA.VER',
+	'INTERNACION.ADJUNTOS.VER',
+	'DASHBOARD.INICIO.VER',
+);
 const crear = requireAnyPermiso(
 	'INTERNACION.ESTUDIOS.CREAR',
 	'TURNOS.AGENDA.CREAR',
@@ -37,8 +44,8 @@ const eliminar = requireAnyPermiso(
 // :clave = IdSolicitud (>0) o -IdPedido para un pedido anterior sin cabecera.
 router.get('/tipos/buscar', ver, ctrl.buscarTipos);
 router.get('/servicios', ver, ctrl.listarServicios);
-router.get('/pendientes/conteo', ver, ctrl.contarLibres);
-router.get('/pendientes', ver, ctrl.listarPendientes);
+router.get('/pendientes/conteo', verBandejaPanel, ctrl.contarLibres);
+router.get('/pendientes', verBandejaPanel, ctrl.listarPendientes);
 router.get('/visita/:idVisita', ver, ctrl.listarPorVisita);
 router.get('/:clave', ver, ctrl.obtener);
 router.post('/', crear, ctrl.crear);

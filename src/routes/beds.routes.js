@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bedsController = require('../controllers/beds.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 
 router.use(requireTenant);
 
@@ -11,7 +11,11 @@ router.get('/', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerC
 router.get('/bootstrap', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerBootstrap);
 router.get('/estados', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerEstadosCama);
 router.get('/sectores', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerSectores);
-router.get('/total', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.obtenerTotalCamas);
+router.get(
+	'/total',
+	requireAnyPermiso('INTERNACION.CAMAS.VER', 'DASHBOARD.INICIO.VER'),
+	bedsController.obtenerTotalCamas,
+);
 router.get('/filtrar/:estado', requirePermiso('INTERNACION.CAMAS.VER'), bedsController.filtrarCamasPorEstado);
 router.get(
 	'/controles-frecuentes/:numeroVisita',
