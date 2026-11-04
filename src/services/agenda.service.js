@@ -644,26 +644,47 @@ async function _resolverSectorMedico(matricula, fechaIso, horaClarion) {
 	return _elegirSectorDeRangos(filas, horaClarion);
 }
 
-/** Datos del médico titular del turno (imPersonal por Matricula). */
+/**
+ * Datos del médico titular del turno (imPersonal).
+ * No exige filas en imPersonalHorarios: un profesional sin grilla (o día sin horario)
+ * debe poder recibir sobreturnos; el INNER JOIN anterior disparaba
+ * "Profesional no encontrado en la nómina activa" en ese caso.
+ */
 async function _datosProfesionalParaTurno(matricula, fechaIso = null, horaClarion = null) {
-	const rows = await executeQuery(
+	const m = Number(matricula);
+	let rows = await executeQuery(
 		`SELECT TOP 1 p.Matricula, p.ApellidoNombre, p.ValorEspecialidad, p.ValorServicio, p.Valor
 		 FROM dbo.imPersonal p
-		 INNER JOIN dbo.imPersonalHorarios h ON h.Matricula = p.Matricula
 		 WHERE p.Matricula = @p0
 		   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL`,
-		[{ value: matricula, type: 'Int' }],
+		[{ value: m, type: 'Int' }],
 	);
+	// Fallback: a veces JWT/UI manda Valor personal como si fuera matrícula
+	if (!rows.length && Number.isFinite(m) && m > 0) {
+		rows = await executeQuery(
+			`SELECT TOP 1 p.Matricula, p.ApellidoNombre, p.ValorEspecialidad, p.ValorServicio, p.Valor
+			 FROM dbo.imPersonal p
+			 WHERE p.Valor = @p0
+			   AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL
+			 ORDER BY CASE
+			   WHEN p.Matricula = p.Valor THEN 0
+			   WHEN p.Matricula IS NOT NULL AND p.Matricula > 0 THEN 1
+			   ELSE 2 END, p.Matricula`,
+			[{ value: m, type: 'Int' }],
+		);
+	}
 	if (!rows.length) {
-		return { matricula, nombre: null, especialidad: 0, valorServicio: null, sector: null };
+		return { matricula: m, nombre: null, especialidad: 0, valorServicio: null, sector: null };
 	}
 	const r = rows[0];
+	const matEfectiva =
+		r.Matricula != null && Number(r.Matricula) > 0 ? Number(r.Matricula) : m;
 	const sector =
 		fechaIso != null
-			? await _resolverSectorMedico(matricula, fechaIso, horaClarion)
+			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion)
 			: null;
 	return {
-		matricula,
+		matricula: matEfectiva,
 		nombre: r.ApellidoNombre ? String(r.ApellidoNombre).trim() : null,
 		especialidad: Number(r.ValorEspecialidad) || 0,
 		valorServicio: r.ValorServicio != null ? Number(r.ValorServicio) : null,
@@ -1441,13 +1462,15 @@ async function asignarTurno({
 	const esSobreturno = Number(tipoTurno) === TIPO_TURNO_SOBRETURNO;
 	const tt = esSobreturno ? TIPO_TURNO_SOBRETURNO : TIPO_TURNO_GRILLA;
 
-	const profPre = await _datosProfesionalParaTurno(m, fecha, horaClarion);
-	if (!profPre?.nombre) {
+	const prof = await _datosProfesionalParaTurno(m, fecha, horaClarion);
+	if (!prof?.nombre) {
 		const e = new Error('Profesional no encontrado en la nómina activa');
 		e.statusCode = 404;
 		e.code = 'PROFESIONAL_INEXISTENTE';
 		throw e;
 	}
+	// Matrícula real en imPersonal (puede diferir si llegó Valor personal)
+	const mat = Number(prof.matricula) > 0 ? Number(prof.matricula) : m;
 
 	const hoyClarion = convertirFechaAClarion(_isoDate(new Date()));
 	if (fechaClarion < hoyClarion) {
@@ -1457,7 +1480,7 @@ async function asignarTurno({
 	}
 
 	// Validar slot contra horarios configurados / no-horarios / feriados
-	const grilla = await generarSlots(m, fecha, fecha);
+	const grilla = await generarSlots(mat, fecha, fecha);
 	const dia = grilla.dias[0];
 	if (dia?.motivo === 'feriado') {
 		const e = new Error(
@@ -1509,17 +1532,10 @@ async function asignarTurno({
 				: horaClarion > 0
 					? horaClarion
 					: convertirHoraAClarion('08:00');
-		horaPersistir = await _resolverHoraSobreturno(m, fechaClarion, base);
+		horaPersistir = await _resolverHoraSobreturno(mat, fechaClarion, base);
 	}
 
 	// Sector = IdServicio del horario del médico (no del operador logueado ni del slot UI)
-	const prof = await _datosProfesionalParaTurno(m, fecha, horaClarion);
-	if (!prof?.nombre) {
-		const e = new Error('Profesional no encontrado en la nómina activa');
-		e.statusCode = 404;
-		e.code = 'PROFESIONAL_INEXISTENTE';
-		throw e;
-	}
 	const sec =
 		(prof.sector && String(prof.sector).trim().slice(0, 4)) ||
 		String(slot?.sector || sector || '')
@@ -1527,7 +1543,7 @@ async function asignarTurno({
 			.slice(0, 4);
 	let secFinal = sec && sec !== '0000' ? sec : '';
 	if (!secFinal) {
-		secFinal = (await _sectorPersonalAsignado(m)) || '';
+		secFinal = (await _sectorPersonalAsignado(mat)) || '';
 	}
 	if (!secFinal && prof.valorServicio != null) {
 		secFinal = String(prof.valorServicio).trim().slice(0, 4);
@@ -1586,7 +1602,7 @@ async function asignarTurno({
 				{ value: fechaClarion, type: 'Int' },
 				{ value: horaPersistir, type: 'Int' },
 				{ value: idPac, type: 'Int' },
-				{ value: m, type: 'Int' },
+				{ value: mat, type: 'Int' },
 				{ value: secFinal, type: 'VarChar' },
 				{ value: esp, type: 'Int' },
 				{ value: obs, type: 'VarChar' },
@@ -1614,12 +1630,12 @@ async function asignarTurno({
 		cod,
 		fechaClarion,
 		horaPersistir,
-		m,
+		m: mat,
 	};
 
 	const existente = await _buscarFilaTurnoParaAsignar(
 		fechaClarion,
-		m,
+		mat,
 		horaPersistir,
 		secFinal,
 		false,
@@ -1643,7 +1659,7 @@ async function asignarTurno({
 		if (!_isDuplicateTurnoPkError(err)) throw err;
 		const pkRow = await _buscarFilaTurnoParaAsignar(
 			fechaClarion,
-			m,
+			mat,
 			horaPersistir,
 			secFinal,
 			false,
@@ -2983,7 +2999,7 @@ async function buscarTiposPedidosEstudios({ q, limit = 30 }) {
 	return estudiosService.buscarTiposPedidosEstudios({ q, limit });
 }
 
-/** Prácticas de nomenclador/moduladas para el paso Procedimientos del cierre. */
+/** Prácticas para el paso Procedimientos del cierre (catálogo + desc. desde xconvenios). */
 async function buscarPracticasFacturacion({ q, limit = 30 }) {
 	const protocolosService = require('./protocolos.service');
 	return protocolosService.buscarPracticas({ q, limit });
@@ -3210,6 +3226,23 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 			`SELECT fp.Valor, fp.Practica, fp.CantidadPractica, fp.HoraPracticaInicio,
 			        LTRIM(RTRIM(ISNULL(tp.DescPractica, ''))) AS DescTipo,
 			        LTRIM(RTRIM(ISNULL(nom.Descripcion, ''))) AS DescNom,
+			        (
+			          SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))
+			          FROM dbo.imPracticasXConvenios x
+			          WHERE LTRIM(RTRIM(CONVERT(VARCHAR(50), x.IdPractica))) =
+			                LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica)))
+			            AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))), '') IS NOT NULL
+			          ORDER BY
+			            CASE
+			              WHEN x.IdConvenio = (
+			                SELECT TOP 1 ISNULL(v.CONTRATO, 0)
+			                FROM dbo.imVisita v
+			                WHERE v.NUMEROVISITA = fp.NumeroVisita
+			              ) THEN 0
+			              ELSE 1
+			            END,
+			            LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))) DESC
+			        ) AS DescXConvenio,
 			        prof.ApellidoNombre AS ProfesionalNombre
 			 FROM dbo.imFacPracticas fp
 			 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdPractica = fp.Practica
@@ -3224,13 +3257,21 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 			],
 		);
 		procedimientosRealizados = (procRows || []).map((row) => {
+			const descX = String(row.DescXConvenio || '').trim();
 			const descTipo = String(row.DescTipo || '').trim();
 			const descNom = String(row.DescNom || '').trim();
 			const cod = Number(row.Practica) || 0;
+			const codStr = cod > 0 ? String(cod) : '';
+			const descNomUtil =
+				descNom && descNom !== codStr ? descNom : '';
 			return {
 				valor: Number(row.Valor) || 0,
 				codigoPractica: cod,
-				descripcion: descTipo || descNom || (cod > 0 ? `Práctica ${cod}` : '—'),
+				descripcion:
+					descX ||
+					descTipo ||
+					descNomUtil ||
+					(cod > 0 ? `Práctica ${cod}` : '—'),
 				cantidad: Number(row.CantidadPractica) || 1,
 				hora: _hhmm(Number(row.HoraPracticaInicio) || 0),
 				profesional: row.ProfesionalNombre

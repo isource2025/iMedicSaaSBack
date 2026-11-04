@@ -422,6 +422,50 @@ function _mapPracticaRows(rows) {
 	}));
 }
 
+/** Si el catálogo trae descripción vacía o = código, completa desde imPracticasXConvenios. */
+async function _enriquecerDescripcionesXConvenios(mapped) {
+	const need = (mapped || []).filter((r) => {
+		const d = String(r.descripcion || '').trim();
+		const id = String(r.idPractica || '');
+		return !d || d === id;
+	});
+	if (!need.length) return mapped || [];
+	const ids = [...new Set(need.map((r) => Number(r.idPractica)).filter((n) => n > 0))];
+	if (!ids.length) return mapped || [];
+	try {
+		const params = ids.map((v) => ({ value: v, type: 'Int' }));
+		const inList = ids.map((_, i) => `@p${i}`).join(', ');
+		const rows = await executeQuery(
+			`SELECT x.IdPractica AS idPractica,
+			        LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))) AS descripcion
+			 FROM dbo.imPracticasXConvenios x
+			 WHERE x.IdPractica IN (${inList})
+			   AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))), '') IS NOT NULL
+			 ORDER BY
+			   LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))) DESC`,
+			params,
+		);
+		const byId = new Map();
+		for (const r of rows || []) {
+			const id = Number(r.idPractica);
+			if (!byId.has(id)) {
+				const d = String(r.descripcion || '').trim();
+				if (d && d !== String(id)) byId.set(id, d);
+			}
+		}
+		return (mapped || []).map((r) => {
+			const d = String(r.descripcion || '').trim();
+			const id = Number(r.idPractica);
+			if (d && d !== String(id)) return r;
+			const alt = byId.get(id);
+			return alt ? { ...r, descripcion: alt } : r;
+		});
+	} catch (err) {
+		if (_sqlBusquedaNoDisponible(err)) return mapped || [];
+		throw err;
+	}
+}
+
 /**
  * Último convenio de la cobertura (imClientes.Valor): vigente primero, si hay empate
  * el Codigo más alto (IDENTITY = el más nuevo).
@@ -586,6 +630,42 @@ async function _buscarEnCatalogos({ like, exactId, idInt, lim }) {
  * 2) Si ese convenio no tiene prácticas (o la tabla no está), nomenclador + moduladas.
  * 3) Si el convenio tiene prácticas y el término no coincide, lista vacía (no se mezcla).
  */
+/** Búsqueda global en xconvenios (cualquier IdConvenio) — para ambulatorio / fallback. */
+async function _buscarEnXConveniosGlobal({ like, exactId, idInt, lim }) {
+	try {
+		return await executeQuery(
+			`SELECT TOP ${lim}
+			   x.IdPractica AS idPractica,
+			   CASE WHEN ${_aliasMo('x.AliasTabla')} THEN 'MO' ELSE 'NO' END AS tipoPractica,
+			   LTRIM(RTRIM(ISNULL(CONVERT(VARCHAR(255), x.Descripcion), ''))) AS descripcion,
+			   ISNULL(CASE WHEN ${_aliasMo('x.AliasTabla')} THEN m.EspUnidad ELSE n.EspUnidad END, 0) AS espUnidad,
+			   ISNULL(CASE WHEN ${_aliasMo('x.AliasTabla')} THEN m.Adte1Unidad ELSE n.Adte1Unidad END, 0) AS adte1Unidad,
+			   ISNULL(CASE WHEN ${_aliasMo('x.AliasTabla')} THEN m.Adte2Unidad ELSE n.Adte2Unidad END, 0) AS adte2Unidad,
+			   ISNULL(CASE WHEN ${_aliasMo('x.AliasTabla')} THEN m.AstaUnidad ELSE n.AstaUnidad END, 0) AS astaUnidad
+			 FROM dbo.imPracticasXConvenios x
+			 LEFT JOIN dbo.imModuladas m
+			   ON ${_aliasMo('x.AliasTabla')} AND m.IDPractica = x.IdPractica
+			 LEFT JOIN dbo.imNomenclador n
+			   ON ${_aliasNo('x.AliasTabla')} AND n.IDPractica = x.IdPractica
+			 WHERE CONVERT(VARCHAR(255), x.Descripcion) LIKE @p0
+			    OR CAST(x.IdPractica AS VARCHAR(20)) LIKE @p0
+			    OR (@p2 IS NOT NULL AND x.IdPractica = @p2)
+			 ORDER BY
+			   CASE WHEN @p1 IS NOT NULL AND CAST(x.IdPractica AS VARCHAR(20)) = @p1 THEN 0 ELSE 1 END,
+			   LEN(LTRIM(RTRIM(CONVERT(VARCHAR(255), x.Descripcion)))) DESC,
+			   CONVERT(VARCHAR(255), x.Descripcion)`,
+			[
+				{ value: like, type: 'VarChar' },
+				{ value: exactId, type: 'VarChar' },
+				{ value: idInt, type: 'Int' },
+			],
+		);
+	} catch (err) {
+		if (_sqlBusquedaNoDisponible(err)) return null;
+		throw err;
+	}
+}
+
 async function buscarPracticas({ q, limit = 30, numeroVisita, idConvenio }) {
 	const term = String(q || '').trim();
 	const lim = Math.min(Math.max(Number(limit) || 30, 1), 80);
@@ -600,11 +680,31 @@ async function buscarPracticas({ q, limit = 30, numeroVisita, idConvenio }) {
 		if (rows?.length) return _mapPracticaRows(rows);
 		if (rows === null) {
 			const cat = await _buscarEnCatalogos({ like, exactId, idInt, lim });
-			if (cat?.length) return _mapPracticaRows(cat);
+			if (cat?.length) {
+				return _enriquecerDescripcionesXConvenios(_mapPracticaRows(cat));
+			}
 		}
 		return [];
 	}
-	return _mapPracticaRows(await _buscarEnCatalogos({ like, exactId, idInt, lim }));
+	const cat = _mapPracticaRows(await _buscarEnCatalogos({ like, exactId, idInt, lim }));
+	const enriched = await _enriquecerDescripcionesXConvenios(cat);
+	const tieneDescUtil = (r) => {
+		const d = String(r.descripcion || '').trim();
+		return d && d !== String(r.idPractica);
+	};
+	// Catálogo OK con nombres útiles → listo. Si no hay filas o sólo figura el código
+	// (p.ej. 200150), completar desde xconvenios de cualquier convenio.
+	if (enriched.length && enriched.every(tieneDescUtil)) return enriched;
+	const xGlobal = await _buscarEnXConveniosGlobal({ like, exactId, idInt, lim });
+	if (!xGlobal?.length) return enriched;
+	const byId = new Map();
+	for (const r of [..._mapPracticaRows(xGlobal), ...enriched]) {
+		const id = Number(r.idPractica);
+		if (!byId.has(id) || (tieneDescUtil(r) && !tieneDescUtil(byId.get(id)))) {
+			byId.set(id, r);
+		}
+	}
+	return [...byId.values()].slice(0, lim);
 }
 
 async function detallePractica(idPractica, tipoPractica = 'NO') {
@@ -648,12 +748,33 @@ async function detallePractica(idPractica, tipoPractica = 'NO') {
 			break;
 		}
 	}
-	if (!row) throw _httpError('La práctica no existe en nomenclador ni en moduladas.', 404);
+
+	let descripcion = String(row?.descripcion || '').trim();
+	if (!descripcion || descripcion === String(id)) {
+		try {
+			const xRows = await executeQuery(
+				`SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), Descripcion))) AS descripcion
+				 FROM dbo.imPracticasXConvenios
+				 WHERE IdPractica = @p0
+				   AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), Descripcion))), '') IS NOT NULL
+				 ORDER BY LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), Descripcion)))) DESC`,
+				[{ value: id, type: 'Int' }],
+			);
+			const alt = String(xRows?.[0]?.descripcion || '').trim();
+			if (alt && alt !== String(id)) descripcion = alt;
+		} catch (err) {
+			if (!_sqlBusquedaNoDisponible(err)) throw err;
+		}
+	}
+
+	if (!row && !descripcion) {
+		throw _httpError('La práctica no existe en nomenclador, moduladas ni convenios.', 404);
+	}
 	return {
-		idPractica: Number(row.idPractica),
-		tipoPractica: tipoFound,
-		descripcion: String(row.descripcion || '').trim(),
-		funcionesRequeridas: _funcionesDesdeUnidades(row),
+		idPractica: id,
+		tipoPractica: tipoFound || tipo,
+		descripcion: descripcion || String(id),
+		funcionesRequeridas: row ? _funcionesDesdeUnidades(row) : [],
 	};
 }
 

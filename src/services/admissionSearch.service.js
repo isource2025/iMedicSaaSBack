@@ -685,26 +685,31 @@ function _sqlDescripcionPracticaXConvenio() {
 /** Una descripción por código (evita duplicados del nomenclador). */
 function _sqlDescripcionPractica(nomenclador) {
 	const xConv = _sqlDescripcionPracticaXConvenio();
+	// Preferir imPracticasXConvenios: muchas prestaciones (p.ej. 200150) sólo tienen
+	// nombre útil ahí; el nomenclador unificado a veces viene vacío o es el código.
 	if (!nomenclador) {
 		return `COALESCE(
-      NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
       ${xConv},
+      NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
       CONVERT(VARCHAR(50), fp.Practica)
     )`;
 	}
 	const { codeCol, descCol } = nomenclador;
 	return `COALESCE(
-    (
+    ${xConv},
+    NULLIF((
       SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}])))
       FROM dbo.VUnionModuladasNomenclador n
       WHERE LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica))) =
             LTRIM(RTRIM(CONVERT(VARCHAR(50), n.[${codeCol}])))
+        AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}]))), '') IS NOT NULL
+        AND LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}]))) <>
+            LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica)))
       ORDER BY
         CASE WHEN UPPER(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}])))) LIKE '%PRE ANEST%' THEN 1 ELSE 0 END,
-        LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}]))))
-    ),
+        LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), n.[${descCol}])))) DESC
+    ), ''),
     NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), fp.DescPractica))), ''),
-    ${xConv},
     CONVERT(VARCHAR(50), fp.Practica)
   )`;
 }

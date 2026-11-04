@@ -68,9 +68,10 @@ test('validar SQL solo deja pasar lecturas seguras', () => {
 	for (const q of rechazos) assert.equal(sqlLectura.validar(q).ok, false, q);
 });
 
-test('puedeUsarSql por rol o por permiso explícito', () => {
-	assert.equal(sqlLectura.puedeUsarSql('ADMIN', []), true);
+test('puedeUsarSql por permiso explícito (rol solo no alcanza)', () => {
+	assert.equal(sqlLectura.puedeUsarSql('ADMIN', []), false);
 	assert.equal(sqlLectura.puedeUsarSql('ENFERMERO', []), false);
+	assert.equal(sqlLectura.puedeUsarSql('ADMIN', ['ASISTENTE.SQL.VER']), true);
 	assert.equal(sqlLectura.puedeUsarSql('ENFERMERO', ['ASISTENTE.SQL.VER']), true);
 });
 
