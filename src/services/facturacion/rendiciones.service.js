@@ -517,6 +517,7 @@ async function lineas(idCrudo, query = {}) {
 				porcentaje: num(f.PORCENTAJE),
 				importeUnitario: unitario,
 				importeFinal: num(f.IMPORTE_FINAL),
+				sinValor: num(f.IMPORTE_FINAL) === 0,
 				bonificacion: { importe: num(f.IMPORTEBONIFICACION), porcentaje: num(f.PORCENTAJEBONIFICACION) },
 				convenio: num(f.IDCONVENIO),
 				regla: tieneRegla
