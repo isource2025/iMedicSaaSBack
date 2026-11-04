@@ -12,6 +12,13 @@ const ver = requireAnyPermiso(
 	'TURNOS.AGENDA.VER',
 	'INTERNACION.ADJUNTOS.VER',
 );
+/** Lectura de KPIs/bandeja del panel (conteo y listado pendientes). */
+const verBandejaPanel = requireAnyPermiso(
+	'INTERNACION.ESTUDIOS.VER',
+	'TURNOS.AGENDA.VER',
+	'INTERNACION.ADJUNTOS.VER',
+	'DASHBOARD.INICIO.VER',
+);
 const crear = requireAnyPermiso(
 	'INTERNACION.ESTUDIOS.CREAR',
 	'TURNOS.AGENDA.CREAR',
@@ -35,8 +42,8 @@ const eliminar = requireAnyPermiso(
 
 router.get('/tipos/buscar', ver, estudiosController.buscarTipos);
 router.get('/sectores-receptor', ver, estudiosController.listarSectores);
-router.get('/pendientes/conteo', ver, estudiosController.contarLibres);
-router.get('/pendientes', ver, estudiosController.listarPendientes);
+router.get('/pendientes/conteo', verBandejaPanel, estudiosController.contarLibres);
+router.get('/pendientes', verBandejaPanel, estudiosController.listarPendientes);
 router.get('/visita/:idVisita/respondidos', ver, estudiosController.respondidosResumen);
 router.get('/visita/:idVisita', ver, estudiosController.listarPorVisita);
 router.get('/:idPedido', ver, estudiosController.obtenerPorId);

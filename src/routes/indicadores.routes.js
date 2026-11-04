@@ -15,22 +15,28 @@ const {
 	obtenerResumenAmbulatorioHoy,
 } = require('../controllers/ambulatorio.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 
 router.use(requireTenant);
 
-router.get('/', requirePermiso('ADMISION.PACIENTES.VER'), obtenerIndicadores);
-router.get('/resumen', requirePermiso('ADMISION.PACIENTES.VER'), obtenerResumenIndicadores);
-router.get('/por-fecha', requirePermiso('ADMISION.PACIENTES.VER'), obtenerIndicadoresPorFecha);
+// Panel de datos (DASHBOARD.INICIO.VER) puede leer todos los KPIs que el panel ofrece,
+// sin exigir permisos operativos de Turnos / Internación / Admisión.
+const verPacientesInd = requireAnyPermiso('ADMISION.PACIENTES.VER', 'DASHBOARD.INICIO.VER');
+const verCamasInd = requireAnyPermiso('INTERNACION.CAMAS.VER', 'DASHBOARD.INICIO.VER');
+const verAmbulatorioInd = requireAnyPermiso('TURNOS.TABLA.VER', 'DASHBOARD.INICIO.VER');
+
+router.get('/', verPacientesInd, obtenerIndicadores);
+router.get('/resumen', verPacientesInd, obtenerResumenIndicadores);
+router.get('/por-fecha', verPacientesInd, obtenerIndicadoresPorFecha);
 router.get('/pacientes/resumen-hoy', requirePermiso('DASHBOARD.INICIO.VER'), obtenerResumenPacientesHoy);
-router.get('/camas', requirePermiso('INTERNACION.CAMAS.VER'), obtenerOcupacionCamas);
-router.get('/camas/resumen', requirePermiso('INTERNACION.CAMAS.VER'), obtenerResumenOcupacionCamas);
-router.get('/camas/por-fecha', requirePermiso('INTERNACION.CAMAS.VER'), obtenerOcupacionCamasPorFecha);
-router.get('/camas/estado-actual', requirePermiso('INTERNACION.CAMAS.VER'), obtenerEstadoActualCamas);
+router.get('/camas', verCamasInd, obtenerOcupacionCamas);
+router.get('/camas/resumen', verCamasInd, obtenerResumenOcupacionCamas);
+router.get('/camas/por-fecha', verCamasInd, obtenerOcupacionCamasPorFecha);
+router.get('/camas/estado-actual', verCamasInd, obtenerEstadoActualCamas);
 
 // Analítica ambulatoria (agenda + visitas ClasePaciente='A').
-// El resumen del día alimenta la card del panel, por eso comparte el permiso del dashboard.
-router.get('/ambulatorio', requirePermiso('TURNOS.TABLA.VER'), obtenerAnaliticaAmbulatoria);
+// Detalle y resumen del día: panel de datos o permiso de turnos.
+router.get('/ambulatorio', verAmbulatorioInd, obtenerAnaliticaAmbulatoria);
 router.get('/ambulatorio/resumen-hoy', requirePermiso('DASHBOARD.INICIO.VER'), obtenerResumenAmbulatorioHoy);
 
 // Producción del hospital (facturado / liquidado por cobertura, sector, profesional...).

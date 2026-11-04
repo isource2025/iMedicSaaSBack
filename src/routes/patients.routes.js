@@ -74,12 +74,12 @@ router.post(
 );
 router.get(
 	'/visitas/internados-sin-cama/conteo',
-	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	requireAnyPermiso('INTERNACION.MOVIMIENTOS.VER', 'DASHBOARD.INICIO.VER'),
 	visitaMovimientosController.contarPacientesInternadosSinCama,
 );
 router.get(
 	'/visitas/internados-sin-cama',
-	requirePermiso('INTERNACION.MOVIMIENTOS.VER'),
+	requireAnyPermiso('INTERNACION.MOVIMIENTOS.VER', 'DASHBOARD.INICIO.VER'),
 	visitaMovimientosController.obtenerPacientesInternadosSinCama,
 );
 router.put(

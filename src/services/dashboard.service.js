@@ -16,15 +16,19 @@ const visitaMovimientosService = require('./visitaMovimientos.service');
 const ambulatorioService = require('./ambulatorio.service');
 const permisosService = require('./permisos.service');
 
-/** Permisos por sección (espejo de indicadores.routes / beds.routes / visitaMovimientos.routes). */
+/**
+ * Permisos por sección. Cada sección acepta el permiso de módulo operativo
+ * o DASHBOARD.INICIO.VER (rol Panel de datos), para que el panel pueda
+ * mostrar/drill-down todos sus indicadores.
+ */
 const PERMISO_SECCION = {
-	camasTotal: 'INTERNACION.CAMAS.VER',
-	camasEstado: 'INTERNACION.CAMAS.VER',
-	camasAnalitica: 'INTERNACION.CAMAS.VER',
-	pacientesHoy: 'DASHBOARD.INICIO.VER',
-	ambulatorioHoy: 'DASHBOARD.INICIO.VER',
-	actividad: 'INTERNACION.MOVIMIENTOS.VER',
-	pacientes: 'ADMISION.PACIENTES.VER',
+	camasTotal: ['INTERNACION.CAMAS.VER', 'DASHBOARD.INICIO.VER'],
+	camasEstado: ['INTERNACION.CAMAS.VER', 'DASHBOARD.INICIO.VER'],
+	camasAnalitica: ['INTERNACION.CAMAS.VER', 'DASHBOARD.INICIO.VER'],
+	pacientesHoy: ['DASHBOARD.INICIO.VER'],
+	ambulatorioHoy: ['DASHBOARD.INICIO.VER'],
+	actividad: ['INTERNACION.MOVIMIENTOS.VER', 'DASHBOARD.INICIO.VER'],
+	pacientes: ['ADMISION.PACIENTES.VER', 'DASHBOARD.INICIO.VER'],
 };
 
 function fechaIso(d) {
@@ -57,7 +61,11 @@ async function seccion(fn) {
  */
 async function obtenerResumenDashboard(opts = {}) {
 	const permisos = Array.isArray(opts.permisos) ? opts.permisos : [];
-	const puede = (sec) => permisosService.tienePermiso(permisos, PERMISO_SECCION[sec]);
+	const puede = (sec) => {
+		const req = PERMISO_SECCION[sec];
+		const lista = Array.isArray(req) ? req : [req];
+		return lista.some((c) => permisosService.tienePermiso(permisos, c));
+	};
 	const rango = rangoPorDefecto();
 	const fechaInicio = opts.fechaInicio || rango.fechaInicio;
 	const fechaFin = opts.fechaFin || rango.fechaFin;
