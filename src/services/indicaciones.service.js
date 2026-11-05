@@ -755,6 +755,9 @@ const obtenerFechaCargaPadre = async (nroPadre) => {
 const nuevaIndicacion = async (data) => {
     console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
 
+    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
+    await assertVisitaSinEgreso(data.NumeroVisita);
+
     const { assertIdentidadParaIndicacion } = require('../utils/identidadClinica');
     await assertIdentidadParaIndicacion({
         ProfesionalAsiste: data.ProfesionalAsiste,
@@ -1005,26 +1008,15 @@ const nuevaIndicacion = async (data) => {
 };
 
 const deleteIndicacion = async (nroIndicacion) => {
-    // Verificar que no sea una indicación padre con hijas
-    const checkHijas = `
-SELECT COUNT(*) as CantidadHijas
-FROM imInterIndMedicas
-WHERE NroAdicional = @param0
-`;
-    const checkParams = [{ value: nroIndicacion }];
-    const result = await executeQuery(checkHijas, checkParams);
-    
-    if (result[0].CantidadHijas > 0) {
-        const cantidadHijas = result[0].CantidadHijas;
-        throw new Error(`Esta indicación tiene ${cantidadHijas} adicional${cantidadHijas > 1 ? 'es' : ''}. Borre los adicionales para poder borrar esta indicación.`);
-    }
-    
-    const sql = `
-DELETE FROM imInterIndMedicas
-WHERE NroIndicacion = @param0
-`;
-    const params = [{ value: nroIndicacion }];
-    await executeQuery(sql, params);
+    // Primero los adicionales (Clarion: NroAdicional = nº del padre), luego la principal.
+    await executeQuery(
+        `DELETE FROM imInterIndMedicas WHERE NroAdicional = @param0`,
+        [{ value: nroIndicacion }],
+    );
+    await executeQuery(
+        `DELETE FROM imInterIndMedicas WHERE NroIndicacion = @param0`,
+        [{ value: nroIndicacion }],
+    );
 };
 
 /**
@@ -1075,6 +1067,8 @@ WHERE NroIndicacion = @param0
     }
     
     const padre = padreRows[0];
+    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
+    await assertVisitaSinEgreso(padre.NumeroVisita);
     
     // Obtener próximo NroIndicacion
     const sqlProximoNro = `

@@ -203,6 +203,9 @@ const eliminarControl = async (valor) => {
  * @returns {Promise<Object>} Registro creado con su Valor (ID)
  */
 const crearControl = async (data) => {
+    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
+    await assertVisitaSinEgreso(data.numeroVisita);
+
     const fechaCargaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
     const horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
     const fechaControlClarion = convertirFechaAClarion(data.fechaControl);

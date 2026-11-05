@@ -141,7 +141,9 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
 		fechaEgresoSQL: r.fechaEgresoSQL || '',
 		egresada,
 		fechaEgresoClarion: r.fechaEgresoClarion != null ? Number(r.fechaEgresoClarion) : 0,
-		Observaciones: egresada ? 'Visita egresada — se puede agregar información clínica' : '',
+		Observaciones: egresada
+			? 'Visita egresada — solo lectura (no se agregan registros clínicos)'
+			: '',
 	};
 }
 

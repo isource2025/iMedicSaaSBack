@@ -33,7 +33,7 @@ module.exports = [
 		permisos: ['INTERNACION.CAMAS.VER'],
 		tags: ['egresada', 'visita egresada', 'cargar despues del alta', 'aviso amarillo'],
 		texto:
-			'Aparece «Visita egresada. Podés agregar registros clínicos. Solo el profesional que creó cada registro puede modificarlo o eliminarlo.» El calendario queda limitado hasta la fecha de egreso.',
+			'Aparece «Visita egresada» (solo lectura: no se agregan registros clínicos). El calendario queda limitado hasta la fecha de egreso. Para corregir un registro propio hace falta el permiso de editar/eliminar de esa sección; para ajenos, INTERNACION.REGISTROS.EDITAR_AJENOS.',
 	},
 	{
 		id: 'hc-ingreso',
