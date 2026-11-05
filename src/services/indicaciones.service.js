@@ -720,17 +720,20 @@ const addDaysYmd = (ymd, days) => {
     return dt.toISOString().slice(0, 10);
 };
 
-/** Hoy o mañana (fecha Argentina). Cualquier otra fecha se rechaza. */
+/**
+ * Fecha/hora que indica (= FechaCarga). Default: hoy (Argentina).
+ * Se acepta cualquier día válido: el formulario puede retrofechar (p. ej. post-egreso).
+ * La UI sigue ofreciendo hoy/mañana como atajo al abrir desde el calendario.
+ */
 const resolverFechaCargaIndicacion = (fechaSolicitada) => {
     const hoy = fechaCalendarioArgentina();
-    const manana = addDaysYmd(hoy, 1);
-    const ymd = parseYmd(fechaSolicitada) || hoy;
-    if (ymd !== hoy && ymd !== manana) {
-        const err = new Error("Solo se puede indicar para el día de hoy o para mañana");
+    const ymd = parseYmd(fechaSolicitada);
+    if (fechaSolicitada != null && String(fechaSolicitada).trim() !== "" && !ymd) {
+        const err = new Error("Fecha/Hora que indica inválida");
         err.statusCode = 400;
         throw err;
     }
-    return ymd;
+    return ymd || hoy;
 };
 
 /**

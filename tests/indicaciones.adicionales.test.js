@@ -98,10 +98,17 @@ test('un adicional cuyo padre no existe responde 404', async () => {
 	assert.equal(insertDe(), undefined, 'no inserta nada');
 });
 
-test('una indicación principal sigue limitada a hoy o mañana', async () => {
+test('una indicación principal puede retrofechar FechaCarga (p. ej. post-egreso)', async () => {
+	await servicio.nuevaIndicacion({ ...base, NroAdicional: null, FechaCarga: '2020-01-01' });
+	const ins = insertDe();
+	assert.ok(ins, 'debe insertar la indicación');
+	assert.equal(ins.params[2].value, convertirFechaAClarion('2020-01-01'));
+});
+
+test('una FechaCarga mal formada se rechaza', async () => {
 	await assert.rejects(
-		() => servicio.nuevaIndicacion({ ...base, NroAdicional: null, FechaCarga: '2020-01-01' }),
-		(e) => e.statusCode === 400 && /hoy o para mañana/.test(e.message),
+		() => servicio.nuevaIndicacion({ ...base, NroAdicional: null, FechaCarga: 'no-es-fecha' }),
+		(e) => e.statusCode === 400 && /inválida/.test(e.message),
 	);
 	assert.equal(insertDe(), undefined);
 });
