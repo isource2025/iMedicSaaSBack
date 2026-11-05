@@ -25,7 +25,7 @@ require.cache[dbPath] = {
 			const q = String(sql);
 			llamadas.push({ sql: q, params });
 			if (/FROM dbo\.imVisita v/.test(q) && /egresada/.test(q)) {
-				return [{ egresada: 0, fechaEgresoClarion: 0 }];
+				return [{ egresada: 0, fechaEgresoClarion: 0, horaEgresoClarion: 0 }];
 			}
 			if (/SELECT TOP 1 CONVERT\(varchar\(10\), DATEADD\(DAY, CAST\(FechaCarga/.test(q)) {
 				return padreExiste ? [{ FechaCarga: fechaPadre }] : [];

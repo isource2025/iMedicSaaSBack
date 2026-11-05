@@ -755,9 +755,6 @@ const obtenerFechaCargaPadre = async (nroPadre) => {
 const nuevaIndicacion = async (data) => {
     console.log('🔍 BACKEND - Recibiendo data.NroAdicional:', data.NroAdicional, 'Tipo:', typeof data.NroAdicional);
 
-    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
-    await assertVisitaSinEgreso(data.NumeroVisita);
-
     const { assertIdentidadParaIndicacion } = require('../utils/identidadClinica');
     await assertIdentidadParaIndicacion({
         ProfesionalAsiste: data.ProfesionalAsiste,
@@ -775,6 +772,9 @@ const nuevaIndicacion = async (data) => {
         typeof data.HoraCarga === 'string' && data.HoraCarga.trim()
             ? data.HoraCarga.trim()
             : horaWallArgentina(true);
+
+    const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
+    await assertCargaAntesDeEgreso(data.NumeroVisita, fechaCargaYmd, horaIndicada);
 
     let horaCarga = convertirHoraAClarion(horaIndicada);
     
@@ -1067,8 +1067,10 @@ WHERE NroIndicacion = @param0
     }
     
     const padre = padreRows[0];
-    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
-    await assertVisitaSinEgreso(padre.NumeroVisita);
+    const fechaHijaYmd = fechaCalendarioArgentina();
+    const horaHija = horaWallArgentina(true);
+    const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
+    await assertCargaAntesDeEgreso(padre.NumeroVisita, fechaHijaYmd, horaHija);
     
     // Obtener próximo NroIndicacion
     const sqlProximoNro = `
@@ -1079,8 +1081,8 @@ FROM imInterIndMedicas
     const proximoNro = proximoRows[0].ProximoNro;
     
     // Preparar datos para inserción
-    const fechaCarga = convertirFechaAClarion(fechaCalendarioArgentina());
-    const horaCarga = convertirHoraAClarion(horaWallArgentina(true));
+    const fechaCarga = convertirFechaAClarion(fechaHijaYmd);
+    const horaCarga = convertirHoraAClarion(horaHija);
     
     // ✅ COMPATIBILIDAD CLARION: Usar 0 en lugar de NULL para campos numéricos
     // y strings vacíos en lugar de NULL para campos de texto.

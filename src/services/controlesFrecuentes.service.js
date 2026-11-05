@@ -203,13 +203,19 @@ const eliminarControl = async (valor) => {
  * @returns {Promise<Object>} Registro creado con su Valor (ID)
  */
 const crearControl = async (data) => {
-    const { assertVisitaSinEgreso } = require('../utils/visitaEstado');
-    await assertVisitaSinEgreso(data.numeroVisita);
+    const fechaControlYmd = data.fechaControl || fechaCalendarioArgentina();
+    const horaControlStr = data.horaControl
+        ? (String(data.horaControl).split(':').length === 2
+            ? `${data.horaControl}:00`
+            : String(data.horaControl))
+        : horaWallArgentina(true);
+    const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
+    await assertCargaAntesDeEgreso(data.numeroVisita, fechaControlYmd, horaControlStr);
 
     const fechaCargaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
     const horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
-    const fechaControlClarion = convertirFechaAClarion(data.fechaControl);
-    const horaControlClarion = convertirHoraAClarion(data.horaControl + ':00');
+    const fechaControlClarion = convertirFechaAClarion(fechaControlYmd);
+    const horaControlClarion = convertirHoraAClarion(horaControlStr);
 
     const peso = data.peso || 0;
     const talla = data.talla || 0;
