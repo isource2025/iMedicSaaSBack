@@ -714,12 +714,6 @@ const parseYmd = (value) => {
     return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 };
 
-const addDaysYmd = (ymd, days) => {
-    const [y, m, d] = ymd.split("-").map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d + days));
-    return dt.toISOString().slice(0, 10);
-};
-
 /**
  * Fecha/hora que indica (= FechaCarga). Default: hoy (Argentina).
  * Se acepta cualquier día válido: el formulario puede retrofechar (p. ej. post-egreso).
