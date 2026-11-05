@@ -774,7 +774,15 @@ const nuevaIndicacion = async (data) => {
             : horaWallArgentina(true);
 
     const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
-    await assertCargaAntesDeEgreso(data.NumeroVisita, fechaCargaYmd, horaIndicada);
+    const estadoVisita = await assertCargaAntesDeEgreso(
+        data.NumeroVisita,
+        fechaCargaYmd,
+        horaIndicada,
+    );
+    // En visita egresada no debe figurar como NUEVA para enfermería (ya "vista").
+    const estadoInicial = estadoVisita?.egresada
+        ? null
+        : limitLength(data.Estado, 1) || 'N';
 
     let horaCarga = convertirHoraAClarion(horaIndicada);
     
@@ -865,7 +873,7 @@ const nuevaIndicacion = async (data) => {
                 ? 0
                 : Number(data.CantidadIndicada),
         Orden: toNumberOrNull(data.Orden) || 0,
-        Estado: limitLength(data.Estado, 1) || "N", // Clarion usa "N" como estado por defecto (Nueva)
+        Estado: estadoInicial, // 'N' = nueva enfermería; null = ya vista (visita egresada)
         CantidadPorTurno:
             data.CantidadPorTurno == null
                 ? 0
@@ -1070,7 +1078,11 @@ WHERE NroIndicacion = @param0
     const fechaHijaYmd = fechaCalendarioArgentina();
     const horaHija = horaWallArgentina(true);
     const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
-    await assertCargaAntesDeEgreso(padre.NumeroVisita, fechaHijaYmd, horaHija);
+    const estadoVisitaHija = await assertCargaAntesDeEgreso(
+        padre.NumeroVisita,
+        fechaHijaYmd,
+        horaHija,
+    );
     
     // Obtener próximo NroIndicacion
     const sqlProximoNro = `
@@ -1101,7 +1113,7 @@ FROM imInterIndMedicas
         Frecuencia: limitLength(data.frecuencia, 20) || "",
         Observaciones: limitLength(data.observaciones, 255) || "",
         IdSector: padre.IdSector || "",
-        Estado: "N", // Clarion usa "N" como estado por defecto (Nueva)
+        Estado: estadoVisitaHija?.egresada ? null : 'N',
         Cantidad: data.cantidadIndicada == null ? 0 : Number(data.cantidadIndicada),
         AliasMedicamento: limitLength(data.aliasMedicamento, 50) || "",
     };

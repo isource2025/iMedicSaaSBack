@@ -61,11 +61,12 @@ async function assertVisitaSinEgreso(numeroVisita) {
  * @param {number|string|null|undefined} numeroVisita
  * @param {string|null|undefined} fechaYmd YYYY-MM-DD (default: hoy AR)
  * @param {string|null|undefined} horaHms HH:mm[:ss] (default: ahora AR)
+ * @returns {Promise<{ egresada: boolean, fechaEgresoClarion: number, horaEgresoClarion: number }>}
  */
 async function assertCargaAntesDeEgreso(numeroVisita, fechaYmd, horaHms) {
-	const { egresada, fechaEgresoClarion, horaEgresoClarion } =
-		await obtenerEstadoVisita(numeroVisita);
-	if (!egresada || !fechaEgresoClarion) return;
+	const estado = await obtenerEstadoVisita(numeroVisita);
+	const { egresada, fechaEgresoClarion, horaEgresoClarion } = estado;
+	if (!egresada || !fechaEgresoClarion) return estado;
 
 	const ymd = fechaYmd || fechaCalendarioArgentina();
 	const hora =
@@ -83,12 +84,12 @@ async function assertCargaAntesDeEgreso(numeroVisita, fechaYmd, horaHms) {
 		horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
 	}
 
-	if (fechaCargaClarion < fechaEgresoClarion) return;
+	if (fechaCargaClarion < fechaEgresoClarion) return estado;
 	if (
 		fechaCargaClarion === fechaEgresoClarion &&
 		horaCargaClarion < (horaEgresoClarion || Number.MAX_SAFE_INTEGER)
 	) {
-		return;
+		return estado;
 	}
 
 	const err = new Error(
