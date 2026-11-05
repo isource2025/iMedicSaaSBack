@@ -770,9 +770,13 @@ const nuevaIndicacion = async (data) => {
     const fechaCargaYmd = nroPadre
         ? await obtenerFechaCargaPadre(nroPadre)
         : resolverFechaCargaIndicacion(data.FechaCarga);
-    const horaActual = horaWallArgentina(true);
-    
-    let horaCarga = convertirHoraAClarion(horaActual);
+    // Hora que indica: la del formulario si viene; si no, ahora (Argentina).
+    const horaIndicada =
+        typeof data.HoraCarga === 'string' && data.HoraCarga.trim()
+            ? data.HoraCarga.trim()
+            : horaWallArgentina(true);
+
+    let horaCarga = convertirHoraAClarion(horaIndicada);
     
     // Si es una indicación adicional, incrementar HoraCarga para que sea única
     if (data.NroAdicional) {
