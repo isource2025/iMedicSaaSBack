@@ -674,7 +674,7 @@ async function actualizar(idCrudo, body, ctx) {
 
 /**
  * Reporte "Resumen" (RENDICION RESUMIDA): una fila por admisión con totales
- * GAS / HON / MED según filtros de tipo de admisión, visitas, rubros y letras.
+ * GAS / HON / MED según filtros de clase de paciente (imClasePaciente), visitas, rubros y letras.
  */
 async function reporteResumen(idCrudo, query = {}) {
 	const id = entero(idCrudo, 'Rendición');
@@ -700,7 +700,8 @@ async function reporteResumen(idCrudo, query = {}) {
 		.filter(Boolean)
 		.map((v) => Number(v));
 	const visitasSel = [...new Set(visitasRaw.filter((n) => Number.isInteger(n) && n > 0))];
-	const tipoAdmision = texto(query.tipoAdmision).slice(0, 1);
+	// UI «Tipo de admisión» del escritorio = imClasePaciente (Admisiones › Clases de Paciente).
+	const clasePaciente = texto(query.clasePaciente || query.tipoAdmision).slice(0, 1);
 
 	const prm = parametros();
 	const pId = prm.p(id, 'Int');
@@ -713,8 +714,8 @@ async function reporteResumen(idCrudo, query = {}) {
 		const ph = visitasSel.map((v) => prm.p(v, 'Int'));
 		filtros.push(`d.NUMEROVISITA IN (${ph.join(', ')})`);
 	}
-	if (tipoAdmision) {
-		filtros.push(`RTRIM(ISNULL(v.TIPOADMISION, '')) = ${prm.p(tipoAdmision, 'VarChar', 1)}`);
+	if (clasePaciente) {
+		filtros.push(`RTRIM(ISNULL(v.CLASEPACIENTE, '')) = ${prm.p(clasePaciente, 'VarChar', 1)}`);
 	}
 
 	let letraExpr = `CASE RTRIM(ISNULL(d.IDMODULO, ''))
@@ -736,7 +737,8 @@ async function reporteResumen(idCrudo, query = {}) {
 		        NULLIF(RTRIM(ISNULL(pac.NumeroSSN, '')), '') AS NroAfiliado,
 		        pac.NumeroDocumento AS Documento,
 		        CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS Ingreso,
-		        RTRIM(ISNULL(v.TIPOADMISION, '')) AS TipoAdmision,
+		        RTRIM(ISNULL(v.CLASEPACIENTE, '')) AS ClasePaciente,
+		        RTRIM(ISNULL(cp.Descripcion, '')) AS ClasePacienteDescripcion,
 		        SUM(CASE WHEN d.TIPOPRESTACION = 'G' THEN ISNULL(d.IMPORTE_FINAL, 0) ELSE 0 END) AS Gastos,
 		        SUM(CASE WHEN d.TIPOPRESTACION = 'H' THEN ISNULL(d.IMPORTE_FINAL, 0) ELSE 0 END) AS Honorarios,
 		        SUM(CASE WHEN d.TIPOPRESTACION = 'M' THEN ISNULL(d.IMPORTE_FINAL, 0) ELSE 0 END) AS Medicamentos,
@@ -750,11 +752,12 @@ async function reporteResumen(idCrudo, query = {}) {
 		 FROM dbo.imFacDetalle d
 		 LEFT JOIN dbo.imVisita v ON v.NUMEROVISITA = d.NUMEROVISITA
 		 LEFT JOIN dbo.imPacientes pac ON pac.IdPaciente = v.IDPACIENTE
+		 LEFT JOIN dbo.imClasePaciente cp ON RTRIM(ISNULL(cp.Valor, '')) = RTRIM(ISNULL(v.CLASEPACIENTE, ''))
 		 LEFT JOIN dbo.imNomenclador nom ON RTRIM(d.IDMODULO) = 'NO' AND nom.IDPractica = d.IDPRACTICA
 		 LEFT JOIN dbo.imModuladas mo ON RTRIM(d.IDMODULO) = 'MO' AND mo.IDPractica = d.IDPRACTICA
 		 WHERE ${where}
 		 GROUP BY d.NUMEROVISITA, pac.ApellidoyNombre, pac.NumeroSSN, pac.NumeroDocumento,
-		          v.FECHAADMISIONS, v.TIPOADMISION
+		          v.FECHAADMISIONS, v.CLASEPACIENTE, cp.Descripcion
 		 ORDER BY d.NUMEROVISITA`,
 		prm.lista,
 	);
@@ -770,7 +773,7 @@ async function reporteResumen(idCrudo, query = {}) {
 			nroAfiliado: afiliado || null,
 			nroAutorizacion: texto(f.NroAutorizacion) || null,
 			ingreso: texto(f.Ingreso) || null,
-			tipoAdmision: texto(f.TipoAdmision) || null,
+			clasePaciente: texto(f.ClasePacienteDescripcion) || texto(f.ClasePaciente) || null,
 			gastos,
 			honorarios,
 			medicamentos,
@@ -798,7 +801,7 @@ async function reporteResumen(idCrudo, query = {}) {
 			observaciones: cab.observaciones || null,
 		},
 		filtros: {
-			tipoAdmision: tipoAdmision || null,
+			clasePaciente: clasePaciente || null,
 			todasLasAdmisiones: visitasSel.length === 0,
 			visitas: visitasSel,
 			tipos,
@@ -838,7 +841,7 @@ async function reporteDetalle(idCrudo, query = {}) {
 		.filter(Boolean)
 		.map((v) => Number(v));
 	const visitasSel = [...new Set(visitasRaw.filter((n) => Number.isInteger(n) && n > 0))];
-	const tipoAdmision = texto(query.tipoAdmision).slice(0, 1);
+	const clasePaciente = texto(query.clasePaciente || query.tipoAdmision).slice(0, 1);
 
 	const prm = parametros();
 	const pId = prm.p(id, 'Int');
@@ -851,8 +854,8 @@ async function reporteDetalle(idCrudo, query = {}) {
 		const ph = visitasSel.map((v) => prm.p(v, 'Int'));
 		filtros.push(`d.NUMEROVISITA IN (${ph.join(', ')})`);
 	}
-	if (tipoAdmision) {
-		filtros.push(`RTRIM(ISNULL(v.TIPOADMISION, '')) = ${prm.p(tipoAdmision, 'VarChar', 1)}`);
+	if (clasePaciente) {
+		filtros.push(`RTRIM(ISNULL(v.CLASEPACIENTE, '')) = ${prm.p(clasePaciente, 'VarChar', 1)}`);
 	}
 
 	const letraExpr = `CASE RTRIM(ISNULL(d.IDMODULO, ''))
@@ -1022,7 +1025,7 @@ async function reporteDetalle(idCrudo, query = {}) {
 			observaciones: cab.observaciones || null,
 		},
 		filtros: {
-			tipoAdmision: tipoAdmision || null,
+			clasePaciente: clasePaciente || null,
 			todasLasAdmisiones: visitasSel.length === 0,
 			visitas: visitasSel,
 			tipos,
@@ -1054,7 +1057,7 @@ async function reporteProfesional(idCrudo, query = {}) {
 		.filter(Boolean)
 		.map((v) => Number(v));
 	const visitasSel = [...new Set(visitasRaw.filter((n) => Number.isInteger(n) && n > 0))];
-	const tipoAdmision = texto(query.tipoAdmision).slice(0, 1);
+	const clasePaciente = texto(query.clasePaciente || query.tipoAdmision).slice(0, 1);
 
 	const prm = parametros();
 	const pId = prm.p(id, 'Int');
@@ -1064,8 +1067,8 @@ async function reporteProfesional(idCrudo, query = {}) {
 		const ph = visitasSel.map((v) => prm.p(v, 'Int'));
 		filtros.push(`d.NUMEROVISITA IN (${ph.join(', ')})`);
 	}
-	if (tipoAdmision) {
-		filtros.push(`RTRIM(ISNULL(v.TIPOADMISION, '')) = ${prm.p(tipoAdmision, 'VarChar', 1)}`);
+	if (clasePaciente) {
+		filtros.push(`RTRIM(ISNULL(v.CLASEPACIENTE, '')) = ${prm.p(clasePaciente, 'VarChar', 1)}`);
 	}
 
 	const letraExpr = `CASE RTRIM(ISNULL(d.IDMODULO, ''))
@@ -1155,7 +1158,7 @@ async function reporteProfesional(idCrudo, query = {}) {
 			observaciones: cab.observaciones || null,
 		},
 		filtros: {
-			tipoAdmision: tipoAdmision || null,
+			clasePaciente: clasePaciente || null,
 			todasLasAdmisiones: visitasSel.length === 0,
 			visitas: visitasSel,
 			letras: filtrarLetras ? letras : ['*'],
