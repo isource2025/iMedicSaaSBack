@@ -185,6 +185,8 @@ const actualizarMedicacion = async (req, res) => {
 		}
 		const body = req.body || {};
 		const data = await medicacionControlService.actualizarMedicacion(idCtrlMedicaInt, {
+			fechaControl: body.fechaControl,
+			horaControl: body.horaControl,
 			cantidad: body.cantidad,
 			cantidadIndicada: body.cantidadIndicada,
 			tipoUnidad: body.tipoUnidad,

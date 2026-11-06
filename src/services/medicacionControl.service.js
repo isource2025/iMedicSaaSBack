@@ -1,5 +1,5 @@
 const { executeQuery } = require("../models/db");
-const { convertirFechaAClarion, filtroPeriodoClarion } = require("../utils/dateUtils");
+const { convertirFechaAClarion, convertirHoraAClarion, filtroPeriodoClarion } = require("../utils/dateUtils");
 const { normalizarFilas } = require("../utils/codigoSector");
 const { sqlApplyOperador, sqlApplyFicha } = require("../utils/sqlNombrePersona");
 
@@ -67,7 +67,7 @@ const obtenerMedicacionPorVisita = async (numeroVisita) => {
     LEFT JOIN dbo.imInterIndMedicas AS ind ON mc.NroIndicacion = ind.NroIndicacion
     ${SQL_APPLY_PERSONAS}
     WHERE mc.NumeroVisita = @param0
-    ORDER BY mc.FechaCarga DESC, mc.HoraCarga DESC, mc.IDCtrlMedica DESC
+    ORDER BY mc.FechaControl ASC, mc.HoraControl ASC, mc.IDCtrlMedica ASC
   `;
     const parametros = [{ value: numeroVisita }];
     try {
@@ -168,8 +168,8 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha, days) => {
         console.error('❌ [DEBUG] Error al obtener registros de debug:', error);
     }
 
-    // Convertir fecha YYYY-MM-DD a formato Clarion usando la función correcta
-    const periodo = filtroPeriodoClarion('mc.FechaCarga', fecha, days, 1);
+    // Misma ventana/orden que controles frecuentes: FechaControl + HoraControl (lo que muestra la UI)
+    const periodo = filtroPeriodoClarion('mc.FechaControl', fecha, days, 1);
 
     const consulta = `
     SELECT 
@@ -217,7 +217,7 @@ const obtenerMedicacionPorVisitaYFecha = async (numeroVisita, fecha, days) => {
     ${SQL_APPLY_PERSONAS}
     WHERE mc.NumeroVisita = @param0 
       ${periodo.sql ? `AND ${periodo.sql}` : ''}
-    ORDER BY mc.FechaCarga ASC, mc.HoraControl ASC, mc.IDCtrlMedica ASC
+    ORDER BY mc.FechaControl ASC, mc.HoraControl ASC, mc.IDCtrlMedica ASC
   `;
     const parametros = [{ value: numeroVisita }, ...periodo.params];
     
@@ -368,21 +368,32 @@ const eliminarMedicacion = async (idCtrlMedica) => {
 };
 
 /**
- * Actualizar medicación suministrada (cantidad / observaciones / unidad).
+ * Actualizar medicación suministrada (fecha/hora control, cantidad, unidad, observaciones).
  */
 const actualizarMedicacion = async (idCtrlMedica, data = {}) => {
 	const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+	const fechaControlClarion = data.fechaControl
+		? convertirFechaAClarion(data.fechaControl)
+		: null;
+	const horaRaw = data.horaControl != null ? String(data.horaControl).trim() : '';
+	const horaControlClarion = horaRaw
+		? convertirHoraAClarion(horaRaw.split(':').length === 2 ? `${horaRaw}:00` : horaRaw)
+		: null;
 	const sql = `
     UPDATE dbo.imInterCtrlMedicamento
     SET
-      Cantidad = COALESCE(@p1, Cantidad),
-      CantidadIndicada = COALESCE(@p2, CantidadIndicada),
-      TipoUnidad = COALESCE(@p3, TipoUnidad),
-      Observaciones = COALESCE(@p4, Observaciones)
+      FechaControl = COALESCE(@p1, FechaControl),
+      HoraControl = COALESCE(@p2, HoraControl),
+      Cantidad = COALESCE(@p3, Cantidad),
+      CantidadIndicada = COALESCE(@p4, CantidadIndicada),
+      TipoUnidad = COALESCE(@p5, TipoUnidad),
+      Observaciones = COALESCE(@p6, Observaciones)
     WHERE IDCtrlMedica = @p0
   `;
 	await executeQuery(sql, [
 		{ value: Number(idCtrlMedica) },
+		{ value: fechaControlClarion },
+		{ value: horaControlClarion },
 		{ value: data.cantidad != null ? Number(data.cantidad) : null },
 		{ value: data.cantidadIndicada != null ? Number(data.cantidadIndicada) : null },
 		{ value: data.tipoUnidad != null ? String(data.tipoUnidad).slice(0, 5) : null },
