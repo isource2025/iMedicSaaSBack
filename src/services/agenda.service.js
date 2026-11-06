@@ -12,6 +12,7 @@ const {
 	fechaCalendarioArgentina,
 	horaWallArgentina,
 	horaClarionAhoraArgentina,
+	ahoraWallArgentinaParaSql,
 } = require('../utils/dateUtils');
 const {
 	DIAS_SEMANA,
@@ -2455,7 +2456,8 @@ async function cerrarTurno({
 		? pedidosInterconsultas
 		: [];
 	const sectorSolicitante = String(idSector || detalle[0]?.Sector || '').trim().slice(0, 4);
-	const now = new Date();
+	// Hora de pared AR en campos UTC (tedious): evita FECHAADMISIONS +3 h vs Clarion/egreso.
+	const now = ahoraWallArgentinaParaSql();
 	await _validarEstudiosRepetidos(listaPedidosEstudios);
 
 	try {

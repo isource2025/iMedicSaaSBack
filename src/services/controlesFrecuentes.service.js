@@ -209,8 +209,14 @@ const crearControl = async (data) => {
             ? `${data.horaControl}:00`
             : String(data.horaControl))
         : horaWallArgentina(true);
-    const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
-    await assertCargaAntesDeEgreso(data.numeroVisita, fechaControlYmd, horaControlStr);
+    // RAC de agenda carga controles por IdTurno antes (o después) de crear la visita
+    // al cerrar el turno. La ventana [admisión, egreso) aplica a internación, no al RAC.
+    const numeroVisita = Number(data.numeroVisita) || 0;
+    const idTurno = Number(data.idTurno) || 0;
+    if (numeroVisita > 0 && idTurno <= 0) {
+        const { assertCargaAntesDeEgreso } = require('../utils/visitaEstado');
+        await assertCargaAntesDeEgreso(numeroVisita, fechaControlYmd, horaControlStr);
+    }
 
     const fechaCargaClarion = convertirFechaAClarion(fechaCalendarioArgentina());
     const horaCargaClarion = convertirHoraAClarion(horaWallArgentina(true));
