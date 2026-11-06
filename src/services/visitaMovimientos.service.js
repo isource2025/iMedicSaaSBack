@@ -90,6 +90,16 @@ async function obtenerCabeceraVisita(numeroVisita) {
   return rows[0] || null;
 }
 
+const SQL_SELECT_MOVIMIENTO = `
+      NumeroVisita, FechaAdmision, HoraAdmision,
+      FechaEgreso, HoraEgreso, DisposicionEgreso, Diagnostico,
+      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
+      LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
+      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS bedId,
+      LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
+      LTRIM(RTRIM(ISNULL(ServicioHospital, ''))) AS ServicioHospital
+`;
+
 /**
  * Obtiene el último movimiento de una visita
  */
@@ -99,19 +109,93 @@ async function obtenerUltimoMovimientoVisita(numeroVisita) {
 
   const sql = `
     SELECT TOP 1
-      NumeroVisita, FechaAdmision, HoraAdmision,
-      FechaEgreso, HoraEgreso, DisposicionEgreso, Diagnostico,
-      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS ValorHabitacionCama,
-      LTRIM(RTRIM(ISNULL(ValorSector, ''))) AS ValorSector,
-      LTRIM(RTRIM(ISNULL(ValorHabitacionCama, ''))) AS bedId,
-      LTRIM(RTRIM(ISNULL(EstadoAmbulatorio, ''))) AS EstadoAmbulatorio,
-      LTRIM(RTRIM(ISNULL(ServicioHospital, ''))) AS ServicioHospital
+      ${SQL_SELECT_MOVIMIENTO}
     FROM imVisitaMovimiento
     WHERE NumeroVisita = @p0
     ORDER BY FechaAdmision DESC, HoraAdmision DESC
   `;
   const rows = await executeQuery(sql, [{ value: num }]);
   return rows[0] || null;
+}
+
+/** Tramo vigente: FechaEgreso = 0 (sin cerrar). */
+async function obtenerMovimientoAbierto(numeroVisita) {
+  const num = parseInt(numeroVisita, 10);
+  if (isNaN(num)) throw new Error(`Visita inválida: ${numeroVisita}`);
+
+  const rows = await executeQuery(
+    `
+      SELECT TOP 1
+        ${SQL_SELECT_MOVIMIENTO}
+      FROM imVisitaMovimiento
+      WHERE NumeroVisita = @p0
+        AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+      ORDER BY FechaAdmision DESC, HoraAdmision DESC
+    `,
+    [{ value: num }],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Si el último tramo quedó cerrado pero el paciente sigue en cama y la visita
+ * no tiene egreso hospitalario, reabre ese tramo (inconsistencia típica post
+ * egreso/traslado a medias o sync Clarion).
+ */
+async function asegurarTramoAbiertoParaTraslado(numeroVisita, ultimo) {
+  const num = parseInt(numeroVisita, 10);
+  if (!ultimo) return null;
+
+  const abierto = await obtenerMovimientoAbierto(num);
+  if (abierto) return abierto;
+  if (!visitaYaEgresada(ultimo.FechaEgreso)) return ultimo;
+
+  const cabecera = await obtenerCabeceraVisita(num);
+  if (cabecera && visitaYaEgresada(cabecera.FechaEgreso)) {
+    throw errorNegocio(`La visita ${num} ya tiene egreso hospitalario; no se puede trasladar`);
+  }
+
+  const camas = await camasOcupadasPorVisita(num);
+  if (!camas?.length) {
+    throw errorNegocio(`La visita ${num} ya tiene egreso; no se puede trasladar`);
+  }
+
+  const cama = String(camas[0].ValorHabitacionCama || '').trim();
+  const sector = String(camas[0].ValorSector || '').trim();
+
+  await executeQuery(
+    `
+      UPDATE dbo.imVisitaMovimiento
+      SET
+        FechaEgreso = 0,
+        HoraEgreso = 0,
+        ValorHabitacionCama = CASE
+          WHEN LTRIM(RTRIM(@p3)) = '' THEN ValorHabitacionCama ELSE @p3
+        END,
+        ValorSector = CASE
+          WHEN LTRIM(RTRIM(@p4)) = '' THEN ValorSector ELSE @p4
+        END,
+        EstadoCama = 'O'
+      WHERE NumeroVisita = @p0
+        AND FechaAdmision = @p1
+        AND HoraAdmision = @p2
+    `,
+    [
+      { value: num },
+      { value: ultimo.FechaAdmision },
+      { value: ultimo.HoraAdmision },
+      { value: cama },
+      { value: sector },
+    ],
+  );
+
+  console.log(
+    `[movimientos] visita ${num}: se reabrió el tramo cerrado (${sector}-${cama}) porque seguía en cama sin egreso hospitalario`,
+  );
+
+  return (
+    (await obtenerMovimientoAbierto(num)) || (await obtenerUltimoMovimientoVisita(num))
+  );
 }
 
 /**
@@ -1416,7 +1500,7 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
     );
   }
 
-  const ultimoMovimiento = await asegurarMovimientoDeIngreso(num, {
+  let ultimoMovimiento = await asegurarMovimientoDeIngreso(num, {
     fecha: FechaEgreso,
     hora: HoraEgreso,
   });
@@ -1425,7 +1509,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
       `La visita ${num} no tiene movimiento de internación ni cama registrada. Asignale una cama antes de trasladarla.`,
     );
   }
-  if (visitaYaEgresada(ultimoMovimiento.FechaEgreso)) {
+  ultimoMovimiento = await asegurarTramoAbiertoParaTraslado(num, ultimoMovimiento);
+  if (!ultimoMovimiento || visitaYaEgresada(ultimoMovimiento.FechaEgreso)) {
     throw errorNegocio(`La visita ${num} ya tiene egreso; no se puede trasladar`);
   }
 
@@ -1692,13 +1777,24 @@ async function intercambiarCamasPacientes(numeroVisita1, numeroVisita2, datos) {
   }
 
   // Obtener información del último movimiento para ambos pacientes
-  const ultimoMovimiento1 = await obtenerUltimoMovimientoVisita(num1);
-  const ultimoMovimiento2 = await obtenerUltimoMovimientoVisita(num2);
-  
+  let ultimoMovimiento1 = await obtenerUltimoMovimientoVisita(num1);
+  let ultimoMovimiento2 = await obtenerUltimoMovimientoVisita(num2);
+
   if (!ultimoMovimiento1 || !ultimoMovimiento2) {
     throw new Error(`No se encontró el último movimiento para alguna de las visitas`);
   }
-  if (visitaYaEgresada(ultimoMovimiento1.FechaEgreso) || visitaYaEgresada(ultimoMovimiento2.FechaEgreso)) {
+  try {
+    ultimoMovimiento1 = await asegurarTramoAbiertoParaTraslado(num1, ultimoMovimiento1);
+    ultimoMovimiento2 = await asegurarTramoAbiertoParaTraslado(num2, ultimoMovimiento2);
+  } catch (err) {
+    throw new Error(err.message || 'No se puede intercambiar: alguna de las visitas ya tiene egreso');
+  }
+  if (
+    !ultimoMovimiento1 ||
+    !ultimoMovimiento2 ||
+    visitaYaEgresada(ultimoMovimiento1.FechaEgreso) ||
+    visitaYaEgresada(ultimoMovimiento2.FechaEgreso)
+  ) {
     throw new Error('No se puede intercambiar: alguna de las visitas ya tiene egreso');
   }
 
