@@ -11,6 +11,7 @@ uploads/
 
 # Config y temporales del file server en la PC de una clínica (tiene el token)
 scripts/tunnel/clinica.env
+scripts/tunnel/pacs.env
 .tmp-uploads/
 
 # Backups SQL locales

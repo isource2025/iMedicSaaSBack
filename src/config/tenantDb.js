@@ -191,7 +191,8 @@ async function loadEmpresaConnectionRowSinCache(idEmpresa) {
         ${c('DbUser')},
         ${c('DbPassword')},
         ${c('DbPasswordEnc')},
-        ${c('FileServerUrl')}
+        ${c('FileServerUrl')},
+        ${c('PacsUrl')}
       FROM dbo.Empresas
       WHERE IDEMPRESA = @id
     `);

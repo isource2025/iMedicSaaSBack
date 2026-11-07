@@ -81,6 +81,19 @@ async function ensureFileServerUrlColumn() {
 	await getEmpresasCols();
 }
 
+/** Crea Empresas.PacsUrl si falta. */
+async function ensurePacsUrlColumn() {
+	const cols = await getEmpresasCols();
+	if (cols.has('pacsurl')) return;
+	try {
+		await mysqlExec(`ALTER TABLE ${q('Empresas')} ADD COLUMN ${q('PacsUrl')} VARCHAR(500) NULL`);
+	} catch (e) {
+		if (!/duplicate column|exists/i.test(String(e.message || ''))) throw e;
+	}
+	invalidateEmpresasColsCache();
+	await getEmpresasCols();
+}
+
 /** Columnas numéricas reales de Empresas (para no mandar '' a un INT). */
 async function getEmpresasNumericCols() {
 	if (empresasNumericColsCache) return empresasNumericColsCache;
@@ -129,6 +142,7 @@ function mapEmpresaRow(r) {
 		DbPassword: r.DbPassword,
 		TipoServidor: normalizeTipoServidor(r.TipoServidor),
 		FileServerUrl: r.FileServerUrl != null ? String(r.FileServerUrl) : null,
+		PacsUrl: r.PacsUrl != null ? String(r.PacsUrl) : null,
 		CantUsuarios: r.CantUsuarios,
 	};
 }
@@ -138,12 +152,13 @@ async function listarEmpresasRows(filtro = '') {
 	const cols = await getEmpresasCols();
 	const tipoSel = cols.has('tiposervidor') ? 'e.TipoServidor' : `'FISICO' AS TipoServidor`;
 	const fileSel = cols.has('fileserverurl') ? 'e.FileServerUrl' : 'NULL AS FileServerUrl';
+	const pacsSel = cols.has('pacsurl') ? 'e.PacsUrl' : 'NULL AS PacsUrl';
 	const qstr = String(filtro || '').trim();
 	let sql = `
     SELECT
       e.IDEMPRESA, e.DESCRIPCION, e.Nro_CUIT, e.localidad, e.Provincia,
       e.Email, e.TEEmpresa, e.DbServer, e.DbPort, e.DbInstance, e.DbName,
-      e.DbUser, e.DbPasswordEnc, ${tipoSel}, ${fileSel},
+      e.DbUser, e.DbPasswordEnc, ${tipoSel}, ${fileSel}, ${pacsSel},
       (SELECT COUNT(*) FROM ${q('imPersonalEmpresas')} pe WHERE pe.IdEmpresa = e.IDEMPRESA) AS CantUsuarios
     FROM ${q('Empresas')} e
   `;
@@ -162,12 +177,13 @@ async function obtenerEmpresaRow(idEmpresa) {
 	const cols = await getEmpresasCols();
 	const tipoSel = cols.has('tiposervidor') ? 'TipoServidor' : `'FISICO' AS TipoServidor`;
 	const fileSel = cols.has('fileserverurl') ? 'FileServerUrl' : 'NULL AS FileServerUrl';
+	const pacsSel = cols.has('pacsurl') ? 'PacsUrl' : 'NULL AS PacsUrl';
 	const rows = await mysqlQuery(
 		`
     SELECT IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
            Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
            DbServer, DbPort, DbInstance, DbName, DbUser, DbPasswordEnc, DbPassword,
-           ${tipoSel}, ${fileSel}
+           ${tipoSel}, ${fileSel}, ${pacsSel}
     FROM ${q('Empresas')} WHERE IDEMPRESA = ? LIMIT 1
     `,
 		[Number(idEmpresa)],
@@ -284,6 +300,18 @@ async function guardarConexionEmpresa(idEmpresa, data) {
 			const raw = data.fileServerUrl !== undefined ? data.fileServerUrl : data.FileServerUrl;
 			add(
 				'FileServerUrl',
+				raw != null && String(raw).trim() !== '' ? String(raw).trim().replace(/\/+$/, '') : null,
+			);
+		}
+	}
+
+	if (data.pacsUrl !== undefined || data.PacsUrl !== undefined) {
+		await ensurePacsUrlColumn();
+		const cols = await getEmpresasCols();
+		if (cols.has('pacsurl')) {
+			const raw = data.pacsUrl !== undefined ? data.pacsUrl : data.PacsUrl;
+			add(
+				'PacsUrl',
 				raw != null && String(raw).trim() !== '' ? String(raw).trim().replace(/\/+$/, '') : null,
 			);
 		}

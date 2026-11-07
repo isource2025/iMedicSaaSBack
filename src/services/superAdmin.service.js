@@ -69,6 +69,7 @@ function mapEmpresaRow(r) {
 			dbName: r.DbName != null ? String(r.DbName) : '',
 			dbUser: r.DbUser != null ? String(r.DbUser) : '',
 			fileServerUrl: r.FileServerUrl != null ? String(r.FileServerUrl) : '',
+			pacsUrl: r.PacsUrl != null ? String(r.PacsUrl) : '',
 			tienePassword: !!r.DbPasswordEnc,
 		},
 	};
@@ -489,6 +490,10 @@ function conexionDesdeBody(data) {
 	if (data.fileServerUrl !== undefined) conexion.fileServerUrl = data.fileServerUrl;
 	if (data.FileServerUrl !== undefined && conexion.fileServerUrl === undefined) {
 		conexion.fileServerUrl = data.FileServerUrl;
+	}
+	if (data.pacsUrl !== undefined) conexion.pacsUrl = data.pacsUrl;
+	if (data.PacsUrl !== undefined && conexion.pacsUrl === undefined) {
+		conexion.pacsUrl = data.PacsUrl;
 	}
 	return conexion;
 }

@@ -10,6 +10,8 @@
 		"test": "node --test \"tests/**/*.test.js\" \"src/**/*.test.js\"",
 		"file-server": "node file-server.js",
 		"dev:file-server": "nodemon file-server.js",
+		"pacs-bridge": "node pacs-bridge.js",
+		"dev:pacs-bridge": "nodemon pacs-bridge.js",
 		"db:impassword": "node scripts/diagnostico_impassword.js",
 		"db:super-admin": "node scripts/setup_super_admin.js",
 		"db:super-admin:mysql": "node scripts/crear_super_admin_mysql.js",

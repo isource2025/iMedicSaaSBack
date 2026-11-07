@@ -381,7 +381,7 @@ async function obtenerEmpresaPorId(idEmpresa) {
       Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
       DbServer, DbPort, DbInstance, DbName, DbUser, DbPassword, DbPasswordEnc,
       WhatsAppPhoneNumberId, WhatsAppWabaId, WhatsAppAccessTokenEnc,
-      FileServerUrl
+      FileServerUrl, PacsUrl
     FROM \`Empresas\`
     WHERE IDEMPRESA = ?
     LIMIT 1
@@ -390,10 +390,29 @@ async function obtenerEmpresaPorId(idEmpresa) {
 		);
 		return rows[0] || null;
 	} catch (e) {
-		// Columna FileServerUrl aún no migrada
-		if (!/fileserverurl/i.test(String(e.message || ''))) throw e;
-		const rows = await query(
-			`
+		const msg = String(e.message || '');
+		// Columnas FileServerUrl / PacsUrl aún no migradas
+		if (!/fileserverurl|pacsurl/i.test(msg)) throw e;
+		try {
+			const rows = await query(
+				`
+    SELECT
+      IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
+      Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
+      DbServer, DbPort, DbInstance, DbName, DbUser, DbPassword, DbPasswordEnc,
+      WhatsAppPhoneNumberId, WhatsAppWabaId, WhatsAppAccessTokenEnc,
+      FileServerUrl
+    FROM \`Empresas\`
+    WHERE IDEMPRESA = ?
+    LIMIT 1
+    `,
+				[id],
+			);
+			return rows[0] || null;
+		} catch (e2) {
+			if (!/fileserverurl/i.test(String(e2.message || ''))) throw e2;
+			const rows = await query(
+				`
     SELECT
       IDEMPRESA, DESCRIPCION, calle, calle_nro, Depto, piso, localidad, Provincia,
       Nro_CUIT, Nro_IngBrutos, IdTipoIVA, TEEmpresa, Email,
@@ -403,9 +422,10 @@ async function obtenerEmpresaPorId(idEmpresa) {
     WHERE IDEMPRESA = ?
     LIMIT 1
     `,
-			[id],
-		);
-		return rows[0] || null;
+				[id],
+			);
+			return rows[0] || null;
+		}
 	}
 }
 

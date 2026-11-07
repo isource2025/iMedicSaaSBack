@@ -458,9 +458,116 @@ async function cmdClinica() {
 	console.log('');
 }
 
+/**
+ * Túnel del bridge PACS (tomógrafo / ClearCanvas).
+ * Hostname fijo: pacs-<slug>.imedic.com.ar → http://127.0.0.1:9013
+ * Túnel propio (no pisa el de files-*): imedic-pacs-<slug>
+ */
+async function cmdPacs() {
+	const slug = args[1];
+	if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
+		throw new Error('Falta el slug de la clinica. Ej: cf-setup.js pacs sarmiento --aplicar');
+	}
+
+	const port = Number(flag('port', '9013'));
+	const nombreTunel = `imedic-pacs-${slug}`;
+	const hostname = `pacs-${slug}.${DOMINIO}`;
+
+	const cuenta = await getCuenta();
+	const zona = await getZona();
+
+	titulo(`PACS ${slug}`);
+	dato(`tunel     ${nombreTunel}`);
+	dato(`hostname  https://${hostname}`);
+	dato(`origen    http://127.0.0.1:${port}`);
+
+	titulo('Tunel');
+	const tuneles = await getTuneles(cuenta.id);
+	let tunel = tuneles.find((t) => t.name === nombreTunel);
+
+	if (tunel) {
+		ok(`ya existe (${tunel.id})`);
+		if (tunel.config_src !== 'cloudflare') {
+			aviso(`esta administrado localmente ("${tunel.config_src}"), no por API`);
+			dato('Borralo en el dashboard y volve a correr este comando para recrearlo.');
+		}
+	} else if (!APLICAR) {
+		console.log(`  + ${nombreTunel} ${c.dim}(se crearia)${c.reset}`);
+	} else {
+		tunel = await cf(`/accounts/${cuenta.id}/cfd_tunnel`, {
+			method: 'POST',
+			body: JSON.stringify({ name: nombreTunel, config_src: 'cloudflare' }),
+		});
+		ok(`creado (${tunel.id})`);
+	}
+
+	titulo('Ingress');
+	const ingress = [
+		{
+			hostname,
+			service: `http://127.0.0.1:${port}`,
+			originRequest: { connectTimeout: 30 },
+		},
+		{ service: 'http_status:404' },
+	];
+
+	if (!tunel) {
+		console.log(`  ${c.dim}~ se define al crear el tunel${c.reset}`);
+	} else if (!APLICAR) {
+		console.log(`  ~ ${hostname} -> http://127.0.0.1:${port} ${c.dim}(se definiria)${c.reset}`);
+	} else {
+		await cf(`/accounts/${cuenta.id}/cfd_tunnel/${tunel.id}/configurations`, {
+			method: 'PUT',
+			body: JSON.stringify({ config: { ingress } }),
+		});
+		ok(`${hostname} -> http://127.0.0.1:${port}`);
+	}
+
+	titulo('DNS');
+	if (!tunel) {
+		console.log(`  ${c.dim}~ se crea junto con el tunel${c.reset}`);
+	} else if (!zona) {
+		aviso(`no puedo ver la zona ${DOMINIO}`);
+		dato(`    pacs-${slug}  CNAME  ${tunel.id}.cfargotunnel.com  (proxied)`);
+	} else {
+		const existentes = await getRegistros(zona.id);
+		const r = await upsertRegistro(zona.id, existentes, {
+			nombre: `pacs-${slug}`,
+			tipo: 'CNAME',
+			contenido: `${tunel.id}.cfargotunnel.com`,
+			proxied: true,
+		});
+		r.detalle = `-> ${tunel.id}.cfargotunnel.com`;
+		mostrarRegistro(r);
+	}
+
+	if (!APLICAR || !tunel) {
+		console.log(`\n${c.dim}Simulacion. Corre con --aplicar para crear el tunel.${c.reset}`);
+		return;
+	}
+
+	const { token } = await cf(`/accounts/${cuenta.id}/cfd_tunnel/${tunel.id}/token`).then((t) => ({
+		token: typeof t === 'string' ? t : t?.token,
+	}));
+	if (!token) throw new Error('Cloudflare no devolvio el token del tunel.');
+
+	console.log('');
+	console.log(`${c.yellow}  En la PC del PACS (${slug}), como Administrador:${c.reset}`);
+	console.log('');
+	console.log(`${c.cyan}  .\\scripts\\tunnel\\Instalar-Pacs.ps1 \`
+      -Clinica ${slug} \`
+      -TunnelToken "${token}"${c.reset}`);
+	console.log('');
+	console.log(`${c.dim}  Ese token es una credencial del tunel: no lo commitees.${c.reset}`);
+	console.log('');
+	console.log(`  Despues:`);
+	console.log(`${c.cyan}  node scripts/tunnel/set-pacs-url.js --empresa 101 --url https://${hostname}${c.reset}`);
+	console.log('');
+}
+
 // ---------------------------------------------------------------------- main
 
-const COMANDOS = { estado: cmdEstado, zona: cmdZona, clinica: cmdClinica };
+const COMANDOS = { estado: cmdEstado, zona: cmdZona, clinica: cmdClinica, pacs: cmdPacs };
 
 async function main() {
 	if (!authHeaders()) {
@@ -481,7 +588,7 @@ async function main() {
 	const fn = COMANDOS[comando];
 	if (!fn) {
 		console.error(`Subcomando desconocido: ${comando}`);
-		console.error('Uso: cf-setup.js [estado|zona|clinica <slug>] [--aplicar]');
+		console.error('Uso: cf-setup.js [estado|zona|clinica <slug>|pacs <slug>] [--aplicar]');
 		process.exit(1);
 	}
 
