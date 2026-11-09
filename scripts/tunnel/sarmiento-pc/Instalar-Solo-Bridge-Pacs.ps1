@@ -298,6 +298,9 @@ netsh advfirewall firewall delete rule name="iMedic PACS 9013" 2>$null | Out-Nul
 netsh advfirewall firewall add rule name="iMedic PACS 9013" dir=in action=allow protocol=TCP localport=$Port
 Write-Ok "escucha en puerto $Port (LAN)"
 
+# PS 2.0 convierte el stderr de schtasks ("la tarea no existe") en error fatal con 'Stop'
+$ErrorActionPreference = 'Continue'
+
 Write-Paso 'Detener bridge anterior (si corre)'
 cmd /c "schtasks /End /TN `"$TaskBridge`"" 2>$null | Out-Null
 try {
