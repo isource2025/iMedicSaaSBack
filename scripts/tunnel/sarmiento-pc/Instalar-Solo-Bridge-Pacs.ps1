@@ -122,7 +122,8 @@ function Invoke-Q([string]$sql, $params) {
 function To-Int($v) { if ($v -is [DBNull] -or $null -eq $v) { return 0 }; return [int]$v }
 function Norm-Pid([string]$p) { return (($p + '') -replace '[.\s-]', '') }
 function Study-Dir($row) {
-	return [IO.Path]::Combine([string]$row.FilesystemPath,[string]$row.PartitionFolder,[string]$row.StudyFolder,[string]$row.StudyInstanceUid)
+	# .NET 2.0 (PS 2.0) solo tiene Combine(a, b)
+	return [IO.Path]::Combine([IO.Path]::Combine([IO.Path]::Combine([string]$row.FilesystemPath,[string]$row.PartitionFolder),[string]$row.StudyFolder),[string]$row.StudyInstanceUid)
 }
 function Safe-Under([string]$root, [string]$abs) {
 	$r = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
@@ -206,7 +207,7 @@ WHERE st.StudyInstanceUid = @uid
 			$dt = Invoke-Q @"
 SELECT SeriesInstanceUid AS seriesInstanceUid, SeriesNumber AS seriesNumber, Modality AS modality,
   SeriesDescription AS seriesDescription, NumberOfSeriesRelatedInstances AS instanceCount
-FROM dbo.Series WHERE StudyInstanceUid = @uid ORDER BY SeriesNumber
+FROM dbo.Series se JOIN dbo.Study st ON st.GUID = se.StudyGUID WHERE st.StudyInstanceUid = @uid ORDER BY se.SeriesNumber
 "@ @{ '@uid' = $uid }
 			$rows = @()
 			foreach ($r in $dt.Rows) {
