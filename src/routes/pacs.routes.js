@@ -15,6 +15,7 @@ const ver = requireAnyPermiso(
 
 router.get('/health', ver, pacsController.health);
 router.get('/pacientes/:patientId/estudios', ver, pacsController.listarPorPaciente);
+router.get('/visitas/:numeroVisita/estudios', ver, pacsController.listarPorVisita);
 router.get('/estudios/:studyUid', ver, pacsController.obtenerEstudio);
 router.get('/estudios/:studyUid/series', ver, pacsController.listarSeries);
 router.get('/estudios/:studyUid/files', ver, pacsController.listarArchivos);

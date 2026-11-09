@@ -20,6 +20,15 @@ async function listarPorPaciente(req, res) {
 	}
 }
 
+async function listarPorVisita(req, res) {
+	try {
+		const data = await pacsService.listarEstudiosPorVisita(req.params.numeroVisita);
+		res.json(data);
+	} catch (e) {
+		res.status(e.status || 502).json({ error: e.message, code: e.code || 'PACS_ERROR' });
+	}
+}
+
 async function obtenerEstudio(req, res) {
 	try {
 		const data = await pacsService.obtenerEstudio(req.params.studyUid);
@@ -68,6 +77,7 @@ async function descargarArchivo(req, res) {
 module.exports = {
 	health,
 	listarPorPaciente,
+	listarPorVisita,
 	obtenerEstudio,
 	listarSeries,
 	listarArchivos,
