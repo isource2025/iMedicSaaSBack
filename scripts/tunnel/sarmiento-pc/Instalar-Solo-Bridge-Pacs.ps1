@@ -68,11 +68,28 @@ function Test-Key($req) {
 	return ($diff -eq 0)
 }
 
+# PS 2.0 deja valores envueltos en PSObject dentro de @{}; JavaScriptSerializer falla con ellos
+function To-Plain($o) {
+	$b = $o
+	if ($b -is [Management.Automation.PSObject]) { $b = $b.PSObject.BaseObject }
+	if ($null -eq $b -or $b -is [DBNull]) { return $null }
+	if ($b -is [Collections.IDictionary]) {
+		$d = New-Object 'System.Collections.Generic.Dictionary[string,object]'
+		foreach ($k in @($b.Keys)) { $d.Add([string]$k, (To-Plain $b[$k])) }
+		return ,$d
+	}
+	if ($b -is [Collections.IEnumerable] -and -not ($b -is [string])) {
+		$l = New-Object System.Collections.ArrayList
+		foreach ($x in $b) { [void]$l.Add((To-Plain $x)) }
+		return ,$l
+	}
+	return $b
+}
 function ConvertTo-JsonPs2($obj) {
 	Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
 	$ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
 	$ser.MaxJsonLength = 67108864
-	return $ser.Serialize($obj)
+	return $ser.Serialize((To-Plain $obj))
 }
 function Send-Json($ctx, $code, $obj) {
 	$json = ConvertTo-JsonPs2 $obj
@@ -157,7 +174,7 @@ ORDER BY st.StudyDate DESC, st.StudyTime DESC
 					instanceCount = (To-Int $r.instanceCount)
 				}
 			}
-			Send-Json $ctx 200 @{ patientId = $patId; count = $rows.Count; studies = $rows }
+			Send-Json $ctx 200 @{ patientId = [string]$patId; count = $rows.Count; studies = $rows }
 			continue
 		}
 		if ($path -match '^/studies/([^/]+)$') {
@@ -215,7 +232,7 @@ WHERE st.StudyInstanceUid = @uid
 "@ @{ '@uid' = $uid }
 			if ($dt.Rows.Count -eq 0) { Send-Json $ctx 404 @{ error = 'Estudio no encontrado' }; continue }
 			$dir = Safe-Under ([string]$dt.Rows[0].FilesystemPath) (Study-Dir $dt.Rows[0])
-			if (-not $dir -or -not (Test-Path $dir)) { Send-Json $ctx 404 @{ error = 'Carpeta no existe'; path = $dir }; continue }
+			if (-not $dir -or -not (Test-Path $dir)) { Send-Json $ctx 404 @{ error = 'Carpeta no existe'; path = [string]$dir }; continue }
 			$files = New-Object System.Collections.ArrayList
 			Get-ChildItem $dir -Recurse -Filter *.dcm -ErrorAction SilentlyContinue | ForEach-Object {
 				$rel = $_.FullName.Substring($dir.Length).TrimStart('\').Replace('\', '/')
