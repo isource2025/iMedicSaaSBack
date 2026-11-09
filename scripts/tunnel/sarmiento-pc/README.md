@@ -48,6 +48,11 @@ Estado y pasos pendientes: [`docs/PACS_HANDOFF_PROMPT.md`](../../../docs/PACS_HA
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\Instalar-Solo-Bridge-Pacs.ps1"
 ```
 
+3. Al final imprime una **CLAVE** (también en `C:\ProgramData\iMedic\pacs\key.txt`).
+   Cargala en Railway como `PACS_BRIDGE_KEY`. Sin ese header (`X-iMedic-Pacs-Key`)
+   el bridge responde 401 a todo salvo `/health` (que sin clave no muestra datos).
+   Re-ejecutar el instalador conserva la clave; para rotarla, borrar `key.txt` y re-ejecutar.
+
 ### En Cloudflare
 
 Zero Trust → Tunnels → `imedic-sarmiento` → Public Hostname → `pacs-sarmiento.imedic.com.ar`

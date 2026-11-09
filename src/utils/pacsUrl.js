@@ -4,11 +4,15 @@
  */
 const { getTenantId } = require('../context/tenantContext');
 
-const PACS_TOKEN = String(process.env.PACS_BRIDGE_TOKEN || process.env.FILE_SERVER_TOKEN || '').trim();
+const PACS_TOKEN = String(process.env.PACS_BRIDGE_KEY || process.env.PACS_BRIDGE_TOKEN || '').trim();
 
 function pacsHeaders(extra) {
 	const headers = { ...(extra || {}) };
-	if (PACS_TOKEN) headers['x-imedic-token'] = PACS_TOKEN;
+	if (PACS_TOKEN) {
+		headers['x-imedic-pacs-key'] = PACS_TOKEN;
+		// pacs-bridge.js (Node) valida x-imedic-token
+		headers['x-imedic-token'] = PACS_TOKEN;
+	}
 	return headers;
 }
 

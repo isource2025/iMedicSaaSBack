@@ -96,7 +96,14 @@ Herramienta de diagnóstico (fuera del repo, en la otra PC): `dicom_probe.py` (p
 
 ### Tareas pendientes, en orden
 
-1. **[BLOQUEANTE DE SEGURIDAD] Autenticar el bridge** antes de publicarlo. Hoy el bridge NO pide
+1. **[HECHO] Autenticar el bridge.** El instalador genera `C:\ProgramData\iMedic\pacs\key.txt`
+   (64 hex, se conserva al re-ejecutar) y la imprime al final; el bridge exige
+   `X-iMedic-Pacs-Key` (o `x-imedic-token`) en todo salvo `/health`, que sin clave solo devuelve
+   `ok/sql/keyConfigured`. El backend la envía desde `PACS_BRIDGE_KEY` (Railway).
+   `/file?path=` rechaza `..`, `:` y rutas absolutas y valida que quede dentro de la carpeta del
+   estudio. También se corrigió: `$pid` (variable de solo lectura en PS → `/studies` daba 500),
+   serialización de bools/DBNull, y el script quedó 100% ASCII (sin BOM fallaba al parsear).
+   Texto original de la tarea, como referencia: Hoy el bridge NO pide
    ningún token: cualquiera con la URL podría listar estudios por DNI y bajar DICOM (datos de salud).
    Implementar un secreto compartido: el bridge exige header `X-iMedic-Pacs-Key` (valor guardado
    en el server, p.ej. en `C:\ProgramData\iMedic\pacs\key.txt`, generado por el instalador e impreso
@@ -106,7 +113,8 @@ Herramienta de diagnóstico (fuera del repo, en la otra PC): `dicom_probe.py` (p
    Además validar en `/studies/:uid/file?path=` que la ruta resuelta quede dentro de la carpeta del
    estudio (evitar path traversal).
 2. Correr/re-correr el instalador del bridge en el tomógrafo (Notepad → pegar → guardar
-   `.ps1` "Todos los archivos" → comando de arriba). Verificar `/health`.
+   `.ps1` "Todos los archivos" → comando de arriba). Verificar `/health` y copiar la CLAVE
+   impresa a Railway como `PACS_BRIDGE_KEY`.
 3. Verificar conectividad LAN desde la PC de adjuntos (punto 2 del estado no verificado).
 4. **Agregar el public hostname al túnel existente `imedic-sarmiento`** SIN romper `files-sarmiento`:
    `pacs-sarmiento.imedic.com.ar` → `http://192.168.1.83:9013`.
