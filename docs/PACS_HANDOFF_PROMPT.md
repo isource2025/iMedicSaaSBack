@@ -94,6 +94,20 @@ Herramienta de diagnóstico (fuera del repo, en la otra PC): `dicom_probe.py` (p
 3. Si el túnel `imedic-sarmiento` es **remotely-managed** (config en el dashboard Zero Trust)
    o **locally-managed** (`config.yml` en la PC de adjuntos). Eso define cómo se agrega la ruta.
 
+### Estado al 2026-11-09
+
+- Bridge instalado y corriendo en el tomógrafo (tarea "iMedic PACS Bridge", ONLOGON: si el
+  server reinicia, alguien tiene que iniciar sesión). Clave en `key.txt` y en Railway
+  (`PACS_BRIDGE_KEY`, cargada con `--skip-deploys`).
+- Túnel: ingress `pacs-sarmiento.imedic.com.ar → http://192.168.1.83:9013` agregado por API
+  (versión 2 de la config, `files-sarmiento` intacto) + CNAME creado. Cert de `imedic.com.ar`
+  en `%USERPROFILE%\.cloudflared\cert-imedic.pem` de la PC de desarrollo.
+- Verificado desde Internet: `/health` público sin datos, resto 401 sin clave; con clave
+  `/studies`, `/studies/:uid`, `/series`, `/files` y `/file` (DICOM real) OK; traversal → 400.
+- Pendiente: merge a `main` (push directo bloqueado por hook → PR), deploy Railway,
+  `set-pacs-url.js` (el proxy público de MySQL cierra la conexión: correrlo con `railway ssh`
+  dentro del contenedor después del deploy), y el front.
+
 ### Tareas pendientes, en orden
 
 1. **[HECHO] Autenticar el bridge.** El instalador genera `C:\ProgramData\iMedic\pacs\key.txt`
