@@ -360,6 +360,10 @@ SELECT ${topClause}
   
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaProximo,0), '1800-12-28'), 23) AS FechaProximoISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaRevision,0), '1800-12-28'), 23) AS FechaRevisionISO,
+  -- Fecha/hora de ESTA hoja (reindicar = día de la copia; sirve para listar por fecha en HC).
+  CONVERT(varchar(10), DATEADD(day, NULLIF(iim.FechaCarga,0), '1800-12-28'), 23) AS FechaHojaISO,
+  CONVERT(varchar(8), DATEADD(ms, (NULLIF(iim.HoraCarga,0) - 1) * 10, 0), 108) AS HoraHoja,
+  -- Vigente desde = origen de la cadena (primera indicación), no la copia diaria.
   CONVERT(varchar(10), DATEADD(day, NULLIF(COALESCE(NULLIF(origenVigente.FechaVigente, 0), iim.FechaCarga), 0), '1800-12-28'), 23) AS FechaCargaISO,
   CONVERT(varchar(10), DATEADD(day, NULLIF(TRY_CAST(iim.FechaExpiro AS int), 0), CONVERT(datetime, '18001228', 112)), 23) AS FechaExpiroISO,
   
@@ -454,8 +458,12 @@ OPTION (MAXRECURSION 80);
                 HoraProximo: r.HoraProximo,
                 anterior: r.FechaRevisionISO,
                 horaAnterior: r.HoraRevision,
+                // Origen de la cadena (primera vez que se indicó) — lo muestra internación.
                 vigenteDesde: r.FechaCargaISO,
                 horaCarga: r.HoraCarga,
+                // Día de esta hoja / copia (reindicar): calendario de internación y resumen HC.
+                fechaCarga: r.FechaHojaISO || r.FechaCargaISO,
+                horaHoja: r.HoraHoja || r.HoraCarga,
                 fechaExpiro: r.FechaExpiroISO || null,
                 horaExpiro: r.HoraExpiroISO || null,
                 tipo: r.TipoIndicacion,
@@ -1526,6 +1534,20 @@ const aplicarIndicacion = async (nroIndicacion, data) => {
             const e = new Error('No se puede aplicar una indicación dejada sin efecto');
             e.statusCode = 400;
             throw e;
+        }
+
+        {
+            const nv = Number(indicacionActual.NumeroVisita) || 0;
+            if (nv > 0) {
+                const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+                await assertCargaEnRangoVisita(
+                    nv,
+                    data.fechaCumplido
+                        ? String(data.fechaCumplido).slice(0, 10)
+                        : null,
+                    data.horaCumplido != null ? String(data.horaCumplido) : null,
+                );
+            }
         }
 
         // ✅ NUEVO: Detectar si es única vez por frecuencia
