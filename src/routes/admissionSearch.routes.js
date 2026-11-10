@@ -28,6 +28,11 @@ router.post(
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.exportGeneralPaciente,
 );
+router.get(
+	'/:numeroVisita/detail/sections',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.detalleSecciones,
+);
 router.get('/:numeroVisita/detail', requirePermiso('ADMISION.BUSQUEDA.VER'), controller.detalle);
 router.get(
 	'/:numeroVisita/datos-principales',

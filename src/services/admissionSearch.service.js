@@ -1060,34 +1060,94 @@ async function cargarDatosClinicosVisita(numeroVisita, need) {
   };
 }
 
+/** Payload con admisión y bloques clínicos vacíos (apertura rápida del detalle). */
+function payloadDetalleShell(visita) {
+  return {
+    generadoEn: new Date().toISOString(),
+    admision: visita,
+    historialClinico: [],
+    practicasPaciente: [],
+    practicas: {
+      laboratorios: [],
+      adjuntos: [],
+    },
+    medicamentos: [],
+    indicaciones: [],
+    evolucionesMedicas: [],
+    estudios: [],
+    interconsultas: [],
+    protocolos: [],
+    epicrisis: [],
+    controles: [],
+    balanceHidrico: [],
+    evolucionesEnfermeria: [],
+    dietas: [],
+    insumos: [],
+    movimientos: [],
+    clinicoCompleto: false,
+  };
+}
+
+/** Mapea el resultado de `cargarDatosClinicosVisita` al shape del detalle/export. */
+function clinicoAPayloadParcial(d, need) {
+  const out = {};
+  if (need.has('hcIngreso')) out.historialClinico = d.historiaClinica;
+  if (need.has('practicas')) out.practicasPaciente = d.practicas;
+  if (need.has('medicamentos')) out.medicamentos = d.medicamentos;
+  if (need.has('indicaciones')) out.indicaciones = d.indicaciones;
+  if (need.has('evoluciones')) out.evolucionesMedicas = d.evolucionesMedicas;
+  if (need.has('estudios')) out.estudios = d.estudios;
+  if (need.has('interconsultas')) out.interconsultas = d.interconsultas;
+  if (need.has('protocolos')) out.protocolos = d.protocolos;
+  if (need.has('epicrisis')) out.epicrisis = d.epicrisis;
+  if (need.has('controles')) out.controles = d.controles;
+  if (need.has('balanceHidrico')) out.balanceHidrico = d.balanceHidrico;
+  if (need.has('evolucionEnfermeria')) out.evolucionesEnfermeria = d.evolucionesEnfermeria;
+  if (need.has('dietas')) out.dietas = d.dietas;
+  if (need.has('insumos')) out.insumos = d.insumos;
+  if (need.has('movimientos')) out.movimientos = d.movimientos;
+
+  const practicas = {};
+  if (need.has('laboratorios')) practicas.laboratorios = d.laboratorios;
+  if (need.has('adjuntos')) practicas.adjuntos = d.adjuntos;
+  if (Object.keys(practicas).length) out.practicas = practicas;
+  return out;
+}
+
+/** Solo datos de admisión: abre el modal sin esperar toda la HC (internados largos). */
+async function exportarAdmisionShell(numeroVisita) {
+  const visita = await obtenerAdmisionDetallada(numeroVisita);
+  if (!visita) return null;
+  return jsonSafe(payloadDetalleShell(visita));
+}
+
+/**
+ * Carga un subconjunto de bloques clínicos (misma forma parcial que el detalle completo).
+ * @param {number} numeroVisita
+ * @param {string[]} sections claves de VISITA_SECCIONES (excepto admision)
+ */
+async function exportarSeccionesClinicas(numeroVisita, sections) {
+  const need = new Set(
+    (Array.isArray(sections) ? sections : [])
+      .map(String)
+      .filter((s) => VISITA_SECCIONES.includes(s) && s !== 'admision'),
+  );
+  if (need.size === 0) return {};
+  const d = await cargarDatosClinicosVisita(numeroVisita, need);
+  return jsonSafe(clinicoAPayloadParcial(d, need));
+}
+
 async function exportarAdmisionCompleta(numeroVisita) {
   const visita = await obtenerAdmisionDetallada(numeroVisita);
   if (!visita) return null;
 
-  const d = await cargarDatosClinicosVisita(numeroVisita, new Set(VISITA_SECCIONES));
+  const need = new Set(VISITA_SECCIONES);
+  const d = await cargarDatosClinicosVisita(numeroVisita, need);
 
   return jsonSafe({
-    generadoEn: new Date().toISOString(),
-    admision: visita,
-    historialClinico: d.historiaClinica,
-    practicasPaciente: d.practicas,
-    practicas: {
-      laboratorios: d.laboratorios,
-      adjuntos: d.adjuntos,
-    },
-    medicamentos: d.medicamentos,
-    indicaciones: d.indicaciones,
-    evolucionesMedicas: d.evolucionesMedicas,
-    estudios: d.estudios,
-    interconsultas: d.interconsultas,
-    protocolos: d.protocolos,
-    epicrisis: d.epicrisis,
-    controles: d.controles,
-    balanceHidrico: d.balanceHidrico,
-    evolucionesEnfermeria: d.evolucionesEnfermeria,
-    dietas: d.dietas,
-    insumos: d.insumos,
-    movimientos: d.movimientos,
+    ...payloadDetalleShell(visita),
+    ...clinicoAPayloadParcial(d, need),
+    clinicoCompleto: true,
   });
 }
 
@@ -1858,6 +1918,8 @@ module.exports = {
   buscarAdmisiones,
   listarCoberturas,
   obtenerPracticasPorVisita,
+  exportarAdmisionShell,
+  exportarSeccionesClinicas,
   exportarAdmisionCompleta,
   exportarAdmisionSelectivo,
   listarNumerosVisitaPaciente,

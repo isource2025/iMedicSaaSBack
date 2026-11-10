@@ -100,7 +100,14 @@ async function detalle(req, res) {
       });
     }
 
-    const payload = await admissionSearchService.exportarAdmisionCompleta(numeroVisita);
+    // Por defecto solo shell (admisión): la HC se pide por lotes en /detail/sections.
+    // `?completo=1` conserva el comportamiento anterior (todo de una vez).
+    const completo =
+      String(req.query.completo || '').trim() === '1' ||
+      String(req.query.completo || '').trim().toLowerCase() === 'true';
+    const payload = completo
+      ? await admissionSearchService.exportarAdmisionCompleta(numeroVisita)
+      : await admissionSearchService.exportarAdmisionShell(numeroVisita);
     if (!payload) {
       return res.status(404).json({
         success: false,
@@ -117,6 +124,44 @@ async function detalle(req, res) {
     res.status(statusDeError(error)).json({
       success: false,
       message: 'Error al obtener detalle de admisión',
+      detail: publicErrorDetail(error),
+    });
+  }
+}
+
+async function detalleSecciones(req, res) {
+  try {
+    const numeroVisita = Number(req.params.numeroVisita);
+    if (!Number.isFinite(numeroVisita) || numeroVisita <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'numeroVisita inválido',
+      });
+    }
+
+    const fromQuery = String(req.query.sections || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const fromBody = Array.isArray(req.body?.sections) ? req.body.sections.map(String) : [];
+    const sections = fromQuery.length ? fromQuery : fromBody;
+    if (sections.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Indicá al menos una sección clínica',
+      });
+    }
+
+    const payload = await admissionSearchService.exportarSeccionesClinicas(numeroVisita, sections);
+    res.json({
+      success: true,
+      data: jsonSafe(payload),
+    });
+  } catch (error) {
+    console.error('Error al obtener secciones clínicas de admisión:', error);
+    res.status(statusDeError(error)).json({
+      success: false,
+      message: 'Error al obtener secciones clínicas',
       detail: publicErrorDetail(error),
     });
   }
@@ -314,6 +359,7 @@ async function turnosActivosPaciente(req, res) {
 module.exports = {
   buscar,
   detalle,
+  detalleSecciones,
   datosPrincipales,
   actualizarDatosPrincipales,
   catalogosAdmision,
