@@ -319,20 +319,19 @@ const guardarExamen = async (cabecera, detalles) => {
 const obtenerExamenesPorVisita = async (numeroVisita) => {
   try {
     const col = await getCabeceraColumnNames();
-    // Preferir NumeroVisita si existe: IdPaciente en algunos esquemas es el paciente, no la visita.
-    const visitCol = col.has('numerovisita')
-      ? 'c.NumeroVisita'
-      : col.has('idpaciente')
-        ? 'c.IdPaciente'
+    const visitCol = col.has('idpaciente')
+      ? 'c.IdPaciente'
+      : col.has('numerovisita')
+        ? 'c.NumeroVisita'
         : null;
     if (!visitCol) {
       throw new Error(
         'imHCExamenesLabCabecera: falta IdPaciente o NumeroVisita para listar por visita.'
       );
     }
-    const visitSelect = col.has('numerovisita')
-      ? 'c.NumeroVisita as NumeroVisita'
-      : 'c.IdPaciente as NumeroVisita';
+    const visitSelect = col.has('idpaciente')
+      ? 'c.IdPaciente as NumeroVisita'
+      : 'c.NumeroVisita as NumeroVisita';
 
     // IdSector no existe en todas las instalaciones.
     const consultaCabecera = `

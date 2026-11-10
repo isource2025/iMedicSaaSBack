@@ -992,8 +992,16 @@ async function obtenerAdmisionDetallada(numeroVisita) {
 async function cargarDatosClinicosVisita(numeroVisita, need) {
   const today = new Date().toISOString().slice(0, 10);
   const skip = Promise.resolve([]);
-  const load = (key, factory) => (need.has(key) ? settled(factory, []) : skip);
-  const needEstudios = need.has('estudios');
+  const FALLO = Symbol('fallo');
+  const seccionesConError = [];
+  const load = (key, factory) =>
+    need.has(key)
+      ? settled(factory, FALLO).then((v) => {
+          if (v !== FALLO) return v;
+          seccionesConError.push(key);
+          return [];
+        })
+      : skip;
 
   const [
     historiaClinica,
@@ -1016,14 +1024,15 @@ async function cargarDatosClinicosVisita(numeroVisita, need) {
   ] = await Promise.all([
     load('hcIngreso', () => obtenerHCIngresoPorVisita(numeroVisita)),
     // En la historia clínica también van las suspendidas (quedan marcadas como tales).
+    // Sin TOP: el corte es por fila (padres + hijas) y en internaciones largas perdía días.
     load('indicaciones', () =>
-      indicacionesService.getIndicacionesByVisita(numeroVisita, { limit: 5000, incluirSuspendidas: true }),
+      indicacionesService.getIndicacionesByVisita(numeroVisita, { incluirSuspendidas: true }),
     ),
     load('practicas', () => obtenerPracticasPorVisita(numeroVisita)),
     load('medicamentos', () => medicacionControlService.obtenerMedicacionPorVisita(numeroVisita)),
     load('evoluciones', () => evolucionesService.obtenerEvolucionesPorVisitaYFecha(numeroVisita, today, null)),
     load('adjuntos', () => adjuntosService.getAdjuntosPorVisita(numeroVisita)),
-    needEstudios ? settled(() => obtenerEstudiosPorVisitaAd(numeroVisita), []) : skip,
+    load('estudios', () => obtenerEstudiosPorVisitaAd(numeroVisita)),
     load('protocolos', () => protocolosService.listarPorVisita(numeroVisita)),
     load('epicrisis', () => getEpicrisisService().listarPorVisita(numeroVisita)),
     load('interconsultas', () => interconsultasService.listarPorVisita(numeroVisita)),
@@ -1040,7 +1049,8 @@ async function cargarDatosClinicosVisita(numeroVisita, need) {
 
   return {
     historiaClinica: asArray(historiaClinica),
-    indicaciones: filterIndicacionesClinicas(asArray(indicaciones)),
+    // Incluye las de control (C/A): carga clínica las lista en la hoja de indicaciones.
+    indicaciones: asArray(indicaciones),
     practicas: asArray(practicas),
     medicamentos: asArray(medicamentos),
     evolucionesMedicas: asArray(evolucionesMedicas),
@@ -1057,6 +1067,7 @@ async function cargarDatosClinicosVisita(numeroVisita, need) {
     dietas: asArray(dietas),
     movimientos: asArray(movimientos),
     laboratorios: asArray(laboratorios),
+    seccionesConError,
   };
 }
 
@@ -1111,6 +1122,7 @@ function clinicoAPayloadParcial(d, need) {
   if (need.has('laboratorios')) practicas.laboratorios = d.laboratorios;
   if (need.has('adjuntos')) practicas.adjuntos = d.adjuntos;
   if (Object.keys(practicas).length) out.practicas = practicas;
+  if (d.seccionesConError?.length) out.seccionesConError = d.seccionesConError;
   return out;
 }
 
@@ -1184,8 +1196,10 @@ function filterHc(rows, fechaInicio, fechaFin, exportAll) {
   });
 }
 
+/** Día de la hoja (copia diaria del reindicar), no el origen de la cadena (`vigenteDesde`). */
 function indicacionYmd(row) {
   return (
+    toYmd(row.fechaCarga) ||
     toYmd(row.vigenteDesde) ||
     toYmd(row.FechaCargaISO) ||
     toYmd(row.proximo) ||
@@ -1194,21 +1208,13 @@ function indicacionYmd(row) {
   );
 }
 
-function isControlEnfermeriaIndicacion(row) {
-  const tipo = String(row?.tipo ?? row?.TipoIndicacion ?? '').trim().toUpperCase();
-  return tipo === 'C';
-}
-
-function filterIndicacionesClinicas(rows) {
-  return (rows || []).filter((r) => {
-    const tipo = String(r?.tipo ?? r?.TipoIndicacion ?? '').trim().toUpperCase();
-    // A/C = controles (asistenciales/enfermería). En aclysa no se muestran en Prácticas/Indicaciones.
-    return tipo !== 'C' && tipo !== 'A';
-  });
-}
-
+/** Carga clínica muestra las sin efecto el día en que expiraron: entran si cualquiera de los dos días cae en el rango. */
 function filterIndicaciones(rows, fechaInicio, fechaFin, exportAll) {
-  return (rows || []).filter((r) => inDateRange(indicacionYmd(r), fechaInicio, fechaFin, exportAll));
+  return (rows || []).filter(
+    (r) =>
+      inDateRange(indicacionYmd(r), fechaInicio, fechaFin, exportAll) ||
+      (r.suspendida && toYmd(r.fechaExpiro) && inDateRange(toYmd(r.fechaExpiro), fechaInicio, fechaFin, exportAll)),
+  );
 }
 
 function filterPracticasPaciente(rows, fechaInicio, fechaFin, exportAll) {
@@ -1472,6 +1478,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
   const has = (s) => sections.includes(s);
   // Para el PDF los estudios salen de las solicitudes agrupadas, igual que en la sección.
   const paraPdf = Boolean(opts.paraPdf);
+  let solicitudesFallaron = false;
   const [d, solicitudes] = await Promise.all([
     cargarDatosClinicosVisita(
       numeroVisita,
@@ -1480,10 +1487,12 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
     paraPdf && has('estudios')
       ? solicitudesEstudiosService.listarPorVisita(numeroVisita).catch((err) => {
           console.warn('[export] solicitudes de estudios no disponibles:', err?.message || err);
+          solicitudesFallaron = true;
           return [];
         })
       : null,
   ]);
+  const seccionesConError = [...d.seccionesConError, ...(solicitudesFallaron ? ['estudios'] : [])];
   const porFecha = (rows, getFecha) => filterPorFecha(rows, getFecha, fechaInicio, fechaFin, exportAll);
 
   const out = {
@@ -1499,6 +1508,7 @@ async function exportarAdmisionSelectivo(numeroVisita, opts = {}) {
       evolucionServicioIds: evolucionServicioIds.length ? evolucionServicioIds : null,
       evolucionSectorIds: evolucionSectorIds.length ? evolucionSectorIds : null,
     },
+    ...(seccionesConError.length ? { seccionesConError } : {}),
   };
 
   if (has('admision')) {
