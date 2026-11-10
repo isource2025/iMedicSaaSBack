@@ -319,19 +319,20 @@ const guardarExamen = async (cabecera, detalles) => {
 const obtenerExamenesPorVisita = async (numeroVisita) => {
   try {
     const col = await getCabeceraColumnNames();
-    const visitCol = col.has('idpaciente')
-      ? 'c.IdPaciente'
-      : col.has('numerovisita')
-        ? 'c.NumeroVisita'
+    // Preferir NumeroVisita si existe: IdPaciente en algunos esquemas es el paciente, no la visita.
+    const visitCol = col.has('numerovisita')
+      ? 'c.NumeroVisita'
+      : col.has('idpaciente')
+        ? 'c.IdPaciente'
         : null;
     if (!visitCol) {
       throw new Error(
         'imHCExamenesLabCabecera: falta IdPaciente o NumeroVisita para listar por visita.'
       );
     }
-    const visitSelect = col.has('idpaciente')
-      ? 'c.IdPaciente as NumeroVisita'
-      : 'c.NumeroVisita as NumeroVisita';
+    const visitSelect = col.has('numerovisita')
+      ? 'c.NumeroVisita as NumeroVisita'
+      : 'c.IdPaciente as NumeroVisita';
 
     // IdSector no existe en todas las instalaciones.
     const consultaCabecera = `
@@ -349,22 +350,59 @@ const obtenerExamenesPorVisita = async (numeroVisita) => {
     `;
 
     const cabeceras = await executeQuery(consultaCabecera, [{ value: numeroVisita }]);
+    if (!cabeceras?.length) return [];
 
-    // Para cada cabecera, obtener sus detalles
-    const examenes = [];
-    for (const cab of cabeceras) {
-      const detallesRaw = await executeQuery(SQL_DETALLE_LAB, [{ value: cab.IdExamen }]);
-      const detalles = enriquecerDetallesLaboratorio(detallesRaw);
-
-      examenes.push({
-        ...cab,
-        detalles: detalles,
-        totalParametros: detalles.length,
-        parametrosFueraDeRango: detalles.filter((d) => d.FueraDeRango).length
-      });
+    // Un solo SELECT de detalles (evita N+1 que timeout-ea en visitas con muchos labs).
+    const ids = cabeceras
+      .map((c) => Number(c.IdExamen))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const detallesPorExamen = new Map();
+    if (ids.length) {
+      const params = ids.map((id) => ({ value: id }));
+      const inList = ids.map((_, i) => `@p${i}`).join(',');
+      const detallesRaw = await executeQuery(
+        `
+          SELECT 
+            d.IdExamenLaboratorio as IdExamen,
+            d.Estudio as NombreParametro,
+            d.Valor as Resultado,
+            d.Orden,
+            conf.ValorMinimo as ValorMinimoConf,
+            conf.ValorMaximo as ValorMaximoConf,
+            conf.ValorNormal as ValorNormalConf,
+            CASE 
+              WHEN conf.ValorMinimo IS NOT NULL AND conf.ValorMaximo IS NOT NULL 
+              THEN CAST(conf.ValorMinimo AS VARCHAR(50)) + '-' + CAST(conf.ValorMaximo AS VARCHAR(50))
+              WHEN conf.ValorNormal IS NOT NULL 
+              THEN CAST(conf.ValorNormal AS VARCHAR(50))
+              ELSE NULL
+            END as ValorReferencia,
+            '' as UnidadMedida
+          FROM imHCExamenesLabDetalle d
+          LEFT JOIN imHCExamenesLabDetalleConf conf 
+            ON d.IdTipoLaboratorio = conf.IdTipoLaboratorio 
+            AND d.Estudio = conf.Estudio
+          WHERE d.IdExamenLaboratorio IN (${inList})
+          ORDER BY d.IdExamenLaboratorio, d.Orden
+        `,
+        params,
+      );
+      for (const row of detallesRaw || []) {
+        const id = Number(row.IdExamen);
+        if (!detallesPorExamen.has(id)) detallesPorExamen.set(id, []);
+        detallesPorExamen.get(id).push(row);
+      }
     }
 
-    return examenes;
+    return cabeceras.map((cab) => {
+      const detalles = enriquecerDetallesLaboratorio(detallesPorExamen.get(Number(cab.IdExamen)) || []);
+      return {
+        ...cab,
+        detalles,
+        totalParametros: detalles.length,
+        parametrosFueraDeRango: detalles.filter((d) => d.FueraDeRango).length,
+      };
+    });
   } catch (error) {
     console.error('Error al obtener exámenes:', error);
     throw error;
