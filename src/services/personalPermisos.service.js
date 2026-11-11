@@ -7,6 +7,7 @@
  * siguen funcionando).
  */
 const { getAuthCentralPool, isAuthCentralEnabled } = require('../config/authCentralDb');
+const { executeQuery } = require('../models/db');
 const { esPermisoRestringido } = require('../utils/permisosDescripciones');
 const matriz = require('../utils/permisos');
 const v = require('../utils/rolesValidacion');
@@ -27,8 +28,29 @@ const DDL = `
   ) ENGINE = InnoDB
 `;
 
+const DDL_SQLSERVER = `
+IF NOT EXISTS (
+  SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+  WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'imPersonalPermisosOverride'
+)
+BEGIN
+  CREATE TABLE dbo.imPersonalPermisosOverride (
+    IdEmpresa INT NOT NULL,
+    Valor INT NOT NULL,
+    Codigo VARCHAR(120) NOT NULL,
+    Efecto VARCHAR(10) NOT NULL,
+    FechaModificacion DATETIME NOT NULL CONSTRAINT DF_imPPO_Fecha_runtime DEFAULT (GETDATE()),
+    ModificadoPor INT NULL,
+    CONSTRAINT PK_imPersonalPermisosOverride PRIMARY KEY (IdEmpresa, Valor, Codigo),
+    CONSTRAINT CK_imPPO_Efecto_runtime CHECK (Efecto IN ('GRANT', 'DENY'))
+  );
+  CREATE INDEX IX_imPPO_Personal ON dbo.imPersonalPermisosOverride (IdEmpresa, Valor);
+END
+`;
+
 const cache = new Map(); // "emp|vp" -> { grants, denies, expira }
 let tablaLista = false;
+let tablaListaSql = false;
 
 function error(statusCode, mensaje) {
 	const e = new Error(mensaje);
@@ -71,6 +93,107 @@ async function asegurarTabla() {
 	return tablaLista;
 }
 
+async function asegurarTablaSql() {
+	if (tablaListaSql) return true;
+	try {
+		await executeQuery(DDL_SQLSERVER);
+		tablaListaSql = true;
+		return true;
+	} catch (e) {
+		console.warn('[personalPermisos] SQL local: no se pudo asegurar la tabla:', e.message);
+		tablaListaSql = false;
+		return false;
+	}
+}
+
+async function listarOverridesSql(idEmpresa, valorPersonal) {
+	const vacio = { grants: [], denies: [] };
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) return vacio;
+
+	const k = clave(emp, vp);
+	const hit = cache.get(k);
+	if (hit && hit.expira > Date.now()) {
+		return { grants: [...hit.grants], denies: [...hit.denies] };
+	}
+	if (!(await asegurarTablaSql())) return vacio;
+
+	let rows;
+	try {
+		rows = await executeQuery(
+			`SELECT Codigo AS codigo, Efecto AS efecto
+       FROM dbo.imPersonalPermisosOverride
+       WHERE IdEmpresa = @p0 AND Valor = @p1`,
+			[
+				{ value: emp, type: 'Int' },
+				{ value: vp, type: 'Int' },
+			],
+		);
+	} catch (e) {
+		console.warn('[personalPermisos] listar SQL:', e.message);
+		return vacio;
+	}
+
+	const validos = codigosValidos();
+	const grants = [];
+	const denies = [];
+	for (const r of rows) {
+		const c = String(r.codigo || '');
+		const efecto = String(r.efecto || '').toUpperCase();
+		if (!validos.has(c) || esPermisoRestringido(c) || !EFECTOS.has(efecto)) continue;
+		if (efecto === 'GRANT') grants.push(c);
+		else denies.push(c);
+	}
+	cache.set(k, { grants, denies, expira: Date.now() + CACHE_TTL_MS });
+	return { grants: [...grants], denies: [...denies] };
+}
+
+async function guardarDesdeEfectivosSql({ idEmpresa, valorPersonal, base, efectivos, actor }) {
+	const emp = Number(idEmpresa);
+	const vp = Number(valorPersonal);
+	if (!Number.isFinite(emp) || emp <= 0) throw error(400, 'Empresa inválida');
+	if (!Number.isFinite(vp) || vp <= 0) throw error(400, 'Personal inválido');
+	if (!(await asegurarTablaSql())) throw error(503, 'No se pudo preparar la tabla de overrides');
+
+	const { grants, denies } = diff(base, efectivos);
+	const check = validarEscritura({
+		grants,
+		denies,
+		permisosActor: actor?.permisos,
+		base,
+	});
+	if (!check.ok) throw error(400, check.errores.join('. '));
+
+	await executeQuery(
+		`DELETE FROM dbo.imPersonalPermisosOverride WHERE IdEmpresa = @p0 AND Valor = @p1`,
+		[
+			{ value: emp, type: 'Int' },
+			{ value: vp, type: 'Int' },
+		],
+	);
+	const filas = [
+		...grants.map((c) => ({ codigo: c, efecto: 'GRANT' })),
+		...denies.map((c) => ({ codigo: c, efecto: 'DENY' })),
+	];
+	for (const f of filas) {
+		await executeQuery(
+			`INSERT INTO dbo.imPersonalPermisosOverride
+         (IdEmpresa, Valor, Codigo, Efecto, FechaModificacion, ModificadoPor)
+       VALUES (@p0, @p1, @p2, @p3, GETDATE(), @p4)`,
+			[
+				{ value: emp, type: 'Int' },
+				{ value: vp, type: 'Int' },
+				{ value: f.codigo, type: 'VarChar' },
+				{ value: f.efecto, type: 'VarChar' },
+				{ value: actor?.valorPersonal != null ? Number(actor.valorPersonal) : null, type: 'Int' },
+			],
+		);
+	}
+	invalidar(emp, vp);
+	return { grants, denies, efectivos: aplicar(base, grants, denies) };
+}
+
 const codigosValidos = () => new Set(matriz.todosLosCodigos().map((c) => c.codigo));
 
 /**
@@ -81,8 +204,11 @@ async function listarOverrides(idEmpresa, valorPersonal) {
 	const vacio = { grants: [], denies: [] };
 	const emp = Number(idEmpresa);
 	const vp = Number(valorPersonal);
-	if (!isAuthCentralEnabled() || !Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) {
+	if (!Number.isFinite(emp) || emp <= 0 || !Number.isFinite(vp)) {
 		return vacio;
+	}
+	if (!isAuthCentralEnabled()) {
+		return listarOverridesSql(emp, vp);
 	}
 
 	const k = clave(emp, vp);
@@ -186,7 +312,9 @@ function validarEscritura({ grants, denies, permisosActor, base }) {
 async function guardarDesdeEfectivos({ idEmpresa, valorPersonal, base, efectivos, actor }) {
 	const emp = Number(idEmpresa);
 	const vp = Number(valorPersonal);
-	if (!isAuthCentralEnabled()) throw error(409, 'Los overrides de permisos requieren autenticación central');
+	if (!isAuthCentralEnabled()) {
+		return guardarDesdeEfectivosSql({ idEmpresa: emp, valorPersonal: vp, base, efectivos, actor });
+	}
 	if (!Number.isFinite(emp) || emp <= 0) throw error(400, 'Empresa inválida');
 	if (!Number.isFinite(vp) || vp <= 0) throw error(400, 'Personal inválido');
 	if (!(await asegurarTabla())) throw error(503, 'No se pudo preparar la tabla de overrides');
@@ -240,6 +368,7 @@ async function guardarDesdeEfectivos({ idEmpresa, valorPersonal, base, efectivos
 function _reiniciar() {
 	cache.clear();
 	tablaLista = false;
+	tablaListaSql = false;
 }
 
 module.exports = {

@@ -16,6 +16,7 @@ const v = require('../utils/rolesValidacion');
 const schema = require('./rolesCustomSchema.service');
 const auditoria = require('./auditoria.service');
 const featureFlags = require('./featureFlags.service');
+const rolesMatrizLocal = () => require('./rolesMatrizLocal.service');
 const permisosService = () => require('./permisos.service');
 
 const CACHE_TTL_MS = 30 * 1000;
@@ -99,6 +100,11 @@ async function permisosDeRolCustom(idRol) {
 	const id = Number(idRol);
 	const hit = cache.get(id);
 	if (hit && hit.expira > Date.now()) return [...hit.permisos];
+	if (!isAuthCentralEnabled()) {
+		const permisos = await rolesMatrizLocal().permisosDeRolCustom(id);
+		cache.set(id, { permisos, expira: Date.now() + CACHE_TTL_MS });
+		return [...permisos];
+	}
 	if (!(await schema.esquemaListo())) return [];
 
 	const rows = await consultar(
@@ -194,13 +200,7 @@ async function permisosPlantillaSistema(ids) {
 /** Roles del sistema + personalizados de la empresa, con sus permisos. */
 async function listarMatriz(idEmpresa) {
 	if (!isAuthCentralEnabled()) {
-		return {
-			soportaPersonalizados: false,
-			plantillasCongeladas: plantillasCongeladas(),
-			esquemaListo: false,
-			sistema: [],
-			personalizados: [],
-		};
+		return rolesMatrizLocal().listarMatriz(idEmpresa);
 	}
 	const listo = await schema.esquemaListo();
 	const filtroSistema = listo ? 'AND IdEmpresa = 0' : '';
@@ -341,6 +341,9 @@ function mapearErrorSql(e) {
  * @param {object} [p.origen] datos del rol duplicado (para la auditoría)
  */
 async function crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permisos, origen }) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().crearRol({ idEmpresa, actor, nombre, descripcion, rolBase, permisos, origen });
+	}
 	if (!Number.isFinite(Number(idEmpresa)) || Number(idEmpresa) <= 0) throw error(400, 'Empresa inválida');
 	await exigirHabilitado(idEmpresa);
 
@@ -484,7 +487,7 @@ async function sincronizarImRolPermisos(conn, idRol, permisos) {
  */
 async function actualizarPlantillaSistema(idRol, { idEmpresa, actor, permisos }) {
 	if (!isAuthCentralEnabled()) {
-		throw error(409, 'La autenticación central es necesaria para editar plantillas del sistema');
+		return rolesMatrizLocal().actualizarPlantillaSistema(idRol, { idEmpresa, actor, permisos });
 	}
 	if (permisos === undefined) {
 		throw error(400, 'Indicá los permisos de la plantilla');
@@ -544,6 +547,9 @@ async function actualizarPlantillaSistema(idRol, { idEmpresa, actor, permisos })
 // ─── Edición ────────────────────────────────────────────────────────────────
 
 async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rolBase, permisos }) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rolBase, permisos });
+	}
 	const id = Number(idRol);
 	if (Number.isFinite(id) && id > 0 && id < v.ID_ROL_PERSONALIZADO_MIN) {
 		return actualizarPlantillaSistema(id, { idEmpresa, actor, permisos });
@@ -641,6 +647,9 @@ async function actualizarRol(idRol, { idEmpresa, actor, nombre, descripcion, rol
 // ─── Duplicar ───────────────────────────────────────────────────────────────
 
 async function duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion, rolBase }) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().duplicarRol(idOrigen, { idEmpresa, actor, nombre, descripcion, rolBase });
+	}
 	await exigirHabilitado(idEmpresa);
 	const id = Number(idOrigen);
 	if (!Number.isFinite(id) || id <= 0) throw error(400, 'Id de rol inválido');
@@ -706,6 +715,9 @@ async function contarAsignados(idEmpresa, idRol) {
 }
 
 async function eliminarRol(idRol, { idEmpresa, actor }) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().eliminarRol(idRol, { idEmpresa, actor });
+	}
 	await exigirHabilitado(idEmpresa);
 	const actual = await obtenerRolPropio(idRol, idEmpresa);
 	const asignados = await contarAsignados(idEmpresa, idRol);
@@ -749,6 +761,9 @@ async function eliminarRol(idRol, { idEmpresa, actor }) {
 // ─── Usuarios y auditoría de un rol ─────────────────────────────────────────
 
 async function usuariosDeRol(idRol, idEmpresa) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().usuariosDeRol(idRol, idEmpresa);
+	}
 	const id = Number(idRol);
 	if (!Number.isFinite(id) || id <= 0) throw error(400, 'Id de rol inválido');
 	if (id >= v.ID_ROL_PERSONALIZADO_MIN) await obtenerRolPropio(id, idEmpresa);
@@ -773,6 +788,9 @@ async function usuariosDeRol(idRol, idEmpresa) {
 }
 
 async function auditoriaDeRol(idRol, idEmpresa, limite = 100) {
+	if (!isAuthCentralEnabled()) {
+		return rolesMatrizLocal().auditoriaDeRol(idRol, idEmpresa, limite);
+	}
 	if (!(await schema.esquemaListo())) return [];
 	const id = Number(idRol);
 	if (id >= v.ID_ROL_PERSONALIZADO_MIN) await obtenerRolPropio(id, idEmpresa);

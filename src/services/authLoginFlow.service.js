@@ -283,12 +283,13 @@ async function completarLogin({
 	res,
 	username,
 	usuario,
-	idEmpresaSesion,
+	idEmpresaSesion: idEmpresaSesionIn,
 	idEmpresaBody,
 	idSectorBody,
 	ip,
 	userAgent,
 }) {
+	let idEmpresaSesion = idEmpresaSesionIn;
 	// requireAuth rechaza tokens sin ValorPersonal > 0: emitirlo deja al usuario logueado
 	// pero con 401 en cada request (pantalla cargando sin fin).
 	if (!(Number(usuario?.ValorPersonal) > 0)) {
@@ -322,8 +323,31 @@ async function completarLogin({
 		if (usuario.RolId == null) usuario.RolId = rolPreliminar.id;
 		if (usuario.RolNivel == null) usuario.RolNivel = rolPreliminar.nivel;
 	}
-	// La cuenta de plataforma va siempre al panel SaaS, sin tenant.
-	if (esCuentaPlataforma(usuario, username)) {
+	const { isLocalDevOnly } = require('../config/authCentralDb');
+	let idEmpresaBodyNum =
+		idEmpresaBody != null && idEmpresaBody !== '' && Number.isFinite(Number(idEmpresaBody))
+			? Number(idEmpresaBody)
+			: null;
+	// En LOCAL_DEV_ONLY, el superadmin de plataforma entra al tenant local
+	// (idEmpresa del body, BOT_EMPRESA_ID, o la única fila de Empresas).
+	if (isLocalDevOnly() && !(idEmpresaBodyNum > 0) && esCuentaPlataforma(usuario, username)) {
+		const fromEnv = Number(process.env.BOT_EMPRESA_ID || process.env.LOCAL_EMPRESA_ID || 0);
+		if (fromEnv > 0) idEmpresaBodyNum = fromEnv;
+		else {
+			try {
+				const empresas = await authService.obtenerTodasEmpresas();
+				if (empresas.length === 1) idEmpresaBodyNum = Number(empresas[0].idEmpresa);
+			} catch (e) {
+				console.warn('[auth.login] empresa local por defecto:', e.message);
+			}
+		}
+	}
+	const entrarTenantLocal =
+		isLocalDevOnly() && idEmpresaBodyNum != null && idEmpresaBodyNum > 0;
+
+	// La cuenta de plataforma va siempre al panel SaaS, sin tenant
+	// (salvo login local explícito con idEmpresa).
+	if (esCuentaPlataforma(usuario, username) && !entrarTenantLocal) {
 		return completarLoginPlataforma({ res, username, usuario, ip, userAgent });
 	}
 
@@ -339,8 +363,12 @@ async function completarLogin({
 
 	// Rol SUPER_ADMIN de un hospital: conserva su empresa, no es cuenta de
 	// plataforma. Solo sin empresa autenticada la sesión queda sin tenant.
-	if (esSuperAdmin && idEmpresaSesion == null) {
+	if (esSuperAdmin && idEmpresaSesion == null && !entrarTenantLocal) {
 		return completarLoginPlataforma({ res, username, usuario, ip, userAgent });
+	}
+
+	if (entrarTenantLocal && (idEmpresaSesion == null || !(Number(idEmpresaSesion) > 0))) {
+		idEmpresaSesion = idEmpresaBodyNum;
 	}
 
 	let empresaSeleccionada = null;
