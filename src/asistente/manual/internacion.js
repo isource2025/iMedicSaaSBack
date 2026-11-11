@@ -63,7 +63,7 @@ module.exports = [
 			'Para volver al mapa: «Cerrar».',
 		],
 		problemas: [
-			{ sintoma: 'No veo «Gestión Médica»', causa: 'El rol ENFERMERO no la tiene; «Evoluciones» e «Interconsultas» están en Gestión Enfermería. Cada sección se oculta si falta el permiso de su submódulo (ej. INTERNACION.EVOLUCIONES.VER).' },
+			{ sintoma: 'No veo «Gestión Médica»', causa: 'El rol ENFERMERO no la tiene (usa Gestión Enfermería). El ADMINISTRATIVO sí debe verla con INTERNACION.*.VER para consultar/imprimir. Si un administrativo no la ve, faltan esos VER en su rol o hay que re-loguearse tras el seed.' },
 			{ sintoma: 'Solo veo adjuntos', causa: 'El rol CARGA_HC entra directo a «Archivos adjuntos» y no ve el resto.' },
 		],
 	},
