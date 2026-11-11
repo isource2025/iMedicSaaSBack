@@ -1,5 +1,9 @@
 const { executeQuery } = require('../models/db');
 const personalService = require('./personal.service');
+const localidadesService = require('./localidades.service');
+const provinciaService = require('./provincia.service');
+const provinciasService = require('./provincias.service');
+const sexoService = require('./sexo.service');
 const { convertirFechaAClarion } = require('../utils/dateUtils');
 const { getTenantId } = require('../context/tenantContext');
 const { isAuthCentralEnabled } = require('../config/authCentralDb');
@@ -121,6 +125,7 @@ function personalDesdeNube(nube, sqlPersonal) {
 		ValorEspecialidad: pickFirst(base.ValorEspecialidad, nube?.valorEspecialidad),
 		ValorFunciones: base.ValorFunciones ?? null,
 		ValorServicio: pickFirst(base.ValorServicio, nube?.valorServicio),
+		ServicioDescripcion: pickFirst(base.ServicioDescripcion, nube?.servicioDescripcion),
 		ValorServicioParaFacturar: pickFirst(base.ValorServicioParaFacturar, nube?.valorServicioParaFacturar),
 		ValorCategoria: pickFirst(base.ValorCategoria, nube?.valorCategoria),
 		ValorClase: base.ValorClase ?? null,
@@ -131,6 +136,10 @@ function personalDesdeNube(nube, sqlPersonal) {
 		IdEspecialidadME: base.IdEspecialidadME ?? null,
 		Estado: pickFirst(base.Estado, nube?.estado),
 		CUIT: pickFirst(base.CUIT, nube?.cuit),
+		Especialidad: null,
+		Localidad: null,
+		Sector: null,
+		Servicio: null,
 	};
 }
 
@@ -162,11 +171,143 @@ async function obtenerPerfilCompleto(valorPersonal) {
 	const nube = await obtenerFichaNube(valorPersonal);
 	const personal = personalDesdeNube(nube, personalSql);
 
+	if (personal) {
+		try {
+			const sectores = await personalService.listarSectoresPersonal(valorPersonal);
+			const nombresSector = (sectores || [])
+				.map((s) => s.Descripcion || s.idSector)
+				.filter(Boolean);
+			personal.Sector = nombresSector.length ? nombresSector.join(', ') : null;
+			const servicioDesdeSector = (sectores || [])
+				.map((s) => s.DescripcionServicio)
+				.find((d) => d && String(d).trim());
+			personal.Servicio = pickFirst(
+				personal.ServicioDescripcion,
+				servicioDesdeSector,
+				personal.ValorServicio,
+			);
+		} catch (e) {
+			console.warn('[miPerfil] sectores:', e.message);
+			personal.Servicio = pickFirst(personal.ServicioDescripcion, personal.ValorServicio);
+		}
+		try {
+			const espId = personal.ValorEspecialidad != null ? Number(personal.ValorEspecialidad) : null;
+			if (espId != null && Number.isFinite(espId)) {
+				const lista = await personalService.listarEspecialidades();
+				const hit = (lista || []).find((e) => Number(e.valor) === espId);
+				personal.Especialidad = hit?.descripcion || String(espId);
+			} else {
+				personal.Especialidad = null;
+			}
+		} catch (e) {
+			console.warn('[miPerfil] especialidad:', e.message);
+			personal.Especialidad =
+				personal.ValorEspecialidad != null ? String(personal.ValorEspecialidad) : null;
+		}
+		let localidadRow = null;
+		try {
+			const locId = personal.ValorLocalidad != null ? Number(personal.ValorLocalidad) : null;
+			if (locId != null && Number.isFinite(locId) && locId !== 0) {
+				const lista = await localidadesService.getLocalidades();
+				localidadRow = (lista || []).find((e) => Number(e.valor) === locId) || null;
+				personal.Localidad =
+					(localidadRow?.descripcion && String(localidadRow.descripcion).trim()) ||
+					String(locId);
+			} else {
+				personal.Localidad = null;
+			}
+		} catch (e) {
+			console.warn('[miPerfil] localidad:', e.message);
+			const locId = personal.ValorLocalidad != null ? Number(personal.ValorLocalidad) : null;
+			personal.Localidad =
+				locId != null && Number.isFinite(locId) && locId !== 0 ? String(locId) : null;
+		}
+		try {
+			// Igual que PersonalForm: Provincia puede venir vacía y se toma de la localidad (LetraProvincia).
+			let codigo = personal.Provincia != null ? String(personal.Provincia).trim() : '';
+			if ((!codigo || codigo === '0') && localidadRow?.valorProvincia != null) {
+				codigo = String(localidadRow.valorProvincia).trim();
+			}
+			if ((!codigo || codigo === '0') && personal.ValorLocalidad) {
+				const locId = Number(personal.ValorLocalidad);
+				if (Number.isFinite(locId) && locId !== 0) {
+					const lista = await localidadesService.getLocalidades();
+					const hit = (lista || []).find((e) => Number(e.valor) === locId);
+					if (hit?.valorProvincia != null) codigo = String(hit.valorProvincia).trim();
+				}
+			}
+
+			if (!codigo || codigo === '0') {
+				personal.Provincia = null;
+			} else if (/^\d+$/.test(codigo)) {
+				const hit = await provinciaService.getProvincia(Number(codigo));
+				personal.Provincia =
+					(hit?.Descripcion && String(hit.Descripcion).trim()) || codigo;
+			} else {
+				const rows = await provinciasService.getProvinciaPorLetra(codigo);
+				const first = Array.isArray(rows) ? rows[0] : rows;
+				personal.Provincia =
+					(first?.descripcion && String(first.descripcion).trim()) || codigo;
+			}
+		} catch (e) {
+			console.warn('[miPerfil] provincia:', e.message);
+			const codigo = personal.Provincia != null ? String(personal.Provincia).trim() : '';
+			personal.Provincia = codigo && codigo !== '0' ? codigo : null;
+		}
+		try {
+			const codigoSexo = personal.Sexo != null ? String(personal.Sexo).trim() : '';
+			if (!codigoSexo || codigoSexo === '0') {
+				personal.Sexo = null;
+			} else {
+				const hit = await sexoService.getSexoByValor(codigoSexo);
+				personal.Sexo =
+					(hit?.descripcion && String(hit.descripcion).trim()) ||
+					(codigoSexo.toUpperCase() === 'M'
+						? 'MASCULINO'
+						: codigoSexo.toUpperCase() === 'F'
+							? 'FEMENINO'
+							: codigoSexo);
+			}
+		} catch (e) {
+			console.warn('[miPerfil] sexo:', e.message);
+			const codigoSexo = personal.Sexo != null ? String(personal.Sexo).trim() : '';
+			personal.Sexo = codigoSexo || null;
+		}
+		try {
+			const codigoCivil = personal.EstadoCivil != null ? String(personal.EstadoCivil).trim() : '';
+			if (!codigoCivil || codigoCivil === '0') {
+				personal.EstadoCivil = null;
+			} else {
+				const rows = await executeQuery(
+					`SELECT Valor AS valor, Descripcion AS descripcion FROM dbo.imEstadoCivil`,
+				);
+				const key = codigoCivil.toUpperCase();
+				const hit = (rows || []).find(
+					(r) => String(r.valor || '').trim().toUpperCase() === key,
+				);
+				personal.EstadoCivil =
+					(hit?.descripcion && String(hit.descripcion).trim()) || codigoCivil;
+			}
+		} catch (e) {
+			console.warn('[miPerfil] estado civil:', e.message);
+			const codigoCivil = personal.EstadoCivil != null ? String(personal.EstadoCivil).trim() : '';
+			personal.EstadoCivil = codigoCivil || null;
+		}
+	}
+
 	let foto = { hasFirma: false };
 	try {
 		foto = await personalService.obtenerFirmaPersonal(valorPersonal);
 	} catch {
 		foto = { hasFirma: false };
+	}
+
+	let fotoPersonal = { hasFoto: false };
+	try {
+		const meta = await personalService.obtenerFotoPersonal(valorPersonal);
+		fotoPersonal = { hasFoto: !!meta?.hasFoto };
+	} catch {
+		fotoPersonal = { hasFoto: false };
 	}
 
 	const apellidoNombre =
@@ -198,6 +339,7 @@ async function obtenerPerfilCompleto(valorPersonal) {
 		},
 		personal: personal || null,
 		fotoPerfil: foto || { hasFirma: false },
+		foto: fotoPersonal,
 	};
 }
 
@@ -208,7 +350,14 @@ async function actualizarPerfilPersonal() {
 }
 
 async function obtenerFotoPerfil(valorPersonal) {
-	return personalService.obtenerFirmaPersonal(valorPersonal);
+	const loaded = await personalService.leerFotoPersonalBuffer(valorPersonal);
+	if (!loaded?.buf?.length) return { hasFoto: false };
+	const mime = loaded.mime || 'image/jpeg';
+	return {
+		hasFoto: true,
+		mime,
+		dataUrl: `data:${mime};base64,${loaded.buf.toString('base64')}`,
+	};
 }
 
 async function actualizarFotoPerfil() {

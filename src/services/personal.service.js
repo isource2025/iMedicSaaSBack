@@ -1258,6 +1258,41 @@ async function _firmaParaPdf(buf) {
 	return { buf, mime };
 }
 
+/**
+ * Prepara la firma para mostrar en UI: PNG con fondo transparente.
+ * Los BMP/JPEG legacy suelen venir con tinta sobre blanco opaco.
+ */
+async function _firmaParaUi(buf) {
+	const mimeOrig = _sniffImageMime(buf);
+	try {
+		const sharp = require('sharp');
+		const meta = await sharp(buf).metadata();
+		// PNG del pad ya tiene alpha: devolverlo tal cual.
+		if (mimeOrig === 'image/png' && (meta.hasAlpha || (meta.channels || 0) >= 4)) {
+			return { buf, mime: 'image/png' };
+		}
+		const { data, info } = await sharp(buf)
+			.ensureAlpha()
+			.raw()
+			.toBuffer({ resolveWithObject: true });
+		const threshold = 242;
+		for (let i = 0; i < data.length; i += 4) {
+			if (data[i] >= threshold && data[i + 1] >= threshold && data[i + 2] >= threshold) {
+				data[i + 3] = 0;
+			}
+		}
+		const png = await sharp(data, {
+			raw: { width: info.width, height: info.height, channels: 4 },
+		})
+			.png()
+			.toBuffer();
+		if (png && png.length) return { buf: png, mime: 'image/png' };
+	} catch (e) {
+		console.warn('[firma] no se pudo transparentar para UI:', e.message);
+	}
+	return { buf, mime: mimeOrig };
+}
+
 function _toFirmaBuffer(firma) {
 	if (firma == null) return null;
 	if (Buffer.isBuffer(firma)) return firma.length ? firma : null;
@@ -1296,7 +1331,7 @@ async function obtenerFirmaPersonal(valor) {
 	if (!row) return { hasFirma: false };
 	const raw = _toFirmaBuffer(row.Firma);
 	if (!raw) return { hasFirma: false };
-	const { buf, mime } = await _firmaParaPdf(raw);
+	const { buf, mime } = await _firmaParaUi(raw);
 	return {
 		hasFirma: true,
 		mime,
@@ -1395,6 +1430,73 @@ async function obtenerFotoPersonal(valor) {
 	const ruta = await _leerRutaFoto(valor);
 	if (!ruta) return { hasFoto: false };
 	return { hasFoto: true, path: ruta };
+}
+
+/**
+ * Lee los bytes de la foto de personal (local o file server) para UI (dataUrl / avatar).
+ */
+async function leerFotoPersonalBuffer(valor) {
+	const path = require('path');
+	const fs = require('fs');
+	const axios = require('axios');
+	const {
+		resolveFileServerUrl,
+		fileServerHeaders,
+	} = require('../utils/fileServerUrl');
+	const {
+		fileServerFileUrl,
+		pathLookupCandidates,
+	} = require('../utils/fileNameEncoding');
+
+	const meta = await obtenerFotoPersonal(valor);
+	if (!meta.hasFoto || !meta.path) return null;
+
+	const ruta = String(meta.path);
+	const mimeFromExt = (p) => {
+		const ext = path.extname(p).toLowerCase();
+		if (ext === '.png') return 'image/png';
+		if (ext === '.gif') return 'image/gif';
+		if (ext === '.webp') return 'image/webp';
+		return 'image/jpeg';
+	};
+
+	const fallbackLocal =
+		process.env.FILE_SERVER_FALLBACK_LOCAL === '1' ||
+		process.env.ADJUNTOS_LOCAL_FALLBACK === '1' ||
+		process.env.NODE_ENV !== 'production';
+
+	if (fallbackLocal && path.isAbsolute(ruta) && fs.existsSync(ruta)) {
+		return { buf: fs.readFileSync(ruta), mime: mimeFromExt(ruta) };
+	}
+
+	const timeoutMs = Number(process.env.FILE_SERVER_TIMEOUT_MS || 180000);
+	const fileServerUrl = await resolveFileServerUrl();
+	const candidates = pathLookupCandidates(ruta);
+	let lastErr = null;
+	for (const candidato of candidates.length ? candidates : [ruta]) {
+		try {
+			const url = fileServerFileUrl(fileServerUrl, candidato);
+			const remote = await axios.get(url, {
+				headers: fileServerHeaders(),
+				responseType: 'arraybuffer',
+				timeout: timeoutMs,
+				validateStatus: (s) => s >= 200 && s < 500,
+			});
+			if (remote.status === 404) continue;
+			if (remote.status >= 400) {
+				lastErr = new Error(`file server HTTP ${remote.status}`);
+				continue;
+			}
+			const buf = Buffer.from(remote.data);
+			if (!buf.length) continue;
+			const mime = remote.headers['content-type'] || mimeFromExt(candidato);
+			return { buf, mime: String(mime).split(';')[0].trim() || 'image/jpeg' };
+		} catch (e) {
+			lastErr = e;
+		}
+	}
+	if (lastErr) throw lastErr;
+	return null;
 }
 
 async function actualizarFotoPersonalPath(valor, ruta) {
@@ -2189,6 +2291,7 @@ module.exports = {
 	eliminarFirmaPersonal,
 	rutaRelativaFotoPersonal,
 	obtenerFotoPersonal,
+	leerFotoPersonalBuffer,
 	actualizarFotoPersonalPath,
 	eliminarFotoPersonal,
 	listarSectoresPersonal,
