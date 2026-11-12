@@ -116,7 +116,8 @@ const MODULOS = Object.freeze([
 			{ id: 'DIETA',                label: 'Dietas',                   acciones: [...CRUD] },
 			{ id: 'BALANCE_HIDRICO',      label: 'Balance hídrico',          acciones: [...CRUD] },
 			{ id: 'INSUMOS',              label: 'Insumos',                  acciones: [...CRUD] },
-			{ id: 'ESTUDIOS',             label: 'Pedidos de estudios (complementarios)',  acciones: [...CRUD, ACCIONES.VER_TODOS] },
+			// VER = bandeja + notificaciones + responder; CREAR = solicitar pedidos nuevos.
+			{ id: 'ESTUDIOS',             label: 'Pedidos de estudios (bandeja / responder)',  acciones: [...CRUD, ACCIONES.VER_TODOS] },
 			{ id: 'PROTOCOLOS',           label: 'Protocolos',               acciones: [...CRUD] },
 			{ id: 'PROCEDIMIENTOS',       label: 'Procedimientos',           acciones: [...CRUD] },
 			// TRASLADAR = cambio/intercambio/asignación de cama.

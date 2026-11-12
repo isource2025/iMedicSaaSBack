@@ -24,7 +24,10 @@ const crear = requireAnyPermiso(
 	'TURNOS.AGENDA.CREAR',
 	'TURNOS.AGENDA.EDITAR',
 );
+// Responder / tomar / liberar: alcanza con VER (bandeja + notificaciones).
+// CREAR/EDITAR de agenda o ADJUNTOS.CREAR siguen habilitándolo por compatibilidad.
 const cumplir = requireAnyPermiso(
+	'INTERNACION.ESTUDIOS.VER',
 	'INTERNACION.ESTUDIOS.CREAR',
 	'TURNOS.AGENDA.EDITAR',
 	'INTERNACION.ADJUNTOS.CREAR',

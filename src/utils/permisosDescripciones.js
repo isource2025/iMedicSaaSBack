@@ -132,9 +132,16 @@ const SUBMODULOS = Object.freeze({
 	},
 	'INTERNACION.EVOLUCIONES': { descripcion: 'Evoluciones médicas del paciente internado.' },
 	'INTERNACION.INTERCONSULTAS': {
-		descripcion: 'Interconsultas solicitadas a otros profesionales.',
+		descripcion:
+			'Interconsultas entre profesionales: solicitarlas en la ficha, verlas en la bandeja de pedidos (pestaña Interconsultas), responderlas y recibir notificaciones.',
 		acciones: {
-			VER_TODOS: 'Ver la bandeja de interconsultas de todos los sectores',
+			VER:
+				'Ver interconsultas en la ficha, entrar a la bandeja (pestaña Interconsultas), ver notificaciones de interconsultas libres y responderlas. El alcance por sector lo define la configuración de personal, no este permiso.',
+			CREAR: 'Crear una interconsulta nueva desde la ficha del paciente.',
+			EDITAR: 'Modificar una interconsulta propia aún no respondida.',
+			ELIMINAR: 'Eliminar una interconsulta aún no respondida.',
+			VER_TODOS:
+				'Ver en la bandeja las interconsultas de todos los sectores, no solo las del servicio/sector del usuario.',
 		},
 	},
 	'INTERNACION.EVOLUCION_ENFERMERIA': { descripcion: 'Evolución de enfermería del paciente internado.' },
@@ -150,9 +157,18 @@ const SUBMODULOS = Object.freeze({
 	},
 	'INTERNACION.INSUMOS': { descripcion: 'Insumos utilizados en el paciente internado.' },
 	'INTERNACION.ESTUDIOS': {
-		descripcion: 'Pedidos de estudios complementarios (laboratorio, imágenes) y su bandeja de cumplimiento.',
+		descripcion:
+			'Pedidos de estudios complementarios (laboratorio, tomografía, rayos, etc.): solicitarlos en la ficha, verlos en la bandeja de pedidos, tomarlos, responderlos y recibir notificaciones. No es el visualizador PACS del tomógrafo (eso va con Adjuntos / Estudios PACS).',
 		acciones: {
-			VER_TODOS: 'Ver la bandeja de estudios de todos los sectores',
+			VER:
+				'Ver pedidos de estudios en la ficha del paciente, entrar a la bandeja de pedidos, ver el contador/notificaciones de pedidos libres de su servicio-sector, tomar/liberar un pedido y cargarle la respuesta (cumplir). Con solo VER ya puede operar la bandeja; el filtro de qué servicios ve lo define la configuración de personal/sector, no este permiso.',
+			CREAR:
+				'Crear un pedido de estudio nuevo (solicitud desde internación o agenda). No hace falta para responder pedidos ajenos: eso lo cubre VER.',
+			EDITAR:
+				'Modificar un pedido de estudio ya cargado (datos de la solicitud, antes de cumplirlo). No reemplaza a VER para la bandeja.',
+			ELIMINAR: 'Eliminar un pedido de estudio que todavía no fue cumplido.',
+			VER_TODOS:
+				'Ver en la bandeja los pedidos de todos los sectores/servicios, no solo los del servicio asignado al usuario. Sin esto, la bandeja se limita a los sectores configurados en su ficha de personal.',
 		},
 	},
 	'INTERNACION.REGISTROS': {
@@ -175,12 +191,17 @@ const SUBMODULOS = Object.freeze({
 		},
 	},
 	'INTERNACION.ADJUNTOS': {
-		descripcion: 'Archivos adjuntos del paciente: resultados, imágenes y documentos.',
+		descripcion:
+			'Archivos adjuntos de la internación (PDF, imágenes, informes) y pestaña Estudios PACS del tomógrafo (ClearCanvas): listar y abrir series DICOM vinculadas a la visita por DNI y fecha.',
 		acciones: {
+			VER:
+				'Ver la sección Archivos adjuntos de la cama, listar archivos y abrir Estudios PACS (imágenes del tomógrafo). También habilita la API PACS. No alcanza para subir archivos nuevos.',
+			CREAR:
+				'Subir adjuntos nuevos (archivos o serie DICOM local) y, por compatibilidad, también permite responder pedidos de estudios en la bandeja.',
 			EDITAR:
-				'Modificar adjuntos propios (los ajenos requieren INTERNACION.REGISTROS.EDITAR_AJENOS)',
+				'Modificar adjuntos propios (los cargados por otro profesional requieren INTERNACION.REGISTROS.EDITAR_AJENOS).',
 			ELIMINAR:
-				'Eliminar adjuntos propios (los ajenos requieren INTERNACION.REGISTROS.EDITAR_AJENOS)',
+				'Eliminar adjuntos propios (los ajenos requieren INTERNACION.REGISTROS.EDITAR_AJENOS).',
 		},
 	},
 	'INTERNACION.EPICRISIS': {
