@@ -1,7 +1,7 @@
 const auditoria = require('./auditoria');
 
 /** Tope de la versión de prueba. 0 = sin límite. */
-const LIMITE_PRUEBA = 5;
+const LIMITE_PRUEBA = 15;
 
 const memoria = new Map();
 let contarMensajes = (args) => auditoria.contarMensajes(args);
