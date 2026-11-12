@@ -7,7 +7,7 @@
  */
 const { executeQuery } = require('../models/db');
 const grab = require('./almacen.remitos.grabacion');
-const { httpError, trim, num, pagina, audUserDe, ahoraCtx, enTransaccion, sql } = require('./almacen.comun');
+const { httpError, trim, num, pagina, resolverAudUser, ahoraCtx, enTransaccion, sql } = require('./almacen.comun');
 
 const DEFAULT_EMPRESA = 1;
 const DEFAULT_SUCURSAL = 1;
@@ -759,7 +759,7 @@ async function crear(body, auth) {
 				delta: inicial,
 				tipoMov: STOCK_COD.INICIAL_MAS,
 				motivo: trim(body.Motivo) || 'Stock inicial',
-				audUser: audUserDe(auth),
+				audUser: await resolverAudUser(auth),
 			});
 		}
 	});
@@ -810,7 +810,7 @@ async function ajustar(body, auth) {
 			delta,
 			tipoMov: delta > 0 ? STOCK_COD.AJUSTE_MAS : STOCK_COD.AJUSTE_MENOS,
 			motivo,
-			audUser: audUserDe(auth),
+			audUser: await resolverAudUser(auth),
 		});
 		ajuste.delta = delta;
 	});

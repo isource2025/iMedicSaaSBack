@@ -190,12 +190,14 @@ async function escribirComprobante(tx, c) {
       INSERT INTO dbo.Remitos (
         IdTransaccion, IdEmpresa, IdSucursal, Tipo_Cbte, Grupo_Cbte, Letra_Cbte, NroCbte,
         IdDeposito, IdEmpresaDest, IdSucursalDest, IdDepositoDest, IdProveedor, IdCliente,
-        Fecha, IdTransaccionOrig, Bultos, IdStatus, ImporteCosto, ImportePPP,
+        Fecha, IdFletero, Flete_Costo, IdTransaccionOrig, Bultos, IdStatus, CotizacionM2, ImporteM2,
+        ImporteCosto, ImportePPP,
         Aud_Fecha_Date, Aud_Hora, Aud_Usuario, Aud_Accion
       ) VALUES (
         @id, @emp, @suc, @tipo, @grupo, @letra, @nro,
-        @dep, @empDest, @sucDest, @depDest, @prov, @cli,
-        @fecha, @orig, @bultos, @status, @costo, @imp,
+        @dep, @empDest, @sucDest, @depDest, ISNULL(@prov, 0), ISNULL(@cli, 0),
+        @fecha, 0, 0, ISNULL(@orig, 0), @bultos, @status, 0, 0,
+        @costo, @imp,
         @ahora, @ahora, @audUser, 1
       )
     `);
@@ -203,7 +205,7 @@ async function escribirComprobante(tx, c) {
 		await reqH.query(`
       UPDATE dbo.Remitos SET
         IdDeposito = @dep, IdEmpresaDest = @empDest, IdSucursalDest = @sucDest, IdDepositoDest = @depDest,
-        IdProveedor = @prov, IdCliente = @cli, Fecha = @fecha, Bultos = @bultos, IdStatus = @status,
+        IdProveedor = ISNULL(@prov, 0), IdCliente = ISNULL(@cli, 0), Fecha = @fecha, Bultos = @bultos, IdStatus = @status,
         ImporteCosto = @costo, ImportePPP = @imp,
         Aud_Fecha_Date = @ahora, Aud_Hora = @ahora, Aud_Usuario = @audUser, Aud_Accion = 2
       WHERE IdTransaccion = @id
@@ -223,6 +225,7 @@ async function escribirComprobante(tx, c) {
 			.input('prod', sql.Int, it.IdProducto)
 			.input('tipo', sql.Char(3), c.tipo)
 			.input('cant', sql.Decimal(18, 4), it.Cantidad)
+			.input('cantSig', sql.Decimal(18, 4), signo * Math.abs(Number(it.Cantidad) || 0))
 			.input('cli', sql.Int, c.idCliente)
 			.input('prov', sql.Int, c.idProveedor)
 			.input('fecha', sql.DateTime, c.fecha)
@@ -244,9 +247,9 @@ async function escribirComprobante(tx, c) {
           Aud_Fecha_Date, Aud_Hora, Aud_Usuario, Aud_Accion
         ) VALUES (
           @id, @ren, @sent, @dep, @status, @prod, @tipo,
-          @cant, @cant, @cant, @cant, 0, 0,
-          @cli, @prov, @fecha, @unit, @tot,
-          @orig, @renOrig, @desc, @pac, @nroInd,
+          @cant, @cant, @cantSig, @cantSig, 0, 0,
+          ISNULL(@cli, 0), ISNULL(@prov, 0), @fecha, @unit, @tot,
+          ISNULL(@orig, 0), ISNULL(@renOrig, @ren), @desc, @pac, @nroInd,
           @ahora, @ahora, @audUser, 1
         )
       `);

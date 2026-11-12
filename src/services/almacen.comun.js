@@ -1,7 +1,7 @@
 /**
  * Helpers compartidos por los servicios de almacén sobre tablas Clarion.
  */
-const { getRequestPool, sql } = require('../models/db');
+const { executeQuery, getRequestPool, sql } = require('../models/db');
 const { partesFechaHoraArgentina, ahoraWallArgentinaParaSql } = require('../utils/dateUtils');
 
 function httpError(mensaje, statusCode = 400) {
@@ -36,6 +36,26 @@ function audUserDe(auth) {
 		if (Number.isFinite(n) && n > 0 && n <= 32767) return n;
 	}
 	return null;
+}
+
+/**
+ * Como audUserDe, pero si el JWT no trae CodOperador lo busca en imPassword por la ficha
+ * (ValorPersonal) del mismo usuario. Clarion deja Aud_Usuario / IdEmpleado en NULL si no.
+ */
+async function resolverAudUser(auth) {
+	const directo = audUserDe(auth);
+	if (directo != null) return directo;
+	const u = auth?.usuario || {};
+	const vp = Number(u.id ?? u.idValorpersonal ?? u.idValorPersonal ?? u.valorPersonal);
+	if (!Number.isFinite(vp) || vp <= 0) return null;
+	const rows = await executeQuery(
+		`SELECT TOP 1 CodOperador FROM dbo.imPassword WITH (NOLOCK)
+     WHERE ValorPersonal = @p0 AND CodOperador > 0 AND CodOperador <= 32767
+     ORDER BY CodOperador`,
+		[{ value: vp, type: 'Int' }],
+	);
+	const n = Number(rows?.[0]?.CodOperador);
+	return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** Fecha y hora "de pared" de Argentina, en la convención UTC que usa tedious. */
@@ -75,6 +95,7 @@ module.exports = {
 	num,
 	pagina,
 	audUserDe,
+	resolverAudUser,
 	ahoraCtx,
 	esErrorSql,
 	enTransaccion,

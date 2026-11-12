@@ -8,6 +8,7 @@ const {
 	ahoraWallArgentinaParaSql,
 } = require('../utils/dateUtils');
 const grab = require('./almacen.remitos.grabacion');
+const { resolverAudUser } = require('./almacen.comun');
 
 function httpError(mensaje, statusCode = 400) {
 	const e = new Error(mensaje);
@@ -831,16 +832,6 @@ const DEFAULT_EMPRESA = 1;
 const DEFAULT_SUCURSAL = 1;
 const LOTE_IN = 500;
 
-/** Código de operador del JWT (Aud_Usuario es smallint). */
-function audUserDe(auth) {
-	const u = auth?.usuario || {};
-	for (const c of [u.codOperador, u.idCodOperador, auth?.idCodOperador]) {
-		const n = c != null && c !== '' ? Number(c) : NaN;
-		if (Number.isFinite(n) && n > 0 && n <= 32767) return n;
-	}
-	return null;
-}
-
 function estadoDeTipo(tipoRow) {
 	const n = Number(tipoRow?.IdStatus);
 	return Number.isFinite(n) && n > 0 ? n : grab.STATUS_CONFIRMADO;
@@ -1138,7 +1129,7 @@ async function crear(body, auth, { transaction = null } = {}) {
 	const ctx = {
 		idEmpresa: Number(body.IdEmpresa) || DEFAULT_EMPRESA,
 		idSucursal: Number(body.IdSucursal) || DEFAULT_SUCURSAL,
-		audUser: audUserDe(auth),
+		audUser: await resolverAudUser(auth),
 		ahora: ahoraWallArgentinaParaSql(),
 	};
 	const idTx = await enTransaccion(async (tx) => {
@@ -1171,6 +1162,7 @@ async function actualizar(id, body, auth, { transaction = null } = {}) {
 	const idTx = Number(id);
 	if (!Number.isFinite(idTx)) throw httpError('Remito inválido');
 	const datos = await prepararDatos(body);
+	const audUser = await resolverAudUser(auth);
 	await enTransaccion(async (tx) => {
 		const cab = await cabeceraEditable(tx, idTx);
 		if (trim(cab.Tipo_Cbte) !== datos.tipo) {
@@ -1179,7 +1171,7 @@ async function actualizar(id, body, auth, { transaction = null } = {}) {
 		const ctx = {
 			idEmpresa: cab.IdEmpresa ?? DEFAULT_EMPRESA,
 			idSucursal: cab.IdSucursal ?? DEFAULT_SUCURSAL,
-			audUser: audUserDe(auth),
+			audUser,
 			ahora: ahoraWallArgentinaParaSql(),
 		};
 		if (usaIndicaciones(datos.tipo)) {
@@ -1215,6 +1207,7 @@ async function actualizar(id, body, auth, { transaction = null } = {}) {
 async function anular(id, auth, { transaction = null } = {}) {
 	const idTx = Number(id);
 	if (!Number.isFinite(idTx)) throw httpError('Remito inválido');
+	const audUser = await resolverAudUser(auth);
 	await enTransaccion(async (tx) => {
 		const cab = await grab.leerCabecera(tx, idTx);
 		if (!cab) throw httpError('Remito no encontrado', 404);
@@ -1225,7 +1218,7 @@ async function anular(id, auth, { transaction = null } = {}) {
 			idPrincipal === idTx ? cab : await grab.leerCabecera(tx, idPrincipal);
 		if (!cabPrincipal) throw httpError('Remito no encontrado', 404);
 
-		const ctx = { audUser: audUserDe(auth), ahora: ahoraWallArgentinaParaSql() };
+		const ctx = { audUser, ahora: ahoraWallArgentinaParaSql() };
 
 		if (Number(cabPrincipal.IdStatus) === grab.STATUS_ANULADO) {
 			// Original ya anulado: si quedó un espejo vivo, anularlo solo.

@@ -120,13 +120,18 @@ async function remito(tx, id) {
 			{ transaction: tx },
 		);
 		r = await remito(tx, rsm.IdTransaccion);
-		check(r.items[0].Sentido === 'S', 'Ítem RSM sentido S');
-		check(!!r.espejo, `REM espejo generado (IdTransaccion ${r.espejo?.IdTransaccion})`);
-		const esp = r.espejo ? await remito(tx, r.espejo.IdTransaccion) : null;
-		check(esp && esp.cab.IdDeposito === DEP_DESTINO && esp.items[0].Sentido === 'E', 'Espejo: entrada en depósito destino');
-		check(esp && esp.items[0].IdTransaccionOrig === rsm.IdTransaccion && esp.items[0].RenglonOrig === 1, 'Espejo enlazado por IdTransaccionOrig/RenglonOrig');
+		const it0 = r.items[0];
+		check(it0.Sentido === 'S', 'Ítem RSM sentido S');
+		check(Number(it0.Cantidad) === 2 && Number(it0.Cantidad_Fisico) === -2 && Number(it0.Cantidad_Disp) === -2, 'Ítem de salida: Cantidad 2, Cantidad_Fisico/Disp -2 (como Clarion)');
+		check(it0.RenglonOrig === 1 && it0.IdTransaccionOrig === 0 && it0.IdCliente === 0 && it0.IdProveedor === 0, 'Ítem: RenglonOrig = renglón y ceros en vez de NULL');
+		check(
+			r.cab.IdTransaccionOrig === 0 && r.cab.IdProveedor === 0 && r.cab.IdCliente === 0 && r.cab.IdFletero === 0 && Number(r.cab.Flete_Costo) === 0,
+			'Cabecera: ceros en vez de NULL (IdTransaccionOrig, proveedor, cliente, flete)',
+		);
+		check(r.trx.IdEmpleado === 15 && r.trx.Aud_Usuario === 15, 'Transacciones.IdEmpleado y Aud_Usuario del operador');
+		check(!r.espejo, 'RSM ya no genera REM espejo');
 		check((await stock(tx, DEP_ORIGEN)) === ini.o + 1, 'Stock origen 3-2 = +1');
-		check((await stock(tx, DEP_DESTINO)) === ini.d + 2, 'Stock destino +2');
+		check((await stock(tx, DEP_DESTINO)) === ini.d, 'Stock destino sin cambios');
 
 		console.log('\n3) Editar RSM: cantidad 2 → 5');
 		await remitos.actualizar(
@@ -144,18 +149,17 @@ async function remito(tx, id) {
 		);
 		const r2 = await remito(tx, rsm.IdTransaccion);
 		check(r2.cab.NroCbte === r.cab.NroCbte, 'Conserva el número');
-		check(r2.espejo && r2.espejo.IdTransaccion === r.espejo.IdTransaccion, 'Reutiliza el mismo espejo');
+		check(!r2.espejo, 'Editar no crea espejo');
+		check(Number(r2.items[0].Cantidad_Fisico) === -5, 'Ítem editado con Cantidad_Fisico -5');
 		check(r2.movs.length === 1 && Number(r2.movs[0].Cant_Fisico) === -5, 'Stock_Mov reescrito (-5)');
 		check((await stock(tx, DEP_ORIGEN)) === ini.o - 2, 'Stock origen 3-5 = -2');
-		check((await stock(tx, DEP_DESTINO)) === ini.d + 5, 'Stock destino +5');
+		check((await stock(tx, DEP_DESTINO)) === ini.d, 'Stock destino sin cambios');
 
 		console.log('\n4) Anular RSM');
 		await remitos.anular(rsm.IdTransaccion, AUTH, { transaction: tx });
 		const r3 = await remito(tx, rsm.IdTransaccion);
-		const e3 = await remito(tx, r.espejo.IdTransaccion);
 		check(r3.cab.IdStatus === 0 && r3.items.every((i) => i.IdStatus === 0), 'RSM anulado (cabecera e ítems)');
-		check(e3.cab.IdStatus === 0, 'Espejo anulado');
-		check(r3.movs.every((m) => m.IdStatus === 0) && e3.movs.every((m) => m.IdStatus === 0), 'Stock_Mov quedan como historial con IdStatus 0');
+		check(r3.movs.every((m) => m.IdStatus === 0), 'Stock_Mov quedan como historial con IdStatus 0');
 		check((await stock(tx, DEP_ORIGEN)) === ini.o + 3, 'Stock origen vuelve a +3');
 		check((await stock(tx, DEP_DESTINO)) === ini.d, 'Stock destino vuelve al inicial');
 
@@ -173,6 +177,7 @@ async function remito(tx, id) {
 		);
 		const r5 = await remito(tx, rsp.IdTransaccion);
 		check(r5.items[0].IdCliente === cli.IdCliente, 'Ítem RSP con IdCliente');
+		check(Number(r5.items[0].Cantidad_Fisico) === -1, 'Ítem RSP con Cantidad_Fisico -1');
 		check(!r5.espejo, 'RSP no genera espejo');
 		check((await stock(tx, DEP_ORIGEN)) === ini.o + 2, 'Stock origen +3-1 = +2');
 
