@@ -1,25 +1,13 @@
 /**
- * Catálogo Productos (tablas legacy Clarion: Productos, Rubros, SUBRUBRO, Unidades).
+ * Catálogo Productos (tablas legacy Clarion: Productos, Rubros, SUBRUBRO, Unidades,
+ * Tipos_Marcas). IdStatus NULL o 1 = activo; 0 = baja (Clarion deja NULL en la mayoría).
+ * Productos.Foto guarda la ruta relativa de la imagen dentro de uploads/.
  */
 const { executeQuery } = require('../models/db');
+const { httpError, trim, num, audUserDe, esErrorSql } = require('./almacen.comun');
 
-function httpError(mensaje, statusCode = 400) {
-	const e = new Error(mensaje);
-	e.statusCode = statusCode;
-	return e;
-}
-
-function trim(v) {
-	if (v == null) return null;
-	const s = String(v).replace(/\u0000/g, '').trim();
-	return s || null;
-}
-
-function num(v) {
-	if (v == null || v === '') return null;
-	const n = Number(v);
-	return Number.isFinite(n) ? n : null;
-}
+const STATUS_BAJA = 0;
+const STATUS_ACTIVO = 1;
 
 function flag01(v, def = 0) {
 	if (v === undefined || v === null || v === '') return def;
@@ -76,8 +64,23 @@ function mapProducto(row) {
 		RubSubLin: partes.length ? partes.join(' - ') : '—',
 		CBarra: trim(row.CBarra),
 		Texto: trim(row.Texto),
+		Foto: trim(row.Foto),
+		TieneFoto: !!trim(row.Foto),
+		Activo: row.IdStatus == null || Number(row.IdStatus) !== STATUS_BAJA,
+		StockTotal: row.StockTotal != null ? Number(row.StockTotal) : null,
+		DepositosConStock: row.DepositosConStock != null ? Number(row.DepositosConStock) : null,
+		DepositosBajoMinimo: row.DepositosBajoMinimo != null ? Number(row.DepositosBajoMinimo) : null,
 	};
 }
+
+const STOCK_APPLY = `
+  OUTER APPLY (
+    SELECT SUM(CASE WHEN st.Cant_Fisico > 0 THEN st.Cant_Fisico ELSE 0 END) AS StockTotal,
+           SUM(CASE WHEN st.Cant_Fisico > 0 THEN 1 ELSE 0 END) AS DepositosConStock,
+           SUM(CASE WHEN st.Stock_Minimo > 0 AND ISNULL(st.Cant_Fisico, 0) < st.Stock_Minimo THEN 1 ELSE 0 END) AS DepositosBajoMinimo
+    FROM dbo.Stock st WHERE st.IdProducto = p.IdProducto
+  ) stk
+`;
 
 const SELECT_PRODUCTO = `
   p.IdProducto, p.Cod_Alternativo, p.Descripcion, p.DescripcionC,
@@ -87,7 +90,7 @@ const SELECT_PRODUCTO = `
   p.Precio_Base, p.PrecioVenta, p.PrecioCosto, p.Punto_Pedido, p.Costo_Reposicion,
   p.Stock_Minimo, p.Stock_Maximo,
   p.Controlar_Stock, p.En_Lista, p.Con_Fabricacion, p.EsKit, p.Es_Partida,
-  p.IdCta_Vta, p.IdCta_Cmpra, p.Texto,
+  p.IdCta_Vta, p.IdCta_Cmpra, p.Texto, p.Foto,
   RTRIM(r.Descripcion) AS RubroNombre,
   RTRIM(s.DESCRIPCION) AS SubRubroNombre,
   RTRIM(u.Descripcion) AS UnidadNombre,
@@ -114,11 +117,29 @@ const FROM_PRODUCTO = `
   LEFT JOIN dbo.Plan_Cuentas cc ON cc.IdCuenta = p.IdCta_Cmpra
 `;
 
+const FILTRO_STOCK = {
+	con: `EXISTS (SELECT 1 FROM dbo.Stock st WHERE st.IdProducto = p.IdProducto AND st.Cant_Fisico > 0)`,
+	sin: `NOT EXISTS (SELECT 1 FROM dbo.Stock st WHERE st.IdProducto = p.IdProducto AND st.Cant_Fisico > 0)`,
+	bajo: `EXISTS (SELECT 1 FROM dbo.Stock st WHERE st.IdProducto = p.IdProducto
+           AND st.Stock_Minimo > 0 AND ISNULL(st.Cant_Fisico, 0) < st.Stock_Minimo)`,
+};
+
+const ORDENES = {
+	descripcion: `COALESCE(NULLIF(RTRIM(p.Descripcion), ''), RTRIM(p.DescripcionC)), p.IdProducto`,
+	codigo: 'p.IdProducto',
+	precio: 'ISNULL(p.PrecioVenta, 0) DESC, p.IdProducto',
+	stock: 'ISNULL(stk.StockTotal, 0) DESC, p.IdProducto',
+};
+
 async function listar({
 	search = '',
 	campo = 'descripcion',
 	idRubro = null,
 	idSubRubro = null,
+	estado = '',
+	stock = '',
+	conFoto = false,
+	orden = 'descripcion',
 	page = 1,
 	pageSize = 40,
 } = {}) {
@@ -137,6 +158,10 @@ async function listar({
 		where.push(`p.IdSubRubro = @p${params.length}`);
 		params.push({ value: Number(idSubRubro), type: 'SmallInt' });
 	}
+	if (estado === 'activos') where.push(`ISNULL(p.IdStatus, ${STATUS_ACTIVO}) <> ${STATUS_BAJA}`);
+	else if (estado === 'baja') where.push(`p.IdStatus = ${STATUS_BAJA}`);
+	if (FILTRO_STOCK[stock]) where.push(FILTRO_STOCK[stock]);
+	if (conFoto) where.push(`LEN(RTRIM(ISNULL(p.Foto, ''))) > 0`);
 
 	if (q) {
 		const like = `%${q}%`;
@@ -191,9 +216,11 @@ async function listar({
 	];
 	const rows = await executeQuery(
 		`
-    SELECT ${SELECT_PRODUCTO}
-    ${fromSql}
-    ORDER BY p.Descripcion, p.IdProducto
+    SELECT ${SELECT_PRODUCTO}, stk.StockTotal, stk.DepositosConStock, stk.DepositosBajoMinimo
+    ${FROM_PRODUCTO}
+    ${STOCK_APPLY}
+    WHERE ${whereSql}
+    ORDER BY ${ORDENES[orden] || ORDENES.descripcion}
     OFFSET @p${params.length} ROWS FETCH NEXT @p${params.length + 1} ROWS ONLY
     `,
 		pageParams,
@@ -211,14 +238,106 @@ async function listar({
 async function obtener(id) {
 	const rows = await executeQuery(
 		`
-    SELECT TOP 1 ${SELECT_PRODUCTO}
+    SELECT TOP 1 ${SELECT_PRODUCTO}, stk.StockTotal, stk.DepositosConStock, stk.DepositosBajoMinimo
     ${FROM_PRODUCTO}
+    ${STOCK_APPLY}
     WHERE p.IdProducto = @p0
     `,
 		[{ value: Number(id), type: 'Int' }],
 	);
 	if (!rows.length) throw httpError('Producto no encontrado', 404);
 	return mapProducto(rows[0]);
+}
+
+/** KPIs del catálogo para el tablero de productos. */
+async function resumen() {
+	const stockPorProducto = `
+    LEFT JOIN (
+      SELECT IdProducto,
+        MAX(CASE WHEN Cant_Fisico > 0 THEN 1 ELSE 0 END) AS conStock,
+        MAX(CASE WHEN Stock_Minimo > 0 AND ISNULL(Cant_Fisico, 0) < Stock_Minimo THEN 1 ELSE 0 END) AS bajo
+      FROM dbo.Stock GROUP BY IdProducto
+    ) sp ON sp.IdProducto = p.IdProducto
+  `;
+	const [tot, porRubro] = await Promise.all([
+		executeQuery(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN ISNULL(p.IdStatus, ${STATUS_ACTIVO}) <> ${STATUS_BAJA} THEN 1 ELSE 0 END) AS activos,
+        SUM(CASE WHEN p.IdStatus = ${STATUS_BAJA} THEN 1 ELSE 0 END) AS bajas,
+        SUM(CASE WHEN LEN(RTRIM(ISNULL(p.Foto, ''))) > 0 THEN 1 ELSE 0 END) AS conFoto,
+        SUM(CASE WHEN ISNULL(p.PrecioVenta, 0) > 0 THEN 1 ELSE 0 END) AS conPrecio,
+        SUM(CASE WHEN LEN(RTRIM(ISNULL(p.CBarra, ''))) > 0 THEN 1 ELSE 0 END) AS conBarra,
+        SUM(ISNULL(sp.conStock, 0)) AS conStock,
+        SUM(ISNULL(sp.bajo, 0)) AS bajoMinimo,
+        (SELECT COUNT(DISTINCT IdProducto) FROM dbo.Proveedores_Prod) AS conProveedor
+      FROM dbo.Productos p
+      ${stockPorProducto}
+    `),
+		executeQuery(`
+      SELECT p.IdRubro, RTRIM(MAX(r.Descripcion)) AS Descripcion, COUNT(*) AS cantidad,
+        SUM(ISNULL(sp.conStock, 0)) AS conStock
+      FROM dbo.Productos p
+      LEFT JOIN dbo.Rubros r ON r.IdRubro = p.IdRubro
+      ${stockPorProducto}
+      WHERE ISNULL(p.IdStatus, ${STATUS_ACTIVO}) <> ${STATUS_BAJA}
+      GROUP BY p.IdRubro
+      ORDER BY COUNT(*) DESC
+    `),
+	]);
+	const t = tot[0] || {};
+	const n = (v) => Number(v || 0);
+	const total = n(t.total);
+	const pct = (v) => (total ? Math.round((n(v) / total) * 1000) / 10 : 0);
+	return {
+		total,
+		activos: n(t.activos),
+		bajas: n(t.bajas),
+		conFoto: n(t.conFoto),
+		conPrecio: n(t.conPrecio),
+		conBarra: n(t.conBarra),
+		conStock: n(t.conStock),
+		bajoMinimo: n(t.bajoMinimo),
+		conProveedor: n(t.conProveedor),
+		pctActivos: pct(t.activos),
+		pctConStock: pct(t.conStock),
+		pctConPrecio: pct(t.conPrecio),
+		pctConFoto: pct(t.conFoto),
+		porRubro: porRubro.map((r) => ({
+			IdRubro: r.IdRubro,
+			Descripcion: trim(r.Descripcion) || 'Sin rubro',
+			cantidad: n(r.cantidad),
+			conStock: n(r.conStock),
+		})),
+	};
+}
+
+/** Ficha: producto + stock por depósito + proveedores + movimientos recientes. */
+async function ficha(id) {
+	const existencias = require('./almacen.existencias.service');
+	const proveedores = require('./almacen.proveedores.service');
+	const [producto, stock, provs, movs, actividad, uso] = await Promise.all([
+		obtener(id),
+		existencias.porProducto(id),
+		proveedores.porProducto(id),
+		existencias.movimientos({ idProducto: id, pageSize: 12 }),
+		existencias.actividadDiaria({ idProducto: id, dias: 90 }),
+		executeQuery(
+			`SELECT COUNT(DISTINCT ri.IdTransaccion) AS remitos, MAX(r.Fecha) AS ultimo
+       FROM dbo.RemitosItems ri JOIN dbo.Remitos r ON r.IdTransaccion = ri.IdTransaccion
+       WHERE ri.IdProducto = @p0 AND ri.IdStatus <> 0`,
+			[{ value: Number(id), type: 'Int' }],
+		),
+	]);
+	return {
+		producto,
+		stock,
+		proveedores: provs,
+		movimientos: movs.items,
+		actividad,
+		remitos: Number(uso[0]?.remitos || 0),
+		ultimoRemito: uso[0]?.ultimo || null,
+	};
 }
 
 async function catalogos() {
@@ -414,13 +533,13 @@ async function crear(body, auth) {
 			{ value: p.IdCtaVta, type: 'Int' },
 			{ value: p.IdCtaCmpra, type: 'Int' },
 			{ value: p.Texto, type: 'VarChar', length: 4000 },
-			{ value: auth?.idCodOperador != null ? Number(auth.idCodOperador) : null, type: 'SmallInt' },
+			{ value: audUserDe(auth), type: 'SmallInt' },
 		],
 	);
 	return obtener(id);
 }
 
-async function actualizar(id, body) {
+async function actualizar(id, body, auth) {
 	const current = await obtener(id);
 	const p = pickPayload(body, current);
 
@@ -458,6 +577,7 @@ async function actualizar(id, body) {
       IdCta_Cmpra = @p29,
       Texto = @p30,
       aud_fecha = GETDATE(),
+      Aud_Usuario = @p31,
       Aud_Accion = 2
     WHERE IdProducto = @p0
     `,
@@ -493,31 +613,224 @@ async function actualizar(id, body) {
 			{ value: p.IdCtaVta, type: 'Int' },
 			{ value: p.IdCtaCmpra, type: 'Int' },
 			{ value: p.Texto, type: 'VarChar', length: 4000 },
+			{ value: audUserDe(auth), type: 'SmallInt' },
 		],
 	);
 	return obtener(id);
 }
 
-async function eliminar(id) {
-	const used = await executeQuery(
-		`SELECT TOP 1 IdTransaccion FROM dbo.RemitosItems WHERE IdProducto = @p0`,
-		[{ value: Number(id), type: 'Int' }],
+async function cambiarEstado(id, activo, auth) {
+	await obtener(id);
+	await executeQuery(
+		`UPDATE dbo.Productos SET IdStatus = @p1, aud_fecha = GETDATE(), Aud_Usuario = @p2, Aud_Accion = 2
+     WHERE IdProducto = @p0`,
+		[
+			{ value: Number(id), type: 'Int' },
+			{ value: activo ? STATUS_ACTIVO : STATUS_BAJA, type: 'SmallInt' },
+			{ value: audUserDe(auth), type: 'SmallInt' },
+		],
 	);
-	if (used.length) {
-		throw httpError('No se puede borrar: el producto está usado en remitos', 409);
+	return obtener(id);
+}
+
+/**
+ * Borra el producto si nunca se movió. Con remitos, movimientos, existencias o
+ * proveedores asociados lo da de baja (IdStatus 0) para conservar la historia.
+ */
+async function eliminar(id, auth) {
+	const idNum = Number(id);
+	const uso = await executeQuery(
+		`SELECT
+       (SELECT COUNT(*) FROM dbo.RemitosItems WHERE IdProducto = @p0) AS remitos,
+       (SELECT COUNT(*) FROM dbo.Stock_Mov WHERE IdProducto = @p0) AS movimientos,
+       (SELECT COUNT(*) FROM dbo.Stock WHERE IdProducto = @p0 AND (ISNULL(Cant_Fisico, 0) <> 0 OR ISNULL(Cant_Disp, 0) <> 0)) AS existencias,
+       (SELECT COUNT(*) FROM dbo.Proveedores_Prod WHERE IdProducto = @p0) AS proveedores`,
+		[{ value: idNum, type: 'Int' }],
+	);
+	const u = uso[0] || {};
+	if (Number(u.remitos) || Number(u.movimientos) || Number(u.existencias) || Number(u.proveedores)) {
+		const producto = await cambiarEstado(idNum, false, auth);
+		return { modo: 'baja', producto };
 	}
-	await executeQuery(`DELETE FROM dbo.Productos WHERE IdProducto = @p0`, [
+	await obtener(idNum);
+	const foto = await rutaFoto(idNum).catch(() => null);
+	try {
+		await executeQuery(
+			`DELETE FROM dbo.Stock WHERE IdProducto = @p0;
+       DELETE FROM dbo.Productos WHERE IdProducto = @p0;`,
+			[{ value: idNum, type: 'Int' }],
+		);
+	} catch (e) {
+		if (!esErrorSql(e, 547)) throw e;
+		const producto = await cambiarEstado(idNum, false, auth);
+		return { modo: 'baja', producto };
+	}
+	return { modo: 'eliminado', foto };
+}
+
+// ── Foto ────────────────────────────────────────────────────────────────
+
+async function rutaFoto(id) {
+	const rows = await executeQuery(`SELECT RTRIM(Foto) AS Foto FROM dbo.Productos WHERE IdProducto = @p0`, [
 		{ value: Number(id), type: 'Int' },
 	]);
+	if (!rows.length) throw httpError('Producto no encontrado', 404);
+	return trim(rows[0].Foto);
+}
+
+/** Guarda la ruta relativa (≤120) y devuelve la anterior para que el llamador la borre. */
+async function guardarFoto(id, rutaRelativa, auth) {
+	if (rutaRelativa && rutaRelativa.length > 120) throw httpError('Ruta de imagen demasiado larga');
+	const anterior = await rutaFoto(id);
+	await executeQuery(
+		`UPDATE dbo.Productos SET Foto = @p1, aud_fecha = GETDATE(), Aud_Usuario = @p2, Aud_Accion = 2
+     WHERE IdProducto = @p0`,
+		[
+			{ value: Number(id), type: 'Int' },
+			{ value: rutaRelativa || null, type: 'Char', length: 120 },
+			{ value: audUserDe(auth), type: 'SmallInt' },
+		],
+	);
+	return anterior;
+}
+
+// ── Catálogos editables ─────────────────────────────────────────────────
+
+/**
+ * Tablas de clasificación con clave numérica MAX+1 (o char en Unidades).
+ * `usoSql` cuenta productos que la referencian (bloquea el borrado).
+ */
+const CATALOGOS = {
+	rubros: {
+		tabla: 'dbo.Rubros',
+		id: 'IdRubro',
+		desc: 'Descripcion',
+		largo: 60,
+		usoSql: 'SELECT COUNT(*) AS n FROM dbo.Productos WHERE IdRubro = @id',
+	},
+	marcas: {
+		tabla: 'dbo.Tipos_Marcas',
+		id: 'IdMarca',
+		desc: 'Descripcion',
+		largo: 30,
+		usoSql: 'SELECT COUNT(*) AS n FROM dbo.Productos WHERE IdMarca = @id',
+	},
+	unidades: {
+		tabla: 'dbo.Unidades',
+		id: 'IdUnidad',
+		desc: 'Descripcion',
+		largo: 40,
+		idChar: 3,
+		usoSql: 'SELECT COUNT(*) AS n FROM dbo.Productos WHERE IdUnidad = @id',
+	},
+	subrubros: {
+		tabla: 'dbo.SUBRUBRO',
+		id: 'CODIGO',
+		desc: 'DESCRIPCION',
+		largo: 40,
+		padre: 'RUBRO',
+		usoSql: 'SELECT COUNT(*) AS n FROM dbo.Productos WHERE IdSubRubro = @id AND IdRubro = @padre',
+	},
+};
+
+function defCatalogo(nombre) {
+	const def = CATALOGOS[nombre];
+	if (!def) throw httpError('Catálogo inválido', 404);
+	return def;
+}
+
+function idCatalogo(def, valor) {
+	if (def.idChar) {
+		const s = (trim(valor) || '').toUpperCase().slice(0, def.idChar);
+		if (!s) throw httpError('Indicá el código');
+		return { value: s, type: 'Char', length: def.idChar };
+	}
+	const n = num(valor);
+	if (n == null || n <= 0) throw httpError('Código inválido');
+	return { value: n, type: 'Int' };
+}
+
+async function guardarCatalogo(nombre, body, idExistente = null) {
+	const def = defCatalogo(nombre);
+	const desc = (trim(body.Descripcion) || '').toUpperCase().slice(0, def.largo);
+	if (!desc) throw httpError('La descripción es obligatoria');
+	const padre = def.padre ? num(body.IdRubro) : null;
+	if (def.padre && padre == null) throw httpError('Indicá el rubro');
+
+	const params = [{ value: desc, type: 'Char', length: def.largo }];
+	const padreSql = def.padre ? ` AND ${def.padre} = @p2` : '';
+	if (idExistente != null) {
+		const idp = idCatalogo(def, idExistente);
+		params.push(idp);
+		if (def.padre) params.push({ value: padre, type: 'Int' });
+		const r = await executeQuery(
+			`UPDATE ${def.tabla} SET ${def.desc} = @p0 WHERE ${def.id} = @p1${padreSql}; SELECT @@ROWCOUNT AS n;`,
+			params,
+		);
+		if (!r[0]?.n) throw httpError('Registro no encontrado', 404);
+		return { id: idp.value, Descripcion: desc };
+	}
+
+	let idp;
+	if (def.idChar) {
+		idp = idCatalogo(def, body.Id);
+	} else {
+		const sig = await executeQuery(
+			`SELECT ISNULL(MAX(${def.id}), 0) + 1 AS n FROM ${def.tabla}${
+				def.padre ? ` WHERE ${def.padre} = @p0` : ''
+			}`,
+			def.padre ? [{ value: padre, type: 'Int' }] : [],
+		);
+		idp = { value: sig[0].n, type: 'Int' };
+	}
+	params.push(idp);
+	if (def.padre) params.push({ value: padre, type: 'Int' });
+	try {
+		await executeQuery(
+			`INSERT INTO ${def.tabla} (${def.desc}, ${def.id}${def.padre ? `, ${def.padre}` : ''})
+       VALUES (@p0, @p1${def.padre ? ', @p2' : ''})`,
+			params,
+		);
+	} catch (e) {
+		if (esErrorSql(e, 2627, 2601)) throw httpError('Ya existe un registro con ese código o descripción', 409);
+		throw e;
+	}
+	return { id: idp.value, Descripcion: desc };
+}
+
+async function eliminarCatalogo(nombre, id, query = {}) {
+	const def = defCatalogo(nombre);
+	const idp = idCatalogo(def, id);
+	const padre = def.padre ? num(query.IdRubro) : null;
+	if (def.padre && padre == null) throw httpError('Indicá el rubro');
+	const params = [idp];
+	if (def.padre) params.push({ value: padre, type: 'Int' });
+	const usoSql = def.usoSql.replace('@id', '@p0').replace('@padre', '@p1');
+	const uso = await executeQuery(usoSql, params);
+	const n = Number(uso[0]?.n || 0);
+	if (n) throw httpError(`No se puede borrar: lo usan ${n.toLocaleString('es-AR')} productos`, 409);
+	const r = await executeQuery(
+		`DELETE FROM ${def.tabla} WHERE ${def.id} = @p0${def.padre ? ` AND ${def.padre} = @p1` : ''}; SELECT @@ROWCOUNT AS n;`,
+		params,
+	);
+	if (!r[0]?.n) throw httpError('Registro no encontrado', 404);
 	return { ok: true };
 }
 
 module.exports = {
 	listar,
 	obtener,
+	resumen,
+	ficha,
 	catalogos,
 	listarCuentas,
 	crear,
 	actualizar,
+	cambiarEstado,
 	eliminar,
+	rutaFoto,
+	guardarFoto,
+	guardarCatalogo,
+	eliminarCatalogo,
+	CATALOGOS,
 };

@@ -146,15 +146,23 @@ const MODULOS = Object.freeze([
 		id: 'ALMACEN',
 		label: 'Almacén',
 		submodulos: [
-			{ id: 'PRODUCTOS', label: 'Productos', path: '/dashboard/almacen/productos', acciones: [...CRUD] },
+			{ id: 'PRODUCTOS', label: 'Productos', path: '/dashboard/almacen/productos', acciones: [...CRUD, ACCIONES.EXPORTAR] },
 			{ id: 'REMITOS',   label: 'Remitos',   path: '/dashboard/almacen/remitos',   acciones: [...CRUD] },
-			{ id: 'STOCK', label: 'Stock', path: '/dashboard/almacen/stock', acciones: [ACCIONES.VER, ACCIONES.EXPORTAR] },
+			// GESTIONAR = ajustes de cantidad (comprobante AJU + Stock_Mov).
+			{ id: 'STOCK', label: 'Stock', path: '/dashboard/almacen/stock', acciones: [...CRUD, ACCIONES.GESTIONAR, ACCIONES.EXPORTAR] },
 			{
 				id: 'PROVEEDORES',
 				label: 'Proveedores',
 				path: '/dashboard/almacen/proveedores',
-				acciones: [ACCIONES.VER, ACCIONES.EXPORTAR],
+				acciones: [...CRUD, ACCIONES.EXPORTAR],
 			},
+			// Circuito imAlmacén (solicitudes → órdenes → actas).
+			{ id: 'ARTICULOS',   label: 'Artículos',             acciones: [ACCIONES.VER, ACCIONES.CREAR, ACCIONES.EDITAR] },
+			{ id: 'MOVIMIENTOS', label: 'Movimientos',           acciones: [ACCIONES.VER] },
+			{ id: 'CONFIG',      label: 'Configuración almacén', acciones: [ACCIONES.VER, ACCIONES.EDITAR] },
+			{ id: 'SOLICITUDES', label: 'Solicitudes de provisión', acciones: [ACCIONES.VER, ACCIONES.CREAR, ACCIONES.EDITAR, ACCIONES.GESTIONAR] },
+			{ id: 'ORDENES',     label: 'Órdenes de provisión',  acciones: [ACCIONES.VER, ACCIONES.CREAR] },
+			{ id: 'ACTAS',       label: 'Actas de recepción',    acciones: [ACCIONES.VER, ACCIONES.CREAR] },
 		],
 	},
 	{
