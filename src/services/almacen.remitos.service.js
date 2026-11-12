@@ -607,8 +607,35 @@ async function listar({
 		Number.isFinite(estadoNum);
 	const needsCatalogJoin = !!(q && !/^\d+$/.test(q)) || !!sent;
 
-	const totalesRows = await executeQuery(
-		`
+	// Totales, COUNT y página no se necesitan entre sí: van en paralelo.
+	let countSql;
+	let countParams = [];
+	if (!hasFilters) {
+		// ~instantáneo; evita COUNT bloqueado sobre 100k+ filas en Clarion/Vidal.
+		countSql = `
+      SELECT SUM(p.rows) AS n
+      FROM sys.partitions p
+      INNER JOIN sys.tables t ON t.object_id = p.object_id
+      WHERE t.name = 'Remitos' AND p.index_id IN (0, 1)
+      `;
+	} else if (needsCatalogJoin) {
+		countSql = `
+      SELECT COUNT(1) AS n
+      FROM dbo.Remitos r WITH (NOLOCK)
+      LEFT JOIN dbo.Tipos_Remitos t WITH (NOLOCK) ON t.IdTipo = r.Tipo_Cbte
+      LEFT JOIN dbo.Depositos d WITH (NOLOCK) ON d.IdDeposito = r.IdDeposito
+      WHERE ${whereSql}
+      `;
+		countParams = params;
+	} else {
+		countSql = `SELECT COUNT(1) AS n FROM dbo.Remitos r WITH (NOLOCK) WHERE ${whereSql}`;
+		countParams = params;
+	}
+
+	const pageParams = [...params, { value: offset, type: 'Int' }, { value: size, type: 'Int' }];
+	const [totalesRows, countRows, rows] = await Promise.all([
+		executeQuery(
+			`
     SELECT RTRIM(t.Sentido) AS Sentido, COUNT(1) AS Cantidad,
            SUM(ISNULL(r.ImportePPP, 0)) AS Importe, SUM(ISNULL(r.Bultos, 0)) AS Bultos
     FROM dbo.Remitos r WITH (NOLOCK)
@@ -617,54 +644,11 @@ async function listar({
     WHERE ${whereTotales.join(' AND ')}
     GROUP BY RTRIM(t.Sentido)
     `,
-		paramsTotales,
-	);
-	const totalSentido = (s) => {
-		const row = totalesRows.find((x) => trim(x.Sentido) === s);
-		return {
-			cantidad: Number(row?.Cantidad || 0),
-			importe: Number(row?.Importe || 0),
-			bultos: Number(row?.Bultos || 0),
-		};
-	};
-	const entradas = totalSentido('E');
-	const salidas = totalSentido('S');
-
-	let total = 0;
-	if (!hasFilters) {
-		// ~instantáneo; evita COUNT bloqueado sobre 100k+ filas en Clarion/Vidal.
-		const approx = await executeQuery(
+			paramsTotales,
+		),
+		executeQuery(countSql, countParams),
+		executeQuery(
 			`
-      SELECT SUM(p.rows) AS n
-      FROM sys.partitions p
-      INNER JOIN sys.tables t ON t.object_id = p.object_id
-      WHERE t.name = 'Remitos' AND p.index_id IN (0, 1)
-      `,
-		);
-		total = Number(approx[0]?.n || 0);
-	} else if (needsCatalogJoin) {
-		const countRows = await executeQuery(
-			`
-      SELECT COUNT(1) AS n
-      FROM dbo.Remitos r WITH (NOLOCK)
-      LEFT JOIN dbo.Tipos_Remitos t WITH (NOLOCK) ON t.IdTipo = r.Tipo_Cbte
-      LEFT JOIN dbo.Depositos d WITH (NOLOCK) ON d.IdDeposito = r.IdDeposito
-      WHERE ${whereSql}
-      `,
-			params,
-		);
-		total = Number(countRows[0]?.n || 0);
-	} else {
-		const countRows = await executeQuery(
-			`SELECT COUNT(1) AS n FROM dbo.Remitos r WITH (NOLOCK) WHERE ${whereSql}`,
-			params,
-		);
-		total = Number(countRows[0]?.n || 0);
-	}
-
-	const pageParams = [...params, { value: offset, type: 'Int' }, { value: size, type: 'Int' }];
-	const rows = await executeQuery(
-		`
     SELECT
       r.IdTransaccion, r.IdEmpresa, r.IdSucursal, r.Tipo_Cbte, r.Grupo_Cbte, r.Letra_Cbte, r.NroCbte,
       r.IdDeposito, r.IdDepositoDest, r.Fecha, r.Bultos, r.IdStatus, r.ImportePPP, r.ImporteCosto,
@@ -697,8 +681,21 @@ async function listar({
     ORDER BY r.IdTransaccion DESC
     OFFSET @p${params.length} ROWS FETCH NEXT @p${params.length + 1} ROWS ONLY
     `,
-		pageParams,
-	);
+			pageParams,
+		),
+	]);
+
+	const totalSentido = (s) => {
+		const row = totalesRows.find((x) => trim(x.Sentido) === s);
+		return {
+			cantidad: Number(row?.Cantidad || 0),
+			importe: Number(row?.Importe || 0),
+			bultos: Number(row?.Bultos || 0),
+		};
+	};
+	const entradas = totalSentido('E');
+	const salidas = totalSentido('S');
+	const total = Number(countRows[0]?.n || 0);
 
 	return {
 		items: rows.map(mapRemito),
