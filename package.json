@@ -41,6 +41,7 @@
 		"setup:turnero": "node scripts/ejecutar_setup_turnero.js",
 		"audit:turnero": "node scripts/audit_turnero.js",
 		"seed:permisos": "node scripts/seed_permisos.js",
+		"setup:matriz-local": "node scripts/setup_matriz_local.js",
 		"audit:rutas": "node scripts/audit_rutas_permisos.js",
 		"audit:permisos-front": "node scripts/check_permisos_front.js",
 		"test:permisos": "node --test tests/",

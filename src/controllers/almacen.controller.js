@@ -1,10 +1,14 @@
 /**
  * Controlador del módulo Almacén
  */
+const fs = require('fs');
 const svc = require('../services/almacen.service');
 const productosSvc = require('../services/almacen.productos.service');
 const remitosSvc = require('../services/almacen.remitos.service');
 const existenciasSvc = require('../services/almacen.existencias.service');
+const proveedoresSvc = require('../services/almacen.proveedores.service');
+const fotosSvc = require('../services/almacen.fotos.service');
+const { isFileServerUnreachable, describeFileServerError } = require('../utils/fileServerUrl');
 
 function esMensajeTecnico(msg) {
 	return /FOREIGN KEY|INSERT statement|UPDATE statement|constraint|Violation of|RequestError|dbo\.|SQLSTATE|ECONN|ETIMEDOUT|status code/i.test(
@@ -575,12 +579,61 @@ const ctrl = {
 				campo: req.query.campo || 'descripcion',
 				idRubro: req.query.idRubro || null,
 				idSubRubro: req.query.idSubRubro || null,
+				estado: req.query.estado || '',
+				stock: req.query.stock || '',
+				conFoto: esVerdadero(req.query.conFoto),
+				orden: req.query.orden || 'descripcion',
 				page: req.query.page,
 				pageSize: req.query.pageSize,
 			});
 			return res.json({ success: true, data });
 		} catch (e) {
 			return handleError(res, e, 'Error al listar productos');
+		}
+	},
+
+	async resumenProductosLegacy(req, res) {
+		try {
+			const data = await productosSvc.resumen();
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al calcular el resumen de productos');
+		}
+	},
+
+	async fichaProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.ficha(req.params.id);
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al obtener la ficha del producto');
+		}
+	},
+
+	async estadoProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.cambiarEstado(req.params.id, !!req.body?.Activo, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: data.Activo ? 'Producto reactivado' : 'Producto dado de baja' });
+		} catch (e) {
+			return handleError(res, e, 'Error al cambiar el estado del producto');
+		}
+	},
+
+	async guardarCatalogoProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.guardarCatalogo(req.params.catalogo, req.body || {}, req.params.id ?? null);
+			return res.status(req.params.id ? 200 : 201).json({ success: true, data, mensaje: 'Catálogo actualizado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al guardar en el catálogo');
+		}
+	},
+
+	async eliminarCatalogoProductoLegacy(req, res) {
+		try {
+			const data = await productosSvc.eliminarCatalogo(req.params.catalogo, req.params.id, req.query);
+			return res.json({ success: true, data, mensaje: 'Registro eliminado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al eliminar del catálogo');
 		}
 	},
 
@@ -625,7 +678,7 @@ const ctrl = {
 
 	async actualizarProductoLegacy(req, res) {
 		try {
-			const data = await productosSvc.actualizar(req.params.id, req.body || {});
+			const data = await productosSvc.actualizar(req.params.id, req.body || {}, req.auth || req.user);
 			return res.json({ success: true, data, mensaje: 'Producto actualizado' });
 		} catch (e) {
 			return handleError(res, e, 'Error al actualizar producto');
@@ -634,8 +687,11 @@ const ctrl = {
 
 	async eliminarProductoLegacy(req, res) {
 		try {
-			const data = await productosSvc.eliminar(req.params.id);
-			return res.json({ success: true, data, mensaje: 'Producto eliminado' });
+			const data = await productosSvc.eliminar(req.params.id, req.auth || req.user);
+			if (data.modo === 'eliminado' && data.foto) await fotosSvc.borrar(data.foto);
+			const mensaje =
+				data.modo === 'baja' ? 'El producto tiene movimientos: quedó dado de baja' : 'Producto eliminado';
+			return res.json({ success: true, data: { modo: data.modo, producto: data.producto }, mensaje });
 		} catch (e) {
 			return handleError(res, e, 'Error al eliminar producto');
 		}
@@ -650,6 +706,8 @@ const ctrl = {
 				idDeposito: req.query.idDeposito || null,
 				desde: req.query.desde || null,
 				hasta: req.query.hasta || null,
+				sentido: req.query.sentido || '',
+				estado: req.query.estado ?? '',
 				page: req.query.page,
 				pageSize: req.query.pageSize,
 			});
@@ -686,12 +744,12 @@ const ctrl = {
 		}
 	},
 
-	async eliminarRemitoLegacy(req, res) {
+	async anularRemitoLegacy(req, res) {
 		try {
-			const data = await remitosSvc.eliminar(req.params.id);
-			return res.json({ success: true, data, mensaje: 'Remito eliminado' });
+			const data = await remitosSvc.anular(req.params.id, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: 'Remito anulado' });
 		} catch (e) {
-			return handleError(res, e, 'No se pudo eliminar el remito. Intentá de nuevo.');
+			return handleError(res, e, 'No se pudo anular el remito. Intentá de nuevo.');
 		}
 	},
 
@@ -788,15 +846,17 @@ const ctrl = {
 		}
 	},
 
-	// ── Existencias Clarion (dbo.Stock) ─────────────────────────────────
+	// ── Existencias Clarion (dbo.Stock + Stock_Mov) ─────────────────────
 	async listarExistenciasClarion(req, res) {
 		try {
-			const soloBajo = ['1', 'true', 'yes'].includes(
-				String(req.query.soloBajoMinimo || '').toLowerCase(),
-			);
+			const soloBajo = esVerdadero(req.query.soloBajoMinimo);
 			const data = await existenciasSvc.listar({
 				search: req.query.search || '',
 				idDeposito: req.query.idDeposito || null,
+				idRubro: req.query.idRubro || null,
+				idProducto: req.query.idProducto || null,
+				estado: req.query.estado || '',
+				orden: req.query.orden || '',
 				soloBajoMinimo: soloBajo,
 				page: req.query.page,
 				pageSize: req.query.pageSize,
@@ -804,6 +864,30 @@ const ctrl = {
 			return res.json({ success: true, data });
 		} catch (e) {
 			return handleError(res, e, 'Error al listar existencias');
+		}
+	},
+
+	async resumenExistenciasClarion(req, res) {
+		try {
+			const data = await existenciasSvc.resumen({ idDeposito: req.query.idDeposito || null });
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al calcular el resumen de stock');
+		}
+	},
+
+	async movimientosExistenciasClarion(req, res) {
+		try {
+			const data = await existenciasSvc.movimientos({
+				idProducto: req.query.idProducto || null,
+				idDeposito: req.query.idDeposito || null,
+				dias: req.query.dias || null,
+				page: req.query.page,
+				pageSize: req.query.pageSize,
+			});
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al listar movimientos de stock');
 		}
 	},
 
@@ -816,10 +900,50 @@ const ctrl = {
 		}
 	},
 
+	async crearExistenciaClarion(req, res) {
+		try {
+			const data = await existenciasSvc.crear(req.body || {}, req.auth || req.user);
+			return res.status(201).json({ success: true, data, mensaje: 'Producto dado de alta en el depósito' });
+		} catch (e) {
+			return handleError(res, e, 'Error al dar de alta el stock');
+		}
+	},
+
+	async actualizarExistenciaClarion(req, res) {
+		try {
+			const data = await existenciasSvc.actualizar(claveStock(req), req.body || {});
+			return res.json({ success: true, data, mensaje: 'Parámetros de stock actualizados' });
+		} catch (e) {
+			return handleError(res, e, 'Error al actualizar el stock');
+		}
+	},
+
+	async ajustarExistenciaClarion(req, res) {
+		try {
+			const data = await existenciasSvc.ajustar(req.body || {}, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: 'Ajuste registrado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al registrar el ajuste');
+		}
+	},
+
+	async eliminarExistenciaClarion(req, res) {
+		try {
+			const data = await existenciasSvc.eliminar(claveStock(req));
+			return res.json({ success: true, data, mensaje: 'Producto quitado del depósito' });
+		} catch (e) {
+			return handleError(res, e, 'Error al quitar el stock');
+		}
+	},
+
+	// ── Proveedores Clarion (dbo.PROVEEDORES y tablas hijas) ────────────
 	async listarProveedoresClarion(req, res) {
 		try {
-			const data = await existenciasSvc.listarProveedores({
+			const data = await proveedoresSvc.listar({
 				search: req.query.search || '',
+				estado: req.query.estado ?? null,
+				idTipo: req.query.idTipo ?? null,
+				orden: req.query.orden || '',
 				page: req.query.page,
 				pageSize: req.query.pageSize,
 			});
@@ -828,6 +952,140 @@ const ctrl = {
 			return handleError(res, e, 'Error al listar proveedores');
 		}
 	},
+
+	async resumenProveedoresClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.resumen();
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al calcular el resumen de proveedores');
+		}
+	},
+
+	async catalogosProveedoresClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.catalogos();
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al cargar catálogos de proveedores');
+		}
+	},
+
+	async obtenerProveedorClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.obtener(req.params.id);
+			return res.json({ success: true, data });
+		} catch (e) {
+			return handleError(res, e, 'Error al obtener el proveedor');
+		}
+	},
+
+	async crearProveedorClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.crear(req.body || {}, req.auth || req.user);
+			return res.status(201).json({ success: true, data, mensaje: 'Proveedor creado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al crear el proveedor');
+		}
+	},
+
+	async actualizarProveedorClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.actualizar(req.params.id, req.body || {}, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: 'Proveedor actualizado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al actualizar el proveedor');
+		}
+	},
+
+	async estadoProveedorClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.cambiarEstado(req.params.id, req.body?.IdStatus, req.auth || req.user);
+			return res.json({ success: true, data, mensaje: 'Estado actualizado' });
+		} catch (e) {
+			return handleError(res, e, 'Error al cambiar el estado del proveedor');
+		}
+	},
+
+	async eliminarProveedorClarion(req, res) {
+		try {
+			const data = await proveedoresSvc.eliminar(req.params.id, req.auth || req.user);
+			const mensaje =
+				data.modo === 'baja' ? 'El proveedor tiene movimientos: quedó dado de baja' : 'Proveedor eliminado';
+			return res.json({ success: true, data, mensaje });
+		} catch (e) {
+			return handleError(res, e, 'Error al eliminar el proveedor');
+		}
+	},
+};
+
+function esVerdadero(v) {
+	return ['1', 'true', 'yes'].includes(String(v || '').toLowerCase());
+}
+
+/** Clave de dbo.Stock en la URL: /existencias/:idEmpresa/:idSucursal/:idDeposito/:idProducto */
+function claveStock(req) {
+	return {
+		IdEmpresa: req.params.idEmpresa,
+		IdSucursal: req.params.idSucursal,
+		IdDeposito: req.params.idDeposito,
+		IdProducto: req.params.idProducto,
+	};
+}
+
+// ── Foto de producto (file server de la clínica, carpeta Productos\) ───
+
+/** Errores del file server/túnel: 503 con el mensaje que explica qué revisar en la clínica. */
+function errorFoto(res, e, fallback) {
+	if (e?.isAxiosError || e?.code === 'FILE_SERVER_URL_MISSING' || isFileServerUnreachable(e)) {
+		console.error(fallback, e.message);
+		if (res.headersSent) return res.end();
+		return res.status(503).json({ success: false, mensaje: describeFileServerError(e) });
+	}
+	if (res.headersSent) return res.end();
+	return handleError(res, e, fallback);
+}
+
+ctrl.fotoProductoLegacy = async (req, res) => {
+	try {
+		const ruta = await productosSvc.rutaFoto(req.params.id);
+		if (!ruta || !(await fotosSvc.enviar(ruta, res))) {
+			return res.status(404).json({ success: false, mensaje: 'Sin foto' });
+		}
+	} catch (e) {
+		return errorFoto(res, e, 'Error al obtener la foto');
+	}
+};
+
+ctrl.subirFotoProductoLegacy = async (req, res) => {
+	const tmp = req.file?.path;
+	try {
+		if (!req.file) return res.status(400).json({ success: false, mensaje: 'Elegí una imagen' });
+		const id = Number(req.params.id);
+		await productosSvc.obtener(id);
+		const ruta = await fotosSvc.subir(id, req.file);
+		const anterior = await productosSvc.guardarFoto(id, ruta, req.auth || req.user).catch(async (e) => {
+			await fotosSvc.borrar(ruta);
+			throw e;
+		});
+		if (anterior && anterior !== ruta) await fotosSvc.borrar(anterior);
+		const data = await productosSvc.obtener(id);
+		return res.json({ success: true, data, mensaje: 'Imagen actualizada' });
+	} catch (e) {
+		if (tmp) await fs.promises.unlink(tmp).catch(() => {});
+		return errorFoto(res, e, 'Error al subir la imagen');
+	}
+};
+
+ctrl.quitarFotoProductoLegacy = async (req, res) => {
+	try {
+		const anterior = await productosSvc.guardarFoto(req.params.id, null, req.auth || req.user);
+		await fotosSvc.borrar(anterior);
+		const data = await productosSvc.obtener(req.params.id);
+		return res.json({ success: true, data, mensaje: 'Imagen quitada' });
+	} catch (e) {
+		return handleError(res, e, 'Error al quitar la imagen');
+	}
 };
 
 module.exports = ctrl;

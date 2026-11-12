@@ -2,10 +2,35 @@
  * Rutas del módulo Almacén / Abastecimiento
  */
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const router = express.Router();
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
 const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
 const ctrl = require('../controllers/almacen.controller');
+
+const fotoTmpDir = path.join(__dirname, '..', '..', 'uploads', '.tmp-producto-foto');
+fs.mkdirSync(fotoTmpDir, { recursive: true });
+const uploadFoto = multer({
+	dest: fotoTmpDir,
+	limits: { fileSize: 4 * 1024 * 1024 },
+	fileFilter: (_req, file, cb) => {
+		if (/^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype || '')) return cb(null, true);
+		const err = new Error('Solo se permiten imágenes (JPEG, PNG, GIF, WebP)');
+		err.statusCode = 400;
+		cb(err);
+	},
+});
+
+/** Errores de multer (tamaño / tipo) como 400 con mensaje legible. */
+function conFoto(req, res, next) {
+	uploadFoto.single('foto')(req, res, (err) => {
+		if (!err) return next();
+		const mensaje = err.code === 'LIMIT_FILE_SIZE' ? 'La imagen supera los 4 MB' : err.message;
+		return res.status(400).json({ success: false, mensaje });
+	});
+}
 
 router.use(requireTenant);
 
@@ -96,10 +121,26 @@ router.post('/actas', requirePermiso('ALMACEN.ACTAS.CREAR'), ctrl.crearActa);
 
 // ── Productos & Remitos (tablas legacy Clarion) ──────────────────────────
 router.get('/productos', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.listarProductosLegacy);
+router.get('/productos/resumen', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.resumenProductosLegacy);
 router.get(
 	'/productos/catalogos',
 	requirePermiso('ALMACEN.PRODUCTOS.VER'),
 	ctrl.catalogosProductosLegacy,
+);
+router.post(
+	'/productos/catalogos/:catalogo',
+	requirePermiso('ALMACEN.PRODUCTOS.EDITAR'),
+	ctrl.guardarCatalogoProductoLegacy,
+);
+router.put(
+	'/productos/catalogos/:catalogo/:id',
+	requirePermiso('ALMACEN.PRODUCTOS.EDITAR'),
+	ctrl.guardarCatalogoProductoLegacy,
+);
+router.delete(
+	'/productos/catalogos/:catalogo/:id',
+	requirePermiso('ALMACEN.PRODUCTOS.ELIMINAR'),
+	ctrl.eliminarCatalogoProductoLegacy,
 );
 router.get(
 	'/productos/cuentas',
@@ -107,6 +148,11 @@ router.get(
 	ctrl.listarCuentasProductoLegacy,
 );
 router.get('/productos/:id', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.obtenerProductoLegacy);
+router.get('/productos/:id/ficha', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.fichaProductoLegacy);
+router.get('/productos/:id/foto', requirePermiso('ALMACEN.PRODUCTOS.VER'), ctrl.fotoProductoLegacy);
+router.post('/productos/:id/foto', requirePermiso('ALMACEN.PRODUCTOS.EDITAR'), conFoto, ctrl.subirFotoProductoLegacy);
+router.delete('/productos/:id/foto', requirePermiso('ALMACEN.PRODUCTOS.EDITAR'), ctrl.quitarFotoProductoLegacy);
+router.post('/productos/:id/estado', requirePermiso('ALMACEN.PRODUCTOS.EDITAR'), ctrl.estadoProductoLegacy);
 router.post('/productos', requirePermiso('ALMACEN.PRODUCTOS.CREAR'), ctrl.crearProductoLegacy);
 router.put('/productos/:id', requirePermiso('ALMACEN.PRODUCTOS.EDITAR'), ctrl.actualizarProductoLegacy);
 router.delete(
@@ -155,20 +201,44 @@ router.post(
 router.get('/remitos/:id', requirePermiso('ALMACEN.REMITOS.VER'), ctrl.obtenerRemitoLegacy);
 router.post('/remitos', requirePermiso('ALMACEN.REMITOS.CREAR'), ctrl.crearRemitoLegacy);
 router.put('/remitos/:id', requirePermiso('ALMACEN.REMITOS.EDITAR'), ctrl.actualizarRemitoLegacy);
-router.delete('/remitos/:id', requirePermiso('ALMACEN.REMITOS.ELIMINAR'), ctrl.eliminarRemitoLegacy);
+router.post('/remitos/:id/anular', requirePermiso('ALMACEN.REMITOS.ELIMINAR'), ctrl.anularRemitoLegacy);
+router.delete('/remitos/:id', requirePermiso('ALMACEN.REMITOS.ELIMINAR'), ctrl.anularRemitoLegacy);
 
 // ── Existencias Clarion (dbo.Stock) + Proveedores (dbo.PROVEEDORES) ─────
 // Rutas /existencias evitan colisión con el stack imAlmacén en /stock.
 router.get('/existencias', requirePermiso('ALMACEN.STOCK.VER'), ctrl.listarExistenciasClarion);
+router.get('/existencias/resumen', requirePermiso('ALMACEN.STOCK.VER'), ctrl.resumenExistenciasClarion);
+router.get('/existencias/movimientos', requirePermiso('ALMACEN.STOCK.VER'), ctrl.movimientosExistenciasClarion);
 router.get(
 	'/existencias/catalogos',
 	requirePermiso('ALMACEN.STOCK.VER'),
 	ctrl.catalogosExistenciasClarion,
 );
+router.post('/existencias', requirePermiso('ALMACEN.STOCK.CREAR'), ctrl.crearExistenciaClarion);
+router.post('/existencias/ajustes', requirePermiso('ALMACEN.STOCK.GESTIONAR'), ctrl.ajustarExistenciaClarion);
+const CLAVE_STOCK = '/existencias/:idEmpresa/:idSucursal/:idDeposito/:idProducto';
+router.put(CLAVE_STOCK, requirePermiso('ALMACEN.STOCK.EDITAR'), ctrl.actualizarExistenciaClarion);
+router.delete(CLAVE_STOCK, requirePermiso('ALMACEN.STOCK.ELIMINAR'), ctrl.eliminarExistenciaClarion);
+
+router.get('/proveedores-clarion', requirePermiso('ALMACEN.PROVEEDORES.VER'), ctrl.listarProveedoresClarion);
+router.get('/proveedores-clarion/resumen', requirePermiso('ALMACEN.PROVEEDORES.VER'), ctrl.resumenProveedoresClarion);
 router.get(
-	'/proveedores-clarion',
+	'/proveedores-clarion/catalogos',
 	requirePermiso('ALMACEN.PROVEEDORES.VER'),
-	ctrl.listarProveedoresClarion,
+	ctrl.catalogosProveedoresClarion,
+);
+router.get('/proveedores-clarion/:id', requirePermiso('ALMACEN.PROVEEDORES.VER'), ctrl.obtenerProveedorClarion);
+router.post('/proveedores-clarion', requirePermiso('ALMACEN.PROVEEDORES.CREAR'), ctrl.crearProveedorClarion);
+router.put('/proveedores-clarion/:id', requirePermiso('ALMACEN.PROVEEDORES.EDITAR'), ctrl.actualizarProveedorClarion);
+router.post(
+	'/proveedores-clarion/:id/estado',
+	requirePermiso('ALMACEN.PROVEEDORES.EDITAR'),
+	ctrl.estadoProveedorClarion,
+);
+router.delete(
+	'/proveedores-clarion/:id',
+	requirePermiso('ALMACEN.PROVEEDORES.ELIMINAR'),
+	ctrl.eliminarProveedorClarion,
 );
 
 module.exports = router;

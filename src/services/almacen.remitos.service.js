@@ -2,7 +2,12 @@
  * Remitos legacy: Remitos + RemitosItems + Tipos_Remitos + Depositos + Remitos_Observa.
  */
 const { executeQuery, getRequestPool, sql } = require('../models/db');
-const { convertirFechaAClarion } = require('../utils/dateUtils');
+const {
+	convertirFechaAClarion,
+	partesFechaHoraArgentina,
+	ahoraWallArgentinaParaSql,
+} = require('../utils/dateUtils');
+const grab = require('./almacen.remitos.grabacion');
 
 function httpError(mensaje, statusCode = 400) {
 	const e = new Error(mensaje);
@@ -32,6 +37,9 @@ function mapRemito(row) {
 		IdDepositoDest: row.IdDepositoDest,
 		DepositoDestNombre: trim(row.DepositoDestNombre),
 		Fecha: row.Fecha,
+		Hora: trim(row.Hora),
+		Sentido: trim(row.Sentido),
+		IdTransaccionOrig: row.IdTransaccionOrig || null,
 		Bultos: row.Bultos,
 		IdStatus: row.IdStatus,
 		StatusNombre: trim(row.StatusNombre),
@@ -41,6 +49,7 @@ function mapRemito(row) {
 		ClienteNombre: trim(row.ClienteNombre),
 		IdProveedor: row.IdProveedor,
 		ProveedorNombre: trim(row.ProveedorNombre),
+		Observaciones: trim(row.Observaciones),
 		NroRemitoFmt: formatNro(row.Grupo_Cbte, row.Letra_Cbte, row.NroCbte),
 	};
 }
@@ -74,6 +83,10 @@ function mapItem(row) {
 	};
 }
 
+/** HH:mm del remito: Transacciones.Hora_D (grabado web); si no, la auditoría del mismo día. Requiere alias r y tx. */
+const SQL_HORA = `CONVERT(char(5), COALESCE(tx.Hora_D,
+  CASE WHEN CAST(r.Aud_Fecha_Date AS date) = CAST(r.Fecha AS date) THEN r.Aud_Fecha_Date END), 108)`;
+
 /** Tipos operativos del modal (entrada / salida servicio / salida paciente). */
 const TIPOS_OPERATIVOS = new Set(['REM', 'RSM', 'RSP']);
 
@@ -102,7 +115,8 @@ async function listarTipos({ soloOperativos = false } = {}) {
 	const rows = await executeQuery(
 		`
     SELECT RTRIM(IdTipo) AS IdTipo, RTRIM(Descripcion) AS Descripcion, RTRIM(Sentido) AS Sentido,
-           Usa_Proveedor, Usa_Cliente, Usa_Dep_Orig_Dest, IdStatus
+           Usa_Proveedor, Usa_Cliente, Usa_Dep_Orig_Dest, IdStatus, stk_Fisico,
+           RTRIM(IdTipo_Generar) AS IdTipo_Generar
     FROM dbo.Tipos_Remitos
     ORDER BY Descripcion
     `,
@@ -117,6 +131,8 @@ async function listarTipos({ soloOperativos = false } = {}) {
 				UsaCliente: r.Usa_Cliente,
 				UsaDepOrigDest: r.Usa_Dep_Orig_Dest,
 				IdStatus: r.IdStatus,
+				StkFisico: r.stk_Fisico,
+				IdTipoGenerar: trim(r.IdTipo_Generar),
 			};
 			return { ...base, ...camposSegunTipo(base) };
 		})
@@ -420,34 +436,6 @@ async function excluirIndicacionDeEntrega(nroIndicacion) {
 	return { ok: true, NroIndicacion: nro, ExcluidoDeEntrega: 1 };
 }
 
-/** Tras confirmar remito RSM: marca entrega en imInterIndMedicas. */
-async function marcarEntregaIndicaciones(items, fechaIso) {
-	const fecha =
-		trim(fechaIso) && /^\d{4}-\d{2}-\d{2}$/.test(trim(fechaIso))
-			? trim(fechaIso)
-			: require('../utils/dateUtils').fechaCalendarioArgentina();
-	for (const it of items || []) {
-		const nro = Number(it.NroIndicacion);
-		if (!Number.isFinite(nro) || nro <= 0) continue;
-		const cant = Number(it.Cantidad);
-		const entregada = Number.isFinite(cant) ? cant : 0;
-		await executeQuery(
-			`
-      UPDATE dbo.imInterIndMedicas
-      SET CantidadEntregada = @p1,
-          ParaFechaEntrega = @p2
-      WHERE NroIndicacion = @p0
-        AND ISNULL(NroAdicional, 0) = 0
-      `,
-			[
-				{ value: nro, type: 'Int' },
-				{ value: entregada, type: 'Float' },
-				{ value: fecha },
-			],
-		);
-	}
-}
-
 async function listarProveedores({ search = '', limit = 80 } = {}) {
 	const params = [];
 	let where = '1=1';
@@ -549,6 +537,8 @@ async function listar({
 	idDeposito = null,
 	desde = null,
 	hasta = null,
+	sentido = '',
+	estado = '',
 	page = 1,
 	pageSize = 30,
 } = {}) {
@@ -558,6 +548,11 @@ async function listar({
 	const params = [];
 	const where = ['1=1'];
 
+	const estadoNum = estado !== '' && estado != null ? Number(estado) : NaN;
+	if (Number.isFinite(estadoNum)) {
+		where.push(`r.IdStatus = @p${params.length}`);
+		params.push({ value: estadoNum, type: 'SmallInt' });
+	}
 	if (trim(tipo)) {
 		where.push(`r.Tipo_Cbte = @p${params.length}`);
 		params.push({ value: trim(tipo).slice(0, 3), type: 'Char', length: 3 });
@@ -589,14 +584,50 @@ async function listar({
 		}
 	}
 
+	// Los totales ignoran el filtro de sentido para mostrar entradas y salidas a la vez.
+	const whereTotales = [...where];
+	if (!Number.isFinite(estadoNum)) whereTotales.push(`r.IdStatus <> ${grab.STATUS_ANULADO}`);
+	const paramsTotales = [...params];
+
+	const sent = (trim(sentido) || '').toUpperCase().slice(0, 1);
+	if (sent === 'E' || sent === 'S') {
+		where.push(`t.Sentido = @p${params.length}`);
+		params.push({ value: sent, type: 'Char', length: 1 });
+	}
+
 	const whereSql = where.join(' AND ');
 	const hasFilters =
 		!!trim(tipo) ||
 		(idDeposito != null && idDeposito !== '') ||
 		!!desde ||
 		!!hasta ||
-		!!q;
-	const needsCatalogJoin = !!(q && !/^\d+$/.test(q));
+		!!q ||
+		!!sent ||
+		Number.isFinite(estadoNum);
+	const needsCatalogJoin = !!(q && !/^\d+$/.test(q)) || !!sent;
+
+	const totalesRows = await executeQuery(
+		`
+    SELECT RTRIM(t.Sentido) AS Sentido, COUNT(1) AS Cantidad,
+           SUM(ISNULL(r.ImportePPP, 0)) AS Importe, SUM(ISNULL(r.Bultos, 0)) AS Bultos
+    FROM dbo.Remitos r WITH (NOLOCK)
+    LEFT JOIN dbo.Tipos_Remitos t WITH (NOLOCK) ON t.IdTipo = r.Tipo_Cbte
+    LEFT JOIN dbo.Depositos d WITH (NOLOCK) ON d.IdDeposito = r.IdDeposito
+    WHERE ${whereTotales.join(' AND ')}
+    GROUP BY RTRIM(t.Sentido)
+    `,
+		paramsTotales,
+	);
+	const totalSentido = (s) => {
+		const row = totalesRows.find((x) => trim(x.Sentido) === s);
+		return {
+			cantidad: Number(row?.Cantidad || 0),
+			importe: Number(row?.Importe || 0),
+			bultos: Number(row?.Bultos || 0),
+		};
+	};
+	const entradas = totalSentido('E');
+	const salidas = totalSentido('S');
 
 	let total = 0;
 	if (!hasFilters) {
@@ -636,20 +667,31 @@ async function listar({
     SELECT
       r.IdTransaccion, r.IdEmpresa, r.IdSucursal, r.Tipo_Cbte, r.Grupo_Cbte, r.Letra_Cbte, r.NroCbte,
       r.IdDeposito, r.IdDepositoDest, r.Fecha, r.Bultos, r.IdStatus, r.ImportePPP, r.ImporteCosto,
-      r.IdCliente, r.IdProveedor,
+      r.IdCliente, r.IdProveedor, r.IdTransaccionOrig,
+      ${SQL_HORA} AS Hora,
+      RTRIM(t.Sentido) AS Sentido,
       RTRIM(t.Descripcion) AS TipoNombre,
       RTRIM(d.Descripcion) AS DepositoNombre,
       RTRIM(dd.Descripcion) AS DepositoDestNombre,
       RTRIM(pv.DESCRIPCION) AS ProveedorNombre,
       RTRIM(COALESCE(NULLIF(RTRIM(cl.Razon_Social),''), LTRIM(RTRIM(ISNULL(cl.Apellidos,'')) + ' ' + RTRIM(ISNULL(cl.Nombres,''))))) AS ClienteNombre,
-      RTRIM(st.Descripcion) AS StatusNombre
+      RTRIM(st.Descripcion) AS StatusNombre,
+      RTRIM(obs.Comentarios) AS Observaciones
     FROM dbo.Remitos r WITH (NOLOCK)
+    LEFT JOIN dbo.Transacciones tx WITH (NOLOCK) ON tx.IdTransaccion = r.IdTransaccion
     LEFT JOIN dbo.Tipos_Remitos t WITH (NOLOCK) ON t.IdTipo = r.Tipo_Cbte
     LEFT JOIN dbo.Depositos d WITH (NOLOCK) ON d.IdDeposito = r.IdDeposito
     LEFT JOIN dbo.Depositos dd WITH (NOLOCK) ON dd.IdDeposito = r.IdDepositoDest
     LEFT JOIN dbo.PROVEEDORES pv WITH (NOLOCK) ON pv.IDPROVEEDOR = r.IdProveedor
     LEFT JOIN dbo.Clientes cl WITH (NOLOCK) ON cl.IdCliente = r.IdCliente
     LEFT JOIN dbo.Status_Remitos st WITH (NOLOCK) ON st.IdStatus = r.IdStatus
+    OUTER APPLY (
+      SELECT TOP 1 o.Comentarios
+      FROM dbo.Remitos_Observa o WITH (NOLOCK)
+      WHERE o.IdTransaccion = r.IdTransaccion
+        AND NULLIF(RTRIM(o.Comentarios), '') IS NOT NULL
+      ORDER BY o.Item
+    ) obs
     WHERE ${whereSql}
     ORDER BY r.IdTransaccion DESC
     OFFSET @p${params.length} ROWS FETCH NEXT @p${params.length + 1} ROWS ONLY
@@ -663,6 +705,11 @@ async function listar({
 		page: p,
 		pageSize: size,
 		totalPages: Math.max(1, Math.ceil(total / size)),
+		totales: {
+			entradas,
+			salidas,
+			neto: { importe: entradas.importe - salidas.importe, cantidad: entradas.cantidad + salidas.cantidad },
+		},
 	};
 }
 
@@ -672,7 +719,9 @@ async function obtener(id) {
     SELECT TOP 1
       r.IdTransaccion, r.IdEmpresa, r.IdSucursal, r.Tipo_Cbte, r.Grupo_Cbte, r.Letra_Cbte, r.NroCbte,
       r.IdDeposito, r.IdDepositoDest, r.Fecha, r.Bultos, r.IdStatus, r.ImportePPP, r.ImporteCosto,
-      r.IdCliente, r.IdProveedor,
+      r.IdCliente, r.IdProveedor, r.IdTransaccionOrig,
+      ${SQL_HORA} AS Hora,
+      RTRIM(t.Sentido) AS Sentido,
       RTRIM(t.Descripcion) AS TipoNombre,
       RTRIM(d.Descripcion) AS DepositoNombre,
       RTRIM(dd.Descripcion) AS DepositoDestNombre,
@@ -680,6 +729,7 @@ async function obtener(id) {
       RTRIM(COALESCE(NULLIF(RTRIM(cl.Razon_Social),''), LTRIM(RTRIM(ISNULL(cl.Apellidos,'')) + ' ' + RTRIM(ISNULL(cl.Nombres,''))))) AS ClienteNombre,
       RTRIM(st.Descripcion) AS StatusNombre
     FROM dbo.Remitos r
+    LEFT JOIN dbo.Transacciones tx ON tx.IdTransaccion = r.IdTransaccion
     LEFT JOIN dbo.Tipos_Remitos t ON t.IdTipo = r.Tipo_Cbte
     LEFT JOIN dbo.Depositos d ON d.IdDeposito = r.IdDeposito
     LEFT JOIN dbo.Depositos dd ON dd.IdDeposito = r.IdDepositoDest
@@ -736,12 +786,37 @@ async function obtener(id) {
 		[{ value: Number(id), type: 'Int' }],
 	).catch(() => []);
 
+	const vinculados = await executeQuery(
+		`
+    SELECT r.IdTransaccion, r.Tipo_Cbte, r.Grupo_Cbte, r.Letra_Cbte, r.NroCbte, r.IdStatus
+    FROM dbo.Remitos r WITH (NOLOCK)
+    WHERE (r.IdTransaccionOrig = @p0 AND r.IdTransaccion <> @p0)
+       OR (r.IdTransaccion = @p1 AND @p1 > 0)
+    `,
+		[
+			{ value: Number(id), type: 'Int' },
+			{ value: Number(rows[0].IdTransaccionOrig) || 0, type: 'Int' },
+		],
+	).catch(() => []);
+	const vinculo = (row) =>
+		row
+			? {
+					IdTransaccion: row.IdTransaccion,
+					TipoCbte: trim(row.Tipo_Cbte),
+					NroRemitoFmt: formatNro(row.Grupo_Cbte, row.Letra_Cbte, row.NroCbte),
+					IdStatus: row.IdStatus,
+				}
+			: null;
+	const origen = Number(rows[0].IdTransaccionOrig) || 0;
+
 	const cabecera = mapRemito(rows[0]);
 	const mappedItems = items.map(mapItem);
 	const totalRemito = mappedItems.reduce((acc, it) => acc + (Number(it.ImporteTotal) || 0), 0);
 
 	return {
 		...cabecera,
+		RemitoOrigen: vinculo(vinculados.find((v) => v.IdTransaccion === origen)),
+		RemitosGenerados: vinculados.filter((v) => v.IdTransaccion !== origen).map(vinculo),
 		items: mappedItems,
 		observaciones: obs.map((o) => ({
 			Item: o.Item,
@@ -752,35 +827,48 @@ async function obtener(id) {
 	};
 }
 
-async function proximoNro(tipoCbte, grupo) {
+const DEFAULT_EMPRESA = 1;
+const DEFAULT_SUCURSAL = 1;
+const LOTE_IN = 500;
+
+/** Código de operador del JWT (Aud_Usuario es smallint). */
+function audUserDe(auth) {
+	const u = auth?.usuario || {};
+	for (const c of [u.codOperador, u.idCodOperador, auth?.idCodOperador]) {
+		const n = c != null && c !== '' ? Number(c) : NaN;
+		if (Number.isFinite(n) && n > 0 && n <= 32767) return n;
+	}
+	return null;
+}
+
+function estadoDeTipo(tipoRow) {
+	const n = Number(tipoRow?.IdStatus);
+	return Number.isFinite(n) && n > 0 ? n : grab.STATUS_CONFIRMADO;
+}
+
+async function proximoNro(tipoCbte, grupo, { idEmpresa = DEFAULT_EMPRESA, idSucursal = DEFAULT_SUCURSAL } = {}) {
 	const tipo = (trim(tipoCbte) || 'REM').slice(0, 3);
-	const year = grupo != null ? Number(grupo) : new Date().getFullYear();
+	const year =
+		grupo != null && grupo !== '' ? Number(grupo) : Number(partesFechaHoraArgentina().fecha.slice(0, 4));
+	const letra = 'X';
 	const rows = await executeQuery(
 		`
-    SELECT ISNULL(MAX(NroCbte), 0) + 1 AS NextNro
-    FROM dbo.Remitos
-    WHERE Tipo_Cbte = @p0 AND Grupo_Cbte = @p1
+    SELECT
+      (SELECT TOP 1 NroCbte FROM dbo.Cbtes_Numeracion
+        WHERE IdEmpresa = @p2 AND IdSucursal = @p3 AND Tipo_Cbte = @p0 AND Grupo_Cbte = @p1 AND Letra_Cbte = @p4) AS Numeracion,
+      (SELECT MAX(NroCbte) FROM dbo.Remitos
+        WHERE Tipo_Cbte = @p0 AND IdEmpresa = @p2 AND IdSucursal = @p3 AND Grupo_Cbte = @p1 AND Letra_Cbte = @p4) AS MaxRemitos
     `,
 		[
 			{ value: tipo, type: 'Char', length: 3 },
 			{ value: year, type: 'SmallInt' },
+			{ value: idEmpresa, type: 'SmallInt' },
+			{ value: idSucursal, type: 'SmallInt' },
+			{ value: letra, type: 'Char', length: 1 },
 		],
 	);
-	return { tipo, grupo: year, letra: 'X', nro: rows[0]?.NextNro || 1 };
-}
-
-async function nextIdTransaccion(tx) {
-	const req = new sql.Request(tx);
-	const r = await req.query(`
-    SELECT ISNULL((
-      SELECT MAX(m) FROM (
-        SELECT MAX(IdTransaccion) AS m FROM dbo.Transacciones
-        UNION ALL
-        SELECT MAX(IdTransaccion) FROM dbo.Remitos
-      ) x
-    ), 0) + 1 AS NextId
-  `);
-	return r.recordset[0].NextId;
+	const actual = Math.max(Number(rows[0]?.Numeracion) || 0, Number(rows[0]?.MaxRemitos) || 0);
+	return { tipo, grupo: year, letra, nro: actual + 1 };
 }
 
 /** Mensaje seguro para el usuario (nunca SQL crudo). */
@@ -791,8 +879,41 @@ function errorGuardado(err) {
 	return httpError('No se pudo guardar el remito. Revisá los datos e intentá de nuevo.', 500);
 }
 
+/**
+ * Remitos.Fecha va a las 00:00 como en Clarion; la hora viaja en Transacciones.Hora_D.
+ * Ambos como hora de pared argentina (tedious serializa los campos UTC).
+ */
+function parseFechaHora(body) {
+	const ahoraAr = partesFechaHoraArgentina();
+	const rawFecha = trim(body.Fecha || body.fecha);
+	const fechaIso = rawFecha ? rawFecha.slice(0, 10) : ahoraAr.fecha;
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaIso)) throw httpError('Fecha inválida');
+	const rawHora = trim(body.Hora || body.hora) || ahoraAr.horaCorta;
+	const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(rawHora);
+	if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw httpError('Hora inválida');
+	const hms = `${m[1].padStart(2, '0')}:${m[2]}:${m[3] || '00'}`;
+	const fecha = new Date(`${fechaIso}T00:00:00Z`);
+	const fechaHora = new Date(`${fechaIso}T${hms}Z`);
+	if (Number.isNaN(fecha.getTime()) || Number.isNaN(fechaHora.getTime())) throw httpError('Fecha inválida');
+	return { fechaIso, fecha, fechaHora };
+}
+
+async function buscarPorIds(sqlBase, ids, type) {
+	const out = [];
+	for (let i = 0; i < ids.length; i += LOTE_IN) {
+		const lote = ids.slice(i, i + LOTE_IN);
+		const marcas = lote.map((_, j) => `@p${j}`).join(',');
+		const rows = await executeQuery(
+			sqlBase.replace('{ids}', marcas),
+			lote.map((value) => ({ value, type })),
+		);
+		out.push(...rows);
+	}
+	return out;
+}
+
 /** Valida body y resuelve ítems / campos según tipo. */
-async function prepararDatos(body, { autoNro = true } = {}) {
+async function prepararDatos(body) {
 	const tipo = (trim(body.TipoCbte || body.tipoCbte) || '').slice(0, 3);
 	if (!tipo) throw httpError('Seleccioná el tipo de remito');
 	const idDeposito = Number(body.IdDeposito ?? body.idDeposito);
@@ -805,73 +926,76 @@ async function prepararDatos(body, { autoNro = true } = {}) {
 	const itemsIn = Array.isArray(body.items) ? body.items : [];
 	if (!itemsIn.length) throw httpError('Agregá al menos un ítem');
 
-	const fecha = body.Fecha || body.fecha ? new Date(body.Fecha || body.fecha) : new Date();
-	if (Number.isNaN(fecha.getTime())) throw httpError('Fecha inválida');
-
-	const grupo = body.GrupoCbte != null ? Number(body.GrupoCbte) : fecha.getFullYear();
+	const { fechaIso, fecha, fechaHora } = parseFechaHora(body);
+	const grupo = body.GrupoCbte != null && body.GrupoCbte !== '' ? Number(body.GrupoCbte) : Number(fechaIso.slice(0, 4));
+	if (!Number.isFinite(grupo)) throw httpError('Grupo de comprobante inválido');
 	const letra = (trim(body.LetraCbte) || 'X').slice(0, 1);
-	let nro = body.NroCbte != null ? Number(body.NroCbte) : null;
-	if (!nro || !Number.isFinite(nro)) {
-		if (!autoNro) throw httpError('Número de remito inválido');
-		const prox = await proximoNro(tipo, grupo);
-		nro = prox.nro;
+
+	const base = itemsIn.map((it, i) => {
+		const idProd = Number(it.IdProducto ?? it.idProducto);
+		if (!Number.isFinite(idProd)) throw httpError(`Ítem ${i + 1}: producto inválido`);
+		const cant = Number(it.Cantidad ?? it.cantidad);
+		if (!Number.isFinite(cant) || cant <= 0) throw httpError(`Ítem ${i + 1}: la cantidad debe ser mayor a 0`);
+		if (!Number.isInteger(cant)) throw httpError(`Ítem ${i + 1}: la cantidad debe ser un número entero (sin decimales)`);
+		const idPac = it.IdPaciente != null && it.IdPaciente !== '' ? Number(it.IdPaciente) : null;
+		const nroIndRaw = it.NroIndicacion ?? it.nroIndicacion;
+		const nroInd = nroIndRaw != null && nroIndRaw !== '' ? Number(nroIndRaw) : null;
+		return { it, idProd, cant, idPac: Number.isFinite(idPac) ? idPac : null, nroInd };
+	});
+
+	const prods = await buscarPorIds(
+		`
+    SELECT p.IdProducto,
+      RTRIM(COALESCE(NULLIF(RTRIM(p.Descripcion),''), NULLIF(RTRIM(p.DescripcionC),''))) AS Descripcion,
+      RTRIM(p.IdUnidad) AS IdUnidad, p.PrecioVenta, COALESCE(p.Costo, p.PrecioCosto, 0) AS Costo
+    FROM dbo.Productos p WHERE p.IdProducto IN ({ids})
+    `,
+		[...new Set(base.map((b) => b.idProd))],
+		'Int',
+	);
+	const prodPorId = new Map(prods.map((p) => [Number(p.IdProducto), p]));
+
+	const idsPac = [...new Set(base.map((b) => b.idPac).filter((x) => x != null))];
+	if (idsPac.length) {
+		const pacs = await buscarPorIds(
+			`SELECT IdPaciente FROM dbo.imPacientes WHERE IdPaciente IN ({ids})`,
+			idsPac,
+			'Int',
+		);
+		const existentes = new Set(pacs.map((p) => Number(p.IdPaciente)));
+		const falta = base.findIndex((b) => b.idPac != null && !existentes.has(b.idPac));
+		if (falta >= 0) throw httpError(`Ítem ${falta + 1}: paciente ${base[falta].idPac} no existe`);
 	}
 
 	const items = [];
 	let total = 0;
+	let costo = 0;
 	let bultos = 0;
-	for (let i = 0; i < itemsIn.length; i++) {
-		const it = itemsIn[i];
-		const idProd = Number(it.IdProducto ?? it.idProducto);
-		if (!Number.isFinite(idProd)) throw httpError(`Ítem ${i + 1}: producto inválido`);
-		const cant = Number(it.Cantidad ?? it.cantidad);
-		if (!Number.isFinite(cant) || cant === 0) throw httpError(`Ítem ${i + 1}: cantidad inválida`);
-
-		const prod = await executeQuery(
-			`
-      SELECT TOP 1
-        RTRIM(COALESCE(NULLIF(RTRIM(p.Descripcion),''), NULLIF(RTRIM(p.DescripcionC),''))) AS Descripcion,
-        RTRIM(p.IdUnidad) AS IdUnidad,
-        p.PrecioVenta
-      FROM dbo.Productos p
-      WHERE p.IdProducto = @p0
-      `,
-			[{ value: idProd, type: 'Int' }],
-		);
-		if (!prod.length) throw httpError(`Producto ${idProd} no existe en tabla Productos`);
-		const desc = trim(prod[0].Descripcion) || `Producto ${idProd}`;
+	base.forEach(({ it, idProd, cant, idPac, nroInd }, i) => {
+		const prod = prodPorId.get(idProd);
+		if (!prod) throw httpError(`Ítem ${i + 1}: producto ${idProd} no existe en tabla Productos`);
 		const unit =
 			it.ImporteUnitario != null && it.ImporteUnitario !== ''
 				? Number(it.ImporteUnitario)
-				: Number(prod[0].PrecioVenta) || 0;
+				: Number(prod.PrecioVenta) || 0;
+		if (!Number.isFinite(unit)) throw httpError(`Ítem ${i + 1}: importe unitario inválido`);
 		const importeTotal = Number(it.ImporteTotal ?? cant * unit);
-		const idPac =
-			it.IdPaciente != null && it.IdPaciente !== '' ? Number(it.IdPaciente) : null;
-		if (idPac != null && Number.isFinite(idPac)) {
-			const pacOk = await executeQuery(
-				`SELECT TOP 1 IdPaciente FROM dbo.imPacientes WHERE IdPaciente = @p0`,
-				[{ value: idPac, type: 'Int' }],
-			);
-			if (!pacOk.length) throw httpError(`Ítem ${i + 1}: paciente ${idPac} no existe`);
-		}
-		const nroIndRaw = it.NroIndicacion ?? it.nroIndicacion;
-		const nroInd =
-			nroIndRaw != null && nroIndRaw !== '' ? Number(nroIndRaw) : null;
 		total += importeTotal;
-		bultos += Math.abs(cant);
+		costo += cant * (Number(prod.Costo) || 0);
+		bultos += cant;
 		items.push({
 			IdProducto: idProd,
-			DescripcionProducto: desc.slice(0, 8000),
-			IdUnidad: trim(prod[0].IdUnidad),
+			DescripcionProducto: (trim(prod.Descripcion) || `Producto ${idProd}`).slice(0, 8000),
+			IdUnidad: trim(prod.IdUnidad),
 			Cantidad: cant,
 			ImporteUnitario: unit,
 			ImporteTotal: importeTotal,
-			IdPaciente: Number.isFinite(idPac) ? idPac : null,
+			IdPaciente: idPac,
 			NroIndicacion: Number.isFinite(nroInd) && nroInd > 0 ? nroInd : null,
 		});
-	}
+	});
 
-	const sentido = (tipoRow.Sentido || 'E').slice(0, 1);
+	const sentido = (tipoRow.Sentido || 'E').slice(0, 1).toUpperCase();
 	const observacion = trim(body.Observaciones || body.observaciones);
 	const campos = camposSegunTipo(tipoRow);
 
@@ -879,16 +1003,16 @@ async function prepararDatos(body, { autoNro = true } = {}) {
 	const idProvRaw = body.IdProveedor ?? body.idProveedor;
 	const idCliRaw = body.IdCliente ?? body.idCliente;
 	const idDepositoDest =
-		campos.usaDepDestino && idDepDestRaw != null && idDepDestRaw !== ''
-			? Number(idDepDestRaw)
-			: null;
+		campos.usaDepDestino && idDepDestRaw != null && idDepDestRaw !== '' ? Number(idDepDestRaw) : null;
 	const idProveedor =
 		campos.usaProveedor && idProvRaw != null && idProvRaw !== '' ? Number(idProvRaw) : null;
-	const idCliente =
-		campos.usaCliente && idCliRaw != null && idCliRaw !== '' ? Number(idCliRaw) : null;
+	const idCliente = campos.usaCliente && idCliRaw != null && idCliRaw !== '' ? Number(idCliRaw) : null;
 
 	if (campos.usaDepDestino && !Number.isFinite(idDepositoDest)) {
 		throw httpError('Seleccioná el depósito destino');
+	}
+	if (campos.usaDepDestino && idDepositoDest === idDeposito) {
+		throw httpError('El depósito destino tiene que ser distinto del depósito de origen');
 	}
 	if (campos.usaProveedor && !Number.isFinite(idProveedor)) {
 		throw httpError('Seleccioná el proveedor');
@@ -897,20 +1021,32 @@ async function prepararDatos(body, { autoNro = true } = {}) {
 		throw httpError('Seleccioná el cliente / paciente');
 	}
 
+	const idsDep = [idDeposito, ...(Number.isFinite(idDepositoDest) ? [idDepositoDest] : [])];
+	const deps = await buscarPorIds(`SELECT IdDeposito FROM dbo.Depositos WHERE IdDeposito IN ({ids})`, idsDep, 'SmallInt');
+	const depsOk = new Set(deps.map((d) => Number(d.IdDeposito)));
+	const depFalta = idsDep.find((d) => !depsOk.has(d));
+	if (depFalta != null) throw httpError(`El depósito ${depFalta} no existe`);
+
+	const tipoGenId = trim(tipoRow.IdTipoGenerar);
+	const tipoGenRow = tipoGenId ? tipos.find((t) => t.IdTipo === tipoGenId) || null : null;
+	if (tipoGenId && !tipoGenRow) {
+		throw httpError(`El tipo ${tipoGenId} que genera ${tipo} no existe en Tipos_Remitos`);
+	}
+
 	return {
 		tipo,
 		tipoRow,
+		tipoGenRow,
 		idDeposito,
 		fecha,
+		fechaHora,
+		fechaIso,
 		grupo,
 		letra,
-		nro,
 		items,
 		total,
-		bultos: Math.min(
-			32767,
-			Math.round(body.Bultos != null ? Number(body.Bultos) : bultos),
-		),
+		costo,
+		bultos: Math.min(32767, Math.round(body.Bultos != null && body.Bultos !== '' ? Number(body.Bultos) : bultos)),
 		sentido,
 		observacion,
 		idDepositoDest: Number.isFinite(idDepositoDest) ? idDepositoDest : null,
@@ -919,160 +1055,72 @@ async function prepararDatos(body, { autoNro = true } = {}) {
 	};
 }
 
-async function insertarItems(transaction, { idTx, items, sentido, idDeposito, tipo, fecha, audUser }) {
-	for (let i = 0; i < items.length; i++) {
-		const it = items[i];
-		const reqI = new sql.Request(transaction);
-		await reqI
-			.input('id', sql.Int, idTx)
-			.input('ren', sql.SmallInt, i + 1)
-			.input('sent', sql.Char(1), sentido)
-			.input('dep', sql.SmallInt, idDeposito)
-			.input('prod', sql.Int, it.IdProducto)
-			.input('tipo', sql.Char(3), tipo)
-			.input('cant', sql.Decimal(18, 4), it.Cantidad)
-			.input('fecha', sql.DateTime, fecha)
-			.input('unit', sql.Decimal(18, 4), it.ImporteUnitario)
-			.input('tot', sql.Decimal(18, 4), it.ImporteTotal)
-			.input('pac', sql.Int, it.IdPaciente)
-			.input('nroInd', sql.Int, it.NroIndicacion)
-			.input('desc', sql.VarChar(sql.MAX), it.DescripcionProducto)
-			.input('audUser', sql.SmallInt, Number.isFinite(audUser) ? audUser : null)
-			.query(`
-        INSERT INTO dbo.RemitosItems (
-          IdTransaccion, Renglon, Sentido, IdDeposito, IdStatus, IdProducto, IdTipo,
-          Cantidad, Cantidad_Origen, Cantidad_Fisico, Cantidad_Disp,
-          Fecha, ImporteUnitario, ImporteTotal, DescripcionProducto, IdPaciente, NroIndicacion,
-          Aud_Fecha_Date, Aud_Usuario, Aud_Accion
-        ) VALUES (
-          @id, @ren, @sent, @dep, 0, @prod, @tipo,
-          @cant, @cant, @cant, @cant,
-          @fecha, @unit, @tot, @desc, @pac, @nroInd,
-          GETDATE(), @audUser, 1
-        )
-      `);
-	}
+function comprobante(datos, ctx, extra) {
+	return {
+		idEmpresa: ctx.idEmpresa,
+		idSucursal: ctx.idSucursal,
+		audUser: ctx.audUser,
+		ahora: ctx.ahora,
+		tipo: datos.tipo,
+		tipoRow: datos.tipoRow,
+		grupo: datos.grupo,
+		letra: datos.letra,
+		idDeposito: datos.idDeposito,
+		idDepositoDest: datos.idDepositoDest,
+		idProveedor: datos.idProveedor,
+		idCliente: datos.idCliente,
+		fecha: datos.fecha,
+		fechaHora: datos.fechaHora,
+		bultos: datos.bultos,
+		idStatus: estadoDeTipo(datos.tipoRow),
+		total: datos.total,
+		costo: datos.costo,
+		items: datos.items,
+		sentido: datos.sentido,
+		observacion: datos.observacion,
+		idTxOrig: null,
+		...extra,
+	};
 }
 
-async function upsertObservacion(transaction, { idTx, observacion, fecha }) {
-	const reqDel = new sql.Request(transaction);
-	await reqDel.input('id', sql.Int, idTx).query(`
-    DELETE FROM dbo.Remitos_Observa WHERE IdTransaccion = @id
-  `);
-	if (!observacion) return;
-	const reqO = new sql.Request(transaction);
-	await reqO
-		.input('id', sql.Int, idTx)
-		.input('item', sql.SmallInt, 1)
-		.input('fecha', sql.DateTime, fecha)
-		.input('com', sql.VarChar(2000), observacion.slice(0, 2000))
-		.query(`
-      INSERT INTO dbo.Remitos_Observa (IdTransaccion, Item, Fecha, Comentarios, Aud_Fecha_Date, Aud_Accion)
-      VALUES (@id, @item, @fecha, @com, GETDATE(), 1)
-    `);
+async function borrarItems(tx, idTx) {
+	await new sql.Request(tx).input('id', sql.Int, idTx).query(`DELETE FROM dbo.RemitosItems WHERE IdTransaccion = @id`);
 }
 
-async function crear(body, auth) {
-	const datos = await prepararDatos(body, { autoNro: true });
-	const idEmpresa = body.IdEmpresa != null ? Number(body.IdEmpresa) : 1;
-	const idSucursal = body.IdSucursal != null ? Number(body.IdSucursal) : 1;
-	const audUser = auth?.idCodOperador != null ? Number(auth.idCodOperador) : null;
+async function anularComprobante(tx, idTx, ctx) {
+	const cab = await grab.leerCabecera(tx, idTx);
+	if (!cab || Number(cab.IdStatus) === grab.STATUS_ANULADO) return;
+	await grab.revertirStock(tx, cab, { anular: true, ahora: ctx.ahora, audUser: ctx.audUser });
+	await grab.marcarAnulado(tx, idTx, ctx);
+}
+
+/**
+ * Clarion generaba un REM espejo (IdTipo_Generar) al grabar RSM.
+ * En iMedic web no se crea: el RSM mueve stock solo en el depósito origen.
+ * Si quedó un espejo viejo (datos Clarion / builds anteriores), se anula.
+ */
+async function sincronizarEspejo(tx, _datos, ctx, { espejoId }) {
+	if (espejoId) await anularComprobante(tx, espejoId, ctx);
+	return null;
+}
+
+function usaIndicaciones(tipo) {
+	return String(tipo).toUpperCase() === 'RSM';
+}
+
+/** Con `externa` el llamador controla commit/rollback (componer operaciones). */
+async function enTransaccion(fn, externa = null) {
+	if (externa) return fn(externa);
 	const pool = await getRequestPool();
-	const transaction = new sql.Transaction(pool);
-	await transaction.begin();
+	const tx = new sql.Transaction(pool);
+	await tx.begin();
 	try {
-		const idTx = await nextIdTransaccion(transaction);
-
-		const reqTx = new sql.Request(transaction);
-		await reqTx
-			.input('id', sql.Int, idTx)
-			.input('emp', sql.SmallInt, idEmpresa)
-			.input('suc', sql.SmallInt, idSucursal)
-			.input('tipo', sql.Char(3), datos.tipo)
-			.input('grupo', sql.SmallInt, datos.grupo)
-			.input('letra', sql.Char(1), datos.letra)
-			.input('nro', sql.Int, datos.nro)
-			.input('empId', sql.Int, Number.isFinite(audUser) ? audUser : null)
-			.input('desc', sql.Char(50), 'Emision de Remitos')
-			.input('fecha', sql.DateTime, datos.fecha)
-			.input('audUser', sql.SmallInt, Number.isFinite(audUser) ? audUser : null)
-			.query(`
-        INSERT INTO dbo.Transacciones (
-          IdTransaccion, IdEmpresa, IdSucursal, TipoCbte, GrupoCbte, LetraCbte, NroCbte,
-          IdEmpleado, Descripcion, NroEvento, IdStatus, Fecha,
-          Aud_Fecha_Date, Aud_Usuario, Aud_Accion
-        ) VALUES (
-          @id, @emp, @suc, @tipo, @grupo, @letra, @nro,
-          @empId, @desc, 0, 1, @fecha,
-          GETDATE(), @audUser, 1
-        )
-      `);
-
-		const reqH = new sql.Request(transaction);
-		await reqH
-			.input('id', sql.Int, idTx)
-			.input('emp', sql.SmallInt, idEmpresa)
-			.input('suc', sql.SmallInt, idSucursal)
-			.input('tipo', sql.Char(3), datos.tipo)
-			.input('grupo', sql.SmallInt, datos.grupo)
-			.input('letra', sql.Char(1), datos.letra)
-			.input('nro', sql.Int, datos.nro)
-			.input('dep', sql.SmallInt, datos.idDeposito)
-			.input('depDest', sql.SmallInt, datos.idDepositoDest)
-			.input('prov', sql.Int, datos.idProveedor)
-			.input('cli', sql.Int, datos.idCliente)
-			.input('fecha', sql.DateTime, datos.fecha)
-			.input('bultos', sql.SmallInt, datos.bultos)
-			.input('status', sql.SmallInt, datos.tipoRow.IdStatus != null ? Number(datos.tipoRow.IdStatus) : 0)
-			.input('imp', sql.Decimal(18, 4), datos.total)
-			.input('audUser', sql.SmallInt, Number.isFinite(audUser) ? audUser : null)
-			.query(`
-        INSERT INTO dbo.Remitos (
-          IdTransaccion, IdEmpresa, IdSucursal, Tipo_Cbte, Grupo_Cbte, Letra_Cbte, NroCbte,
-          IdDeposito, IdDepositoDest, IdProveedor, IdCliente,
-          Fecha, Bultos, IdStatus, ImportePPP, ImporteCosto,
-          Aud_Fecha_Date, Aud_Usuario, Aud_Accion
-        ) VALUES (
-          @id, @emp, @suc, @tipo, @grupo, @letra, @nro,
-          @dep, @depDest, @prov, @cli,
-          @fecha, @bultos, @status, @imp, @imp,
-          GETDATE(), @audUser, 1
-        )
-      `);
-
-		await insertarItems(transaction, {
-			idTx,
-			items: datos.items,
-			sentido: datos.sentido,
-			idDeposito: datos.idDeposito,
-			tipo: datos.tipo,
-			fecha: datos.fecha,
-			audUser,
-		});
-		await upsertObservacion(transaction, {
-			idTx,
-			observacion: datos.observacion,
-			fecha: datos.fecha,
-		});
-
-		await transaction.commit();
-
-		if (String(datos.tipo).toUpperCase() === 'RSM') {
-			const fechaIso =
-				datos.fecha instanceof Date
-					? datos.fecha.toISOString().slice(0, 10)
-					: String(body.Fecha || body.fecha || '').slice(0, 10);
-			try {
-				await marcarEntregaIndicaciones(datos.items, fechaIso);
-			} catch (e) {
-				console.warn('[remitos] marcarEntregaIndicaciones:', e.message);
-			}
-		}
-
-		return obtener(idTx);
+		const out = await fn(tx);
+		await tx.commit();
+		return out;
 	} catch (e) {
 		try {
-			await transaction.rollback();
+			await tx.rollback();
 		} catch (_) {
 			/* ignore */
 		}
@@ -1080,166 +1128,123 @@ async function crear(body, auth) {
 	}
 }
 
-async function actualizar(id, body, auth) {
+/**
+ * Orden: Cbtes_Numeracion → Transacciones → Remitos → RemitosItems → Remitos_Observa
+ * → Stock/Stock_Mov → entregas de indicaciones. Todo o nada.
+ * (Ya no se genera REM espejo al grabar RSM.)
+ */
+async function crear(body, auth, { transaction = null } = {}) {
+	const datos = await prepararDatos(body);
+	const ctx = {
+		idEmpresa: Number(body.IdEmpresa) || DEFAULT_EMPRESA,
+		idSucursal: Number(body.IdSucursal) || DEFAULT_SUCURSAL,
+		audUser: audUserDe(auth),
+		ahora: ahoraWallArgentinaParaSql(),
+	};
+	const idTx = await enTransaccion(async (tx) => {
+		const nro = await grab.reservarNumero(tx, { ...ctx, tipo: datos.tipo, grupo: datos.grupo, letra: datos.letra });
+		const id = await grab.reservarIdTransaccion(tx);
+		await grab.escribirComprobante(tx, comprobante(datos, ctx, { idTx: id, isNew: true, nro }));
+		await sincronizarEspejo(tx, datos, ctx, { idTx: id, espejoId: null });
+		if (usaIndicaciones(datos.tipo)) {
+			await grab.ajustarEntregaIndicaciones(tx, datos.items, { signo: 1, fechaIso: datos.fechaIso });
+		}
+		return id;
+	}, transaction);
+	return transaction ? { IdTransaccion: idTx } : obtener(idTx);
+}
+
+async function cabeceraEditable(tx, idTx) {
+	const cab = await grab.leerCabecera(tx, idTx);
+	if (!cab) throw httpError('Remito no encontrado', 404);
+	if (Number(cab.IdStatus) === grab.STATUS_ANULADO) throw httpError('El remito está anulado');
+	if (Number(cab.IdTransaccionOrig) > 0) {
+		throw httpError(
+			`Este remito se generó automáticamente desde la transacción ${cab.IdTransaccionOrig}; operá sobre el remito original`,
+		);
+	}
+	return cab;
+}
+
+/** Revierte stock e indicaciones del remito y lo vuelve a grabar con el mismo número. */
+async function actualizar(id, body, auth, { transaction = null } = {}) {
 	const idTx = Number(id);
 	if (!Number.isFinite(idTx)) throw httpError('Remito inválido');
-
-	const actual = await executeQuery(
-		`
-    SELECT TOP 1 IdTransaccion, IdEmpresa, IdSucursal
-    FROM dbo.Remitos WHERE IdTransaccion = @p0
-    `,
-		[{ value: idTx, type: 'Int' }],
-	);
-	if (!actual.length) throw httpError('Remito no encontrado', 404);
-
-	const datos = await prepararDatos(body, { autoNro: false });
-	const idEmpresa = body.IdEmpresa != null ? Number(body.IdEmpresa) : Number(actual[0].IdEmpresa) || 1;
-	const idSucursal =
-		body.IdSucursal != null ? Number(body.IdSucursal) : Number(actual[0].IdSucursal) || 1;
-	const audUser = auth?.idCodOperador != null ? Number(auth.idCodOperador) : null;
-
-	const pool = await getRequestPool();
-	const transaction = new sql.Transaction(pool);
-	await transaction.begin();
-	try {
-		const reqTx = new sql.Request(transaction);
-		await reqTx
-			.input('id', sql.Int, idTx)
-			.input('emp', sql.SmallInt, idEmpresa)
-			.input('suc', sql.SmallInt, idSucursal)
-			.input('tipo', sql.Char(3), datos.tipo)
-			.input('grupo', sql.SmallInt, datos.grupo)
-			.input('letra', sql.Char(1), datos.letra)
-			.input('nro', sql.Int, datos.nro)
-			.input('fecha', sql.DateTime, datos.fecha)
-			.input('audUser', sql.SmallInt, Number.isFinite(audUser) ? audUser : null)
-			.query(`
-        UPDATE dbo.Transacciones SET
-          IdEmpresa = @emp, IdSucursal = @suc,
-          TipoCbte = @tipo, GrupoCbte = @grupo, LetraCbte = @letra, NroCbte = @nro,
-          Fecha = @fecha, Aud_Fecha_Date = GETDATE(), Aud_Usuario = @audUser, Aud_Accion = 2
-        WHERE IdTransaccion = @id
-      `);
-
-		const reqH = new sql.Request(transaction);
-		await reqH
-			.input('id', sql.Int, idTx)
-			.input('emp', sql.SmallInt, idEmpresa)
-			.input('suc', sql.SmallInt, idSucursal)
-			.input('tipo', sql.Char(3), datos.tipo)
-			.input('grupo', sql.SmallInt, datos.grupo)
-			.input('letra', sql.Char(1), datos.letra)
-			.input('nro', sql.Int, datos.nro)
-			.input('dep', sql.SmallInt, datos.idDeposito)
-			.input('depDest', sql.SmallInt, datos.idDepositoDest)
-			.input('prov', sql.Int, datos.idProveedor)
-			.input('cli', sql.Int, datos.idCliente)
-			.input('fecha', sql.DateTime, datos.fecha)
-			.input('bultos', sql.SmallInt, datos.bultos)
-			.input('status', sql.SmallInt, datos.tipoRow.IdStatus != null ? Number(datos.tipoRow.IdStatus) : 0)
-			.input('imp', sql.Decimal(18, 4), datos.total)
-			.input('audUser', sql.SmallInt, Number.isFinite(audUser) ? audUser : null)
-			.query(`
-        UPDATE dbo.Remitos SET
-          IdEmpresa = @emp, IdSucursal = @suc,
-          Tipo_Cbte = @tipo, Grupo_Cbte = @grupo, Letra_Cbte = @letra, NroCbte = @nro,
-          IdDeposito = @dep, IdDepositoDest = @depDest, IdProveedor = @prov, IdCliente = @cli,
-          Fecha = @fecha, Bultos = @bultos, IdStatus = @status,
-          ImportePPP = @imp, ImporteCosto = @imp,
-          Aud_Fecha_Date = GETDATE(), Aud_Usuario = @audUser, Aud_Accion = 2
-        WHERE IdTransaccion = @id
-      `);
-
-		const reqDel = new sql.Request(transaction);
-		await reqDel.input('id', sql.Int, idTx).query(`
-      DELETE FROM dbo.RemitosItems WHERE IdTransaccion = @id
-    `);
-
-		await insertarItems(transaction, {
-			idTx,
-			items: datos.items,
-			sentido: datos.sentido,
-			idDeposito: datos.idDeposito,
-			tipo: datos.tipo,
-			fecha: datos.fecha,
-			audUser,
-		});
-		await upsertObservacion(transaction, {
-			idTx,
-			observacion: datos.observacion,
-			fecha: datos.fecha,
-		});
-
-		await transaction.commit();
-
-		if (String(datos.tipo).toUpperCase() === 'RSM') {
-			const fechaIso =
-				datos.fecha instanceof Date
-					? datos.fecha.toISOString().slice(0, 10)
-					: String(body.Fecha || body.fecha || '').slice(0, 10);
-			try {
-				await marcarEntregaIndicaciones(datos.items, fechaIso);
-			} catch (e) {
-				console.warn('[remitos] marcarEntregaIndicaciones (upd):', e.message);
-			}
+	const datos = await prepararDatos(body);
+	await enTransaccion(async (tx) => {
+		const cab = await cabeceraEditable(tx, idTx);
+		if (trim(cab.Tipo_Cbte) !== datos.tipo) {
+			throw httpError('No se puede cambiar el tipo de un remito grabado. Anulalo y creá uno nuevo.');
 		}
-
-		return obtener(idTx);
-	} catch (e) {
-		try {
-			await transaction.rollback();
-		} catch (_) {
-			/* ignore */
+		const ctx = {
+			idEmpresa: cab.IdEmpresa ?? DEFAULT_EMPRESA,
+			idSucursal: cab.IdSucursal ?? DEFAULT_SUCURSAL,
+			audUser: audUserDe(auth),
+			ahora: ahoraWallArgentinaParaSql(),
+		};
+		if (usaIndicaciones(datos.tipo)) {
+			const previos = await grab.leerItemsIndicaciones(tx, idTx);
+			await grab.ajustarEntregaIndicaciones(tx, previos, { signo: -1 });
 		}
-		throw errorGuardado(e);
-	}
+		await grab.revertirStock(tx, cab, { anular: false, ahora: ctx.ahora, audUser: ctx.audUser });
+		await borrarItems(tx, idTx);
+		await grab.escribirComprobante(
+			tx,
+			comprobante(datos, ctx, {
+				idTx,
+				isNew: false,
+				grupo: cab.Grupo_Cbte,
+				letra: trim(cab.Letra_Cbte) || 'X',
+				nro: cab.NroCbte,
+			}),
+		);
+		const espejoId = await grab.buscarEspejo(tx, idTx);
+		await sincronizarEspejo(tx, datos, ctx, { idTx, espejoId });
+		if (usaIndicaciones(datos.tipo)) {
+			await grab.ajustarEntregaIndicaciones(tx, datos.items, { signo: 1, fechaIso: datos.fechaIso });
+		}
+	}, transaction);
+	return transaction ? { IdTransaccion: idTx } : obtener(idTx);
 }
 
-async function eliminar(id) {
+/**
+ * Anula el remito (IdStatus 0), revierte stock y el espejo vinculado.
+ * Si el usuario anula el remito generado automáticamente (IdTransaccionOrig),
+ * se anula el original: eso también anula este espejo.
+ */
+async function anular(id, auth, { transaction = null } = {}) {
 	const idTx = Number(id);
 	if (!Number.isFinite(idTx)) throw httpError('Remito inválido');
+	await enTransaccion(async (tx) => {
+		const cab = await grab.leerCabecera(tx, idTx);
+		if (!cab) throw httpError('Remito no encontrado', 404);
 
-	const exists = await executeQuery(
-		`SELECT TOP 1 IdTransaccion FROM dbo.Remitos WHERE IdTransaccion = @p0`,
-		[{ value: idTx, type: 'Int' }],
-	);
-	if (!exists.length) throw httpError('Remito no encontrado', 404);
+		const orig = Number(cab.IdTransaccionOrig) || 0;
+		const idPrincipal = orig > 0 && orig !== idTx ? orig : idTx;
+		const cabPrincipal =
+			idPrincipal === idTx ? cab : await grab.leerCabecera(tx, idPrincipal);
+		if (!cabPrincipal) throw httpError('Remito no encontrado', 404);
 
-	const pool = await getRequestPool();
-	const transaction = new sql.Transaction(pool);
-	await transaction.begin();
-	try {
-		const delItems = new sql.Request(transaction);
-		await delItems.input('id', sql.Int, idTx).query(`
-      DELETE FROM dbo.RemitosItems WHERE IdTransaccion = @id
-    `);
+		const ctx = { audUser: audUserDe(auth), ahora: ahoraWallArgentinaParaSql() };
 
-		const delObs = new sql.Request(transaction);
-		await delObs.input('id', sql.Int, idTx).query(`
-      DELETE FROM dbo.Remitos_Observa WHERE IdTransaccion = @id
-    `);
-
-		const delRem = new sql.Request(transaction);
-		await delRem.input('id', sql.Int, idTx).query(`
-      DELETE FROM dbo.Remitos WHERE IdTransaccion = @id
-    `);
-
-		const delTx = new sql.Request(transaction);
-		await delTx.input('id', sql.Int, idTx).query(`
-      DELETE FROM dbo.Transacciones WHERE IdTransaccion = @id
-    `);
-
-		await transaction.commit();
-		return { ok: true, IdTransaccion: idTx };
-	} catch (e) {
-		try {
-			await transaction.rollback();
-		} catch (_) {
-			/* ignore */
+		if (Number(cabPrincipal.IdStatus) === grab.STATUS_ANULADO) {
+			// Original ya anulado: si quedó un espejo vivo, anularlo solo.
+			if (idPrincipal !== idTx && Number(cab.IdStatus) !== grab.STATUS_ANULADO) {
+				await anularComprobante(tx, idTx, ctx);
+				return;
+			}
+			throw httpError('El remito está anulado');
 		}
-		throw errorGuardado(e);
-	}
+
+		if (usaIndicaciones(cabPrincipal.Tipo_Cbte)) {
+			const previos = await grab.leerItemsIndicaciones(tx, idPrincipal);
+			await grab.ajustarEntregaIndicaciones(tx, previos, { signo: -1 });
+		}
+		await anularComprobante(tx, idPrincipal, ctx);
+		const espejoId = await grab.buscarEspejo(tx, idPrincipal);
+		if (espejoId) await anularComprobante(tx, espejoId, ctx);
+	}, transaction);
+	return transaction ? { IdTransaccion: idTx } : obtener(idTx);
 }
 
 module.exports = {
@@ -1247,7 +1252,7 @@ module.exports = {
 	obtener,
 	crear,
 	actualizar,
-	eliminar,
+	anular,
 	listarTipos,
 	listarDepositos,
 	listarProveedores,
