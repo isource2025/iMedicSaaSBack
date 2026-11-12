@@ -922,16 +922,18 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 	const desdeClarion = convertirFechaAClarion(desdeIso);
 	const hastaClarion = convertirFechaAClarion(hastaIso);
 
-	const [horarios, noHorarios, turnosData, feriados] = await Promise.all([
+	const [horarios, noHorarios, turnosData, feriados, sectorPersonalMed, profesional] = await Promise.all([
 		agendaConfig.obtenerHorariosPorMatricula(m),
 		_cargarNoHorarios(m, desdeClarion, hastaClarion),
 		_cargarTurnos(m, desdeClarion, hastaClarion),
 		feriadosService.listarEnRangoConEnsure(desdeIso, hastaIso).catch(() => []),
+		_sectorPersonalAsignado(m),
+		_datosProfesionalParaTurno(m, desdeIso),
 	]);
 
-	const sectorPersonalMed = await _sectorPersonalAsignado(m);
-
 	const diasOut = [];
+	/** Slots con turno de todos los días: el resumen RAC se pide una sola vez al final. */
+	const slotsConRac = [];
 	const cursor = new Date(desde);
 	while (cursor <= hasta) {
 		const fechaIso = _isoDate(cursor);
@@ -1089,10 +1091,7 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 
 		if (!ligero) {
 			_agregarSobreturnosEnSlots(slots, fechaIso, turnosData.rows, sectorPersonalMed, diaCfg.rangos);
-			const racMap = await _racResumenPorTurnos(
-				slots.map((s) => s.idTurno).filter(Boolean),
-			);
-			_aplicarRacResumenASlots(slots, racMap);
+			slotsConRac.push(...slots.filter((s) => s.idTurno));
 		}
 		_ordenarSlotsAgenda(slots);
 		diasOut.push({
@@ -1105,7 +1104,11 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 		cursor.setDate(cursor.getDate() + 1);
 	}
 
-	const profesional = await _datosProfesionalParaTurno(m, desdeIso);
+	if (slotsConRac.length) {
+		const racMap = await _racResumenPorTurnos(slotsConRac.map((s) => s.idTurno));
+		_aplicarRacResumenASlots(slotsConRac, racMap);
+	}
+
 	return {
 		matricula: m,
 		desde: desdeIso,

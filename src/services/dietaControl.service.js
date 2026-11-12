@@ -93,6 +93,14 @@ async function crear(data) {
 	if (!Number.isInteger(numeroVisita) || numeroVisita <= 0) {
 		throw Object.assign(new Error('Número de visita inválido'), { statusCode: 400 });
 	}
+	{
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		await assertCargaEnRangoVisita(
+			numeroVisita,
+			data.fechaDieta ? String(data.fechaDieta).slice(0, 10) : null,
+			data.horaDieta != null ? String(data.horaDieta) : null,
+		);
+	}
 	// Valor no es IDENTITY: el lock evita que dos altas simultáneas tomen el mismo número.
 	const sql = `
     INSERT INTO dbo.imInterCtrlDieta (
@@ -122,6 +130,19 @@ async function crear(data) {
 async function actualizar(id, data = {}) {
 	const existing = await obtenerPorId(id);
 	if (!existing) return null;
+	{
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		const fecha =
+			data.fechaDieta != null
+				? String(data.fechaDieta).slice(0, 10)
+				: String(existing.FechaDieta || existing.FechaCarga || '').slice(0, 10);
+		const hora =
+			data.horaDieta != null
+				? String(data.horaDieta)
+				: String(existing.HoraDieta || existing.HoraCarga || '');
+		const nv = Number(existing.NumeroVisita) || 0;
+		if (nv > 0) await assertCargaEnRangoVisita(nv, fecha || null, hora || null);
+	}
 	await executeQuery(
 		`
     UPDATE dbo.imInterCtrlDieta SET

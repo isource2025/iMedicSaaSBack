@@ -5,17 +5,26 @@
  */
 const { executeQuery } = require('../models/db');
 const { reqTienePermiso } = require('../middlewares/requirePermiso.middleware');
+const { getTenantId } = require('../context/tenantContext');
+const { TtlCache } = require('./ttlCache');
+
+/** Se consulta en cada /auth/me y en cada request de agenda propia; la matrícula casi nunca cambia. */
+const matriculaCache = new TtlCache({ ttlMs: 10 * 60 * 1000, max: 5000, nombre: 'matriculaTenant' });
 
 async function resolverMatriculaTenant(valorPersonal) {
 	const vp = Number(valorPersonal);
 	if (!Number.isFinite(vp) || vp <= 0) return null;
-	const rows = await executeQuery(
-		'SELECT TOP 1 Matricula FROM dbo.imPersonal WHERE Valor = @p0',
-		[{ value: vp, type: 'Int' }],
-	);
-	const m = rows?.[0]?.Matricula;
-	const n = m != null && m !== '' ? Number(m) : NaN;
-	return Number.isFinite(n) && n > 0 ? n : null;
+	const key = `${getTenantId() ?? '_'}|${vp}`;
+	const cacheada = await matriculaCache.getOrLoad(key, async () => {
+		const rows = await executeQuery(
+			'SELECT TOP 1 Matricula FROM dbo.imPersonal WHERE Valor = @p0',
+			[{ value: vp, type: 'Int' }],
+		);
+		const m = rows?.[0]?.Matricula;
+		const n = m != null && m !== '' ? Number(m) : NaN;
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	});
+	return cacheada > 0 ? cacheada : null;
 }
 
 /**

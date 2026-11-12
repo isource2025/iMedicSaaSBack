@@ -289,6 +289,25 @@ const crearControl = async (data) => {
  * Actualizar un control frecuente existente (solo campos clínicos).
  */
 const actualizarControl = async (valor, data) => {
+    const actual = await obtenerControlPorId(valor);
+    if (!actual) {
+        const err = new Error('Control frecuente no encontrado');
+        err.statusCode = 404;
+        throw err;
+    }
+    const fechaYmd = data.fechaControl
+        ? String(data.fechaControl).slice(0, 10)
+        : String(actual.FechaControl || '').slice(0, 10);
+    const horaStr = data.horaControl
+        ? String(data.horaControl)
+        : String(actual.HoraControl || '');
+    const nv = Number(actual.NumeroVisita) || 0;
+    const idTurno = Number(actual.IdTurno) || 0;
+    if (nv > 0 && idTurno <= 0 && fechaYmd) {
+        const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+        await assertCargaEnRangoVisita(nv, fechaYmd, horaStr || null);
+    }
+
     const fechaControlClarion = data.fechaControl
         ? convertirFechaAClarion(data.fechaControl)
         : null;

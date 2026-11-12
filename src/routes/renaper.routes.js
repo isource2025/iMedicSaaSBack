@@ -5,8 +5,8 @@ const renaperController = require('../controllers/renaper.controller');
 // Endpoint para genera el token
 router.get('/get-token', renaperController.getToken);
 
-// Endpoint para buscar una persona
-router.get('/buscar-persona/:documento/:sexo', renaperController.search);
+// Buscar persona por DNI; el sexo es opcional (sin sexo devuelve todas las personas del DNI)
+router.get('/buscar-persona/:documento/:sexo?', renaperController.search);
 
 
 module.exports = router;

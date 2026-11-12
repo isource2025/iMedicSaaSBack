@@ -317,6 +317,47 @@ const renaperService = {
 };
 
 /**
+ * Todas las personas con ese DNI: consulta F y M por separado (sin flip).
+ * RENAPER responde una persona por sexo; un mismo número puede corresponder a dos personas
+ * distintas (ej. DNI 6353656), así que el que llama debe dejar elegir.
+ * @returns {Promise<Array<object>>} 0, 1 o 2 personas (F primero).
+ */
+async function searchAllByDni(NumeroDocumento, opts = {}) {
+	const debug = !!opts.debug;
+	const allowSigned = opts.allowSigned !== false;
+	const timeoutMs = Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS;
+
+	const consultar = async (token) =>
+		Promise.allSettled(
+			[1, 2].map((idSexo) =>
+				searchOnce(NumeroDocumento, idSexo, { token, codDominio: COD_DOMINIO }, debug, timeoutMs),
+			),
+		);
+
+	await ensureTokenFresh(PROACTIVE_TTL_MS);
+	let resultados = await consultar(cachedToken);
+	if (resultados.some((r) => r.status === 'rejected' && String(r.reason?.message || '').includes('HTTP 401'))) {
+		resultados = await consultar(await getFreshToken());
+	}
+
+	const personas = [];
+	for (const [i, r] of resultados.entries()) {
+		if (r.status === 'fulfilled' && isValidResult(r.value, allowSigned)) {
+			const p = r.value;
+			if (!p.sexo && p.idSexo == null) p.idSexo = i === 0 ? 1 : 2;
+			personas.push(p);
+		} else if (r.status === 'rejected' && debug) {
+			console.warn('[RENAPER][searchAll] idSexo=', i + 1, r.reason?.message);
+		}
+	}
+	const errores = resultados.filter((r) => r.status === 'rejected');
+	if (!personas.length && errores.length === resultados.length) {
+		throw errores[0].reason;
+	}
+	return personas;
+}
+
+/**
  * Consulta RENAPER vía servidor intermedio (ej. on-prem con acceso a MSAL).
  * RENAPER_PROXY_BASE_URL=https://tu-servidor/api/integrations/bot
  */
@@ -405,4 +446,5 @@ async function searchByDni(NumeroDocumento, opts = { debug: false, allowSigned: 
 module.exports = {
 	...renaperService,
 	searchByDni,
+	searchAllByDni,
 };

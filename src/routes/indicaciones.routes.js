@@ -2,14 +2,24 @@ const express = require('express');
 const router = express.Router();
 const indicacionesController = require('../controllers/indicaciones.controller');
 const { requireTenant } = require('../middlewares/requireTenant.middleware');
-const { requirePermiso } = require('../middlewares/requirePermiso.middleware');
+const { requirePermiso, requireAnyPermiso } = require('../middlewares/requirePermiso.middleware');
 const { requirePropietario } = require('../middlewares/propietario.middleware');
 
 router.use(requireTenant);
 
+const TIPO_INDICACION_DESCARTABLES = 9;
+
+const _crearIndicacion = requirePermiso('INTERNACION.INDICACIONES.CREAR');
+// Descartables (insumos): INTERNACION.INSUMOS.CREAR alcanza; INDICACIONES.CREAR los sigue incluyendo.
+const _crearInsumo = requireAnyPermiso('INTERNACION.INSUMOS.CREAR', 'INTERNACION.INDICACIONES.CREAR');
+const requirePermisoAltaIndicacion = (req, res, next) =>
+	Number(req.body?.TipoIndicacion) === TIPO_INDICACION_DESCARTABLES
+		? _crearInsumo(req, res, next)
+		: _crearIndicacion(req, res, next);
+
 router.get(
 	'/formulario/datos',
-	requirePermiso('INTERNACION.INDICACIONES.VER'),
+	requireAnyPermiso('INTERNACION.INDICACIONES.VER', 'INTERNACION.INSUMOS.CREAR'),
 	indicacionesController.obtenerDatosFormulario,
 );
 router.get(
@@ -25,7 +35,7 @@ router.get(
 router.get('/:numeroVisita/byDate', requirePermiso('INTERNACION.INDICACIONES.VER'), indicacionesController.byDate);
 router.get(
 	'/:numeroVisita/insumos/byDate',
-	requirePermiso('INTERNACION.INDICACIONES.VER'),
+	requireAnyPermiso('INTERNACION.INSUMOS.VER', 'INTERNACION.INDICACIONES.VER'),
 	indicacionesController.insumosByDate,
 );
 router.post(
@@ -39,7 +49,7 @@ router.get(
 	indicacionesController.nuevasEnfermeria,
 );
 
-router.post('/', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.nuevaIndicacion);
+router.post('/', requirePermisoAltaIndicacion, indicacionesController.nuevaIndicacion);
 router.post('/hija', requirePermiso('INTERNACION.INDICACIONES.CREAR'), indicacionesController.crearIndicacionHija);
 
 const _ownIndicacion = requirePropietario({

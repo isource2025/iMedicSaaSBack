@@ -1251,6 +1251,12 @@ async function crearPedido({
 		fechaPedido instanceof Date && !Number.isNaN(fechaPedido.getTime())
 			? fechaPedido
 			: _ahoraWallArgentina();
+	{
+		// FechaPedido = DATETIME de pared HIS. `now` se arma wall-as-Z (_ahoraWallArgentina).
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		const iso = now.toISOString();
+		await assertCargaEnRangoVisita(numeroVisita, iso.slice(0, 10), iso.slice(11, 19));
+	}
 
 	const pedRows = await executeQuery(
 		`INSERT INTO dbo.imPedidosEstudios (

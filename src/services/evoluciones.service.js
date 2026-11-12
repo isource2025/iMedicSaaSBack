@@ -138,6 +138,15 @@ const resolverSectorInternacion = async (idVisita, sectorEnviado) => {
  * Crear nueva evolución
  */
 const crearEvolucion = async (data) => {
+    const nv = Number(data.IdVisita) || 0;
+    if (nv > 0) {
+        const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+        await assertCargaEnRangoVisita(
+            nv,
+            data.FechaEv ? String(data.FechaEv).slice(0, 10) : null,
+            data.HoraEv != null ? String(data.HoraEv) : null,
+        );
+    }
     // Convertir fecha y hora a formato Clarion INT
     const fechaClarion = convertirFechaAClarion(data.FechaEv);
     const horaClarion = convertirHoraAClarion(data.HoraEv);
@@ -252,6 +261,22 @@ const eliminarEvolucion = async (id) => {
  * Actualizar evolución
  */
 const actualizarEvolucion = async (id, data) => {
+    const existente = await obtenerEvolucionPorId(id);
+    const nv = Number(data.IdVisita ?? existente?.IdVisita) || 0;
+    if (nv > 0) {
+        const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+        await assertCargaEnRangoVisita(
+            nv,
+            data.FechaEv
+                ? String(data.FechaEv).slice(0, 10)
+                : String(existente?.FechaEv || '').slice(0, 10) || null,
+            data.HoraEv != null
+                ? String(data.HoraEv)
+                : existente?.HoraEv != null
+                  ? String(existente.HoraEv)
+                  : null,
+        );
+    }
     // Convertir fecha y hora a formato Clarion INT
     const fechaClarion = convertirFechaAClarion(data.FechaEv);
     const horaClarion = convertirHoraAClarion(data.HoraEv);

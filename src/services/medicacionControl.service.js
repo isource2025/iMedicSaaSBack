@@ -372,6 +372,24 @@ const eliminarMedicacion = async (idCtrlMedica) => {
  */
 const actualizarMedicacion = async (idCtrlMedica, data = {}) => {
 	const { normalizarTextoParaClarionAnsi } = require('../utils/clarionText');
+	const actual = await obtenerMedicacionPorId(idCtrlMedica);
+	if (!actual) {
+		const err = new Error('Registro de medicación no encontrado');
+		err.statusCode = 404;
+		throw err;
+	}
+	const fechaYmd = data.fechaControl
+		? String(data.fechaControl).slice(0, 10)
+		: String(actual.FechaControl || '').slice(0, 10);
+	const horaRawIn =
+		data.horaControl != null && String(data.horaControl).trim() !== ''
+			? String(data.horaControl).trim()
+			: String(actual.HoraControl || '').trim();
+	const nv = Number(actual.NumeroVisita) || 0;
+	if (nv > 0 && fechaYmd) {
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		await assertCargaEnRangoVisita(nv, fechaYmd, horaRawIn || null);
+	}
 	const fechaControlClarion = data.fechaControl
 		? convertirFechaAClarion(data.fechaControl)
 		: null;

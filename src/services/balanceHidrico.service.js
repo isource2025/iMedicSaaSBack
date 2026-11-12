@@ -314,6 +314,12 @@ async function crear(data) {
 	if (p.Profesional == null || !Number.isFinite(p.Profesional)) {
 		throw new Error('Profesional es requerido');
 	}
+	{
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		const horaTxt =
+			data.Hora || data.hora || data.horaControl || data.HoraControl || null;
+		await assertCargaEnRangoVisita(p.NumeroVisita, p.Fecha, horaTxt);
+	}
 
 	const cols = COLS_GRABAR;
 	const sql = `
@@ -368,6 +374,19 @@ async function actualizar(id, data) {
 		merged[`Egr_Drenaje${i}Tipo`] = pick(`egrDrenaje${i}Tipo`, `Egr_Drenaje${i}Tipo`);
 	}
 
+	{
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		const fechaTxt = String(merged.Fecha || '').slice(0, 10);
+		const horaTxt =
+			merged.Hora != null && String(merged.Hora).includes(':')
+				? String(merged.Hora)
+				: data.hora || data.Hora || null;
+		await assertCargaEnRangoVisita(
+			Number(existing.NumeroVisita) || 0,
+			fechaTxt || null,
+			horaTxt,
+		);
+	}
 	const p = mapPayload(merged);
 	const cols = COLS_GRABAR.filter((c) => c !== 'NumeroVisita' && c !== 'Profesional');
 	const sql = `

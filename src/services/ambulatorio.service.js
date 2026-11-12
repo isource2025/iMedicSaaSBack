@@ -436,19 +436,24 @@ async function _consultarSerie(cte, params) {
  * No se intenta deducirla del profesional: imPersonal.ValorEspecialidad viene
  * vacío en la mayoría de las instalaciones y el rescate sería anecdótico.
  */
+/** Contadores y promedios compartidos por las tablas de dimensión. */
+const SQL_DIM_METRICAS = `
+			SUM(te.EsAgenda) AS Programados,
+			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosAgenda,
+			SUM(CASE WHEN te.EsAgenda = 0 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosDemanda,
+			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
+			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
+			SUM(CASE WHEN te.EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
+			AVG(CASE WHEN te.Estado = 'ATENDIDO' THEN te.MinEspera END) AS EsperaProm,
+			AVG(CASE WHEN te.Estado = 'ATENDIDO' THEN te.MinPermanencia END) AS PermanenciaProm`;
+
 async function _consultarPorEspecialidad(cte, params) {
 	return executeQuery(
 		`${cte}
 		SELECT TOP 30
 			te.Especialidad AS Codigo,
 			MAX(esp.Descripcion) AS Descripcion,
-			SUM(te.EsAgenda) AS Programados,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS Atendidos,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
-			SUM(CASE WHEN te.EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
-			AVG(te.MinEspera) AS EsperaProm,
-			AVG(te.MinPermanencia) AS PermanenciaProm
+			${SQL_DIM_METRICAS}
 		FROM TurnosEstado te
 		LEFT JOIN dbo.imEspecialidad esp ON esp.Valor = te.Especialidad
 		GROUP BY te.Especialidad
@@ -464,13 +469,7 @@ async function _consultarPorSector(cte, params) {
 			LTRIM(RTRIM(ISNULL(te.Sector, ''))) AS Codigo,
 			MAX(sec.Descripcion) AS Descripcion,
 			MAX(sec.AmbInt) AS AmbInt,
-			SUM(te.EsAgenda) AS Programados,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS Atendidos,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
-			SUM(CASE WHEN te.EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
-			AVG(te.MinEspera) AS EsperaProm,
-			AVG(te.MinPermanencia) AS PermanenciaProm
+			${SQL_DIM_METRICAS}
 		FROM TurnosEstado te
 		LEFT JOIN dbo.imSectores sec
 			ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ISNULL(te.Sector, '')))
@@ -488,14 +487,8 @@ async function _consultarPorProfesional(cte, params) {
 		SELECT TOP 30
 			te.Profesional AS Matricula,
 			MAX(per.ApellidoNombre) AS Nombre,
-			SUM(te.EsAgenda) AS Programados,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS Atendidos,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
-			SUM(CASE WHEN te.EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
-			AVG(te.MinEspera) AS EsperaProm,
-			AVG(te.MinPermanencia) AS PermanenciaProm,
-			AVG(te.MinConsulta) AS ConsultaProm
+			${SQL_DIM_METRICAS},
+			AVG(CASE WHEN te.Estado = 'ATENDIDO' THEN te.MinConsulta END) AS ConsultaProm
 		FROM TurnosEstado te
 		OUTER APPLY (
 			SELECT TOP 1 p.ApellidoNombre
@@ -521,8 +514,8 @@ async function _consultarHeatmap(cte, params) {
 			DATEPART(HOUR, InstanteTurno) AS Hora,
 			COUNT(*) AS Programados,
 			SUM(CASE WHEN Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			AVG(MinEspera) AS EsperaProm,
-			AVG(MinPermanencia) AS PermanenciaProm
+			AVG(CASE WHEN Estado = 'ATENDIDO' THEN MinEspera END) AS EsperaProm,
+			AVG(CASE WHEN Estado = 'ATENDIDO' THEN MinPermanencia END) AS PermanenciaProm
 		FROM TurnosEstado
 		GROUP BY ${SQL_DIA_SEMANA}, DATEPART(HOUR, InstanteTurno)
 		ORDER BY DiaSemana, Hora`,
@@ -650,23 +643,30 @@ async function _consultarVisitasPorSector(filtros) {
 async function _consultarVisitasPorProfesional(filtros) {
 	try {
 		const { condiciones, params } = _paramsVisitasBase(filtros);
+		// El OR sobre imPersonal no admite seek: se resuelve el nombre después de
+		// agrupar (30 filas) y no por cada visita del período.
 		return await executeQuery(
-			`SELECT TOP 30
-				v.DOCTORADMISOR AS Matricula,
-				MAX(per.ApellidoNombre) AS Nombre,
-				${_sqlConteoVisitasPorOrigen()}
-			FROM dbo.imVisita v
-			LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+			`WITH Agrupado AS (
+				SELECT TOP 30
+					v.DOCTORADMISOR AS Matricula,
+					COUNT(*) AS Total,
+					${_sqlConteoVisitasPorOrigen()}
+				FROM dbo.imVisita v
+				LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+				WHERE ${condiciones.join('\n\t\t\t\t  AND ')}
+				  AND ISNULL(v.DOCTORADMISOR, 0) > 0
+				GROUP BY v.DOCTORADMISOR
+				ORDER BY COUNT(*) DESC
+			)
+			SELECT a.Matricula, per.ApellidoNombre AS Nombre, a.ConTurno, a.ADemanda
+			FROM Agrupado a
 			OUTER APPLY (
 				SELECT TOP 1 p.ApellidoNombre
 				FROM dbo.imPersonal p
-				WHERE p.Matricula = v.DOCTORADMISOR OR p.Valor = v.DOCTORADMISOR
+				WHERE p.Matricula = a.Matricula OR p.Valor = a.Matricula
 				ORDER BY p.Valor
 			) per
-			WHERE ${condiciones.join('\n\t\t\t  AND ')}
-			  AND ISNULL(v.DOCTORADMISOR, 0) > 0
-			GROUP BY v.DOCTORADMISOR
-			ORDER BY COUNT(*) DESC`,
+			ORDER BY a.Total DESC`,
 			params,
 		);
 	} catch (error) {
@@ -678,30 +678,44 @@ async function _consultarVisitasPorProfesional(filtros) {
 async function _consultarVisitasPorEspecialidad(filtros) {
 	try {
 		const { condiciones, params } = _paramsVisitasBase(filtros);
+		// Se agrupa primero por (especialidad del turno, admisor) y recién sobre esas
+		// pocas filas se busca la especialidad en imPersonal: el OR no admite seek y
+		// resolverlo por visita escanea la tabla entera una vez por fila.
 		return await executeQuery(
-			`SELECT TOP 30
-				COALESCE(tur.Especialidad, per.ValorEspecialidad, 0) AS Codigo,
+			`WITH Parcial AS (
+				SELECT
+					tur.Especialidad AS EspTurno,
+					v.DOCTORADMISOR AS Admisor,
+					COUNT(*) AS Total,
+					${_sqlConteoVisitasPorOrigen()}
+				FROM dbo.imVisita v
+				LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+				OUTER APPLY (
+					SELECT TOP 1 t.Especialidad
+					FROM dbo.imTurnos t
+					WHERE t.NumeroVisita = v.NUMEROVISITA AND ISNULL(t.Especialidad, 0) > 0
+					ORDER BY t.IdTurno
+				) tur
+				WHERE ${condiciones.join('\n\t\t\t\t  AND ')}
+				GROUP BY tur.Especialidad, v.DOCTORADMISOR
+			)
+			SELECT TOP 30
+				COALESCE(pa.EspTurno, per.ValorEspecialidad, 0) AS Codigo,
 				MAX(esp.Descripcion) AS Descripcion,
-				${_sqlConteoVisitasPorOrigen()}
-			FROM dbo.imVisita v
-			LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
-			OUTER APPLY (
-				SELECT TOP 1 t.Especialidad
-				FROM dbo.imTurnos t
-				WHERE t.NumeroVisita = v.NUMEROVISITA AND ISNULL(t.Especialidad, 0) > 0
-				ORDER BY t.IdTurno
-			) tur
+				SUM(pa.ConTurno) AS ConTurno,
+				SUM(pa.ADemanda) AS ADemanda
+			FROM Parcial pa
 			OUTER APPLY (
 				SELECT TOP 1 p.ValorEspecialidad
 				FROM dbo.imPersonal p
-				WHERE p.Matricula = v.DOCTORADMISOR OR p.Valor = v.DOCTORADMISOR
+				WHERE pa.EspTurno IS NULL
+				  AND (p.Matricula = pa.Admisor OR p.Valor = pa.Admisor)
 				ORDER BY p.Valor
 			) per
 			LEFT JOIN dbo.imEspecialidad esp
-				ON esp.Valor = COALESCE(tur.Especialidad, per.ValorEspecialidad, 0)
-			WHERE ${condiciones.join('\n\t\t\t  AND ')}
-			GROUP BY COALESCE(tur.Especialidad, per.ValorEspecialidad, 0)
-			ORDER BY COUNT(*) DESC`,
+				ON esp.Valor = COALESCE(pa.EspTurno, per.ValorEspecialidad, 0)
+			GROUP BY COALESCE(pa.EspTurno, per.ValorEspecialidad, 0)
+			ORDER BY SUM(pa.Total) DESC`,
 			params,
 		);
 	} catch (error) {
@@ -890,6 +904,8 @@ function _mergeDimensionConVisitas(turnoDims, visitaRows, campoCodigo, extra = (
 			descripcion: v.descripcion,
 			programados: 0,
 			atendidos: 0,
+			atendidosAgenda: 0,
+			atendidosDemanda: 0,
 			ausentes: 0,
 			cancelados: 0,
 			turnosDemanda: 0,
@@ -909,12 +925,18 @@ function _mapDimension(rows, campoCodigo, extra = () => ({})) {
 	return (rows || []).map((r) => {
 		const programados = _num(r.Programados);
 		const cancelados = _num(r.Cancelados);
+		// Cancelados avisaron: no entran al denominador del ausentismo.
 		const base = Math.max(0, programados - cancelados);
+		const atendidosAgenda = _num(r.AtendidosAgenda ?? r.Atendidos);
+		const atendidosDemanda = _num(r.AtendidosDemanda);
 		return {
 			codigo: r[campoCodigo] != null ? String(r[campoCodigo]).trim() : '',
 			descripcion: _txt(r.Descripcion) || _txt(r.Nombre),
 			programados,
-			atendidos: _num(r.Atendidos),
+			/** Agenda cerrada + demanda cerrada (mismo criterio que el resumen). */
+			atendidos: atendidosAgenda + atendidosDemanda,
+			atendidosAgenda,
+			atendidosDemanda,
 			ausentes: _num(r.Ausentes),
 			cancelados,
 			turnosDemanda: _num(r.TurnosDemanda),

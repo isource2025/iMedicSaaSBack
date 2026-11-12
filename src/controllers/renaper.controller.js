@@ -73,13 +73,19 @@ const getToken = async (req, res) => {
 	}
 };
 
+/**
+ * GET /buscar-persona/:documento/:sexo?
+ * RENAPER informa una persona por sexo, así que un DNI puede corresponder a dos personas:
+ * siempre se consultan ambos y se devuelven en `personas`.
+ * `persona` es la del sexo pedido (o la otra si no existe, como antes); sin sexo, solo
+ * se completa cuando hay una única persona.
+ */
 const search = async (req, res) => {
 	const rawDoc = req.params.documento;
-	const rawSexo = req.params.sexo; // ¡no lo parsees aún!
+	const rawSexo = req.params.sexo;
 
-	// Validación básica de documento
 	const NumeroDocumento = Number(String(rawDoc).trim());
-	if (!Number.isFinite(NumeroDocumento)) {
+	if (!Number.isFinite(NumeroDocumento) || NumeroDocumento <= 0) {
 		return res.status(400).json({
 			success: false,
 			message: 'Parámetro "documento" inválido',
@@ -87,39 +93,45 @@ const search = async (req, res) => {
 		});
 	}
 
-	// El sexo puede venir como "1/2" o "F/M"
-	const Sexo = String(rawSexo).trim().toUpperCase();
-	if (!/^(F|M|1|2)$/.test(Sexo)) {
-		return res.status(400).json({
-			success: false,
-			message: 'Parámetro "sexo" inválido. Usa F/M o 1/2.',
-			detail: { sexo: rawSexo },
-		});
+	// El sexo es opcional y puede venir como "1/2" o "F/M"
+	let sexoPedido = null;
+	if (rawSexo != null && String(rawSexo).trim() !== '') {
+		const Sexo = String(rawSexo).trim().toUpperCase();
+		if (!/^(F|M|1|2)$/.test(Sexo)) {
+			return res.status(400).json({
+				success: false,
+				message: 'Parámetro "sexo" inválido. Usa F/M o 1/2.',
+				detail: { sexo: rawSexo },
+			});
+		}
+		sexoPedido = Sexo === '1' ? 'F' : Sexo === '2' ? 'M' : Sexo;
 	}
 
 	try {
-		// consulta al servicio
-		const result = await renaperService.search(NumeroDocumento, Sexo, { debug: true });
-
-		if (!result.ok) {
+		const personas = (await renaperService.searchAllByDni(NumeroDocumento)).map(
+			normalizePersonaForClient,
+		);
+		if (!personas.length) {
 			return res.status(404).json({
 				success: false,
 				message: 'No se encontraron datos en RENAPER',
-				reason: result.reason,
-				raw: result.attempts || null,
+				personas: [],
 			});
 		}
 
-		const persona = normalizePersonaForClient(result.data);
+		const delSexo = sexoPedido ? personas.find((p) => p.sexo === sexoPedido) : null;
+		const persona = delSexo || (sexoPedido || personas.length === 1 ? personas[0] : null);
 
 		return res.json({
 			success: true,
 			persona,
+			personas,
+			multiples: personas.length > 1,
 		});
 	} catch (error) {
 		console.error('[RENAPER][search] ERROR:', {
 			doc: NumeroDocumento,
-			sexo: Sexo,
+			sexo: sexoPedido,
 			message: error?.message,
 		});
 

@@ -13,10 +13,13 @@ const {
 const API_BASE = 'https://api.argentinadatos.com/v1/feriados';
 const API_TIMEOUT_MS = 8000;
 const SYNC_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Un sync incompleto (INSERT que fallan, API caída) no se reintenta en cada request. */
+const SYNC_RETRY_MS = 6 * 60 * 60 * 1000;
 const LIST_TTL_MS = 60 * 60 * 1000;
 
 const schemaByTenant = new Map();
 const syncAtByTenant = new Map();
+const syncIntentoByTenant = new Map();
 const syncInflightByTenant = new Map();
 const listCacheByTenant = new Map();
 
@@ -312,7 +315,11 @@ async function ensureFeriados() {
 
 	if (syncInflightByTenant.has(key)) return syncInflightByTenant.get(key);
 
+	const ultimoIntento = syncIntentoByTenant.get(key) || 0;
+	if (Date.now() - ultimoIntento < SYNC_RETRY_MS) return { skipped: true, reason: 'retry-wait' };
+
 	const job = (async () => {
+		syncIntentoByTenant.set(key, Date.now());
 		try {
 			const schema = await descubrirSchema();
 			if (!schema.exists) {
@@ -371,20 +378,21 @@ async function listarEnRango(desdeIso, hastaIso, opts = {}) {
 		.map(([fecha, nombre]) => ({ fecha, nombre: nombre || 'Feriado' }))
 		.sort((a, b) => a.fecha.localeCompare(b.fecha));
 
-	if (items.length) {
-		listCacheByTenant.set(key, {
-			desde,
-			hasta,
-			items,
-			expires: Date.now() + LIST_TTL_MS,
-		});
-	}
+	// Un rango sin feriados es lo normal (casi todas las semanas): también se cachea.
+	listCacheByTenant.set(key, {
+		desde,
+		hasta,
+		items,
+		expires: Date.now() + LIST_TTL_MS,
+	});
 	return items;
 }
 
 async function listarEnRangoConEnsure(desdeIso, hastaIso) {
+	const key = tenantKey();
 	let items = await listarEnRango(desdeIso, hastaIso);
-	if (!items.length) {
+	// Solo se espera el sync la primera vez del tenant en este proceso; después corre en segundo plano.
+	if (!items.length && !syncAtByTenant.has(key) && !syncIntentoByTenant.has(key)) {
 		await ensureFeriados();
 		items = await listarEnRango(desdeIso, hastaIso, { skipCache: true });
 		return items;

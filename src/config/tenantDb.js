@@ -35,6 +35,20 @@ const empresaRowCache = new TtlCache({
 const PROBE_MS = Number(process.env.TENANT_CONNECT_TIMEOUT_MS) || 20000;
 const REQUEST_MS = Number(process.env.TENANT_REQUEST_TIMEOUT_MS) || 120000;
 
+/**
+ * - validateConnection: mssql 11 manda `SELECT 1` en cada préstamo del pool = un viaje
+ *   de red extra por query (~220 ms Railway → hospital). Las conexiones cerradas o con
+ *   error se siguen descartando; las caídas silenciosas las reintenta executeQuery.
+ * - min/idle: mantener conexiones abiertas evita repetir el handshake TCP+login (varios
+ *   viajes) en hospitales con poco tráfico.
+ * - max: la analítica ambulatoria lanza 11 queries en paralelo.
+ */
+const POOL_CONFIG = {
+	max: Number(process.env.TENANT_POOL_MAX) || 20,
+	min: Number(process.env.TENANT_POOL_MIN) || 2,
+	idleTimeoutMillis: Number(process.env.TENANT_POOL_IDLE_MS) || 10 * 60 * 1000,
+};
+
 function isLocalDevOnly() {
 	return ['1', 'true', 'yes', 'on'].includes(
 		String(process.env.LOCAL_DEV_ONLY || '').trim().toLowerCase(),
@@ -56,7 +70,8 @@ function envDefaultConfig() {
 			requestTimeout: REQUEST_MS,
 		},
 		connectionTimeout: PROBE_MS,
-		pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
+		validateConnection: false,
+		pool: { ...POOL_CONFIG },
 	};
 }
 
@@ -106,7 +121,8 @@ function rowToSqlConfig(row) {
 			requestTimeout: REQUEST_MS,
 		},
 		connectionTimeout: PROBE_MS,
-		pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
+		validateConnection: false,
+		pool: { ...POOL_CONFIG },
 	};
 
 	// Puerto TCP explícito (típico en cloud → SQL on-prem): no mezclar instanceName (SQLEXPRESS).

@@ -565,7 +565,40 @@ const nuevasEnfermeria = async (req, res) => {
 	}
 };
 
+const nuevoInsumo = async (req, res) => {
+    try {
+        const OperadorCarga = requireOperadorCarga(req, res);
+        if (OperadorCarga == null) return;
+        const ProfesionalAsiste = requireProfesional(req, res);
+        if (ProfesionalAsiste == null) return;
+        const b = req.body || {};
+        const result = await indicacionesService.nuevoInsumo({
+            NumeroVisita: b.NumeroVisita,
+            Codigo: b.Codigo,
+            Cantidad: b.Cantidad,
+            TipoUnidad: typeof b.TipoUnidad === 'string' ? b.TipoUnidad : null,
+            Observaciones: typeof b.Observaciones === 'string' ? b.Observaciones : null,
+            FechaCarga: typeof b.FechaCarga === 'string' ? b.FechaCarga : null,
+            HoraCarga: typeof b.HoraCarga === 'string' ? b.HoraCarga : null,
+            IdSector: typeof b.IdSector === 'string' ? b.IdSector : null,
+            OperadorCarga,
+            ProfesionalAsiste,
+        });
+        return res.status(201).json({ success: true, message: 'Insumo registrado', data: result });
+    } catch (err) {
+        console.error('[IndicacionesController][nuevoInsumo]', err.message);
+        const mensaje = mensajeDeError(err, 'No se pudo registrar el insumo');
+        return res.status(statusDeError(err)).json({
+            success: false,
+            mensaje,
+            message: mensaje,
+            code: err.code || undefined,
+        });
+    }
+};
+
 module.exports = {
+    nuevoInsumo,
     obtenerUltimaIndicacionPorVisita,
     obtenerUltimasIndicacionesPorVisita,
     byDate,

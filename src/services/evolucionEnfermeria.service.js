@@ -148,6 +148,15 @@ const actualizarEvolucion = async (numeroVisita, fechaControl, horaControl, obse
  * Crear nueva evolución de enfermería
  */
 const crearEvolucion = async (data) => {
+    const nv = Number(data.NumeroVisita) || 0;
+    if (nv > 0) {
+        const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+        await assertCargaEnRangoVisita(
+            nv,
+            data.FechaControl ? String(data.FechaControl).slice(0, 10) : null,
+            data.HoraControl != null ? String(data.HoraControl) : null,
+        );
+    }
     const fechaClarion = convertirFechaAClarion(data.FechaControl);
     const horaClarion = convertirHoraAClarion(data.HoraControl);
 

@@ -92,6 +92,11 @@ async function obtenerPorId(id) {
 async function crear(data) {
 	const fecha = toFechaSql(data.Fecha);
 	const hora = convertirHoraAClarion(data.Hora);
+	const nv = Number(data.IdVisita) || 0;
+	if (nv > 0) {
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		await assertCargaEnRangoVisita(nv, fecha, data.Hora != null ? String(data.Hora) : null);
+	}
 	const generadoConIA = Boolean(data.GeneradoConIA);
 	const epicrisis = clip(
 		normalizarTextoParaClarionAnsi(
@@ -158,6 +163,20 @@ async function crear(data) {
 async function actualizar(id, data) {
 	const fecha = toFechaSql(data.Fecha);
 	const hora = convertirHoraAClarion(data.Hora);
+	const existente = await obtenerPorId(id);
+	const nv = Number(data.IdVisita ?? existente?.IdVisita) || 0;
+	if (nv > 0) {
+		const { assertCargaEnRangoVisita } = require('../utils/visitaEstado');
+		await assertCargaEnRangoVisita(
+			nv,
+			fecha || String(existente?.Fecha || '').slice(0, 10) || null,
+			data.Hora != null
+				? String(data.Hora)
+				: existente?.Hora != null
+					? String(existente.Hora)
+					: null,
+		);
+	}
 	const generadoConIA = Boolean(data.GeneradoConIA);
 	const epicrisis = clip(
 		normalizarTextoParaClarionAnsi(

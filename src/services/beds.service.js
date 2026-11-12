@@ -56,6 +56,15 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	return rows;
 }
 
+/** Datos del header del paciente (edad, afiliado, internación). Requiere alias p (imPacientes) y v (imVisita). */
+const SELECT_DATOS_HEADER = `
+      CASE
+        WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+        ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
+      END AS FechaNacimientoPaciente,
+      NULLIF(LTRIM(RTRIM(CAST(p.NumeroSSN AS VARCHAR(40)))), '') AS NumeroAfiliado,
+      NULLIF(LTRIM(RTRIM(CAST(v.NUMEROINTERNACION AS VARCHAR(40)))), '') AS NumeroInternacion,`;
+
 /**
  * Obtener camas desde imHabitacionCamas.
  * @param {string|null} idSector - Si viene, solo ese sector (login / filtro). Sin filtro = hospital entero.
@@ -79,7 +88,7 @@ const obtenerCamas = async (idSector) => {
       c.RazonSocial as RazonSocialCliente,
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
-      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
+      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,${SELECT_DATOS_HEADER}
       CASE WHEN hc.numeroVisita = 0 THEN '' ELSE CAST(hc.numeroVisita AS VARCHAR) END as mostrarNumeroVisita,
       CAST(0 AS INT) AS IndicacionesNuevasEnfermeria
     FROM 
@@ -279,7 +288,7 @@ const obtenerCamaPorId = async (id) => {
       c.RazonSocial as RazonSocialCliente,
       sm.Descripcion as ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) as fechaIngresoSQL,
-      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,
+      CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) as horaIngresoSQL,${SELECT_DATOS_HEADER}
       ${conVisto ? vistoEnfermeria.SELECT_COUNT : vistoEnfermeria.SELECT_COUNT_ZERO}
     FROM 
       imHabitacionCamas hc

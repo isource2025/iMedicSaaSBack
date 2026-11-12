@@ -30,6 +30,12 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
       sm.Descripcion AS ServicioMedicoDescripcion,
       CONVERT(VARCHAR(10), v.FECHAADMISIONS, 103) AS fechaIngresoSQL,
       CONVERT(VARCHAR(5), v.FECHAADMISIONS, 114) AS horaIngresoSQL,
+      CASE
+        WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
+        ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
+      END AS FechaNacimientoPaciente,
+      NULLIF(LTRIM(RTRIM(CAST(p.NumeroSSN AS VARCHAR(40)))), '') AS NumeroAfiliado,
+      NULLIF(LTRIM(RTRIM(CAST(v.NUMEROINTERNACION AS VARCHAR(40)))), '') AS NumeroInternacion,
       CONVERT(VARCHAR(10), DATEADD(day, NULLIF(TRY_CAST(v.FechaEgreso AS int), 0), '1800-12-28'), 103) AS fechaEgresoSQL,
       CASE
         WHEN TRY_CAST(v.HoraEgreso AS int) IS NOT NULL AND TRY_CAST(v.HoraEgreso AS int) > 0
@@ -143,6 +149,9 @@ async function obtenerContextoClinicoVisita(numeroVisita) {
 		servicioMedicoDescripcion: r.ServicioMedicoDescripcion || '',
 		fechaIngresoSQL: r.fechaIngresoSQL || '',
 		horaIngresoSQL: r.horaIngresoSQL || '',
+		FechaNacimientoPaciente: r.FechaNacimientoPaciente || '',
+		NumeroAfiliado: r.NumeroAfiliado || '',
+		NumeroInternacion: r.NumeroInternacion || '',
 		fechaEgresoSQL: r.fechaEgresoSQL || '',
 		horaEgresoSQL: r.horaEgresoSQL || '',
 		egresada,

@@ -67,7 +67,28 @@ function resolveMssqlType(parametro) {
  * @param {{ platform?: boolean }} [opts] - platform: true fuerza BD catálogo (.env)
  * @returns {Promise<Array>} Resultados de la consulta
  */
+const CODIGOS_CONEXION_CAIDA = new Set(['ESOCKET', 'ECONNCLOSED', 'ECONNRESET']);
+const SOLO_LECTURA_RE = /^\s*(SELECT|WITH)\b/i;
+const ESCRITURA_RE = /\b(INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE|INTO|DROP|ALTER|CREATE|TRUNCATE)\b/i;
+
+/** Sin validación por préstamo en el pool, una conexión caída en silencio falla una vez: solo se reintentan lecturas. */
+function esReintentable(error, consulta) {
+  const code = error?.code || error?.originalError?.code;
+  if (!CODIGOS_CONEXION_CAIDA.has(code)) return false;
+  return SOLO_LECTURA_RE.test(consulta) && !ESCRITURA_RE.test(consulta);
+}
+
 async function executeQuery(consulta, parametros = [], opts = {}) {
+  try {
+    return await ejecutarConsulta(consulta, parametros, opts);
+  } catch (error) {
+    if (!esReintentable(error, consulta)) throw error;
+    console.warn('[db] conexión caída, reintentando lectura:', error.code || error.message);
+    return ejecutarConsulta(consulta, parametros, opts);
+  }
+}
+
+async function ejecutarConsulta(consulta, parametros = [], opts = {}) {
   try {
     const pool = await resolvePool(!!opts.platform);
     const request = pool.request();

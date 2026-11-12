@@ -137,10 +137,37 @@ async function obtenerMovimientoAbierto(numeroVisita) {
   return rows[0] || null;
 }
 
+function mismaUbicacionMovimiento(mov, cama, sector) {
+  const movCama = String(mov?.ValorHabitacionCama || mov?.bedId || '')
+    .trim()
+    .toUpperCase();
+  const movSector = String(mov?.ValorSector || '')
+    .trim()
+    .toUpperCase();
+  const camaN = String(cama || '')
+    .trim()
+    .toUpperCase();
+  const sectorN = String(sector || '')
+    .trim()
+    .toUpperCase();
+  if (!camaN || movCama !== camaN) return false;
+  if (sectorN && movSector && movSector !== sectorN) return false;
+  return true;
+}
+
+/** True si (f1,h1) es estrictamente anterior a (f2,h2) en Clarion. */
+function clarionAntes(f1, h1, f2, h2) {
+  const fa = clarionInt(f1);
+  const fb = clarionInt(f2);
+  if (fa !== fb) return fa < fb;
+  return clarionInt(h1) < clarionInt(h2);
+}
+
 /**
- * Si el último tramo quedó cerrado pero el paciente sigue en cama y la visita
- * no tiene egreso hospitalario, reabre ese tramo (inconsistencia típica post
- * egreso/traslado a medias o sync Clarion).
+ * Si no hay tramo abierto pero el paciente sigue en cama (sin egreso hospitalario):
+ * - Si el último cerrado es de LA MISMA cama → reabrirlo.
+ * - Si es de OTRA cama (p.ej. quirófano ya cerrado) → abrir un tramo nuevo en la
+ *   cama actual, sin pisar el historial (evitar 411B con fechas del quirófano).
  */
 async function asegurarTramoAbiertoParaTraslado(numeroVisita, ultimo) {
   const num = parseInt(numeroVisita, 10);
@@ -163,34 +190,90 @@ async function asegurarTramoAbiertoParaTraslado(numeroVisita, ultimo) {
   const cama = String(camas[0].ValorHabitacionCama || '').trim();
   const sector = String(camas[0].ValorSector || '').trim();
 
+  if (mismaUbicacionMovimiento(ultimo, cama, sector)) {
+    await executeQuery(
+      `
+        UPDATE dbo.imVisitaMovimiento
+        SET
+          FechaEgreso = 0,
+          HoraEgreso = 0,
+          EstadoCama = 'O'
+        WHERE NumeroVisita = @p0
+          AND FechaAdmision = @p1
+          AND HoraAdmision = @p2
+      `,
+      [
+        { value: num },
+        { value: ultimo.FechaAdmision },
+        { value: ultimo.HoraAdmision },
+      ],
+    );
+    console.log(
+      `[movimientos] visita ${num}: se reabrió el tramo de ${sector}-${cama} (misma cama, sin egreso hospitalario)`,
+    );
+    return (
+      (await obtenerMovimientoAbierto(num)) || (await obtenerUltimoMovimientoVisita(num))
+    );
+  }
+
+  // Nuevo tramo en la cama actual, justo después del egreso del último cerrado.
+  let fecha = clarionInt(ultimo.FechaEgreso) || clarionInt(ultimo.FechaAdmision);
+  let hora = clarionInt(ultimo.HoraEgreso) || clarionInt(ultimo.HoraAdmision) || 1;
+  if (!esFechaClarionValida(fecha)) {
+    throw errorNegocio(
+      `La visita ${num} tiene historial inconsistente; no se puede armar el tramo actual para trasladar.`,
+    );
+  }
+  // Contiguo al egreso previo (mismo instante alcanza: el cierre del anterior ya ocurrió).
+  if (!esHoraClarionValida(hora)) hora = 1;
+
   await executeQuery(
     `
-      UPDATE dbo.imVisitaMovimiento
-      SET
-        FechaEgreso = 0,
-        HoraEgreso = 0,
-        ValorHabitacionCama = CASE
-          WHEN LTRIM(RTRIM(@p3)) = '' THEN ValorHabitacionCama ELSE @p3
-        END,
-        ValorSector = CASE
-          WHEN LTRIM(RTRIM(@p4)) = '' THEN ValorSector ELSE @p4
-        END,
-        EstadoCama = 'O'
-      WHERE NumeroVisita = @p0
-        AND FechaAdmision = @p1
-        AND HoraAdmision = @p2
+      IF NOT EXISTS (
+        SELECT 1 FROM dbo.imVisitaMovimiento
+        WHERE NumeroVisita = @p0
+          AND ISNULL(TRY_CAST(FechaEgreso AS int), 0) = 0
+      )
+      BEGIN
+        INSERT INTO dbo.imVisitaMovimiento (
+          NumeroVisita, FechaAdmision, HoraAdmision,
+          FechaEgreso, HoraEgreso,
+          EstadoAmbulatorio, Diagnostico, Operador,
+          FechaCarga, HoraCarga, ValorSector, ValorHabitacionCama, EstadoCama,
+          ServicioHospital, [Status]
+        )
+        VALUES (
+          @p0, @p1, @p2,
+          0, 0,
+          @p3, @p4, @p5,
+          @p1, @p2, @p6, @p7, 'O',
+          @p8, 0
+        );
+      END
     `,
     [
       { value: num },
-      { value: ultimo.FechaAdmision },
-      { value: ultimo.HoraAdmision },
-      { value: cama },
-      { value: sector },
+      { value: fecha },
+      { value: hora },
+      {
+        value:
+          String(ultimo.EstadoAmbulatorio || cabecera?.EstadoAmbulatorio || '')
+            .trim() || ' ',
+      },
+      {
+        value: String(ultimo.Diagnostico || cabecera?.Diagnostico || '').trim() || null,
+      },
+      { value: '0' },
+      { value: sector || null },
+      { value: cama || null },
+      {
+        value: String(ultimo.ServicioHospital || cabecera?.ServicioHospital || '').trim() || null,
+      },
     ],
   );
 
   console.log(
-    `[movimientos] visita ${num}: se reabrió el tramo cerrado (${sector}-${cama}) porque seguía en cama sin egreso hospitalario`,
+    `[movimientos] visita ${num}: se abrió tramo nuevo en ${sector}-${cama} sin tocar el historial cerrado`,
   );
 
   return (
@@ -1514,6 +1597,23 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
     throw errorNegocio(`La visita ${num} ya tiene egreso; no se puede trasladar`);
   }
 
+  // El cierre del tramo nunca puede ser anterior a su propio ingreso.
+  let fechaEgresoCierre = clarionInt(FechaEgreso);
+  let horaEgresoCierre = clarionInt(HoraEgreso);
+  if (
+    clarionAntes(
+      fechaEgresoCierre,
+      horaEgresoCierre,
+      ultimoMovimiento.FechaAdmision,
+      ultimoMovimiento.HoraAdmision,
+    )
+  ) {
+    throw errorNegocio(
+      `La fecha/hora del traslado (${fechaEgresoCierre}/${horaEgresoCierre}) es anterior al ingreso del tramo actual; corregí la hora.`,
+      400,
+    );
+  }
+
   const cabecera = await obtenerCabeceraVisita(num);
   if (!cabecera) {
     throw errorNegocio(`No se encontró información del paciente para la visita ${num}`, 404);
@@ -1689,8 +1789,8 @@ async function moverPacienteACamaVacia(numeroVisita, datos) {
   `;
 
   const params = [
-    { value: FechaEgreso },
-    { value: HoraEgreso },
+    { value: fechaEgresoCierre },
+    { value: horaEgresoCierre },
     { value: estadoAmbMovimiento },
     { value: diagnosticoMovimiento },
     { value: String(Operador) },
