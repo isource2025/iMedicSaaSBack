@@ -81,7 +81,7 @@ module.exports = [
 		comoLlegar: 'Consultar Historia Clínica → abrir la visita → «Modificar».',
 		permisos: ['ADMISION.BUSQUEDA.VER', 'ADMISION.NUEVA.CREAR'],
 		tags: ['modificar admision', 'editar admision', 'corregir admision', 'cambiar cobertura', 'ubicacion movimientos y egreso'],
-		texto: 'Abre «Modificar admisión» con el paciente bloqueado. Ahí también está «Ubicación, movimientos y egreso» (cambiar cama, registrar egreso, revertir egreso).',
+		texto: 'Abre «Modificar admisión» con el paciente bloqueado. Ahí también está «Ubicación y movimientos» (cambiar cama, registrar egreso, revertir egreso).',
 		pasos: ['Corregí los datos y tocá «Guardar cambios».'],
 	},
 	{

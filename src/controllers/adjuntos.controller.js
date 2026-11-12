@@ -522,6 +522,109 @@ router.get('/:idAdjunto', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req
   }
 });
 
+const MSG_ARCHIVO_FALTANTE =
+  'No está en el servidor. Puede haber cambiado de nombre o ya no estar en esa ubicación.';
+const MSG_ARCHIVO_RED = 'Problema de red o el servidor de archivos no responde.';
+
+/**
+ * Comprueba si el binario del adjunto existe (local o file server) sin descargar el archivo completo.
+ * @returns {{ disponible: boolean, motivo?: 'faltante'|'red', mensaje?: string }}
+ */
+async function probeAdjuntoArchivo(adjunto) {
+  const rutaNormalizada = normalizarRuta(adjunto.RutaArchivo);
+  const locales = pathLookupCandidates(rutaNormalizada).concat(
+    pathLookupCandidates(adjunto.RutaArchivo),
+  );
+  for (const p of locales) {
+    if (fsSync.existsSync(p)) return { disponible: true };
+  }
+
+  const rutasIntento = pathLookupCandidates(rutaNormalizada);
+  try {
+    const fileServerUrl = await resolveFileServerUrl();
+    let lastErr = null;
+    for (const ruta of rutasIntento) {
+      const fileUrl = fileServerFileUrl(fileServerUrl, ruta);
+      try {
+        await axios.get(fileUrl, {
+          responseType: 'arraybuffer',
+          headers: { ...fileServerHeaders(), Range: 'bytes=0-0' },
+          timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
+          validateStatus: (s) => (s >= 200 && s < 300) || s === 206,
+          maxContentLength: 4096,
+        });
+        return { disponible: true };
+      } catch (tryErr) {
+        lastErr = tryErr;
+        if (tryErr.response?.status === 404) continue;
+        // Algunos file servers no aceptan Range: reintento mínimo sin Range.
+        if (tryErr.response?.status === 416 || tryErr.response?.status === 501) {
+          try {
+            const full = await axios.get(fileUrl, {
+              responseType: 'stream',
+              headers: fileServerHeaders(),
+              timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
+              validateStatus: (s) => s >= 200 && s < 300,
+            });
+            full.data.destroy?.();
+            return { disponible: true };
+          } catch (e2) {
+            lastErr = e2;
+            if (e2.response?.status === 404) continue;
+            throw e2;
+          }
+        }
+        if (tryErr.response?.status !== 404) throw tryErr;
+      }
+    }
+    if (lastErr && isFileServerNetworkError(lastErr)) {
+      return { disponible: false, motivo: 'red', mensaje: MSG_ARCHIVO_RED };
+    }
+    return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
+  } catch (err) {
+    if (isFileServerNetworkError(err)) {
+      return { disponible: false, motivo: 'red', mensaje: MSG_ARCHIVO_RED };
+    }
+    return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
+  }
+}
+
+/**
+ * GET /api/adjuntos/:idAdjunto/disponible
+ * Indica si el archivo físico está accesible (para avisar al abrir la lista).
+ */
+router.get('/:idAdjunto/disponible', requirePermiso('INTERNACION.ADJUNTOS.VER'), async (req, res) => {
+  try {
+    const idAdjunto = parseInt(req.params.idAdjunto, 10);
+    const adjunto = await adjuntosService.getAdjuntoPorId(idAdjunto);
+    if (!adjunto) {
+      return res.status(404).json({
+        success: false,
+        disponible: false,
+        motivo: 'faltante',
+        error: 'Adjunto no encontrado',
+        mensaje: 'El registro del adjunto no existe.',
+      });
+    }
+    const probe = await probeAdjuntoArchivo(adjunto);
+    return res.json({
+      success: true,
+      idAdjunto,
+      nombreArchivo: adjunto.NombreArchivo || null,
+      ...probe,
+    });
+  } catch (error) {
+    console.error('❌ Error al verificar adjunto:', error);
+    return res.status(statusDeError(error)).json({
+      success: false,
+      disponible: false,
+      motivo: 'red',
+      error: MSG_ARCHIVO_RED,
+      mensaje: MSG_ARCHIVO_RED,
+    });
+  }
+});
+
 /**
  * GET /api/adjuntos/:idAdjunto/download
  * Descargar archivo adjunto desde el servidor HTTP de archivos
@@ -628,7 +731,8 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
       if (fileError.response?.status === 404) {
         return res.status(404).json({
           success: false,
-          error: 'Archivo no encontrado en el servidor',
+          error: MSG_ARCHIVO_FALTANTE,
+          mensaje: MSG_ARCHIVO_FALTANTE,
           rutaOriginal: adjunto.RutaArchivo,
           rutaNormalizada
         });
@@ -636,14 +740,17 @@ router.get('/:idAdjunto/download', requirePermiso('INTERNACION.ADJUNTOS.VER'), a
 
       return res.status(503).json({
         success: false,
-        error: describeFileServerError(fileError),
+        error: MSG_ARCHIVO_RED,
+        mensaje: MSG_ARCHIVO_RED,
+        detalle: describeFileServerError(fileError),
       });
     }
   } catch (error) {
     console.error('❌ Error al descargar adjunto:', error);
     res.status(statusDeError(error)).json({
       success: false,
-      error: 'Error al descargar adjunto'
+      error: 'No se pudo descargar el adjunto',
+      mensaje: 'No se pudo descargar el adjunto',
     });
   }
 });
