@@ -193,6 +193,10 @@ async function listar(opts = {}) {
 			} else if (est === 'exceso') {
 				having.push(`SUM(ISNULL(s.Stock_Maximo, 0)) > 0`);
 				having.push(`SUM(ISNULL(s.Cant_Fisico, 0)) > SUM(ISNULL(s.Stock_Maximo, 0))`);
+			} else if (est === 'sinParametros') {
+				having.push(`SUM(ISNULL(s.Stock_Minimo, 0)) = 0`);
+				having.push(`SUM(ISNULL(s.Stock_Maximo, 0)) = 0`);
+				having.push(`SUM(ISNULL(s.Punto_Pedido, 0)) = 0`);
 			}
 		}
 		const havingSql = having.length ? `HAVING ${having.join(' AND ')}` : '';
