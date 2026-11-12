@@ -49,11 +49,35 @@ function ymd(v) {
 	return m ? `${m[1]}${m[2]}${m[3]}` : '';
 }
 
+function visitaCubreFecha(visita, studyDateYmd) {
+	const f = ymd(studyDateYmd);
+	const d = ymd(visita?.desde);
+	if (!f || !d) return false;
+	const h = ymd(visita?.hasta);
+	return f >= d && (!h || f <= h);
+}
+
+/**
+ * Entre las visitas del paciente que cubren la fecha del estudio, elige la más
+ * actual (el arreglo debe venir ordenado: ingreso más reciente primero).
+ * El tomógrafo exporta DNI + fecha; si hay dos visitas el mismo día para el
+ * mismo paciente, el estudio queda en la más reciente.
+ */
+function visitaDueniaDelEstudio(studyDate, visitasPaciente) {
+	const f = ymd(studyDate);
+	if (!f || !Array.isArray(visitasPaciente) || !visitasPaciente.length) return null;
+	return visitasPaciente.find((v) => visitaCubreFecha(v, f)) || null;
+}
+
 /**
  * Estudios de una visita: AccessionNumber = NumeroVisita (exacto) o, si no hay
  * accession numérico, fecha del estudio dentro de [ingreso, egreso || hoy].
+ *
+ * Con `visitasPaciente` (todas las visitas del DNI, más reciente primero), un
+ * estudio por fecha solo se asigna a la visita dueña: evita que dos visitas
+ * del mismo día muestren el mismo estudio del tomógrafo.
  */
-function filtrarEstudiosDeVisita(studies, { numeroVisita, desde, hasta }) {
+function filtrarEstudiosDeVisita(studies, { numeroVisita, desde, hasta, visitasPaciente }) {
 	const nv = String(numeroVisita);
 	const d = ymd(desde);
 	const h = ymd(hasta);
@@ -62,7 +86,10 @@ function filtrarEstudiosDeVisita(studies, { numeroVisita, desde, hasta }) {
 		if (acc) return acc === nv;
 		const f = ymd(s.studyDate);
 		if (!f || !d) return false;
-		return f >= d && (!h || f <= h);
+		if (!(f >= d && (!h || f <= h))) return false;
+		if (!Array.isArray(visitasPaciente) || !visitasPaciente.length) return true;
+		const duenia = visitaDueniaDelEstudio(f, visitasPaciente);
+		return duenia != null && String(duenia.numeroVisita) === nv;
 	});
 }
 
@@ -77,6 +104,7 @@ async function listarEstudiosPorVisita(numeroVisita) {
 		`
 		SELECT TOP 1
 			v.NumeroVisita,
+			v.IdPaciente,
 			p.NumeroDocumento,
 			CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
 			CASE
@@ -97,13 +125,45 @@ async function listarEstudiosPorVisita(numeroVisita) {
 		throw err;
 	}
 	const documento = String(visita.NumeroDocumento || '').replace(/\D/g, '');
+	const hoy = new Date().toISOString().slice(0, 10);
 	const desde = visita.FechaAdmision || null;
-	const hasta = visita.FechaEgreso || new Date().toISOString().slice(0, 10);
+	const hasta = visita.FechaEgreso || hoy;
 	const base = { numeroVisita: nv, documento, desde, hasta, egresada: Boolean(visita.FechaEgreso) };
 	if (!documento) return { ...base, count: 0, studies: [] };
 
+	const idPaciente = Number(visita.IdPaciente);
+	let visitasPaciente = [{ numeroVisita: nv, desde, hasta }];
+	if (Number.isFinite(idPaciente) && idPaciente > 0) {
+		const hermanas = await executeQuery(
+			`
+			SELECT
+				v.NumeroVisita,
+				CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
+				CASE
+					WHEN TRY_CAST(v.FechaEgreso AS int) IS NOT NULL AND TRY_CAST(v.FechaEgreso AS int) > 0
+					THEN CONVERT(VARCHAR(10), dbo.fn_ClarionDATE2SQL(v.FechaEgreso), 23)
+					ELSE NULL
+				END AS FechaEgreso
+			FROM imVisita v
+			WHERE v.IdPaciente = @param0
+			ORDER BY v.FECHAADMISIONS DESC, v.NumeroVisita DESC
+			`,
+			[{ value: idPaciente }],
+		);
+		visitasPaciente = (hermanas || []).map((r) => ({
+			numeroVisita: Number(r.NumeroVisita),
+			desde: r.FechaAdmision || null,
+			hasta: r.FechaEgreso || hoy,
+		}));
+	}
+
 	const data = await listarEstudiosPorPatientId(documento);
-	const studies = filtrarEstudiosDeVisita(data?.studies, { numeroVisita: nv, desde, hasta });
+	const studies = filtrarEstudiosDeVisita(data?.studies, {
+		numeroVisita: nv,
+		desde,
+		hasta,
+		visitasPaciente,
+	});
 	return { ...base, count: studies.length, studies };
 }
 
@@ -125,6 +185,7 @@ module.exports = {
 	listarEstudiosPorPatientId,
 	listarEstudiosPorVisita,
 	filtrarEstudiosDeVisita,
+	visitaDueniaDelEstudio,
 	obtenerEstudio,
 	listarSeries,
 	listarArchivos,
