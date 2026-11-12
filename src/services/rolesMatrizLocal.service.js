@@ -150,7 +150,7 @@ async function listarMatriz(idEmpresa) {
 			esSistema: true,
 			editable: true,
 			rolBase: BASE_DE_ROL_SISTEMA[nombre] || (nombre === 'ADMIN' ? null : 'NINGUNO'),
-			permisos: deBd && deBd.length ? deBd : [...matriz.permisosDeRol(nombre)],
+			permisos: deBd && deBd.length && nombre !== 'ADMIN' ? deBd : [...matriz.permisosDeRol(nombre)],
 			usuarios: usuarios.get(id) || 0,
 		};
 	});
@@ -223,7 +223,7 @@ async function obtenerRolSistema(idRol) {
 	const nombre = String(rows[0].nombre || '').trim().toUpperCase();
 	if (nombre === 'SUPER_ADMIN') throw error(403, 'Este rol no se puede modificar');
 	const deBd = await permisosPlantillaSistema([id]);
-	const permisos = deBd.get(id)?.length ? deBd.get(id) : [...matriz.permisosDeRol(nombre)];
+	const permisos = deBd.get(id)?.length && nombre !== 'ADMIN' ? deBd.get(id) : [...matriz.permisosDeRol(nombre)];
 	return {
 		idRol: id,
 		nombre: String(rows[0].nombre || '').trim(),

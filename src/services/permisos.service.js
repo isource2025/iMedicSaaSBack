@@ -25,6 +25,7 @@ const ROL_SISTEMA_POR_ID = Object.freeze({
 	6: 'CARGA_HC',
 	7: 'PANEL_DATOS',
 });
+const ROLES_TOTALES = new Set(['ADMIN', 'SUPER_ADMIN']);
 // Carga diferida: evita ciclos de dependencias y no toca la BD si no se usa.
 const rolesCustom = () => require('./rolesCustom.service');
 const personalPermisos = () => require('./personalPermisos.service');
@@ -99,6 +100,10 @@ async function permisosDeRol(idRol, nombreRol) {
 		nombre === 'ENFERMERO' ||
 		nombre === 'CARGA_HC' ||
 		nombre === 'PANEL_DATOS';
+
+	// ADMIN y SUPER_ADMIN tienen siempre la plantilla completa (incluye permisos
+	// nuevos que imRolPermisos todavía no conoce).
+	if (ROLES_TOTALES.has(nombre)) return [...matriz.permisosDeRol(nombre)];
 
 	if (idNum == null) {
 		return matriz.permisosDeRol(nombreRol || null);
@@ -182,7 +187,12 @@ async function permisosDeUsuario(valorPersonal) {
 				} catch (e) {
 					console.warn('[permisos] overrides no aplicados (se usan sólo roles):', e.message);
 				}
-				const permisos = personalPermisos().aplicar(base, grants, denies);
+				const esAdmin = mappedRoles.some(
+					(r) =>
+						ROLES_TOTALES.has(String(r.nombre || '').trim().toUpperCase()) ||
+						ROLES_TOTALES.has(ROL_SISTEMA_POR_ID[Number(r.idRol ?? r.IdRol)] || ''),
+				);
+				const permisos = esAdmin ? base : personalPermisos().aplicar(base, grants, denies);
 				const principal = mappedRoles.find((r) => r.EsPrincipal || r.esPrincipal) || mappedRoles[0];
 				return {
 					rol: {
