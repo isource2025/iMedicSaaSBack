@@ -33,10 +33,10 @@ test('VARBINARY Clarion recupera Ó/Á (Güemes) aunque el string venga sin acen
 	assert.strictEqual(row.ApellidoYNombreBytes, undefined);
 });
 
-test('"ï¿½" ya materializado se normaliza a U+FFFD y nunca se persiste', () => {
+test('"ï¿½" ya materializado se normaliza a U+FFFD; al persistir se restaura Ñ si aplica', () => {
 	assert.strictEqual(repararTextoClarionAnsi(`ORGO${FFFD_LATIN1}`), 'ORGO\uFFFD');
-	assert.strictEqual(normalizarTextoParaClarionAnsi(`ORGO${FFFD_LATIN1}, X`), 'ORGO, X');
-	assert.strictEqual(sanitizarTextoParaBd(`ORGO${FFFD_LATIN1}, X`), 'ORGO, X');
+	assert.strictEqual(normalizarTextoParaClarionAnsi(`ORGO${FFFD_LATIN1}, X`), 'ORGO\u00D1, X');
+	assert.strictEqual(sanitizarTextoParaBd(`ORGO${FFFD_LATIN1}, X`), 'ORGO\u00D1, X');
 });
 
 test('restaurarEnie recupera la Ñ perdida en datos de persona, sin tocar "ATENCI�N"', () => {
@@ -48,4 +48,17 @@ test('restaurarEnie recupera la Ñ perdida en datos de persona, sin tocar "ATENC
 	assert.strictEqual(out.a, 'ORGO\u00D1, CECILIA');
 	assert.strictEqual(out.b, 'ACU\u00D1A');
 	assert.strictEqual(out.c, 'ATENCI\uFFFDN');
+});
+
+test('pipeline web/RENAPER → VARCHAR ANSI conserva Ó/Ñ (ACOSTA RAMÓN, ACUÑA)', () => {
+	assert.strictEqual(normalizarTextoParaClarionAnsi('ACOSTA RAMÓN, JUAN'), 'ACOSTA RAMÓN, JUAN');
+	assert.strictEqual(normalizarTextoParaClarionAnsi('ACUÑA, MARÍA'), 'ACUÑA, MARÍA');
+	assert.strictEqual(normalizarTextoParaClarionAnsi('ACU\uFFFDA, PEDRO'), 'ACUÑA, PEDRO');
+	const mojibake = repararStringsDeep(
+		{ apellido: 'ACUÃ\u0091A', nombres: 'RAMÃ\u0093N' },
+		0,
+		{ restaurarEnie: true },
+	);
+	assert.strictEqual(mojibake.apellido, 'ACUÑA');
+	assert.strictEqual(mojibake.nombres, 'RAMÓN');
 });

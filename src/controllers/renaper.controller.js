@@ -6,10 +6,13 @@ const {
 	restaurarEnieDePersona,
 } = require('../utils/clarionText');
 
-/** Texto de persona (RENAPER): repara mojibake y recupera Ñ perdida (U+FFFD). */
+/**
+ * Texto de persona (RENAPER / todo web): repara mojibake UTF-8↔CP1252 y recupera Ñ
+ * perdida (U+FFFD). No depende de Clarion UI; alimenta el alta de pacientes web.
+ */
 const repararTextoClarionAnsi = (v) => restaurarEnieDePersona(repararBase(v));
 
-/** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER. */
+/** Unifica variantes de nombres de campos que devuelve MSAL/RENAPER (multi-sexo). */
 function normalizePersonaForClient(raw) {
 	if (!raw || typeof raw !== 'object') return raw;
 	const fixed = repararStringsDeep(raw, 0, { restaurarEnie: true });
@@ -146,4 +149,5 @@ const search = async (req, res) => {
 module.exports = {
 	getToken,
 	search,
+	normalizePersonaForClient,
 };

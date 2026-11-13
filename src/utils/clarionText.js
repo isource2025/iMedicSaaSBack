@@ -79,6 +79,8 @@ function restaurarEnieDePersona(s) {
 }
 
 /**
+ * Texto hacia VARCHAR ANSI (imPacientes / legacy): NFC, repara mojibake, recupera Ñ
+ * perdida (RENAPER/web) y conserva áéíóúñ (CP1252). No es solo Clarion UI.
  * @param {unknown} texto
  * @param {{ maxLength?: number }} [options]
  * @returns {string}
@@ -88,6 +90,8 @@ function normalizarTextoParaClarionAnsi(texto, options = {}) {
 	if (texto == null || texto === undefined) return '';
 
 	let s = repararTextoClarionAnsi(String(texto));
+	// Antes de borrar U+FFFD: ACU�A → ACUÑA (pipeline web/RENAPER → alta paciente).
+	s = restaurarEnieDePersona(s);
 	s = s
 		.replace(/\u00a0/g, ' ')
 		.replace(/\t/g, ' ')
@@ -226,7 +230,7 @@ function repararStringsDeep(value, depth = 0, opts = {}) {
 function sanitizarTextoParaBd(v) {
 	if (typeof v !== 'string') return v;
 	if (!/Ã|Â|\u00EF\u00BF\u00BD|\uFFFD/.test(v)) return v;
-	return repararTextoClarionAnsi(v).replace(/\uFFFD/g, '');
+	return restaurarEnieDePersona(repararTextoClarionAnsi(v)).replace(/\uFFFD/g, '');
 }
 
 module.exports = {

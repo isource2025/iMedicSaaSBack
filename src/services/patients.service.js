@@ -6,13 +6,35 @@ const { createTenantOnce } = require('../context/tenantCache');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const { v4: uuidv4 } = require('uuid');
-const { normalizarTextoParaClarionAnsi, repararTextoClarionAnsi } = require('../utils/clarionText');
+const {
+	normalizarTextoParaClarionAnsi,
+	repararTextoClarionAnsi,
+	restaurarEnieDePersona,
+	applyClarionTextFromBytes,
+} = require('../utils/clarionText');
+
+/** SELECT extra: bytes crudos del VARCHAR para no perder Ó/Ñ al leer (mismo fix que admisión). */
+const APELLIDO_BYTES_SQL = 'CONVERT(VARBINARY(500), p.ApellidoyNombre) AS ApellidoyNombreBytes';
+const APELLIDO_BYTES_NO_ALIAS =
+	'CONVERT(VARBINARY(500), ApellidoyNombre) AS ApellidoyNombreBytes';
 
 function mapNombrePacienteFilas(rows) {
 	if (!Array.isArray(rows)) return rows;
 	return rows.map((r) => {
-		if (!r || r.ApellidoyNombre == null) return r;
-		return { ...r, ApellidoyNombre: repararTextoClarionAnsi(r.ApellidoyNombre) };
+		if (!r) return r;
+		const row = { ...r };
+		if (row.ApellidoyNombreBytes != null) {
+			applyClarionTextFromBytes(row, 'ApellidoyNombre', 'ApellidoyNombreBytes');
+		}
+		if (row.ApellidoyNombre != null) {
+			row.ApellidoyNombre = restaurarEnieDePersona(
+				repararTextoClarionAnsi(String(row.ApellidoyNombre)),
+			);
+		}
+		if (row.Domicilio != null) {
+			row.Domicilio = restaurarEnieDePersona(repararTextoClarionAnsi(String(row.Domicilio)));
+		}
+		return row;
 	});
 }
 
@@ -248,6 +270,7 @@ const obtenerPacientes = async (page = 1, limit = 30, searchTerm = '') => {
 			SELECT 
     p.IdPaciente AS IDPaciente,
     p.ApellidoyNombre,
+    ${APELLIDO_BYTES_SQL},
     p.NumeroDocumento,
     p.NumeroHC,
     p.Domicilio,
@@ -267,7 +290,7 @@ ORDER BY p.ApellidoyNombre;
 		
 		params.push({ value: offset }, { value: maxLimit });
 		let rows = await executeQuery(query, params);
-		return rows;
+		return mapNombrePacienteFilas(rows);
 	} catch (error) {
 		console.error('Error al obtener pacientes de la base de datos:', error);
 		throw error;
@@ -335,6 +358,7 @@ const buscarPacientesPaginados = async (page = 1, limit = 30, searchTerm = '') =
 			SELECT 
 				p.IdPaciente as IDPaciente,
 				p.ApellidoyNombre,
+				${APELLIDO_BYTES_SQL},
 				p.NumeroDocumento,
 				p.NumeroHC,
 				p.Domicilio,
@@ -407,6 +431,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.IDPaciente,
 				p.NumeroDocumento,
 				p.ApellidoyNombre,
+				${APELLIDO_BYTES_SQL},
 				p.Domicilio,
 				p.Sexo,
 				p.NumeroHC,
@@ -454,7 +479,7 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 		const parametros = [{ value: id }];
 		const rows = await executeQuery(query, parametros);
 		if (!rows.length) return null;
-		const paciente = mapFotoURL(rows, baseUrl)[0];
+		const paciente = mapFotoURL(mapNombrePacienteFilas(rows), baseUrl)[0];
 		// Adjuntar trabajos si existen
 		try {
 			paciente.Trabajos = await getJobsByPatient(paciente.IDPaciente);
@@ -483,7 +508,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 		if (isNumeric) {
 			// Búsqueda específica numérica usando igualdad (aprovecha índices) + opcional nombre
 			query = `SELECT TOP 100
-				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
+				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, ${APELLIDO_BYTES_SQL}, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
           			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
           			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
@@ -509,7 +534,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
 			// Texto: solo sobre nombre + LIKE en documento/historia si empieza por dígitos (sin CAST)
 			const digitsPrefix = term.match(/^(\d{3,})/); // prefijo numérico útil
 			query = `SELECT TOP 100
-				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, p.Domicilio, p.Sexo, p.NumeroHC,
+				p.IDPaciente, p.NumeroDocumento, p.ApellidoyNombre, ${APELLIDO_BYTES_SQL}, p.Domicilio, p.Sexo, p.NumeroHC,
 				CASE 
           			WHEN p.FechaNacimiento IS NULL OR p.FechaNacimiento <= 0 OR p.FechaNacimiento > 1000000 THEN NULL
           			ELSE CONVERT(VARCHAR(10), DATEADD(DAY, p.FechaNacimiento, '1800-12-28'), 23)
@@ -626,7 +651,7 @@ const crearPaciente = async (pacienteData) => {
 				@p30,@p31,@p32,@p33,@p34,@p35
 			);
 			SELECT 
-				IDPaciente, ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
+				IDPaciente, ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, ${APELLIDO_BYTES_NO_ALIAS}, TipoDocumento, NumeroDocumento,
 				Domicilio, ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
 				CONVERT(VARCHAR(10), 
 					CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
@@ -675,7 +700,7 @@ const crearPaciente = async (pacienteData) => {
 			{ value: sd.SituacionLaboral },
 			{ value: sd.NivelDeEstudios },
 		];
-		const [nuevo] = await executeQuery(insert, params);
+		const [nuevo] = mapNombrePacienteFilas(await executeQuery(insert, params));
 		// Insertar trabajos si vienen
 		if (pacienteData.Trabajos && Array.isArray(pacienteData.Trabajos)) {
 			try {
@@ -769,7 +794,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 				LicenciaConducir=@p22, DadorOrganos=@p23, OrdenNacimiento=@p24, LugarNacimiento=@p25,
 				FechaDefuncion=@p26, HoraDefuncion=@p27, IdiomaPrimario=@p28, GrupoEtnico=@p29, EstadoMilitar=@p30, Ciudadania=@p31, Ocupacion=@p32, SituacionLaboral=@p33, NivelDeEstudios=@p34
 			WHERE IDPaciente=@p0;
-			SELECT IDPaciente, ApellidoyNombre, TipoDocumento, NumeroDocumento, Domicilio,
+			SELECT IDPaciente, ApellidoyNombre, ${APELLIDO_BYTES_NO_ALIAS}, TipoDocumento, NumeroDocumento, Domicilio,
 				ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
 				CONVERT(VARCHAR(10), CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
 				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
@@ -814,7 +839,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 			{ value: sd.SituacionLaboral },
 			{ value: sd.NivelDeEstudios },
 		];
-		const rows = await executeQuery(query, params);
+		const rows = mapNombrePacienteFilas(await executeQuery(query, params));
 		const actualizado = rows[0];
 		try {
 			console.log(
@@ -876,6 +901,7 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
 				v.DiagnosticoEgreso AS diagnosticoEgreso,
 				p.IDPaciente AS idPaciente,
 				p.ApellidoyNombre AS nombrePaciente,
+				${APELLIDO_BYTES_SQL},
 				LTRIM(RTRIM(h.ValorHabitacionCama)) AS habitacionCama,
 				h.Observaciones AS descripcionHabitacionCama
 			FROM imvisita v
@@ -884,7 +910,15 @@ const obtenerVisitaPorNumero = async (numeroVisita) => {
 			WHERE v.NumeroVisita = @p0`;
 		const result = await executeQuery(query, [{ value: numeroVisita }]);
 		if (!result.length) return null;
-		return result[0];
+		const row = result[0];
+		if (row.ApellidoyNombreBytes != null) {
+			applyClarionTextFromBytes(row, 'nombrePaciente', 'ApellidoyNombreBytes');
+		} else if (row.nombrePaciente != null) {
+			row.nombrePaciente = restaurarEnieDePersona(
+				repararTextoClarionAnsi(String(row.nombrePaciente)),
+			);
+		}
+		return row;
 	} catch (error) {
 		console.error(`Error al obtener visita con número ${numeroVisita}:`, error);
 		throw error;
@@ -974,9 +1008,11 @@ const obtenerTablasReferencia = async () => {
 };
 
 const buscarPacientePorDocumentoExacto = async (numeroDocumento) => {
-	const rows = await executeQuery(
-		'SELECT TOP 1 IDPaciente, ApellidoyNombre FROM imPacientes WHERE NumeroDocumento = @p0 ORDER BY IDPaciente',
-		[{ value: Number(numeroDocumento) }],
+	const rows = mapNombrePacienteFilas(
+		await executeQuery(
+			`SELECT TOP 1 IDPaciente, ApellidoyNombre, ${APELLIDO_BYTES_NO_ALIAS} FROM imPacientes WHERE NumeroDocumento = @p0 ORDER BY IDPaciente`,
+			[{ value: Number(numeroDocumento) }],
+		),
 	);
 	return rows?.[0] || null;
 };
