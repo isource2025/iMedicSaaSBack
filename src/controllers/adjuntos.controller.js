@@ -530,6 +530,16 @@ const MSG_ARCHIVO_RED = 'Problema de red o el servidor de archivos no responde.'
  * Comprueba si el binario del adjunto existe (local o file server) sin descargar el archivo completo.
  * @returns {{ disponible: boolean, motivo?: 'faltante'|'red', mensaje?: string }}
  */
+function motivoDesdeErrorArchivo(err) {
+  const status = err?.response?.status;
+  // Solo 404 = archivo ausente / ruta rota (mensaje “cambio de nombre”).
+  if (status === 404) {
+    return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
+  }
+  // 5xx, timeout, túnel caído, ECONNREFUSED, etc. = red.
+  return { disponible: false, motivo: 'red', mensaje: MSG_ARCHIVO_RED };
+}
+
 async function probeAdjuntoArchivo(adjunto) {
   const rutaNormalizada = normalizarRuta(adjunto.RutaArchivo);
   const locales = pathLookupCandidates(rutaNormalizada).concat(
@@ -543,6 +553,7 @@ async function probeAdjuntoArchivo(adjunto) {
   try {
     const fileServerUrl = await resolveFileServerUrl();
     let lastErr = null;
+    let solo404 = true;
     for (const ruta of rutasIntento) {
       const fileUrl = fileServerFileUrl(fileServerUrl, ruta);
       try {
@@ -556,9 +567,10 @@ async function probeAdjuntoArchivo(adjunto) {
         return { disponible: true };
       } catch (tryErr) {
         lastErr = tryErr;
-        if (tryErr.response?.status === 404) continue;
+        const status = tryErr.response?.status;
+        if (status === 404) continue;
         // Algunos file servers no aceptan Range: reintento mínimo sin Range.
-        if (tryErr.response?.status === 416 || tryErr.response?.status === 501) {
+        if (status === 416 || status === 501) {
           try {
             const full = await axios.get(fileUrl, {
               responseType: 'stream',
@@ -571,21 +583,20 @@ async function probeAdjuntoArchivo(adjunto) {
           } catch (e2) {
             lastErr = e2;
             if (e2.response?.status === 404) continue;
-            throw e2;
+            solo404 = false;
+            return motivoDesdeErrorArchivo(e2);
           }
         }
-        if (tryErr.response?.status !== 404) throw tryErr;
+        solo404 = false;
+        return motivoDesdeErrorArchivo(tryErr);
       }
     }
-    if (lastErr && isFileServerNetworkError(lastErr)) {
-      return { disponible: false, motivo: 'red', mensaje: MSG_ARCHIVO_RED };
+    if (solo404 || lastErr?.response?.status === 404) {
+      return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
     }
-    return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
+    return motivoDesdeErrorArchivo(lastErr || { response: { status: 503 } });
   } catch (err) {
-    if (isFileServerNetworkError(err)) {
-      return { disponible: false, motivo: 'red', mensaje: MSG_ARCHIVO_RED };
-    }
-    return { disponible: false, motivo: 'faltante', mensaje: MSG_ARCHIVO_FALTANTE };
+    return motivoDesdeErrorArchivo(err);
   }
 }
 
