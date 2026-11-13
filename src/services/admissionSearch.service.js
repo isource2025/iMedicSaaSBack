@@ -24,6 +24,7 @@ const evolucionEnfermeriaService = require('./evolucionEnfermeria.service');
 const dietaControlService = require('./dietaControl.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const { jsonSafe } = require('../utils/jsonSafe');
+const { applyClarionTextFromBytes } = require('../utils/clarionText');
 
 function getEpicrisisService() {
   return require('./epicrisis.service');
@@ -409,6 +410,7 @@ async function buscarAdmisiones({
       v.NumeroVisita,
       v.IdPaciente,
       p.ApellidoYNombre,
+      CONVERT(VARBINARY(500), p.ApellidoYNombre) AS ApellidoYNombreBytes,
       p.NumeroDocumento,
       p.NumeroHC,
       LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
@@ -549,6 +551,7 @@ async function buscarAdmisiones({
     baseRows.map((r) => r.NumeroVisita),
   );
   const data = baseRows.map((row) => {
+    applyClarionTextFromBytes(row, 'ApellidoYNombre', 'ApellidoYNombreBytes');
     const cnt = countsByVisita.get(Number(row.NumeroVisita)) || EMPTY_CLINICAL_COUNTS;
     return { ...row, ...cnt };
   });
@@ -572,6 +575,7 @@ async function obtenerResumenAdmision(numeroVisita) {
         v.NumeroVisita,
         v.IdPaciente,
         p.ApellidoYNombre,
+        CONVERT(VARBINARY(500), p.ApellidoYNombre) AS ApellidoYNombreBytes,
         p.NumeroDocumento,
         p.NumeroHC,
         CONVERT(VARCHAR(10), v.FECHAADMISIONS, 23) AS FechaAdmision,
@@ -622,7 +626,9 @@ async function obtenerResumenAdmision(numeroVisita) {
     `,
     [{ value: numeroVisita }]
   );
-  return rows?.[0] || null;
+  const row = rows?.[0] || null;
+  if (row) applyClarionTextFromBytes(row, 'ApellidoYNombre', 'ApellidoYNombreBytes');
+  return row;
 }
 
 /** Números de visita de un paciente (más recientes primero). */
@@ -1659,6 +1665,7 @@ async function _consultarVisitaCompleta(numeroVisita) {
         v.NUMEROVISITA AS NumeroVisita,
         v.IDPACIENTE AS IdPaciente,
         p.ApellidoYNombre,
+        CONVERT(VARBINARY(500), p.ApellidoYNombre) AS ApellidoYNombreBytes,
         p.NumeroDocumento,
         p.NumeroHC,
         LTRIM(RTRIM(ISNULL(p.NumeroSSN, ''))) AS NumeroSSN,
@@ -1771,7 +1778,9 @@ async function _consultarVisitaCompleta(numeroVisita) {
     [{ value: nv }],
   );
 
-  return rows?.[0] || null;
+  const row = rows?.[0] || null;
+  if (row) applyClarionTextFromBytes(row, 'ApellidoYNombre', 'ApellidoYNombreBytes');
+  return row;
 }
 
 async function obtenerCatalogosAdmision(clienteId) {

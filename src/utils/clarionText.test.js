@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
 	decodeBufferPreferUtf8,
+	decodeClarionVarcharBinary,
+	applyClarionTextFromBytes,
 	repararTextoClarionAnsi,
 	repararStringsDeep,
 	normalizarTextoParaClarionAnsi,
@@ -19,6 +21,16 @@ test('U+FFFD legítimo en UTF-8 no se convierte en "ï¿½"', () => {
 test('buffer ANSI (CP1252) y UTF-8 válido se decodifican bien', () => {
 	assert.strictEqual(decodeBufferPreferUtf8(Buffer.from([0x4f, 0x52, 0x47, 0x4f, 0xd1])), 'ORGO\u00D1');
 	assert.strictEqual(decodeBufferPreferUtf8(Buffer.from('ACU\u00D1A', 'utf8')), 'ACU\u00D1A');
+});
+
+test('VARBINARY Clarion recupera Ó/Á (Güemes) aunque el string venga sin acentos', () => {
+	// "RAMÓN" en CP1252: Ó = 0xD3
+	const bytes = Buffer.from([0x52, 0x41, 0x4d, 0xd3, 0x4e]);
+	assert.strictEqual(decodeClarionVarcharBinary(bytes), 'RAMÓN');
+	const row = { ApellidoYNombre: 'RAMN', ApellidoYNombreBytes: bytes };
+	applyClarionTextFromBytes(row, 'ApellidoYNombre', 'ApellidoYNombreBytes');
+	assert.strictEqual(row.ApellidoYNombre, 'RAMÓN');
+	assert.strictEqual(row.ApellidoYNombreBytes, undefined);
 });
 
 test('"ï¿½" ya materializado se normaliza a U+FFFD y nunca se persiste', () => {

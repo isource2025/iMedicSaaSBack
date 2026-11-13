@@ -3,6 +3,7 @@
 const { executeQuery } = require('../models/db');
 const { enrichControlesWithIMC } = require('../utils/antropometria');
 const { normalizarFilas } = require('../utils/codigoSector');
+const { applyClarionTextFromBytes } = require('../utils/clarionText');
 const vistoEnfermeria = require('./indicacionesVistoEnfermeria.service');
 const { SQL_APPLY_PERSONAS } = require('./controlesFrecuentes.service');
 const { tenantCacheKey } = require('../context/tenantCache');
@@ -29,6 +30,13 @@ async function conCacheCatalogo(nombre, cargar) {
 	return catalogoCache.getOrLoad(key, cargar);
 }
 
+function aplicarNombresClarion(rows) {
+	for (const row of rows || []) {
+		applyClarionTextFromBytes(row, 'NombrePaciente', 'NombrePacienteBytes');
+	}
+	return rows;
+}
+
 /** Purga sectores/estados cacheados del tenant actual (o de todos si no hay contexto). */
 function invalidarCatalogosCamas() {
 	const key = tenantCacheKey();
@@ -41,7 +49,7 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 		const listo = await vistoEnfermeria.tablaLista();
 		if (listo) {
 			try {
-				return normalizarFilas(await executeQuery(sqlConVisto, params));
+				return aplicarNombresClarion(normalizarFilas(await executeQuery(sqlConVisto, params)));
 			} catch (err) {
 				console.warn('[beds] Aviso de indicaciones omitido:', err?.message || err);
 			}
@@ -49,7 +57,7 @@ async function queryCamasSeguro(sqlConVisto, sqlSinVisto, params) {
 	} catch (err) {
 		console.warn('[beds] Chequeo de indicaciones nuevas omitido:', err?.message || err);
 	}
-	const rows = normalizarFilas(await executeQuery(sqlSinVisto, params));
+	const rows = aplicarNombresClarion(normalizarFilas(await executeQuery(sqlSinVisto, params)));
 	void vistoEnfermeria.ensureTable().catch((e) => {
 		console.warn('[beds] No se pudo preparar tabla de aviso de indicaciones:', e?.message || e);
 	});
@@ -80,6 +88,7 @@ const obtenerCamas = async (idSector) => {
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
+      CONVERT(VARBINARY(500), p.ApellidoYNombre) as NombrePacienteBytes,
       p.NumeroDocumento as DocumentoPaciente,
       p.Sexo as SexoPaciente,
       sx.Descripcion as DescripcionSexo,
@@ -111,7 +120,7 @@ const obtenerCamas = async (idSector) => {
     ORDER BY
       hc.ValorHabitacionCama ASC`;
 	const t0 = Date.now();
-	const rows = normalizarFilas(await executeQuery(sqlList, params));
+	const rows = aplicarNombresClarion(normalizarFilas(await executeQuery(sqlList, params)));
 	const t1 = Date.now();
 	const visitas = (rows || []).map((r) => r.NumeroVisita ?? r.numeroVisita);
 	const [nuevas, respondidos] = await Promise.all([
@@ -203,6 +212,7 @@ const filtrarCamasPorEstado = async (estadoValor) => {
       ec.descripcion as descripcionEstadoCama,
       ec.Descripcion as EstadoDescripcion,
       p.ApellidoYNombre as NombrePaciente,
+      CONVERT(VARBINARY(500), p.ApellidoYNombre) as NombrePacienteBytes,
       p.NumeroDocumento as DocumentoPaciente,
       p.Sexo as SexoPaciente,
       sx.Descripcion as DescripcionSexo,
@@ -281,6 +291,7 @@ const obtenerCamaPorId = async (id) => {
     SELECT 
       hc.*,
       p.ApellidoYNombre as NombrePaciente,
+      CONVERT(VARBINARY(500), p.ApellidoYNombre) as NombrePacienteBytes,
       p.NumeroDocumento as documentoPaciente,
       p.Sexo as SexoPaciente,
 	  p.Domicilio as ubicacionPaciente,

@@ -149,6 +149,54 @@ function repararTextoClarionAnsi(texto) {
 	}
 }
 
+/**
+ * Decodifica bytes crudos de un VARCHAR Clarion (ANSI/CP1252) leídos con CONVERT(VARBINARY, col).
+ * Evita U+FFFD cuando el driver TDS interpreta mal el code page (p. ej. Güemes).
+ * @param {Buffer|Uint8Array|number[]|string|null|undefined} binaryValue
+ * @returns {string|null}
+ */
+function decodeClarionVarcharBinary(binaryValue) {
+	if (binaryValue == null) return null;
+	let buf;
+	if (Buffer.isBuffer(binaryValue)) buf = binaryValue;
+	else if (binaryValue instanceof Uint8Array) buf = Buffer.from(binaryValue);
+	else if (Array.isArray(binaryValue)) buf = Buffer.from(binaryValue);
+	else if (typeof binaryValue === 'string' && binaryValue.length) {
+		// jsonSafe / latin1 round-trip
+		buf = Buffer.from(binaryValue, 'latin1');
+	} else return null;
+	if (!buf.length) return '';
+
+	// NVARCHAR / UTF-16LE: muchos 0x00 en posiciones impares en texto ASCII/Latin.
+	let nullOdds = 0;
+	const sample = Math.min(buf.length, 48);
+	for (let i = 1; i < sample; i += 2) {
+		if (buf[i] === 0) nullOdds += 1;
+	}
+	if (buf.length >= 4 && buf.length % 2 === 0 && nullOdds >= Math.floor(sample / 4)) {
+		return buf.toString('utf16le').replace(/\0/g, '').replace(/\s+$/g, '');
+	}
+
+	return decodeBufferPreferUtf8(buf).replace(/\0/g, '').replace(/\s+$/g, '');
+}
+
+/**
+ * Si la fila trae *Bytes (VARBINARY), reemplaza el campo texto por la decodificación ANSI correcta.
+ * @param {Record<string, unknown>} row
+ * @param {string} textKey
+ * @param {string} bytesKey
+ */
+function applyClarionTextFromBytes(row, textKey, bytesKey) {
+	if (!row || typeof row !== 'object') return row;
+	const decoded = decodeClarionVarcharBinary(row[bytesKey]);
+	delete row[bytesKey];
+	// Los bytes del VARCHAR Clarion son la fuente de verdad (evita RAMN vs RAMÓN en Güemes).
+	if (decoded != null && String(decoded).trim()) {
+		row[textKey] = decoded;
+	}
+	return row;
+}
+
 /** Recorre objetos/arrays y repara strings que lucen corruptos (lecturas SQL / JSON). */
 function repararStringsDeep(value, depth = 0, opts = {}) {
 	if (depth > 8) return value;
@@ -185,6 +233,8 @@ module.exports = {
 	sanitizarTextoParaBd,
 	restaurarEnieDePersona,
 	decodeBufferPreferUtf8,
+	decodeClarionVarcharBinary,
+	applyClarionTextFromBytes,
 	normalizarTextoParaClarionAnsi,
 	repararTextoClarionAnsi,
 	repararStringsDeep,

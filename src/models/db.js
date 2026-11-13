@@ -136,7 +136,8 @@ async function ejecutarConsulta(consulta, parametros = [], opts = {}) {
     }
     const rows = resultado.recordset;
     if (!Array.isArray(rows)) return rows;
-    return repararStringsDeep(rows);
+    // restaurarEnie: recupera Ñ perdida (U+FFFD) en nombres de personas al leer.
+    return repararStringsDeep(rows, 0, { restaurarEnie: true });
   } catch (error) {
     console.error('Error al ejecutar consulta SQL:', error.message);
     console.error('Detalles del error:', JSON.stringify(error, null, 2));
