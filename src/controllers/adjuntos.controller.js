@@ -549,6 +549,9 @@ async function probeAdjuntoArchivo(adjunto) {
     if (fsSync.existsSync(p)) return { disponible: true };
   }
 
+  // Misma estrategia que /download: GET stream (sin Range).
+  // Range + maxContentLength marcaba falsos "No disponible" cuando el file server
+  // ignoraba Range y devolvía el PDF completo.
   const rutasIntento = pathLookupCandidates(rutaNormalizada);
   try {
     const fileServerUrl = await resolveFileServerUrl();
@@ -557,37 +560,22 @@ async function probeAdjuntoArchivo(adjunto) {
     for (const ruta of rutasIntento) {
       const fileUrl = fileServerFileUrl(fileServerUrl, ruta);
       try {
-        await axios.get(fileUrl, {
-          responseType: 'arraybuffer',
-          headers: { ...fileServerHeaders(), Range: 'bytes=0-0' },
-          timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
-          validateStatus: (s) => (s >= 200 && s < 300) || s === 206,
-          maxContentLength: 4096,
+        const response = await axios.get(fileUrl, {
+          responseType: 'stream',
+          headers: fileServerHeaders(),
+          timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 15000),
+          validateStatus: (s) => s >= 200 && s < 300,
         });
+        response.data.destroy?.();
         return { disponible: true };
       } catch (tryErr) {
         lastErr = tryErr;
-        const status = tryErr.response?.status;
-        if (status === 404) continue;
-        // Algunos file servers no aceptan Range: reintento mínimo sin Range.
-        if (status === 416 || status === 501) {
-          try {
-            const full = await axios.get(fileUrl, {
-              responseType: 'stream',
-              headers: fileServerHeaders(),
-              timeout: Math.min(FILE_SERVER_TIMEOUT_MS, 12000),
-              validateStatus: (s) => s >= 200 && s < 300,
-            });
-            full.data.destroy?.();
-            return { disponible: true };
-          } catch (e2) {
-            lastErr = e2;
-            if (e2.response?.status === 404) continue;
-            solo404 = false;
-            return motivoDesdeErrorArchivo(e2);
-          }
-        }
+        if (tryErr.response?.status === 404) continue;
         solo404 = false;
+        // Seguir probando otras rutas candidatas ante errores de red/5xx.
+        if (!tryErr.response || tryErr.response.status >= 500 || isFileServerNetworkError(tryErr)) {
+          continue;
+        }
         return motivoDesdeErrorArchivo(tryErr);
       }
     }
