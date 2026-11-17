@@ -58,6 +58,7 @@ async function buscar(req, res) {
       porIngreso = '',
       tipoAtencion = '',
       cliente = '',
+      sector = '',
       page = 1,
       limit = 25,
     } = req.query;
@@ -72,6 +73,7 @@ async function buscar(req, res) {
       porIngreso,
       tipoAtencion,
       cliente,
+      sector,
       page: Number(page),
       limit: Number(limit),
     });
@@ -247,6 +249,19 @@ async function coberturas(req, res) {
   }
 }
 
+async function sectores(req, res) {
+  try {
+    const data = await admissionSearchService.listarSectores();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error al listar sectores para búsqueda:', error);
+    res.status(statusDeError(error)).json({
+      success: false,
+      message: 'Error al listar sectores',
+    });
+  }
+}
+
 const EXPORT_SECTIONS = new Set(admissionSearchService.VISITA_SECCIONES);
 async function resumenIa(req, res) {
   try {
@@ -364,6 +379,7 @@ module.exports = {
   actualizarDatosPrincipales,
   catalogosAdmision,
   coberturas,
+  sectores,
   exportSelectivo,
   resumenIa,
   turnosActivosPaciente,

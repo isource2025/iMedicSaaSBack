@@ -284,6 +284,7 @@ async function buscarAdmisiones({
   porIngreso = '',
   tipoAtencion = '',
   cliente = '',
+  sector = '',
   page = 1,
   limit = 25,
 }) {
@@ -297,6 +298,7 @@ async function buscarAdmisiones({
   const filtrarInternado = tipoNorm === 'I' || tipoNorm === 'INTERNADO';
   const filtrarAmbulatorio = tipoNorm === 'A' || tipoNorm === 'AMBULATORIO';
   const clienteVal = String(cliente).trim();
+  const sectorVal = String(sector).trim();
 
   // Buscador unificado: un solo término que se prueba contra apellido y nombre,
   // documento y número de visita. Van con OR porque el usuario no elige el campo.
@@ -387,6 +389,14 @@ async function buscarAdmisiones({
       whereParts.push(`LTRIM(RTRIM(CAST(v.CLIENTE AS VARCHAR(50)))) = @param${params.length}`);
       params.push({ value: clienteVal });
     }
+  }
+
+  // Sector = imVisita.VALORSECTOR (código de imSectores.Valor).
+  if (sectorVal && sectorVal.toLowerCase() !== 'all') {
+    whereParts.push(
+      `LTRIM(RTRIM(CAST(ISNULL(v.VALORSECTOR, '') AS VARCHAR(50)))) = @param${params.length}`,
+    );
+    params.push({ value: sectorVal });
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
@@ -1932,10 +1942,28 @@ async function listarCoberturas() {
   }));
 }
 
+/** Catálogo de sectores ambulatorios (imSectores.AmbInt = 'A') para el filtro de búsqueda. */
+async function listarSectores() {
+  const rows = await executeQuery(`
+    SELECT
+      LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) AS Valor,
+      LTRIM(RTRIM(ISNULL(s.Descripcion, ''))) AS Descripcion
+    FROM dbo.imSectores s WITH (NOLOCK)
+    WHERE LTRIM(RTRIM(ISNULL(s.Valor, ''))) <> ''
+      AND UPPER(LEFT(LTRIM(RTRIM(ISNULL(s.AmbInt, ''))), 1)) = 'A'
+    ORDER BY s.Descripcion
+  `);
+  return (rows || []).map((r) => ({
+    Valor: String(r.Valor || '').trim(),
+    Descripcion: String(r.Descripcion || '').trim() || String(r.Valor || '').trim(),
+  }));
+}
+
 module.exports = {
   VISITA_SECCIONES,
   buscarAdmisiones,
   listarCoberturas,
+  listarSectores,
   obtenerPracticasPorVisita,
   exportarAdmisionShell,
   exportarSeccionesClinicas,

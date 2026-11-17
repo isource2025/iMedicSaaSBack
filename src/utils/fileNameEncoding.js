@@ -74,6 +74,34 @@ function legacyUnderscoreForN(s) {
 	return String(s).replace(/[\u00D1\u00F1]/g, '_');
 }
 
+/**
+ * SQL/Clarion con acento vs disco sin acento (GÓMEZ ↔ GOMEZ, García ↔ Garcia).
+ * Misma idea que legacyUnderscoreForN: candidato alternativo para el lookup.
+ */
+function foldDiacritics(s) {
+	try {
+		return String(s)
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '');
+	} catch {
+		return String(s);
+	}
+}
+
+/** Comparación de nombres de archivo tolerante a Ñ/_/? y acentos. */
+function namesMatchLoose(a, b) {
+	const left = decodeMultipartFilename(a).toLowerCase();
+	const right = decodeMultipartFilename(b).toLowerCase();
+	if (left === right) return true;
+	const leftFold = foldDiacritics(left);
+	const rightFold = foldDiacritics(right);
+	if (leftFold === rightFold) return true;
+	const leftN = legacyUnderscoreForN(left);
+	const rightN = legacyUnderscoreForN(right);
+	if (leftN === rightN) return true;
+	return foldDiacritics(leftN) === foldDiacritics(rightN);
+}
+
 function sanitizeWindowsFileName(name) {
 	const decoded = decodeMultipartFilename(name);
 	const base = path.basename(decoded.replace(/\\/g, '/')) || 'archivo';
@@ -355,9 +383,22 @@ function pathLookupCandidates(filePath) {
 		}
 	}
 
+	const folded = foldDiacritics(repaired);
+	const foldedDir = foldDiacritics(repairedDir);
+	const foldedName = foldDiacritics(repairedName);
+	const foldedRel = foldDiacritics(relNorm);
+	const fromRelFolded = [];
+	if (foldedRel && foldedRel !== relNorm) {
+		fromRelFolded.push(foldedRel);
+		for (const root of localRoots) {
+			fromRelFolded.push(`${root}\\${foldedRel}`);
+		}
+	}
+
 	return uniqueNonEmpty([
 		// Preferir relativa / absoluta de clínica antes que UNC Clarion
 		...fromRel,
+		...fromRelFolded,
 		normalized,
 		decodeMultipartFilename(normalized),
 		original,
@@ -375,6 +416,14 @@ function pathLookupCandidates(filePath) {
 		legacyUnderscoreForN(repaired),
 		path.join(legacyUnderscoreForN(repairedDir), legacyUnderscoreForN(repairedName)),
 		path.join(questionMarkAsEnie(repairedDir), repairedName),
+		// Acentos: PatchServidor con Ó/Á vs archivo en disco sin acento (Sarmiento)
+		folded,
+		foldDiacritics(original),
+		foldDiacritics(normalized),
+		path.join(foldedDir, foldedName),
+		path.join(repairedDir, foldedName),
+		path.join(foldedDir, repairedName),
+		path.join(legacyUnderscoreForN(foldedDir), legacyUnderscoreForN(foldedName)),
 	]);
 }
 
@@ -471,6 +520,8 @@ module.exports = {
 	toClarionStoredPath,
 	relativeUnderImagenesOrRoot,
 	isLocalAdjuntosPath,
+	foldDiacritics,
+	namesMatchLoose,
 	pathLookupCandidates,
 	fileServerFileQuery,
 	fileServerFileUrl,

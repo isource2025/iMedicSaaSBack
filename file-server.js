@@ -28,6 +28,7 @@ const {
 	pathLookupCandidates,
 	sanitizeWindowsFileName,
 	decodeFileServerPathParam,
+	namesMatchLoose,
 } = require('./src/utils/fileNameEncoding');
 
 const PORT = Number(process.env.IMEDIC_FS_PORT || process.env.FILE_SERVER_PORT || 9012);
@@ -124,8 +125,14 @@ function archivoEnCarpeta(folder, fileName, wantedLower) {
 	try {
 		for (const entrada of fs.readdirSync(folder, { withFileTypes: true })) {
 			if (!entrada.isFile()) continue;
-			if (decodeMultipartFilename(entrada.name).toLowerCase() !== wantedLower) continue;
-			return path.join(folder, entrada.name);
+			const nombre = decodeMultipartFilename(entrada.name);
+			if (nombre.toLowerCase() === wantedLower) {
+				return path.join(folder, entrada.name);
+			}
+			// GÓMEZ (SQL) ↔ GOMEZ (disco), misma lógica que pathLookupCandidates
+			if (namesMatchLoose(nombre, wantedLower) || namesMatchLoose(nombre, fileName)) {
+				return path.join(folder, entrada.name);
+			}
 		}
 	} catch {
 		/* carpeta ilegible */

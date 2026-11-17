@@ -19,6 +19,11 @@ router.get(
 	controller.coberturas,
 );
 router.get(
+	'/sectores',
+	requirePermiso('ADMISION.BUSQUEDA.VER'),
+	controller.sectores,
+);
+router.get(
 	'/paciente/:idPaciente/turnos-activos',
 	requirePermiso('ADMISION.BUSQUEDA.VER'),
 	controller.turnosActivosPaciente,

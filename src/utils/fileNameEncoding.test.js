@@ -5,6 +5,8 @@ const {
 	decodeFileServerPathParam,
 	pathLookupCandidates,
 	sanitizeFolderName,
+	foldDiacritics,
+	namesMatchLoose,
 } = require('./fileNameEncoding');
 
 const ruta = 'C:\\imedic\\adjuntos\\123 PEÑA JUAN\\estudio.pdf';
@@ -35,5 +37,20 @@ assert.ok(
 );
 
 assert.strictEqual(sanitizeFolderName('peña garcía'), 'PEÑA GARCÍA');
+
+assert.strictEqual(foldDiacritics('GÓMEZ CRISTIAN.docx'), 'GOMEZ CRISTIAN.docx');
+assert.ok(namesMatchLoose('E21807GÓMEZ CRISTIAN.docx', 'E21807GOMEZ CRISTIAN.docx'));
+assert.ok(namesMatchLoose('peña', 'PE_A') || namesMatchLoose('PEÑA', 'PE_A'));
+
+const gomezPath = 'C:\\imedic\\adjuntos\\1092 GÓMEZ CRISTIAN\\E21807GÓMEZ CRISTIAN.docx';
+const gomezCandidates = pathLookupCandidates(gomezPath);
+assert.ok(
+	gomezCandidates.some((c) => c.includes('GOMEZ') && !c.includes('GÓMEZ')),
+	'candidato sin acento a partir de GÓMEZ (Sarmiento)',
+);
+assert.ok(
+	gomezCandidates.some((c) => /E21807GOMEZ CRISTIAN\.docx/i.test(c)),
+	'nombre de archivo folded en candidatos',
+);
 
 console.log('fileNameEncoding.test.js OK');
