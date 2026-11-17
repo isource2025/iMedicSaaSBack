@@ -230,41 +230,37 @@ function _normServicioCode(v) {
 }
 
 /**
- * Resuelve filtro de servicio (Valor imServicios, Descripción o IdServicio) a tokens comparables.
+ * Resuelve el filtro de servicio al ID canónico: imServicios.Valor
+ * (= IdServicio en imPersonalHorarios). Acepta Valor o Descripción como
+ * entrada (bot/API), pero los tokens de match son solo IDs.
  */
 async function _tokensServicioFiltro(servicioFiltro) {
 	const raw = String(servicioFiltro || '').trim();
 	if (!raw) return null;
-	const tokens = new Set([_normServicioCode(raw)]);
+	const tokens = new Set();
 	const rows = await executeQuery(
-		`SELECT Valor, Descripcion FROM dbo.imServicios
+		`SELECT Valor FROM dbo.imServicios
 		 WHERE RTRIM(Valor) = @p0
+		    OR UPPER(RTRIM(Valor)) = UPPER(@p0)
 		    OR RTRIM(Descripcion) = @p0
-		    OR UPPER(RTRIM(Descripcion)) = UPPER(@p0)
-		    OR UPPER(RTRIM(Valor)) = UPPER(@p0)`,
+		    OR UPPER(RTRIM(Descripcion)) = UPPER(@p0)`,
 		[{ value: raw, type: 'VarChar' }],
 	);
 	for (const r of rows) {
 		const v = _normServicioCode(r.Valor);
-		const d = _normServicioCode(r.Descripcion);
 		if (v) tokens.add(v);
-		if (d) tokens.add(d);
 	}
+	// Código crudo si no está (aún) en catálogo — p.ej. IdServicio legacy.
+	if (!tokens.size) tokens.add(_normServicioCode(raw));
 	return tokens;
 }
 
+/** Match solo por IdServicio del horario === Valor (ID) del filtro. */
 function _horarioCoincideServicio(r, tokens) {
 	if (!tokens || !tokens.size) return true;
 	const idServ = _normServicioCode(r.IdServicio);
-	const valServ = _normServicioCode(r.ValorServicio);
-	for (const t of tokens) {
-		if (!t) continue;
-		if (idServ === t || valServ === t) return true;
-		if (t.length >= 2 && idServ && (idServ.startsWith(t) || t.startsWith(idServ))) {
-			return true;
-		}
-	}
-	return false;
+	if (!idServ) return false;
+	return tokens.has(idServ);
 }
 
 function _estadoLabel(status) {
@@ -1226,7 +1222,7 @@ async function listarTurnos(matricula, desdeIso, hastaIso) {
 /**
  * Devuelve médicos con agenda configurada para `fechaIso`.
  * @param {object} [filtros]
- * @param {string} [filtros.servicio]  IdServicio / imServicios.Valor (4 chars o código catálogo)
+ * @param {string} [filtros.servicio]  ID de servicio = imServicios.Valor (= IdServicio horario)
  * @param {number} [filtros.especialidad] imPersonal.ValorEspecialidad
  */
 async function disponibilidadDia(fechaIso, filtros = {}) {
@@ -1356,7 +1352,7 @@ async function disponibilidadDia(fechaIso, filtros = {}) {
 /**
  * Profesionales con horarios configurados (cualquier día), sin depender de una fecha.
  * @param {object} [filtros]
- * @param {string} [filtros.servicio]
+ * @param {string} [filtros.servicio] ID = imServicios.Valor (= IdServicio horario)
  * @param {number} [filtros.especialidad]
  */
 async function listarProfesionalesAgenda(filtros = {}) {
