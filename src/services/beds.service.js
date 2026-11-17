@@ -418,7 +418,7 @@ function _mapSectorInternacion(r) {
 
 /**
  * Sectores de internación (AmbInt = I). Todos, no solo los asignados al personal.
- * El sector del login solo preselecciona el filtro en el front.
+ * AmbInt = A (ambulatorio) no entra acá. El sector del login solo preselecciona el filtro.
  */
 const obtenerSectores = async () => conCacheCatalogo('sectores', obtenerSectoresSinCache);
 

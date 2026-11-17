@@ -12,6 +12,7 @@ const {
   fechaClarionHoyArgentina,
 } = require('../utils/dateUtils');
 const { normalizarFilas } = require('../utils/codigoSector');
+const { sqlClaseConCama } = require('../utils/clasePacienteUbicacion');
 
 function clarionInt(v) {
   const n = Number(v);
@@ -1149,7 +1150,7 @@ async function resolverContextoRevertirEgreso(numeroVisita) {
           FROM dbo.imVisita
           WHERE TRY_CAST(IDPACIENTE AS int) = @p0
             AND NumeroVisita <> @p1
-            AND UPPER(LTRIM(RTRIM(COALESCE(ClasePaciente, '')))) = 'I'
+            AND ${sqlClaseConCama('ClasePaciente')}
             AND (
               FECHAEGRESO IS NULL
               OR TRY_CAST(FECHAEGRESO AS int) IS NULL
@@ -2327,8 +2328,8 @@ async function obtenerMovimientosRecientes(limite = 3) {
 
 
 /**
- * Pacientes internados (ClasePaciente = I) vigentes sin cama asignada en imHabitacionCamas.
- * Usa tablas existentes: imVisita, imPacientes, imHabitacionCamas, imDiagnosticos.
+ * Pacientes con clase que requiere cama (I = Internado, H = Hospital de día) vigentes
+ * sin cama asignada en imHabitacionCamas.
  * @param {string} [termino] - Nombre, documento o número de visita
  */
 async function obtenerPacientesInternadosSinCama(termino = '') {
@@ -2366,7 +2367,7 @@ async function obtenerPacientesInternadosSinCama(termino = '') {
     INNER JOIN dbo.imPacientes p ON p.IDPaciente = v.IDPaciente
     LEFT JOIN dbo.imDiagnosticos d
       ON LTRIM(RTRIM(ISNULL(v.Diagnostico, ''))) = LTRIM(RTRIM(ISNULL(d.CodigoOMS, '')))
-    WHERE UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+    WHERE ${sqlClaseConCama('v.ClasePaciente')}
       AND (
         v.FECHAEGRESO IS NULL
         OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL
@@ -2386,13 +2387,13 @@ async function obtenerPacientesInternadosSinCama(termino = '') {
 }
 
 /**
- * Cantidad de internados vigentes (ClasePaciente = I, sin egreso) sin cama asignada.
+ * Cantidad de visitas vigentes con clase que requiere cama (I / H) sin cama.
  */
 async function contarPacientesInternadosSinCama() {
   const sql = `
     SELECT COUNT(1) AS total
     FROM dbo.imVisita v
-    WHERE UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+    WHERE ${sqlClaseConCama('v.ClasePaciente')}
       AND (
         v.FECHAEGRESO IS NULL
         OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL

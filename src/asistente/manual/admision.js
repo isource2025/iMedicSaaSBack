@@ -57,7 +57,7 @@ module.exports = [
 			'Menú: Admisión → «Nueva Admisión» (o desde Pacientes → «Nueva admisión»).',
 			'«Paciente»: buscalo (mínimo 3 caracteres) o «Nuevo paciente».',
 			'«Datos principales»: «Fecha de admisión», «Hora», «Clase de paciente», diagnóstico CIE-10, médicos, «Cobertura», «Convenio / plan», «Tipo de paciente», «Observaciones».',
-			'Si la clase es internado (I): «N° de internación» y «Ubicación» → «Sector» y «Cama libre», o «Internar sin cama».',
+			'Si la clase es internado (I) u hospital de día: «N° de internación» y «Ubicación» → «Sector» y «Cama libre», o «Internar sin cama».',
 			'Opcional: «Documentos y requisitos», «Acompañantes» («Agregar acompañante»), «Novedades».',
 			'«Confirmar admisión». Al terminar: «Ir a Consultar Historia Clínica» o «Nueva admisión».',
 		],

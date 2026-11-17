@@ -372,9 +372,9 @@ async function buscarAdmisiones({
     }
   }
 
-  // Tipo de atención = ClasePaciente (I/A). Sin fallback a TipoPaciente.
+  // Tipo de atención = ClasePaciente (I/H = internación+hospital de día, A = ambulatorio).
   if (filtrarInternado) {
-    whereParts.push(`UPPER(LEFT(LTRIM(RTRIM(COALESCE(v.ClasePaciente, ''))), 1)) = 'I'`);
+    whereParts.push(`UPPER(LEFT(LTRIM(RTRIM(COALESCE(v.ClasePaciente, ''))), 1)) IN ('I', 'H')`);
   } else if (filtrarAmbulatorio) {
     whereParts.push(`UPPER(LEFT(LTRIM(RTRIM(COALESCE(v.ClasePaciente, ''))), 1)) = 'A'`);
   }
@@ -480,6 +480,7 @@ async function buscarAdmisiones({
       CASE
         WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'A' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I' THEN 'Internado'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'H' THEN 'Hospital de día'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%AMBUL%' THEN 'Ambulatorio'
         WHEN UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%INTERN%' THEN 'Internado'
@@ -489,7 +490,7 @@ async function buscarAdmisiones({
         ELSE 'Sin clasificar'
       END AS TipoAtencion,
       CASE
-        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+        WHEN UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) IN ('I', 'H')
           OR UPPER(LTRIM(RTRIM(COALESCE(tp.Descripcion, '')))) LIKE '%INTERN%'
           OR UPPER(LTRIM(RTRIM(COALESCE(ea.Descripcion, '')))) LIKE '%INTERN%'
           OR UPPER(LTRIM(RTRIM(COALESCE(v.TipoPaciente, '')))) IN ('I', 'INT', 'INTERNADO')

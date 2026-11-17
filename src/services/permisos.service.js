@@ -126,6 +126,28 @@ async function permisosDeRol(idRol, nombreRol) {
 		else if (nombreRol) permisos = matriz.permisosDeRol(nombreRol);
 	}
 
+	// ADMINISTRATIVO: imRolPermisos suele quedar desfasado. Completa VER de
+	// operativa + gestión médica + gestión enfermería + documentación.
+	if (nombre === 'ADMINISTRATIVO' && permisos.length) {
+		const set = new Set(permisos);
+		for (const codigo of [
+			...(matriz.verGestionMedica ? matriz.verGestionMedica(['AUDITORIA_HC']) : []),
+			...(matriz.verGestionEnfermeria ? matriz.verGestionEnfermeria() : []),
+		]) {
+			set.add(codigo);
+		}
+		for (const codigo of matriz.permisosDeRol('ADMINISTRATIVO')) {
+			if (
+				typeof codigo === 'string' &&
+				codigo.startsWith('INTERNACION.') &&
+				codigo.endsWith('.VER')
+			) {
+				set.add(codigo);
+			}
+		}
+		permisos = [...set];
+	}
+
 	_cache.set(id, { permisos, expira: _ahora() + TTL_MS });
 	return [...permisos];
 }

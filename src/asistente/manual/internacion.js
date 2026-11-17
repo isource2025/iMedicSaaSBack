@@ -63,7 +63,7 @@ module.exports = [
 			'Para volver al mapa: «Cerrar».',
 		],
 		problemas: [
-			{ sintoma: 'No veo «Gestión Médica»', causa: 'El rol ENFERMERO no la tiene (usa Gestión Enfermería). El ADMINISTRATIVO sí debe verla con INTERNACION.*.VER para consultar/imprimir. Si un administrativo no la ve, faltan esos VER en su rol o hay que re-loguearse tras el seed.' },
+			{ sintoma: 'No veo «Gestión Médica» / «Gestión Enfermería» (administrativo)', causa: 'Los VER de Internación están separados: gestión médica vs gestión enfermería (más operativa y documentación). El ADMINISTRATIVO debe tener ambos paquetes en solo lectura. El login completa esos VER desde la plantilla; si igual no aparecen: re-loguearse, o en Matriz de permisos marcar «VER» de cada bloque, o `node scripts/vidal_admin_internacion_ver.js`.' },
 			{ sintoma: 'Solo veo adjuntos', causa: 'El rol CARGA_HC entra directo a «Archivos adjuntos» y no ve el resto.' },
 		],
 	},

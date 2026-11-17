@@ -256,6 +256,7 @@ function mapPedidoRow(row) {
 	let tipoAtencion = null;
 	if (clase === 'A' || tipoAdm === 'A' || /AMBUL/.test(tipoAdm)) tipoAtencion = 'AMBULATORIO';
 	else if (clase === 'I' || tipoAdm === 'I' || /INTERN/.test(tipoAdm)) tipoAtencion = 'INTERNADO';
+	else if (clase === 'H') tipoAtencion = 'HOSPITAL_DE_DIA';
 	else if (row.UbicacionCama) tipoAtencion = 'INTERNADO';
 	else if (Number(row.IdVisita) > 0) tipoAtencion = clase ? clase : null;
 

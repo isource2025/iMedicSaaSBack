@@ -341,6 +341,7 @@ function catalogoConDescripciones({ incluirPlataforma = false } = {}) {
 			id: s.id,
 			label: s.label,
 			path: s.path || null,
+			grupo: s.grupo || null,
 			descripcion: descripcionSubmodulo(m.id, s.id),
 			acciones: s.acciones.map((a) => {
 				const codigo = `${m.id}.${s.id}.${a}`;

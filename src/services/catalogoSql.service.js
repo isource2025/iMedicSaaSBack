@@ -4,6 +4,7 @@
  */
 const { executeQuery } = require('../models/db');
 const { ayudaDeColumna } = require('./catalogoAyudas');
+const { sqlClaseConCama } = require('../utils/clasePacienteUbicacion');
 
 function errorHttp(mensaje, statusCode) {
 	const err = new Error(mensaje);
@@ -469,8 +470,9 @@ const LOOKUPS = {
 	},
 };
 
+/** Internado (I) u Hospital de día (H), sin egreso. */
 const SQL_VISITA_SIN_EGRESO = `
-	UPPER(LTRIM(RTRIM(COALESCE(v.ClasePaciente, '')))) = 'I'
+	${sqlClaseConCama('v.ClasePaciente')}
 	AND (
 		v.FECHAEGRESO IS NULL
 		OR TRY_CAST(v.FECHAEGRESO AS int) IS NULL
@@ -478,7 +480,7 @@ const SQL_VISITA_SIN_EGRESO = `
 	)`;
 
 const BUSQUEDAS = {
-	/** Internados vigentes (ClasePaciente = I, sin egreso), con la cama que ocupan si tienen. */
+	/** Vigentes con cama (I/H, sin egreso), con la cama que ocupan si tienen. */
 	'visitas-sin-egreso': async (termino) => {
 		const term = String(termino || '').trim();
 		const params = [];
