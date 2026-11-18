@@ -9,6 +9,7 @@ const {
 	partesFechaHoraArgentina,
 } = require('../utils/dateUtils');
 const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+const { resolverFichaParaFacProfesional } = require('../utils/fichaFacProfesional');
 
 function _s(v, max) {
 	if (v == null) return '';
@@ -1729,10 +1730,13 @@ async function cumplirPedido({
 	}
 	/**
 	 * Quien cobra en facturación = quien tomó el pedido.
-	 * imFacProfesionales.Matricula guarda el Valor de imPersonal (no la matrícula):
-	 * así lo lee iMedic escritorio y así lo escribe protocolos.service.
+	 * imFacProfesionales.Matricula guarda la ficha (Valor), no la matrícula.
+	 * Si el personal no tiene matrícula cargada, el join de la toma no trae ValorPersonal.
 	 */
-	const matricula = Number(toma.ValorPersonal) || Number(toma.Matricula);
+	const matricula = await resolverFichaParaFacProfesional({
+		ficha: toma.ValorPersonal,
+		matricula: toma.Matricula,
+	});
 
 	const pedRows = await executeQuery(
 		"SELECT TOP 1 pe.IdPedido, pe.IdVisita, pe.IdPractica, pe.IdProtocolo, pe.IdSectorReceptor FROM dbo.imPedidosEstudios pe WHERE pe.IdPedido = @p0",

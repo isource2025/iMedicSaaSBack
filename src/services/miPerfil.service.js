@@ -505,6 +505,8 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 		? `,
       CAST(MAX(liq.liquidado) AS DECIMAL(19, 4)) AS liquidado`
 		: '';
+	// Vista filtra por matrícula real; imFacProfesionales.Matricula guarda ficha (Valor).
+	const ficha = Number(valorPersonal);
 	const joinLiquidado = liq
 		? `
     LEFT JOIN (
@@ -513,7 +515,7 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
       JOIN dbo.imFacDetalle d
         ON d.${liq.detPrestacion} = p.${liq.profPrestacion}
         ${liq.detTipo ? `AND d.${liq.detTipo} = 'H'` : ''}
-      WHERE p.${liq.profMatricula} = @p0
+      WHERE p.${liq.profMatricula} = @p3
         AND d.${liq.detLiquidado} IS NOT NULL
       GROUP BY p.${liq.profPractica}
     ) liq ON liq.practica = v.Valor`
@@ -554,6 +556,7 @@ async function obtenerProduccionConFiltros(valorPersonal, { desde, hasta } = {})
 			{ value: matricula },
 			{ value: rango.desdeCalendario },
 			{ value: rango.hastaCalendario },
+			{ value: Number.isFinite(ficha) && ficha > 0 ? ficha : matricula },
 		],
 	);
 

@@ -42,6 +42,7 @@ const {
 } = require('../utils/turnoCancelacion');
 const agendaConfig = require('./agendaConfig.service');
 const feriadosService = require('./feriados.service');
+const { resolverFichaParaFacProfesional } = require('../utils/fichaFacProfesional');
 
 const DIA_POR_JS = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
 
@@ -73,17 +74,12 @@ function _hhmm(clarion) {
 	return s ? s.slice(0, 5) : null;
 }
 
-/** Ficha (imPersonal.Valor) del médico del turno, a partir de su matrícula. */
+/**
+ * Ficha (imPersonal.Valor) del médico del turno a partir de su matrícula.
+ * imFacProfesionales.Matricula y DOCTORADMISOR esperan ficha, no matrícula.
+ */
 async function _fichaDeMatricula(matricula) {
-	const m = Number(matricula);
-	if (!Number.isFinite(m) || m <= 0) return null;
-	const rows = await executeQuery(
-		`SELECT TOP 1 Valor FROM dbo.imPersonal WHERE Matricula = @p0
-		 ORDER BY CASE WHEN Valor = Matricula THEN 0 ELSE 1 END, Valor`,
-		[{ value: m, type: 'Int' }],
-	);
-	const v = Number(rows?.[0]?.Valor);
-	return Number.isFinite(v) && v > 0 ? v : m;
+	return resolverFichaParaFacProfesional({ matricula });
 }
 
 /** Nombre del operador (imPassword) por CodOperador o Valor personal. */
@@ -2139,7 +2135,13 @@ async function _insertarFacPracticaConProfesional({
 		SELECT SCOPE_IDENTITY() AS IDFacProfesional`,
 		[
 			{ value: valorPractica, type: 'Int' },
-			{ value: Number(fichaMedico) > 0 ? Number(fichaMedico) : matriculaMedico, type: 'Int' },
+			{
+				value: await resolverFichaParaFacProfesional({
+					ficha: fichaMedico,
+					matricula: matriculaMedico,
+				}),
+				type: 'Int',
+			},
 			{ value: codOp, type: 'Int' },
 			{ value: fechaClarion, type: 'Int' },
 			{ value: horaClarion, type: 'Int' },
@@ -2158,7 +2160,7 @@ async function _insertarFacPracticaConProfesional({
  * Cierra el turno con flujo completo:
  *  - Inserta imVisita (clasePaciente='A')
  *  - Inserta imHCI esqueleto con datos del form
- *  - Inserta imFacPracticas (consulta) e imFacProfesionales (matrícula del médico, funcion=1)
+ *  - Inserta imFacPracticas (consulta) e imFacProfesionales (ficha del médico, funcion=1)
  *  - Actualiza imTurnos (Status=Atendido, HoraSalida, NumeroVisita)
  *  - Actualiza imInterCtrlFrecuente / imInterCtrlMedicamento con el NumeroVisita generado
  *
@@ -2233,7 +2235,7 @@ async function _crearPedidosEstudiosTurno({ numeroVisita, matriculaMedico, ficha
 		const creado = await estudiosService.crearPedido({
 			idVisita: numeroVisita,
 			matriculaSolicitante: matriculaMedico,
-			valorProfesional: fichaMedico || matriculaMedico,
+			valorProfesional: fichaMedico,
 			sectorSolicitante,
 			idTipoPedido: item?.idTipoPedido,
 			idPractica: item?.idPractica,
@@ -3249,7 +3251,12 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 			 LEFT JOIN dbo.imTiposPedidosEstudios tp ON tp.IdPractica = fp.Practica
 			 LEFT JOIN dbo.imNomenclador nom ON nom.IDPractica = fp.Practica
 			 LEFT JOIN dbo.imFacProfesionales fprof ON fprof.Valor = fp.Valor AND fprof.Funcion = 1
-			 LEFT JOIN dbo.imPersonal prof ON prof.Matricula = fprof.Matricula
+			 OUTER APPLY (
+			   SELECT TOP 1 p.ApellidoNombre
+			   FROM dbo.imPersonal p
+			   WHERE p.Valor = fprof.Matricula OR p.Matricula = fprof.Matricula
+			   ORDER BY CASE WHEN p.Valor = fprof.Matricula THEN 0 ELSE 1 END, p.Valor
+			 ) prof
 			 WHERE fp.NumeroVisita = @p0 AND fp.Practica <> @p1
 			 ORDER BY fp.Valor`,
 			[

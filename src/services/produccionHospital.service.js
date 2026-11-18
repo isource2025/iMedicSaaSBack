@@ -370,8 +370,8 @@ WITH b AS (
   OUTER APPLY (
     SELECT TOP 1 x.ApellidoNombre, x.ValorEspecialidad
     FROM dbo.imPersonal x
-    WHERE x.Matricula = pr.Matricula
-    ORDER BY x.Valor
+    WHERE x.Valor = pr.Matricula OR x.Matricula = pr.Matricula
+    ORDER BY CASE WHEN x.Valor = pr.Matricula THEN 0 ELSE 1 END, x.Valor
   ) pe
   LEFT JOIN dbo.imEspecialidad e ON e.Valor = pe.ValorEspecialidad
   WHERE p.FechaPractica BETWEEN ${pDesde} AND ${pHasta}

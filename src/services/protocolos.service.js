@@ -6,6 +6,7 @@ const {
 	fechaClarionHoyArgentina,
 } = require('../utils/dateUtils');
 const { sqlApplyNombrePersona } = require('../utils/sqlNombrePersona');
+const { resolverFichaParaFacProfesional } = require('../utils/fichaFacProfesional');
 
 /**
  * IdOperador: el escritorio (y la web de ahora) graban CodOperador, el mismo
@@ -168,11 +169,19 @@ function _normalizarPracticas(body) {
 			throw _httpError(`Práctica ${n}: no tiene equipo. Asigná al menos un profesional.`);
 		}
 		const profesionales = profs.map((pr) => {
-			const valorPersonal = Number(pr?.valorPersonal ?? pr?.matricula);
-			if (!Number.isFinite(valorPersonal) || valorPersonal <= 0) {
+			const ficha = Number(pr?.valorPersonal);
+			const matricula = Number(pr?.matricula);
+			const tieneFicha = Number.isFinite(ficha) && ficha > 0;
+			const tieneMat = Number.isFinite(matricula) && matricula > 0;
+			// imFacProfesionales.Matricula = ficha. Si solo viene matrícula, se resuelve al grabar.
+			if (!tieneFicha && !tieneMat) {
 				throw _httpError(`Práctica ${n}: hay un profesional sin identificar. Volvé a buscarlo y elegirlo.`);
 			}
-			return { valorPersonal, funcion: normalizarFuncion(pr?.funcion) };
+			return {
+				valorPersonal: tieneFicha ? ficha : null,
+				matricula: tieneMat ? matricula : null,
+				funcion: normalizarFuncion(pr?.funcion),
+			};
 		});
 		return { valorPractica, idPractica, tipoPractica, cantidad, profesionales };
 	});
@@ -253,9 +262,13 @@ async function _reemplazarEquipo(tx, ctx, valorFac, profesionales) {
 	del.input('valor', sql.Int, valorFac);
 	await del.query(`DELETE FROM dbo.imFacProfesionales WHERE Valor = @valor`);
 	for (const prof of profesionales) {
+		const ficha = await resolverFichaParaFacProfesional({
+			ficha: prof.valorPersonal,
+			matricula: prof.matricula,
+		});
 		const req = new sql.Request(tx);
 		req.input('valor', sql.Int, valorFac);
-		req.input('mat', sql.Int, prof.valorPersonal);
+		req.input('mat', sql.Int, ficha);
 		req.input('fn', sql.TinyInt, prof.funcion);
 		req.input('codOp', sql.Int, ctx.codOp);
 		req.input('fechaC', sql.Int, ctx.fechaClarion);
@@ -1350,7 +1363,7 @@ async function actualizarProtocolo(
 				if (existente.facturada) {
 					const equipoActual = await _equipoDePractica(existente.valor);
 					const equipoNuevo = prac.profesionales
-						.map((p) => `${p.funcion}:${p.valorPersonal}`)
+						.map((p) => `${p.funcion}:${p.valorPersonal ?? p.matricula}`)
 						.sort();
 					const cambia =
 						existente.codigo !== prac.idPractica ||

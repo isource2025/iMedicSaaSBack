@@ -27,6 +27,7 @@ const {
 	fechaCalendarioArgentina,
 	horaWallArgentina,
 } = require('../utils/dateUtils');
+const { resolverFichaParaFacProfesional } = require('../utils/fichaFacProfesional');
 
 const MAX_ITEMS = 100;
 const URGENCIAS = ['Normal', 'Urgente', 'Medio'];
@@ -880,8 +881,11 @@ async function cumplirSolicitud({
 	);
 	const idPaciente = Number(visitaRows?.[0]?.IdPaciente) || 0;
 
-	// Facturación: quien cobra = quien tomó (imFacProfesionales.Matricula guarda el Valor de imPersonal).
-	const matriculaFac = Number(objetivo[0].TomaValorPersonal) || Number(objetivo[0].TomaMatricula);
+	// Facturación: quien cobra = quien tomó (imFacProfesionales.Matricula = ficha / Valor).
+	const matriculaFac = await resolverFichaParaFacProfesional({
+		ficha: objetivo[0].TomaValorPersonal,
+		matricula: objetivo[0].TomaMatricula,
+	});
 	const sectorFac = est._padSector(sectorServicio || objetivo[0].IdSectorReceptor || '');
 	const codOp = Number(codOperador) || 0;
 	const now = new Date();
