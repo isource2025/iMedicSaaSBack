@@ -74,6 +74,8 @@ const ensureExtraColumns = createTenantOnce(async () => {
 			{ name: 'Ocupacion', type: 'NVARCHAR(40) NULL' },
 			{ name: 'SituacionLaboral', type: 'NVARCHAR(40) NULL' },
 			{ name: 'NivelDeEstudios', type: 'NVARCHAR(40) NULL' },
+			// Teléfono familiar (distinto de Particular y Negocio)
+			{ name: 'TelefonoFamiliar', type: 'NVARCHAR(20) NULL' },
 		];
 		for (const col of columns) {
 			// Crear si no existe
@@ -148,7 +150,7 @@ const ensureExtraColumns = createTenantOnce(async () => {
 
 	// Upgrades de tipos para teléfonos (evitar overflow al intentar convertir a INT en tablas antiguas)
 	try {
-		const telCols = ['TelefonoParticular', 'TelefonoNegocio'];
+		const telCols = ['TelefonoParticular', 'TelefonoFamiliar', 'TelefonoNegocio'];
 		for (const tcol of telCols) {
 			const typeRows = await executeQuery(
 				`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='impacientes' AND COLUMN_NAME='${tcol}'`,
@@ -448,8 +450,8 @@ const obtenerPacientePorId = async (id, baseUrl) => {
 				p.Nacionalidad,
 				p.CUIT,
 				p.TelefonoParticular,
+				p.TelefonoFamiliar,
 				p.TelefonoNegocio,
-				p.TelefonoNegocio AS TelefonoCelular,
 				p.Mail,
 				p.NumeroCuenta,
 				p.NumeroSSN,
@@ -515,7 +517,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
         		END AS FechaNacimiento,
 				p.FechaNacimiento AS FechaNacimientoClarion,
 				p.EstadoCivil, c.Valor AS Cobertura, c.RazonSocial AS CoberturaDescripcion, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
-				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
+				p.TelefonoParticular, p.TelefonoFamiliar, p.TelefonoNegocio, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
 				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
@@ -541,7 +543,7 @@ const buscarPacientes = async (searchTerm = '', baseUrl) => {
         		END AS FechaNacimiento,
 				p.FechaNacimiento AS FechaNacimientoClarion,
 				p.EstadoCivil, c.Valor AS Cobertura, c.RazonSocial AS CoberturaDescripcion, p.ValorLocalidad, p.Provincia, p.Nacionalidad, p.CUIT,
-				p.TelefonoParticular, p.TelefonoNegocio, p.TelefonoNegocio AS TelefonoCelular, p.Mail,
+				p.TelefonoParticular, p.TelefonoFamiliar, p.TelefonoNegocio, p.Mail,
 				p.NumeroCuenta, p.NumeroSSN, p.NumeroSSN AS nAfiliado, p.FotoURL, p.LicenciaConducir,
 				p.DadorOrganos, p.OrdenNacimiento, p.LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN p.FechaDefuncion IS NULL OR p.FechaDefuncion < 0 OR p.FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY,p.FechaDefuncion,'1800-12-28') END,23) AS FechaDefuncion,
@@ -570,7 +572,7 @@ const crearPaciente = async (pacienteData) => {
 		await ensureExtraColumns();
 		const limitLength = (str, max) =>
 			str == null ? null : normalizarTextoParaClarionAnsi(str).substring(0, max);
-		// Fallbacks alias del front (acepta TelefonoCelular, nAfiliado, Cobertura)
+		// Fallbacks alias del front (acepta TelefonoCelular→Negocio legacy, nAfiliado, Cobertura)
 		const telefonoNegocioIn = pacienteData.TelefonoNegocio ?? pacienteData.TelefonoCelular;
 		const numeroSSNIn = pacienteData.NumeroSSN ?? pacienteData.nAfiliado;
 		const numeroCuentaRaw = pacienteData.NumeroCuenta ?? pacienteData.Cobertura;
@@ -603,6 +605,7 @@ const crearPaciente = async (pacienteData) => {
 			Religion: limitLength(pacienteData.Religion, 3) || null,
 			Raza: pacienteData.Raza != null ? Number(pacienteData.Raza) : null,
 			TelefonoParticular: limitLength(pacienteData.TelefonoParticular, 20) || null,
+			TelefonoFamiliar: limitLength(pacienteData.TelefonoFamiliar, 20) || null,
 			TelefonoNegocio: limitLength(telefonoNegocioIn, 20) || null,
 			Mail: limitLength(pacienteData.Mail, 80) || null,
 			NumeroSSN: limitLength(numeroSSNIn, 40) || null,
@@ -641,14 +644,14 @@ const crearPaciente = async (pacienteData) => {
 				ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, TipoDocumento, NumeroDocumento,
 				Domicilio, ValorLocalidad, Provincia, Nacionalidad, Sexo,
 				NumeroHC, FechaNacimiento, Hora, CUIT, EstadoCivil,
-				Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail,
+				Religion, Raza, TelefonoParticular, TelefonoFamiliar, TelefonoNegocio, Mail,
 				NumeroSSN, NumeroCuenta, FotoURL, LicenciaConducir, DadorOrganos, OrdenNacimiento,
 				LugarNacimiento, FechaDefuncion, HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, Ocupacion, SituacionLaboral, NivelDeEstudios
 			) VALUES (
 				@p0,@p1,@p2,@p3,@p4,@p5,@p6,@p7,@p8,@p9,
 				@p10,@p11,@p12,@p13,@p14,@p15,@p16,@p17,@p18,@p19,
 				@p20,@p21,@p22,@p23,@p24,@p25,@p26,@p27,@p28,@p29,
-				@p30,@p31,@p32,@p33,@p34,@p35
+				@p30,@p31,@p32,@p33,@p34,@p35,@p36
 			);
 			SELECT 
 				IDPaciente, ListaIDPaciente, IDPacienteAlt, ApellidoyNombre, ${APELLIDO_BYTES_NO_ALIAS}, TipoDocumento, NumeroDocumento,
@@ -656,7 +659,7 @@ const crearPaciente = async (pacienteData) => {
 				CONVERT(VARCHAR(10), 
 					CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL
 						 ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
-				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
+				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoFamiliar, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
 				LicenciaConducir, DadorOrganos, OrdenNacimiento, LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN FechaDefuncion IS NULL OR FechaDefuncion < 0 OR FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY, FechaDefuncion, '1800-12-28') END, 23) AS FechaDefuncion,
 				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, Ocupacion, SituacionLaboral, NivelDeEstudios, NivelDeEstudios AS NivelEstudios
@@ -681,6 +684,7 @@ const crearPaciente = async (pacienteData) => {
 			{ value: sd.Religion },
 			{ value: sd.Raza },
 			{ value: sd.TelefonoParticular },
+			{ value: sd.TelefonoFamiliar },
 			{ value: sd.TelefonoNegocio },
 			{ value: sd.Mail },
 			{ value: sd.NumeroSSN },
@@ -754,6 +758,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 			Religion: limitLength(pacienteData.Religion, 50) || '',
 			Raza: isNaN(pacienteData.Raza) ? null : pacienteData.Raza,
 			TelefonoParticular: limitLength(pacienteData.TelefonoParticular, 20) || '',
+			TelefonoFamiliar: limitLength(pacienteData.TelefonoFamiliar, 20) || '',
 			TelefonoNegocio: limitLength(telefonoNegocioIn, 20) || '',
 			Mail: limitLength(pacienteData.Mail, 100) || '',
 			NumeroSSN: limitLength(numeroSSNIn, 20) || '',
@@ -782,22 +787,22 @@ const actualizarPaciente = async (id, pacienteData) => {
 				limitLength(pacienteData.NivelDeEstudios || pacienteData.NivelEstudios, 40) ||
 				null,
 		};
-		const setFoto = sd.FotoURL ? ', FotoURL = @p20' : '';
-		// Reescritura: siempre incluimos @p20 y usamos COALESCE para no borrar FotoURL si viene null
+		const setFoto = sd.FotoURL ? ', FotoURL = @p21' : '';
+		// Reescritura: siempre incluimos FotoURL y usamos COALESCE para no borrar si viene null
 		const query = `
 			UPDATE impacientes SET
 				ApellidoyNombre=@p1, TipoDocumento=@p2, NumeroDocumento=@p3,
 				Domicilio=@p4, ValorLocalidad=@p5, Provincia=@p6, Nacionalidad=@p7,
 				Sexo=@p8, NumeroHC=@p9, FechaNacimiento=@p10, Hora=@p11, CUIT=@p12,
 				EstadoCivil=@p13, Religion=@p14, Raza=@p15, TelefonoParticular=@p16,
-				TelefonoNegocio=@p17, Mail=@p18, NumeroSSN=@p19, NumeroCuenta=@p20, FotoURL=COALESCE(@p21, FotoURL),
-				LicenciaConducir=@p22, DadorOrganos=@p23, OrdenNacimiento=@p24, LugarNacimiento=@p25,
-				FechaDefuncion=@p26, HoraDefuncion=@p27, IdiomaPrimario=@p28, GrupoEtnico=@p29, EstadoMilitar=@p30, Ciudadania=@p31, Ocupacion=@p32, SituacionLaboral=@p33, NivelDeEstudios=@p34
+				TelefonoFamiliar=@p17, TelefonoNegocio=@p18, Mail=@p19, NumeroSSN=@p20, NumeroCuenta=@p21, FotoURL=COALESCE(@p22, FotoURL),
+				LicenciaConducir=@p23, DadorOrganos=@p24, OrdenNacimiento=@p25, LugarNacimiento=@p26,
+				FechaDefuncion=@p27, HoraDefuncion=@p28, IdiomaPrimario=@p29, GrupoEtnico=@p30, EstadoMilitar=@p31, Ciudadania=@p32, Ocupacion=@p33, SituacionLaboral=@p34, NivelDeEstudios=@p35
 			WHERE IDPaciente=@p0;
 			SELECT IDPaciente, ApellidoyNombre, ${APELLIDO_BYTES_NO_ALIAS}, TipoDocumento, NumeroDocumento, Domicilio,
 				ValorLocalidad, Provincia, Nacionalidad, Sexo, NumeroHC,
 				CONVERT(VARCHAR(10), CASE WHEN FechaNacimiento IS NULL OR FechaNacimiento < 0 OR FechaNacimiento > 1000000 THEN NULL ELSE DATEADD(DAY, FechaNacimiento, '1800-12-28') END, 23) AS FechaNacimiento,
-				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
+				Hora, CUIT, EstadoCivil, Religion, Raza, TelefonoParticular, TelefonoFamiliar, TelefonoNegocio, Mail, NumeroSSN, NumeroCuenta, FotoURL,
 				LicenciaConducir, DadorOrganos, OrdenNacimiento, LugarNacimiento,
 				CONVERT(VARCHAR(10), CASE WHEN FechaDefuncion IS NULL OR FechaDefuncion < 0 OR FechaDefuncion > 1000000 THEN NULL ELSE DATEADD(DAY, FechaDefuncion, '1800-12-28') END, 23) AS FechaDefuncion,
 				HoraDefuncion, IdiomaPrimario, GrupoEtnico, EstadoMilitar, Ciudadania, Ocupacion, SituacionLaboral, NivelDeEstudios, NivelDeEstudios AS NivelEstudios
@@ -820,6 +825,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 			{ value: sd.Religion },
 			{ value: sd.Raza },
 			{ value: sd.TelefonoParticular },
+			{ value: sd.TelefonoFamiliar },
 			{ value: sd.TelefonoNegocio },
 			{ value: sd.Mail },
 			{ value: sd.NumeroSSN },
