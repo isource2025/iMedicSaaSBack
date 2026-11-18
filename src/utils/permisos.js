@@ -15,7 +15,8 @@
  *   EXPORTAR   (descargar reportes / tablas)
  *   IMPRIMIR
  *   EDITAR_AJENOS (modificar registros clínicos de otro profesional)
- *   CERRAR     (cerrar turno / atención)
+ *   CERRAR     (cerrar turno / dar atención)
+ *   LLEGADA    (marcar llegada del paciente en agenda)
  *   MARCAR_VISTO (marcar indicaciones como vistas — enfermería)
  *   VER_TODOS  (bandeja de todos los sectores, no solo el de sesión)
  *   SOLO_PROPIA (alcance forzado a la matrícula del usuario)
@@ -50,6 +51,7 @@ const ACCIONES = Object.freeze({
 	IMPRIMIR: 'IMPRIMIR',
 	EDITAR_AJENOS: 'EDITAR_AJENOS',
 	CERRAR: 'CERRAR',
+	LLEGADA: 'LLEGADA',
 	MARCAR_VISTO: 'MARCAR_VISTO',
 	VER_TODOS: 'VER_TODOS',
 	SOLO_PROPIA: 'SOLO_PROPIA',
@@ -87,7 +89,13 @@ const MODULOS = Object.freeze([
 				id: 'AGENDA',
 				label: 'Agenda',
 				path: '/dashboard/turnos/agenda',
-				acciones: [...CRUD, ACCIONES.CERRAR, ACCIONES.SOLO_PROPIA, ACCIONES.GESTIONAR],
+				acciones: [
+					...CRUD,
+					ACCIONES.LLEGADA,
+					ACCIONES.CERRAR,
+					ACCIONES.SOLO_PROPIA,
+					ACCIONES.GESTIONAR,
+				],
 			},
 			{ id: 'ADMIN',         label: 'Gestión de turnos', path: '/dashboard/turnos/admin',         acciones: [...CRUD, ACCIONES.GESTIONAR] },
 			{ id: 'EXCEPCIONES',   label: 'Excepciones',      path: '/dashboard/turnos/excepciones',   acciones: [...CRUD] },
@@ -298,6 +306,7 @@ const PLANTILLAS = Object.freeze({
 		'TURNOS.AGENDA.CREAR',
 		'TURNOS.AGENDA.EDITAR',
 		'TURNOS.AGENDA.ELIMINAR',
+		'TURNOS.AGENDA.LLEGADA',
 		'TURNOS.AGENDA.CERRAR',
 		'TURNOS.AGENDA.SOLO_PROPIA',
 		'TURNOS.EXCEPCIONES.VER',
@@ -446,6 +455,7 @@ const PLANTILLAS = Object.freeze({
 		'TURNOS.AGENDA.CREAR',
 		'TURNOS.AGENDA.EDITAR',
 		'TURNOS.AGENDA.ELIMINAR',
+		'TURNOS.AGENDA.LLEGADA',
 		'TURNOS.AGENDA.CERRAR',
 		'TURNOS.AGENDA.GESTIONAR',
 		'TURNOS.CONVERSACIONES.VER',

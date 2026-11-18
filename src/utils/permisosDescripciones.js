@@ -26,6 +26,7 @@ const ACCION_GENERICA = Object.freeze({
 	EDITAR_AJENOS:
 		'Modificar o eliminar lo que cargó otro profesional (override tipo admin clínico)',
 	CERRAR: 'Cerrar el registro o la atención',
+	LLEGADA: 'Marcar la llegada del paciente',
 	MARCAR_VISTO: 'Marcar como visto',
 	VER_TODOS: 'Ver de todos los sectores',
 	SOLO_PROPIA: 'Limitar el alcance a lo propio',
@@ -50,7 +51,9 @@ const SUBMODULOS = Object.freeze({
 			CREAR: 'Dar turnos nuevos',
 			EDITAR: 'Modificar, mover o cambiar el estado de un turno',
 			ELIMINAR: 'Cancelar o eliminar turnos',
-			CERRAR: 'Cerrar un turno y editar la atención post-cierre',
+			LLEGADA: 'Marcar la llegada del paciente (recepción)',
+			CERRAR:
+				'Dar la atención: ingreso a consultorio, finalizar y editar post-cierre',
 			SOLO_PROPIA: 'Limitar la agenda a la matrícula propia (sin GESTIONAR, fuerza alcance propio)',
 			GESTIONAR: 'Operar agendas de cualquier profesional (por id de turno)',
 		},

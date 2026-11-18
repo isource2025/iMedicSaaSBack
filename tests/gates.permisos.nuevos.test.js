@@ -11,6 +11,7 @@ const { puedeUsarSql } = require('../src/asistente/sql');
 
 const NUEVOS = [
 	'INTERNACION.REGISTROS.EDITAR_AJENOS',
+	'TURNOS.AGENDA.LLEGADA',
 	'TURNOS.AGENDA.CERRAR',
 	'TURNOS.AGENDA.SOLO_PROPIA',
 	'TURNOS.AGENDA.GESTIONAR',
@@ -39,14 +40,17 @@ test('ADMIN tiene EDITAR_AJENOS, VER_TODOS y OPCGRD; MEDICO tiene SOLO_PROPIA y 
 	assert.ok(admin.has('TURNOS.CONVERSACIONES.VER'));
 
 	assert.ok(med.has('TURNOS.AGENDA.SOLO_PROPIA'));
+	assert.ok(med.has('TURNOS.AGENDA.LLEGADA'));
 	assert.ok(med.has('TURNOS.AGENDA.CERRAR'));
 	assert.ok(med.has('ASISTENTE.SQL.VER'));
 	assert.ok(!med.has('TURNOS.CONVERSACIONES.VER'));
 	assert.ok(!med.has('INTERNACION.ESTUDIOS.VER_TODOS'));
 
 	assert.ok(enf.has('INTERNACION.INDICACIONES.MARCAR_VISTO'));
+	assert.ok(!enf.has('TURNOS.AGENDA.LLEGADA'));
 	assert.ok(!enf.has('TURNOS.AGENDA.CERRAR'));
 
+	assert.ok(adm.has('TURNOS.AGENDA.LLEGADA'));
 	assert.ok(adm.has('TURNOS.AGENDA.CERRAR'));
 	assert.ok(adm.has('TURNOS.AGENDA.GESTIONAR'));
 	assert.ok(adm.has('TURNOS.CONVERSACIONES.VER'));

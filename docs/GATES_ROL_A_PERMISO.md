@@ -6,7 +6,8 @@ Inventario accionable (Fase 1). Cada fila indica el reemplazo por código de la 
 |-----------|-----------|--------------|-----------------|-------|
 | P0 | `propietario.middleware.js` `esAdminClinico` + UI `useUsuarioActual.esAdminClinico` | rol ADMIN / id 1 / Grupo 11 | `INTERNACION.REGISTROS.EDITAR_AJENOS` | Bypass de autoría en internación |
 | P0 | `opcGrd.routes.js` + `admin.middleware.js` | stub que deja pasar | `CONFIGURACION.OPCGRD.*` (CRUD) | Reemplazar stub |
-| P1 | `agenda.controller` cerrar / post-cierre | `rolNombre === ENFERMERO` → 403 | `TURNOS.AGENDA.CERRAR` | Sin el permiso → 403 |
+| P1 | rutas agenda llegada | `TURNOS.AGENDA.EDITAR` | `TURNOS.AGENDA.LLEGADA` | Sin el permiso → 403 |
+| P1 | rutas agenda ingreso / cerrar / post-cierre | `TURNOS.AGENDA.EDITAR` (+ CERRAR en controller) | `TURNOS.AGENDA.CERRAR` | Sin el permiso → 403 |
 | P1 | `agenda.controller` / `turnero` `porIdTurno` | `!== MEDICO` | `TURNOS.AGENDA.SOLO_PROPIA` | Si tiene SOLO_PROPIA → porIdTurno false |
 | P1 | `matriculaTenant.matriculaAlcanceAgenda` / RAC | `=== MEDICO` | `TURNOS.AGENDA.SOLO_PROPIA` | Fuerza matrícula propia |
 | P1 | `indicaciones.controller` marcar visto | `!== ENFERMERO` | `INTERNACION.INDICACIONES.MARCAR_VISTO` | Hook front igual |

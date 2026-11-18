@@ -16,7 +16,7 @@ node --test tests/gates.permisos.nuevos.test.js tests/permisos.snapshot.test.js 
 2. Login como ese usuario: menú y APIs alineados a efectivos.
 3. DENY de un permiso del rol → 403 en API y UI oculta tras refresh.
 4. GRANT de `INTERNACION.REGISTROS.EDITAR_AJENOS` a un no-ADMIN → puede editar registro ajeno.
-5. Sin `TURNOS.AGENDA.CERRAR` → 403 al cerrar turno.
+5. Sin `TURNOS.AGENDA.LLEGADA` → 403 al marcar llegada; sin `TURNOS.AGENDA.CERRAR` → 403 al ingreso / cerrar atención.
 6. Con `TURNOS.AGENDA.SOLO_PROPIA` sin `GESTIONAR` → solo agenda propia.
 7. `TURNOS.CONVERSACIONES.VER` → aparece Conversaciones; sin él, no.
 8. SUPER_ADMIN / login plataforma sin regresión.

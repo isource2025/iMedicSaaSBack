@@ -221,12 +221,12 @@ router.patch(
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/llegada',
-	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	requirePermiso('TURNOS.AGENDA.LLEGADA'),
 	agendaCtrl.marcarLlegada,
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/ingreso',
-	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	requirePermiso('TURNOS.AGENDA.CERRAR'),
 	agendaCtrl.marcarIngreso,
 );
 router.post(
@@ -236,12 +236,12 @@ router.post(
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/cerrar',
-	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	requirePermiso('TURNOS.AGENDA.CERRAR'),
 	agendaCtrl.cerrarTurno,
 );
 router.patch(
 	'/:matricula/turnos/:idTurno/atencion',
-	requirePermiso('TURNOS.AGENDA.EDITAR'),
+	requirePermiso('TURNOS.AGENDA.CERRAR'),
 	agendaCtrl.actualizarAtencionPostCierre,
 );
 router.delete(
