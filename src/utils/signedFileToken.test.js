@@ -90,12 +90,14 @@ test('claves por clínica: mapa explícito y derivación de la maestra', (t) => 
 });
 
 test('interceptor axios: reemplaza la marca por una firma válida de la URL final', async (t) => {
-	const prev = process.env.FILE_SERVER_SIGNING_KEYS;
+	const prev = { keys: process.env.FILE_SERVER_SIGNING_KEYS, master: process.env.IMEDIC_SIGNING_MASTER };
 	t.after(() => {
-		if (prev === undefined) delete process.env.FILE_SERVER_SIGNING_KEYS;
-		else process.env.FILE_SERVER_SIGNING_KEYS = prev;
+		if (prev.keys === undefined) delete process.env.FILE_SERVER_SIGNING_KEYS;
+		else process.env.FILE_SERVER_SIGNING_KEYS = prev.keys;
+		if (prev.master !== undefined) process.env.IMEDIC_SIGNING_MASTER = prev.master;
 	});
 	process.env.FILE_SERVER_SIGNING_KEYS = JSON.stringify({ 7: KEY });
+	delete process.env.IMEDIC_SIGNING_MASTER;
 	const inst = axios.create();
 	installAxiosSigner(inst);
 	let visto;

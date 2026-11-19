@@ -1,9 +1,8 @@
-# Seguridad de adjuntos, PACS, fotos y RENAPER (S1–S7)
+# Seguridad de adjuntos, PACS y fotos (S1–S5, S7)
 
 Cambios previos al portal del paciente MiSalud. Objetivo: que nada de lo que
 corre en las clínicas (file server de adjuntos, bridge PACS) ni las fotos de
-pacientes se pueda leer sin una credencial, y que ninguna credencial quede en
-el código.
+pacientes se pueda leer sin una credencial.
 
 | | Qué cambia | Dónde |
 |---|---|---|
@@ -12,7 +11,6 @@ el código.
 | S3 | Lo mismo para el bridge PACS (Node y PowerShell 2.0 de Sarmiento) | `pacs-bridge.js`, `Instalar-Pacs.ps1`, `sarmiento-pc/Instalar-Solo-Bridge-Pacs.ps1` |
 | S4 | Script para el usuario SQL Server de solo lectura por clínica | `scripts/sql/misalud/crear_usuario_portal_ro_sqlserver.sql` |
 | S5 | Script para el usuario MySQL de solo lectura del catálogo, sin contraseñas | `scripts/sql/misalud/crear_usuario_catalogo_ro_mysql.sql` |
-| S6 | Credenciales RENAPER fuera del código | `src/services/renaper.service.js` |
 | S7 | `/media/patients` y `/uploads` piden URL firmada o sesión | `src/app.js`, `src/utils/mediaUrl.js` |
 
 ## Cómo funciona el token firmado
@@ -67,15 +65,10 @@ Los actualizados muestran `security: "v1"` y el modo de autenticación
 
 ### 1. Railway (iMedicSaaSBack) — antes del deploy
 
-1. **RENAPER** (obligatorio, si no la validación de DNI responde 503):
-   `RENAPER_NOMBRE` y `RENAPER_CLAVE` con las credenciales de MSAL que hoy usa
-   el sistema. Se recomienda pedir a MSAL credenciales nuevas, porque las
-   actuales estuvieron en el código y en el historial de git.
-   Opcionales: `RENAPER_BASE_URL`, `RENAPER_COD_DOMINIO` (defaults = los de hoy).
-2. **Clave maestra**: `node scripts/tunnel/clave-firma.js --maestra` y cargar
+1. **Clave maestra**: `node scripts/tunnel/clave-firma.js --maestra` y cargar
    el resultado en `IMEDIC_SIGNING_MASTER`.
-3. Dejar `FILE_SERVER_TOKEN` / `PACS_BRIDGE_KEY` como están (si existen).
-4. Opcional: `MEDIA_URL_SECRET` (si no, se deriva de `JWT_SECRET`) y
+2. Dejar `FILE_SERVER_TOKEN` / `PACS_BRIDGE_KEY` como están (si existen).
+3. Opcional: `MEDIA_URL_SECRET` (si no, se deriva de `JWT_SECRET`) y
    `MEDIA_URL_TTL_S` (default 7200).
 
 ### 2. Deploy del backend
@@ -209,8 +202,9 @@ Si después aparecen 404, el log del file server dice
 - **Fotos**: la URL firmada no está atada a la clínica; quien tenga una URL
   vigente ve esa foto hasta que vence. El disco de Railway es efímero (sin
   cambios respecto de hoy).
-- **RENAPER**: si falta la variable, la validación de DNI y el alta automática
-  del chatbot devuelven 503 hasta cargarla.
+- **RENAPER (S6) no se tocó**: sus credenciales siguen en
+  `src/services/renaper.service.js`, como antes. Queda pendiente si se decide
+  moverlas a variables de entorno más adelante.
 - Los scripts obsoletos (`vidal-pc/Parche-Unc-Vidal.ps1`,
   `vidal-pc/Start-QuickTunnel.ps1`, `sarmiento-pc/Instalar-Sarmiento-Pacs-UnaVez.ps1`)
   ahora cortan con error para que nadie reinstale un servidor abierto.
