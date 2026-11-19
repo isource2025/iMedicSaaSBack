@@ -13,6 +13,15 @@
     - file server PowerShell (UNC + fallback local) como el usuario logueado
     - cloudflared como servicio Windows
     - FileServerUrl en Super Admin (si hay SaPass)
+
+  Seguridad del file server:
+    - exige token firmado de vida corta (header x-imedic-sig) con la clave de
+      C:\ProgramData\iMedic\fs-sign-key.txt; sin clave solo responde /health
+    - solo lee/escribe dentro de UncRoot, LocalRoot y ExtraRoots
+    - sin CORS: lo llama solo el backend, nunca el navegador
+
+  Para actualizar solo el file server en una clinica que ya tiene tunel:
+  $SoloFileServer = $true (no toca cloudflared ni Super Admin).
 #>
 
 # =============================================================================
@@ -29,6 +38,12 @@ $Dominio     = 'imedic.com.ar'
 $ApiBase     = 'https://imedicsaasback-production.up.railway.app/api'
 $SaUser      = 'superadmin'                  # vacio = no graba FileServerUrl por API
 $SaPass      = ''                            # password SA (o dejar vacio y poner URL a mano)
+# Seguridad:
+$SigningKey  = ''      # clave de firma (>= 32). Vacio = conserva fs-sign-key.txt o genera una.
+                       # Con IMEDIC_SIGNING_MASTER en Railway: node scripts/tunnel/clave-firma.js --servicio fs --empresa <id>
+$LegacyToken = ''      # opcional: FILE_SERVER_TOKEN de Railway, solo durante la transicion
+$ExtraRoots  = ''      # otras carpetas permitidas, separadas por ;
+$SoloFileServer = $false  # $true = solo reinstala el file server (no toca cloudflared ni Super Admin)
 # =============================================================================
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +53,7 @@ $Clinica = $Clinica.Trim().ToLowerInvariant()
 if ($Clinica -notmatch '^[a-z0-9][a-z0-9-]*$') { throw "Clinica invalida: $Clinica" }
 if (-not $UncRoot) { throw 'Falta UncRoot en CONFIG' }
 if (-not $LocalRoot) { throw 'Falta LocalRoot en CONFIG' }
-if (-not $TunnelToken -or $TunnelToken -like 'PEGAR_*') {
+if (-not $SoloFileServer -and (-not $TunnelToken -or $TunnelToken -like 'PEGAR_*')) {
 	throw 'Falta TunnelToken en CONFIG (generarlo con cf-setup.js)'
 }
 
@@ -46,6 +61,8 @@ $Hostname   = "files-$Clinica.$Dominio"
 $TaskName   = 'iMedic File Server'
 $InstallDir = 'C:\ProgramData\iMedic'
 $FsScript   = Join-Path $InstallDir 'file-server.ps1'
+$SignKeyFile = Join-Path $InstallDir 'fs-sign-key.txt'
+$LegacyFile  = Join-Path $InstallDir 'fs-legacy-token.txt'
 $User       = "$env:USERDOMAIN\$env:USERNAME"
 $MaxMb      = 100
 
@@ -86,29 +103,123 @@ $FileServerSource = @'
 param(
 	[string]$UncRoot = '__UNC_ROOT__',
 	[string]$LocalRoot = '__LOCAL_ROOT__',
+	[string]$ExtraRoots = '__EXTRA_ROOTS__',
+	[string]$SignKeyFile = '__SIGN_KEY_FILE__',
+	[string]$LegacyFile = '__LEGACY_FILE__',
+	[string]$EmpresaId = '__EMPRESA_ID__',
 	[int]$Port = 9012,
-	[int]$MaxMb = 100
+	[int]$MaxMb = 100,
+	[int]$SkewS = 300,
+	[int]$MaxTtlS = 900
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force -Path $LocalRoot -ErrorAction SilentlyContinue | Out-Null
 $MaxBytes = $MaxMb * 1MB
+$SignKey = ''
+if ($SignKeyFile -and (Test-Path -LiteralPath $SignKeyFile)) { $SignKey = ([IO.File]::ReadAllText($SignKeyFile)).Trim() }
+$LegacyToken = ''
+if ($LegacyFile -and (Test-Path -LiteralPath $LegacyFile)) { $LegacyToken = ([IO.File]::ReadAllText($LegacyFile)).Trim() }
+$Roots = @($UncRoot, $LocalRoot) + @(($ExtraRoots + '').Split(';') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $prefix = "http://127.0.0.1:$Port/"
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add($prefix)
 $listener.Start()
-Write-Host "[iMedic FS] $prefix unc=$UncRoot local=$LocalRoot"
+$modo = @(); if ($SignKey.Length -ge 32) { $modo += 'firma' }; if ($LegacyToken.Length -ge 16) { $modo += 'token-legado' }
+Write-Host "[iMedic FS] $prefix unc=$UncRoot local=$LocalRoot auth=$(if ($modo) { $modo -join '+' } else { 'SIN CONFIGURAR' })"
 
 function Send-Json($ctx, $code, $obj) {
 	$json = ($obj | ConvertTo-Json -Compress -Depth 6)
 	$bytes = [Text.Encoding]::UTF8.GetBytes($json)
 	$ctx.Response.StatusCode = $code
 	$ctx.Response.ContentType = 'application/json; charset=utf-8'
-	$ctx.Response.Headers['Access-Control-Allow-Origin'] = '*'
-	$ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET,POST,DELETE,OPTIONS'
-	$ctx.Response.Headers['Access-Control-Allow-Headers'] = '*'
 	$ctx.Response.ContentLength64 = $bytes.Length
 	$ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
 	$ctx.Response.Close()
+}
+
+function Test-Inside([string]$p) {
+	if (-not $p -or $p.Contains([string][char]0)) { return $false }
+	try { $full = [IO.Path]::GetFullPath($p) } catch { return $false }
+	foreach ($root in $Roots) {
+		if (-not $root) { continue }
+		try { $r = [IO.Path]::GetFullPath($root).TrimEnd('\') } catch { continue }
+		if ($full.Equals($r, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+		if ($full.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+	}
+	return $false
+}
+
+function Test-Leaf([string]$p) {
+	return (Test-Inside $p) -and (Test-Path -LiteralPath $p -PathType Leaf)
+}
+
+# Token firmado v1: mismo mensaje que src/utils/signedFileToken.js del backend.
+function Unescape-Q([string]$s) { return [Uri]::UnescapeDataString($s.Replace('+', ' ')) }
+function Get-RawParts([string]$raw) {
+	if ($raw -match '^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(.*)$') { $raw = $Matches[1] }
+	$h = $raw.IndexOf('#'); if ($h -ge 0) { $raw = $raw.Substring(0, $h) }
+	$qi = $raw.IndexOf('?')
+	if ($qi -ge 0) { return @($raw.Substring(0, $qi), $raw.Substring($qi + 1)) }
+	return @($raw, '')
+}
+function Get-CanonQuery([string]$q) {
+	$items = New-Object System.Collections.ArrayList
+	foreach ($part in $q.Split('&')) {
+		if (-not $part) { continue }
+		$eq = $part.IndexOf('=')
+		if ($eq -ge 0) { $k = Unescape-Q $part.Substring(0, $eq); $v = Unescape-Q $part.Substring($eq + 1) }
+		else { $k = Unescape-Q $part; $v = '' }
+		if ($k -ceq 'sig') { continue }
+		[void]$items.Add($k + [char]0 + $v)
+	}
+	$arr = [string[]]$items.ToArray([string])
+	[Array]::Sort($arr, [StringComparer]::Ordinal)
+	$out = New-Object System.Collections.ArrayList
+	foreach ($s in $arr) { $z = $s.IndexOf([char]0); [void]$out.Add($s.Substring(0, $z) + '=' + $s.Substring($z + 1)) }
+	return [string]::Join('&', [string[]]$out.ToArray([string]))
+}
+function Get-Sig([string]$key, [string]$msg) {
+	$hm = New-Object System.Security.Cryptography.HMACSHA256
+	$hm.Key = [Text.Encoding]::UTF8.GetBytes($key)
+	$b = $hm.ComputeHash([Text.Encoding]::UTF8.GetBytes($msg))
+	return [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+function Test-SameString([string]$a, [string]$b) {
+	if (-not $a -or $a.Length -ne $b.Length) { return $false }
+	$diff = 0
+	for ($i = 0; $i -lt $a.Length; $i++) { $diff = $diff -bor ([int]$a[$i] -bxor [int]$b[$i]) }
+	return ($diff -eq 0)
+}
+function Test-Signed($req) {
+	if ($SignKey.Length -lt 32) { return $false }
+	$parts = Get-RawParts ([string]$req.RawUrl)
+	$tok = [string]$req.Headers['x-imedic-sig']
+	if (-not $tok) {
+		foreach ($p in $parts[1].Split('&')) { if ($p.StartsWith('sig=')) { $tok = Unescape-Q $p.Substring(4) } }
+	}
+	if (-not $tok) { return $false }
+	$t = $tok.Trim().Split('.')
+	if ($t.Length -ne 4 -or $t[0] -cne 'v1') { return $false }
+	if ($t[1] -notmatch '^\d+$' -or $t[2] -notmatch '^\d+$') { return $false }
+	if ($EmpresaId -and $EmpresaId -match '^\d+$' -and $t[1] -ne $EmpresaId) { return $false }
+	$exp = [long]$t[2]
+	$epoch = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+	$now = [long][Math]::Floor(([DateTime]::UtcNow - $epoch).TotalSeconds)
+	if ($now -gt ($exp + $SkewS)) { return $false }
+	if ($exp -gt ($now + $MaxTtlS + $SkewS)) { return $false }
+	$ruta = $parts[0]
+	try { $ruta = [Uri]::UnescapeDataString($ruta) } catch {}
+	$ruta = $ruta.TrimEnd('/'); if (-not $ruta) { $ruta = '/' }
+	$msg = [string]::Join("`n", [string[]]@('v1', $t[1], $req.HttpMethod.ToUpperInvariant(), $ruta, (Get-CanonQuery $parts[1]), $t[2]))
+	return (Test-SameString $t[3] (Get-Sig $SignKey $msg))
+}
+function Test-Auth($req) {
+	if (Test-Signed $req) { return $true }
+	if ($LegacyToken.Length -ge 16) {
+		$enviado = ([string]$req.Headers['x-imedic-token']).Trim()
+		return (Test-SameString $enviado $LegacyToken)
+	}
+	return $false
 }
 
 function Decode-Path([string]$p) {
@@ -149,52 +260,55 @@ function Get-RawQueryPath($req) {
 }
 
 function Map-Path([string]$p) {
+	$hit = Map-PathCandidato $p
+	if ($hit -and (Test-Inside $hit)) { return $hit }
+	return $null
+}
+
+function Map-PathCandidato([string]$p) {
 	$p = Decode-Path $p
 	if (-not $p) { return $null }
-	if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
+	if (Test-Leaf $p) { return $p }
 
 	# Relativa al UncRoot/LocalRoot de ESTA clínica (sin IP ni host fijo).
 	$esAbsoluta = ($p -match '^[A-Za-z]:\\') -or ($p -like '\\*')
 	if (-not $esAbsoluta) {
-		foreach ($root in @($UncRoot, $LocalRoot)) {
+		foreach ($root in $Roots) {
 			if (-not $root) { continue }
 			$c = Join-Path $root.TrimEnd('\') $p.TrimStart('\')
-			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			if (Test-Leaf $c) { return $c }
 		}
 	}
 
 	# UNC legacy Clarion (\\192.168…\Imagenes\<share>\…): solo el sufijo relativo.
 	if ($p -match '(?i)^\\\\[^\\]+\\Imagenes\\[^\\]+\\(.+)$') {
 		$rel = $Matches[1]
-		foreach ($root in @($UncRoot, $LocalRoot)) {
+		foreach ($root in $Roots) {
 			if (-not $root) { continue }
 			$c = Join-Path $root.TrimEnd('\') $rel
-			if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+			if (Test-Leaf $c) { return $c }
 		}
 	}
 
-	if ($p -like '\\*') {
-		if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-	}
 	$uncNorm = $UncRoot.TrimEnd('\')
 	if ($p.StartsWith($uncNorm, [StringComparison]::OrdinalIgnoreCase)) {
 		$rel = $p.Substring($uncNorm.Length).TrimStart('\')
 		$local = Join-Path $LocalRoot $rel
-		if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
+		if (Test-Leaf $local) { return $local }
 	}
 	$name = Split-Path $p -Leaf
 	$c1 = Join-Path $LocalRoot $name
-	if (Test-Path -LiteralPath $c1 -PathType Leaf) { return $c1 }
+	if (Test-Leaf $c1) { return $c1 }
 	$enie = [string][char]0x00D1
 	$enieMin = [string][char]0x00F1
 	$under = $p.Replace($enie, '_').Replace($enieMin, '_')
-	if ($under -ne $p -and (Test-Path -LiteralPath $under -PathType Leaf)) { return $under }
+	if ($under -ne $p -and (Test-Leaf $under)) { return $under }
 	$parentName = ''
 	try { $parentName = Split-Path (Split-Path $p -Parent) -Leaf } catch { $parentName = '' }
 	$visita = $null
 	if ($parentName -match '^(\d+)(\s|$)') { $visita = $Matches[1] }
 	if ($visita) {
-		foreach ($root in @($LocalRoot, $UncRoot)) {
+		foreach ($root in $Roots) {
 			if (-not $root) { continue }
 			if (-not (Test-Path -LiteralPath $root)) { continue }
 			foreach ($pat in @($visita, ($visita + ' *'))) {
@@ -204,7 +318,7 @@ function Map-Path([string]$p) {
 					$leaf = [IO.Path]::GetFileName($full)
 					if ($leaf -ne $visita -and -not $leaf.StartsWith($visita + ' ')) { continue }
 					$c = Join-Path $full $name
-					if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+					if (Test-Leaf $c) { return $c }
 				}
 			}
 		}
@@ -294,20 +408,28 @@ while ($listener.IsListening) {
 		$path = $abs.TrimEnd('/')
 		if (-not $path) { $path = '/' }
 
-		if ($method -eq 'OPTIONS') {
-			$ctx.Response.StatusCode = 204
-			$ctx.Response.Headers['Access-Control-Allow-Origin'] = '*'
-			$ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET,POST,DELETE,OPTIONS'
-			$ctx.Response.Headers['Access-Control-Allow-Headers'] = '*'
-			$ctx.Response.Close(); continue
-		}
+		$authed = Test-Auth $req
 
 		if ($method -eq 'GET' -and ($path -eq '/' -or $path -eq '/health')) {
-			Send-Json $ctx 200 @{
-				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v2'
-				clinica='__CLINICA__'; unc=$UncRoot; root=$LocalRoot; port=$Port; maxMb=$MaxMb; auth='tunnel'
+			$epochH = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+			$h = @{
+				success=$true; ok=$true; status='ok'; encoding='ps1-unc-v3'; security='v1'
+				clinica='__CLINICA__'; maxMb=$MaxMb; auth=$(if ($modo) { $modo -join '+' } else { 'sin-configurar' })
+				epoch = [long][Math]::Floor(([DateTime]::UtcNow - $epochH).TotalSeconds)
 				uncReachable = [bool](Test-Path -LiteralPath $UncRoot)
 			}
+			if ($authed) { $h.unc = $UncRoot; $h.root = $LocalRoot; $h.extraRoots = $ExtraRoots; $h.port = $Port }
+			Send-Json $ctx 200 $h
+			continue
+		}
+
+		if (-not $modo) {
+			Send-Json $ctx 503 @{ success=$false; error="File server sin credenciales: falta $SignKeyFile (reinstalar con Instalar-Clinica-UnaVez.ps1)" }
+			continue
+		}
+		if (-not $authed) {
+			Write-Host "[iMedic FS] 401 $method $path"
+			Send-Json $ctx 401 @{ success=$false; error='Token inválido' }
 			continue
 		}
 
@@ -330,7 +452,6 @@ while ($listener.IsListening) {
 			}
 			$ctx.Response.StatusCode = 200
 			$ctx.Response.ContentType = $(if ($map.ContainsKey($ext)) { $map[$ext] } else { 'application/octet-stream' })
-			$ctx.Response.Headers['Access-Control-Allow-Origin'] = '*'
 			$fn = [Uri]::EscapeDataString([IO.Path]::GetFileName($found))
 			$ctx.Response.AddHeader('Content-Disposition', "inline; filename*=UTF-8''$fn")
 			$ctx.Response.ContentLength64 = $bytes.Length
@@ -361,6 +482,10 @@ while ($listener.IsListening) {
 				$baseRoot = if (Test-Path -LiteralPath $UncRoot) { $UncRoot } else { $LocalRoot }
 				$dest = Join-Path $baseRoot.TrimEnd('\') $dest.TrimStart('\')
 			}
+			if (-not (Test-Inside $dest)) {
+				Write-Host "[iMedic FS] upload rechazado, destino fuera de las carpetas permitidas: $dest"
+				Send-Json $ctx 400 @{ success=$false; error='Destino fuera de la carpeta de adjuntos de la clinica' }; continue
+			}
 			$dir = Split-Path $dest -Parent
 			New-Item -ItemType Directory -Force -Path $dir | Out-Null
 			[IO.File]::WriteAllBytes($dest, $mp.file.bytes)
@@ -382,7 +507,42 @@ while ($listener.IsListening) {
 $FileServerSource = $FileServerSource.
 	Replace('__UNC_ROOT__', $UncRoot.Replace("'", "''")).
 	Replace('__LOCAL_ROOT__', $LocalRoot.Replace("'", "''")).
+	Replace('__EXTRA_ROOTS__', $ExtraRoots.Replace("'", "''")).
+	Replace('__SIGN_KEY_FILE__', $SignKeyFile.Replace("'", "''")).
+	Replace('__LEGACY_FILE__', $LegacyFile.Replace("'", "''")).
+	Replace('__EMPRESA_ID__', [string]$EmpresaId).
 	Replace('__CLINICA__', $Clinica)
+
+function Protect-KeyFile([string]$f) {
+	# Solo Administradores y SYSTEM (por SID) + el usuario que corre la tarea (UNC).
+	cmd /c "icacls `"$f`" /inheritance:r /grant:r *S-1-5-32-544:F *S-1-5-18:F `"$User`":R" 2>$null | Out-Null
+	if ($LASTEXITCODE -ne 0) { Write-Warn "no se pudieron restringir permisos de $f" }
+}
+
+function Install-Keys {
+	New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+	$key = $SigningKey
+	if (-not $key -and (Test-Path -LiteralPath $SignKeyFile)) { $key = ([IO.File]::ReadAllText($SignKeyFile)).Trim() }
+	if ($key -and $key.Length -lt 32) { throw 'SigningKey tiene que tener al menos 32 caracteres.' }
+	if (-not $key) {
+		$buf = New-Object byte[] 32
+		(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($buf)
+		$key = ([BitConverter]::ToString($buf)).Replace('-', '').ToLowerInvariant()
+		Write-Ok "clave de firma nueva en $SignKeyFile"
+	} else {
+		Write-Ok "clave de firma en $SignKeyFile"
+	}
+	[IO.File]::WriteAllText($SignKeyFile, $key)
+	Protect-KeyFile $SignKeyFile
+	if ($LegacyToken) {
+		[IO.File]::WriteAllText($LegacyFile, $LegacyToken.Trim())
+		Protect-KeyFile $LegacyFile
+		Write-Ok "token legado en $LegacyFile (borrarlo cuando Railway ya firme)"
+	} elseif (Test-Path -LiteralPath $LegacyFile) {
+		Write-Warn "queda token legado en $LegacyFile (borrarlo cuando Railway ya firme)"
+	}
+	return $key
+}
 
 function Install-FileServer {
 	New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -473,8 +633,13 @@ if (Test-Path -LiteralPath $UncRoot) {
 	Write-Warn "no se lee $UncRoot con este usuario (abrir Explorador a esa ruta y reintentar)"
 }
 
-Write-Paso 'cloudflared'
-$Cloudflared = Install-Cloudflared
+if (-not $SoloFileServer) {
+	Write-Paso 'cloudflared'
+	$Cloudflared = Install-Cloudflared
+}
+
+Write-Paso 'Claves del file server'
+$ClaveFirma = Install-Keys
 
 Write-Paso 'File server local (PowerShell UNC)'
 Install-FileServer
@@ -491,8 +656,8 @@ foreach ($i in 1..15) {
 if ($h) {
 	Write-Host (($h | ConvertTo-Json -Compress))
 	$enc = if ($h.PSObject.Properties['encoding']) { [string]$h.encoding } else { '' }
-	if ($enc -ne 'ps1-unc-v2') {
-		Write-Warn "health encoding=$enc (esperado ps1-unc-v2); matando puerto y reintento..."
+	if ($enc -ne 'ps1-unc-v3') {
+		Write-Warn "health encoding=$enc (esperado ps1-unc-v3); matando puerto y reintento..."
 		Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
 			ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 		$ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -510,6 +675,7 @@ if ($h) {
 	Write-Warn 'file server local aun no responde; revisar tarea iMedic File Server'
 }
 
+if (-not $SoloFileServer) {
 Write-Paso 'Servicio cloudflared'
 $svc = Get-Service -Name 'cloudflared' -ErrorAction SilentlyContinue
 if ($svc) {
@@ -544,9 +710,14 @@ if ($svc -and $svc.Status -eq 'Running') {
 }
 
 Set-FileServerUrlRemote
+}
 
 Write-Host ''
 Write-Host '  LISTO' -ForegroundColor Green
 Write-Host "  https://$Hostname" -ForegroundColor Cyan
 Write-Host "  Local health: http://127.0.0.1:$Port/health"
+Write-Host ''
+Write-Host '  Clave de firma de esta clinica (Railway, FILE_SERVER_SIGNING_KEYS):' -ForegroundColor Yellow
+Write-Host ("      `"{0}`":`"{1}`"" -f $EmpresaId, $ClaveFirma) -ForegroundColor White
+Write-Host "  (queda en $SignKeyFile; si Railway usa IMEDIC_SIGNING_MASTER y la clave salio de clave-firma.js, no hace falta cargarla)"
 Write-Host ''

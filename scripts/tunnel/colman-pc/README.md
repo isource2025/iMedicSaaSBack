@@ -9,6 +9,11 @@ Empresa: `102`
 | `cloudflared` | Servicio Windows `start=auto` + restart on failure |
 | File server | Tarea `iMedic File Server` (al loguearse el usuario + cada 5 min) |
 
+> **Actualizar el file server (seguridad):** `Instalar-Colman-UnaVez` (b64) es la
+> versión vieja, sin token ni confinamiento. Usar `scripts/tunnel/Instalar-Clinica-UnaVez.ps1`
+> con `$Clinica='colman'`, `$EmpresaId=102`, `$UncRoot=$LocalRoot='E:\imedic\adjuntos'`,
+> `$SigningKey` y `$SoloFileServer=$true`. Ver `docs/SEGURIDAD_MISALUD.md`.
+
 ## En la PC de Colman (Administrador) — una sola vez
 
 1. Copiá a la PC remota: `Instalar-Colman-UnaVez.ps1`
@@ -21,7 +26,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Instalar-Colman-UnaVez.ps1
 ```
 
-Health local esperado: `http://127.0.0.1:9012/health` → `encoding=ps1-unc-v2`, `status=ok`.
+Health local esperado: `http://127.0.0.1:9012/health` → `status=ok` (`encoding=ps1-unc-v3`, `security=v1` con el instalador nuevo).
 
 URL pública: `https://files-colman.imedic.com.ar/health`
 

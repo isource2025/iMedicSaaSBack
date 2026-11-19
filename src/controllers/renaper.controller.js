@@ -138,7 +138,7 @@ const search = async (req, res) => {
 			message: error?.message,
 		});
 
-		return res.status(502).json({
+		return res.status(error?.code === 'RENAPER_NOT_CONFIGURED' ? 503 : 502).json({
 			success: false,
 			message: 'Error consultando RENAPER',
 			detail: error?.message,

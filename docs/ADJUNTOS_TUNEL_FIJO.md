@@ -1,5 +1,7 @@
 # Adjuntos: dominio y túneles fijos
 
+> **Seguridad (S1–S3):** el file server y el bridge PACS exigen un token firmado por clínica y solo sirven archivos de sus carpetas. Despliegue y verificación: [`SEGURIDAD_MISALUD.md`](SEGURIDAD_MISALUD.md).
+
 Cada clínica publica sus adjuntos en un hostname que **no cambia nunca**:
 
 ```

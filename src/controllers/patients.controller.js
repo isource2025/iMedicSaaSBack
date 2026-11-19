@@ -3,6 +3,7 @@ const patientsService = require('../services/patients.service');
 const visitaMovimientosService = require('../services/visitaMovimientos.service');
 const { requireOperadorCarga } = require('../utils/sessionIdentity');
 const { statusDeError, mensajeDeError } = require('../utils/httpError');
+const { signMediaUrl } = require('../utils/mediaUrl');
 
 /**
  * Lista pacientes con paginación real.
@@ -124,8 +125,8 @@ const crearPaciente = async (req, res) => {
 		const cleanUndefined = (v) => (v === 'undefined' ? null : v);
 		const buildAbsolute = (relativePath) => {
 			if (!relativePath) return null;
-			if (/^https?:\/\//i.test(relativePath)) return relativePath;
-			return `${req.protocol}://${req.get('host')}${relativePath}`;
+			if (/^https?:\/\//i.test(relativePath)) return signMediaUrl(relativePath);
+			return signMediaUrl(`${req.protocol}://${req.get('host')}${relativePath}`);
 		};
 
 		// Parseo seguro de Trabajos (multipart)
@@ -368,11 +369,11 @@ const actualizarPaciente = async (req, res) => {
 		const buildAbsolute = (relativePath) => {
 			if (!relativePath) return null;
 			if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
-				return relativePath;
+				return signMediaUrl(relativePath);
 			}
 			const protocol = req.protocol;
 			const host = req.get('host');
-			return `${protocol}://${host}${relativePath}`;
+			return signMediaUrl(`${protocol}://${host}${relativePath}`);
 		};
 		const id = parseInt(req.params.id);
 		const {

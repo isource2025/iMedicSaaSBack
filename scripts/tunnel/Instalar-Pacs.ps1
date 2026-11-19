@@ -39,7 +39,16 @@ param(
 
 	[int]$Port = 9013,
 
+	# Clave compartida legada. Solo para no cortar mientras Railway no tenga la clave de firma.
 	[string]$Token = '',
+
+	# Clave de firma de ESTA clinica (>= 32 caracteres). Vacio = se conserva la
+	# instalada o se genera una nueva. Con IMEDIC_SIGNING_MASTER en Railway se
+	# obtiene con: node scripts/tunnel/clave-firma.js --servicio pacs --empresa <id>
+	[string]$SigningKey = '',
+
+	# IDEMPRESA de la clinica: el bridge rechaza tokens de otra empresa.
+	[int]$EmpresaId = 0,
 
 	[string]$Dominio = 'imedic.com.ar',
 
@@ -144,6 +153,18 @@ if (-not (Test-Path (Join-Path $RepoRoot 'node_modules\express')) -or -not (Test
 
 New-Item -ItemType Directory -Force -Path $CfDir | Out-Null
 
+Write-Paso 'Clave de firma'
+if (-not $SigningKey) { $SigningKey = [string][Environment]::GetEnvironmentVariable('IMEDIC_PACS_SIGNING_KEY', 'Machine') }
+if ($SigningKey -and $SigningKey.Length -lt 32) { throw 'SigningKey tiene que tener al menos 32 caracteres.' }
+if (-not $SigningKey) {
+	$buf = New-Object byte[] 32
+	(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($buf)
+	$SigningKey = ([BitConverter]::ToString($buf)).Replace('-', '').ToLowerInvariant()
+	Write-Ok 'clave nueva generada'
+} else {
+	Write-Ok 'se usa la clave indicada / instalada'
+}
+
 Write-Paso 'pacs.env'
 @"
 IMEDIC_PACS_PORT=$Port
@@ -153,8 +174,11 @@ IMEDIC_PACS_SQL_USER=$SqlUser
 IMEDIC_PACS_SQL_PASSWORD=$SqlPassword
 IMEDIC_PACS_FS_ROOT=$FsRoot
 IMEDIC_PACS_TOKEN=$Token
+IMEDIC_PACS_SIGNING_KEY=$SigningKey
+IMEDIC_PACS_EMPRESA_ID=$(if ($EmpresaId -gt 0) { $EmpresaId } else { '' })
 IMEDIC_PACS_HOSTNAME=https://$Hostname
 "@ | Set-Content -Path $EnvFile -Encoding ASCII
+cmd /c "icacls `"$EnvFile`" /inheritance:r /grant:r *S-1-5-32-544:F *S-1-5-18:F" 2>$null | Out-Null
 # También a variables de máquina (la tarea SYSTEM las ve)
 [Environment]::SetEnvironmentVariable('IMEDIC_PACS_PORT', "$Port", 'Machine')
 [Environment]::SetEnvironmentVariable('IMEDIC_PACS_SQL_SERVER', $SqlServer, 'Machine')
@@ -163,6 +187,8 @@ IMEDIC_PACS_HOSTNAME=https://$Hostname
 [Environment]::SetEnvironmentVariable('IMEDIC_PACS_SQL_PASSWORD', $SqlPassword, 'Machine')
 [Environment]::SetEnvironmentVariable('IMEDIC_PACS_FS_ROOT', $FsRoot, 'Machine')
 [Environment]::SetEnvironmentVariable('IMEDIC_PACS_TOKEN', $Token, 'Machine')
+[Environment]::SetEnvironmentVariable('IMEDIC_PACS_SIGNING_KEY', $SigningKey, 'Machine')
+[Environment]::SetEnvironmentVariable('IMEDIC_PACS_EMPRESA_ID', $(if ($EmpresaId -gt 0) { "$EmpresaId" } else { $null }), 'Machine')
 Write-Ok $EnvFile
 
 $ConfigPath = $null
@@ -313,4 +339,9 @@ Write-Host ''
 Write-Host "  Hostname: https://$Hostname" -ForegroundColor Green
 Write-Host "  En tu PC / repo, grabá PacsUrl:" -ForegroundColor Green
 Write-Host "    node scripts/tunnel/set-pacs-url.js --empresa 101 --url https://$Hostname"
+Write-Host ''
+$idTxt = $(if ($EmpresaId -gt 0) { "$EmpresaId" } else { '<IDEMPRESA>' })
+Write-Host '  Clave de firma de esta clinica (Railway, PACS_SIGNING_KEYS):' -ForegroundColor Yellow
+Write-Host ("      `"{0}`":`"{1}`"" -f $idTxt, $SigningKey) -ForegroundColor White
+Write-Host '  (si Railway usa IMEDIC_SIGNING_MASTER y la clave salio de clave-firma.js, no hace falta cargarla)'
 Write-Host ''

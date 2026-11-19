@@ -2,14 +2,30 @@ const https = require('https');
 const { getTenantId } = require('../context/tenantContext');
 const { decodeBufferPreferUtf8, repararStringsDeep } = require('../utils/clarionText');
 
-const RENAPER_BASE = 'https://federador.msal.gob.ar/masterfile-federacion-service';
+const RENAPER_BASE = String(
+	process.env.RENAPER_BASE_URL || 'https://federador.msal.gob.ar/masterfile-federacion-service',
+)
+	.trim()
+	.replace(/\/+$/, '');
 const LOGIN_URL = `${RENAPER_BASE}/api/usuarios/aplicacion/login`;
 const PERSONA_URL = `${RENAPER_BASE}/api/personas/renaper`;
-const COD_DOMINIO = '2.16.840.1.113883.2.10.43';
+const COD_DOMINIO = String(process.env.RENAPER_COD_DOMINIO || '2.16.840.1.113883.2.10.43').trim();
 
-// Credenciales provistas (mismas que en Clarion)
-const CRED_NOMBRE = 'HQgdGgMcFxMaCl4SEh8FDFwCHBcCCBYdBA0B';
-const CRED_CLAVE = 'IVQARl0wWyBBFQkLBEclO0M=';
+/**
+ * Credenciales de aplicación del Federador (las mismas que usa Clarion), tal
+ * como las acepta el login. Van solo en variables de entorno.
+ */
+function credenciales() {
+	const nombre = String(process.env.RENAPER_NOMBRE || '').trim();
+	const clave = String(process.env.RENAPER_CLAVE || '').trim();
+	if (!nombre || !clave) {
+		const err = new Error('RENAPER no está configurado: faltan RENAPER_NOMBRE y RENAPER_CLAVE en el entorno.');
+		err.code = 'RENAPER_NOT_CONFIGURED';
+		err.statusCode = 503;
+		throw err;
+	}
+	return { nombre, clave };
+}
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const EXP_SKEW_MS = 5000; // margen para exp
@@ -124,7 +140,8 @@ function decodeJwtExpMs(token) {
 /* ------------------------ token handling ------------------------ */
 
 async function getFreshToken() {
-	const body = { nombre: CRED_NOMBRE, clave: CRED_CLAVE, codDominio: COD_DOMINIO };
+	const { nombre, clave } = credenciales();
+	const body = { nombre, clave, codDominio: COD_DOMINIO };
 	const data = await fetchJSON(LOGIN_URL, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },

@@ -10,6 +10,12 @@ param(
 	[int]$Port = 9012
 )
 
+
+# OBSOLETO: este file server no exige token, acepta rutas de todo el disco y
+# responde con CORS abierto. Usar scripts/tunnel/Instalar-Clinica-UnaVez.ps1
+# (con $SoloFileServer = $true si el tunel ya existe). Ver docs/SEGURIDAD_MISALUD.md.
+throw 'Script obsoleto e inseguro: usar scripts/tunnel/Instalar-Clinica-UnaVez.ps1 (ver docs/SEGURIDAD_MISALUD.md).'
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 $InstallDir = 'C:\ProgramData\iMedic'

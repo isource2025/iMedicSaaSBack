@@ -175,9 +175,11 @@ const patientPhotosDir = path.join(uploadsDir, 'patient-photos');
 for (const dir of [uploadsDir, patientPhotosDir]) {
 	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
-// Rutas estáticas (compatibilidad + nueva ruta "segura")
-app.use('/uploads', express.static(uploadsDir)); // legado
-app.use('/media/patients', express.static(patientPhotosDir));
+// Fotos de pacientes: URL firmada (la API la devuelve en FotoURL) o sesión válida.
+const { requireMediaAccess, onlyLegacyPhotoPaths } = require('./middlewares/mediaAccess.middleware');
+const staticPrivado = { cacheControl: false, dotfiles: 'deny', index: false, redirect: false };
+app.use('/uploads', onlyLegacyPhotoPaths, requireMediaAccess, express.static(uploadsDir, staticPrivado)); // legado
+app.use('/media/patients', requireMediaAccess, express.static(patientPhotosDir, staticPrivado));
 
 // Configurar rutas
 const { apiAuthUnlessPublic } = require('./middlewares/apiAuth.middleware');

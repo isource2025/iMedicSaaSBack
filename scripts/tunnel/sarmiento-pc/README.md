@@ -52,6 +52,11 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Desktop\Instalar-Solo
    Cargala en Railway como `PACS_BRIDGE_KEY`. Sin ese header (`X-iMedic-Pacs-Key`)
    el bridge responde 401 a todo salvo `/health` (que sin clave no muestra datos).
    Re-ejecutar el instalador conserva la clave; para rotarla, borrar `key.txt` y re-ejecutar.
+4. Clave de firma (la que usa Railway de ahora en más): poner en `$SignKeyIn` la
+   que da `node scripts/tunnel/clave-firma.js --servicio pacs --empresa 101`
+   (o dejarla vacía: genera una, queda en `sign-key.txt` y hay que cargarla en
+   `PACS_SIGNING_KEYS`). Cuando Railway ya firme, borrar `key.txt` y
+   `PACS_BRIDGE_KEY`. Ver `docs/SEGURIDAD_MISALUD.md`.
 
 ### En Cloudflare
 

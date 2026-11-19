@@ -37,8 +37,20 @@
 	Puerto local del file server. Solo escucha en loopback.
 
 .PARAMETER Token
-	Opcional. Secreto compartido que el file server exige en el header
-	x-imedic-token. Tiene que coincidir con FILE_SERVER_TOKEN del backend.
+	Opcional, LEGADO. Secreto compartido (header x-imedic-token) igual a
+	FILE_SERVER_TOKEN del backend. Solo para no cortar las descargas mientras
+	Railway todavia no tiene la clave de firma de esta clinica.
+
+.PARAMETER SigningKey
+	Clave de firma de ESTA clinica (>= 32 caracteres). El backend firma cada
+	pedido con ella (token x-imedic-sig de vida corta, por archivo). Vacio = se
+	conserva la instalada o se genera una nueva. Con IMEDIC_SIGNING_MASTER en
+	Railway se obtiene con:
+	  node scripts/tunnel/clave-firma.js --servicio fs --empresa <id>
+
+.PARAMETER ExtraRoots
+	Otras carpetas (separadas por ;) desde las que se permite servir archivos,
+	por ejemplo el share UNC que guarda Clarion. Todo lo demas se rechaza.
 
 .PARAMETER EmpresaId
 	Opcional. IDEMPRESA en Super Admin para grabar FileServerUrl automaticamente.
@@ -69,6 +81,10 @@ param(
 	[int]$Port = 9012,
 
 	[string]$Token = '',
+
+	[string]$SigningKey = '',
+
+	[string]$ExtraRoots = '',
 
 	[int]$EmpresaId = 0,
 
@@ -162,7 +178,17 @@ Write-Host "  clinica:   $Clinica"
 Write-Host "  hostname:  https://$Hostname"
 Write-Host "  carpeta:   $Root"
 Write-Host "  puerto:    127.0.0.1:$Port"
-Write-Host "  auth:      $(if ($Token) { 'token compartido' } else { 'solo tunel' })"
+if (-not $SigningKey) { $SigningKey = [string][Environment]::GetEnvironmentVariable('IMEDIC_FS_SIGNING_KEY', 'Machine') }
+if ($SigningKey -and $SigningKey.Length -lt 32) { throw 'SigningKey tiene que tener al menos 32 caracteres.' }
+$ClaveNueva = $false
+if (-not $SigningKey) {
+	$buf = New-Object byte[] 32
+	(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($buf)
+	$SigningKey = ([BitConverter]::ToString($buf)).Replace('-', '').ToLowerInvariant()
+	$ClaveNueva = $true
+}
+Write-Host "  auth:      token firmado$(if ($Token) { ' + token compartido legado' })$(if ($ClaveNueva) { ' (clave nueva)' })"
+if ($ExtraRoots) { Write-Host "  extra:     $ExtraRoots" }
 Write-Host "  modo:      $(if ($ModoApi) { 'tunel administrado por Cloudflare' } else { 'CLI con cloudflared login' })"
 
 if (-not (Test-Path $FileServerJs)) {
@@ -335,6 +361,9 @@ Write-Paso 'Servicio del file server'
 [Environment]::SetEnvironmentVariable('IMEDIC_FS_PORT',  "$Port", 'Machine')
 [Environment]::SetEnvironmentVariable('IMEDIC_FS_ROOT',  $Root,   'Machine')
 [Environment]::SetEnvironmentVariable('IMEDIC_FS_TOKEN', $Token,  'Machine')
+[Environment]::SetEnvironmentVariable('IMEDIC_FS_SIGNING_KEY', $SigningKey, 'Machine')
+[Environment]::SetEnvironmentVariable('IMEDIC_FS_EXTRA_ROOTS', $(if ($ExtraRoots) { $ExtraRoots } else { $null }), 'Machine')
+[Environment]::SetEnvironmentVariable('IMEDIC_FS_EMPRESA_ID', $(if ($EmpresaId -gt 0) { "$EmpresaId" } else { $null }), 'Machine')
 
 $action = New-ScheduledTaskAction -Execute $Node -Argument "`"$FileServerJs`"" -WorkingDirectory $RepoRoot
 
@@ -365,10 +394,14 @@ $envLines = @(
 	"IMEDIC_FS_HOSTNAME=$Hostname",
 	"IMEDIC_FS_PORT=$Port",
 	"IMEDIC_FS_ROOT=$Root",
-	"IMEDIC_FS_TOKEN=$Token"
+	"IMEDIC_FS_TOKEN=$Token",
+	"IMEDIC_FS_SIGNING_KEY=$SigningKey",
+	"IMEDIC_FS_EXTRA_ROOTS=$ExtraRoots",
+	"IMEDIC_FS_EMPRESA_ID=$(if ($EmpresaId -gt 0) { $EmpresaId } else { '' })"
 )
 Set-Content -Path $EnvFile -Value ($envLines -join "`r`n") -Encoding UTF8
-Write-Ok "variables en $EnvFile"
+cmd /c "icacls `"$EnvFile`" /inheritance:r /grant:r *S-1-5-32-544:F *S-1-5-18:F" 2>$null | Out-Null
+Write-Ok "variables en $EnvFile (solo Administradores y SYSTEM)"
 
 # ------------------------------------------------------------------ chequeos
 
@@ -427,7 +460,12 @@ Write-Host "  Super Admin > Empresas > $Clinica > FileServerUrl =" -ForegroundCo
 Write-Host "      https://$Hostname" -ForegroundColor Cyan
 if ($Token) {
 	Write-Host ''
-	Write-Host '  Y en Railway (backend), la variable:' -ForegroundColor White
+	Write-Host '  Token legado en Railway (backend), mientras dure la transicion:' -ForegroundColor White
 	Write-Host "      FILE_SERVER_TOKEN=$Token" -ForegroundColor Cyan
 }
+Write-Host ''
+$idTxt = $(if ($EmpresaId -gt 0) { "$EmpresaId" } else { '<IDEMPRESA>' })
+Write-Host '  Clave de firma de esta clinica (Railway, FILE_SERVER_SIGNING_KEYS):' -ForegroundColor Yellow
+Write-Host ("      `"{0}`":`"{1}`"" -f $idTxt, $SigningKey) -ForegroundColor White
+Write-Host '  (si Railway usa IMEDIC_SIGNING_MASTER y la clave salio de clave-firma.js, no hace falta cargarla)'
 Write-Host ''
