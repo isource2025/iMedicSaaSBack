@@ -58,6 +58,11 @@ router.get(
 	agendaCtrl.obtenerDetalleAtencion,
 );
 router.get(
+	'/turnos/:idTurno/ticket',
+	requirePermiso('TURNOS.AGENDA.VER'),
+	agendaCtrl.obtenerTicketTurno,
+);
+router.get(
 	'/turnos/:idTurno/rac',
 	requirePermiso('TURNOS.AGENDA.VER'),
 	racCtrl.obtenerRac,

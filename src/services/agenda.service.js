@@ -3376,6 +3376,114 @@ async function obtenerDetalleAtencionTurno(idTurno, opts = {}) {
 	};
 }
 
+/**
+ * Datos del ticket de turno (estilo Clarion) para imprimir / previsualizar PDF.
+ */
+async function obtenerTicketTurno(idTurno) {
+	const id = Number(idTurno);
+	if (!Number.isFinite(id) || id <= 0) {
+		const e = new Error('idTurno inválido');
+		e.statusCode = 400;
+		throw e;
+	}
+
+	const rows = await executeQuery(
+		`SELECT TOP 1
+		        t.IdTurno, t.FechaAsignada, t.HoraAsignada, t.Sector, t.Observaciones,
+		        t.Status, t.NumeroDocumento, t.IDPaciente, t.CodOperador, t.Especialidad,
+		        t.Profesional,
+		        ${SQL_PACIENTE_COLS},
+		        prof.ApellidoNombre AS ProfesionalNombre,
+		        prof.ValorEspecialidad AS ProfEspecialidad,
+		        prof.ValorServicio AS ProfServicio,
+		        esp.Descripcion AS EspecialidadNombre,
+		        srv.Descripcion AS ServicioNombre,
+		        op.Apellido AS OpAsigApellido, op.Nombres AS OpAsigNombres
+		 FROM dbo.imTurnos t
+		 ${SQL_PACIENTE_JOIN}
+		 LEFT JOIN dbo.imPersonal prof ON prof.Matricula = t.Profesional
+		 LEFT JOIN dbo.imEspecialidad esp
+		   ON esp.Valor = CASE
+		     WHEN ISNULL(t.Especialidad, 0) > 0 THEN t.Especialidad
+		     ELSE ISNULL(prof.ValorEspecialidad, 0)
+		   END
+		 LEFT JOIN dbo.imServicios srv
+		   ON LTRIM(RTRIM(CONVERT(VARCHAR(20), srv.Valor))) =
+		      LTRIM(RTRIM(CONVERT(VARCHAR(20),
+		        CASE
+		          WHEN NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(20), t.Sector))), '') IS NOT NULL
+		            THEN t.Sector
+		          ELSE CONVERT(VARCHAR(20), ISNULL(prof.ValorServicio, ''))
+		        END
+		      )))
+		 LEFT JOIN dbo.imPassword op ON op.CodOperador = t.CodOperador OR op.ValorPersonal = t.CodOperador
+		 WHERE t.IdTurno = @p0`,
+		[{ value: id, type: 'Int' }],
+	);
+
+	if (!rows.length) {
+		const e = new Error('Turno no encontrado');
+		e.statusCode = 404;
+		throw e;
+	}
+
+	const r = rows[0];
+	const st = r.Status != null ? Number(r.Status) : STATUS_OCUPADO;
+	if (st === STATUS_CANCELADO) {
+		const e = new Error('El turno está cancelado');
+		e.statusCode = 409;
+		throw e;
+	}
+
+	const fa = Number(r.FechaAsignada) || 0;
+	const fechaDate = fa > 0 ? convertirFechaClarionADate(fa) : null;
+	const fechaIso = fechaDate ? _isoDate(fechaDate) : null;
+	const hora = _hhmm(Number(r.HoraAsignada) || 0);
+
+	let fechaHoraLegible = null;
+	if (fechaDate && hora) {
+		const dia = DIA_POR_JS[fechaDate.getDay()] || '';
+		const dd = String(fechaDate.getDate()).padStart(2, '0');
+		const mm = String(fechaDate.getMonth() + 1).padStart(2, '0');
+		const yyyy = fechaDate.getFullYear();
+		fechaHoraLegible = `${dia} ${dd}/${mm}/${yyyy} ${hora}`;
+	}
+
+	const opAsigNom = [r.OpAsigApellido, r.OpAsigNombres]
+		.filter(Boolean)
+		.map((s) => String(s).trim())
+		.join(' ')
+		.trim();
+	const codAsig = Number(r.CodOperador) || 0;
+	const otorgadoPor =
+		opAsigNom || (codAsig > 0 ? await _nombreOperador(codAsig) : null) || null;
+
+	const docRaw = r.NumeroDocumento != null ? Number(r.NumeroDocumento) : null;
+	const numeroDocumento =
+		Number.isFinite(docRaw) && docRaw > 0
+			? docRaw
+			: r.NumeroDocumento != null && String(r.NumeroDocumento).trim()
+				? String(r.NumeroDocumento).trim()
+				: null;
+
+	return {
+		idTurno: id,
+		fecha: fechaIso,
+		hora,
+		fechaHoraLegible,
+		profesional: r.ProfesionalNombre ? String(r.ProfesionalNombre).trim() : null,
+		servicio: r.ServicioNombre ? String(r.ServicioNombre).trim() : null,
+		especialidad: r.EspecialidadNombre ? String(r.EspecialidadNombre).trim() : null,
+		paciente: r.PacienteNombre
+			? repararTextoClarionAnsi(String(r.PacienteNombre).trim())
+			: null,
+		numeroDocumento,
+		observaciones: r.Observaciones ? String(r.Observaciones).trim() : null,
+		otorgadoPor,
+		sector: r.Sector ? String(r.Sector).trim() : null,
+	};
+}
+
 module.exports = {
 	generarSlots,
 	listarDiasConAgenda,
@@ -3398,4 +3506,5 @@ module.exports = {
 	buscarPracticasFacturacion,
 	listarSectoresReceptorEstudios,
 	obtenerDetalleAtencionTurno,
+	obtenerTicketTurno,
 };

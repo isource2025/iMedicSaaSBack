@@ -496,6 +496,16 @@ async function obtenerDetalleAtencion(req, res) {
 	}
 }
 
+async function obtenerTicketTurno(req, res) {
+	try {
+		const id = Number(req.params.idTurno);
+		const data = await service.obtenerTicketTurno(id);
+		res.json({ success: true, data });
+	} catch (e) {
+		_err(res, e);
+	}
+}
+
 module.exports = {
 	obtenerSlots,
 	obtenerDiasConAgenda,
@@ -523,4 +533,5 @@ module.exports = {
 	buscarPracticasFacturacion,
 	listarSectoresReceptorEstudios,
 	obtenerDetalleAtencion,
+	obtenerTicketTurno,
 };
