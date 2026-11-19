@@ -1,3 +1,6 @@
+# OBSOLETO: no pegar. Este parche deja el file server sin confinar a su carpeta.
+# Reinstalar con scripts/tunnel/Instalar-Clinica-UnaVez.ps1 ($SoloFileServer = $true). Ver docs/SEGURIDAD_MISALUD.md.
+#
 # Pegá ESTO en el file-server.ps1 que ya tenés en Vidal
 # Archivo típico: C:\ProgramData\iMedic\file-server.ps1
 # Después reiniciá la tarea "iMedic File Server" (o volvé a correr Parche-Unc-Vidal.ps1).

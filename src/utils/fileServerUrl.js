@@ -11,21 +11,34 @@
  * Vidal (empresa 1) es la excepción histórica: IP http://181.4.71.230:3002
  * mientras no esté migrada al túnel.
  */
+const axios = require('axios');
 const { getTenantId } = require('../context/tenantContext');
+const { markForSigning, installAxiosSigner } = require('./signedFileToken');
 
 const DEFAULT_VIDAL_FILE_SERVER_URL = 'http://181.4.71.230:3002';
 const VIDAL_EMPRESA_ID = Number(process.env.VIDAL_EMPRESA_ID || 1);
 
-/** Secreto compartido con el file server de las clínicas. Vacío = sin auth. */
+/**
+ * Secreto compartido legado (mismo para todas las clínicas). Se sigue mandando
+ * mientras esté seteado para no cortar a los file servers sin actualizar; se
+ * borra de Railway cuando todas las clínicas validan el token firmado.
+ */
 const FILE_SERVER_TOKEN = String(process.env.FILE_SERVER_TOKEN || '').trim();
 
+installAxiosSigner(axios);
+
 /**
- * Headers para hablar con el file server de una clínica.
+ * Headers para hablar con el file server de una clínica. Si la empresa tiene
+ * clave de firma (FILE_SERVER_SIGNING_KEYS o IMEDIC_SIGNING_MASTER), el pedido
+ * sale además con un token firmado para ese método + archivo, de vida corta.
  * @param {Record<string, string>} [extra]
+ * @param {number|string} [idEmpresaOpt] por defecto, la empresa del request
  */
-function fileServerHeaders(extra) {
+function fileServerHeaders(extra, idEmpresaOpt) {
 	const headers = { ...(extra || {}) };
 	if (FILE_SERVER_TOKEN) headers['x-imedic-token'] = FILE_SERVER_TOKEN;
+	const id = idEmpresaOpt != null && idEmpresaOpt !== '' ? idEmpresaOpt : getTenantId();
+	markForSigning(headers, 'fs', id);
 	return headers;
 }
 

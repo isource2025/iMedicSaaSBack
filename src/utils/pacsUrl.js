@@ -2,17 +2,28 @@
  * URL pública del bridge PACS por empresa.
  * Hostname fijo: https://pacs-<clinica>.imedic.com.ar
  */
+const axios = require('axios');
 const { getTenantId } = require('../context/tenantContext');
+const { markForSigning, installAxiosSigner } = require('./signedFileToken');
 
+/** Clave compartida legada; se borra de Railway cuando los bridges validan la firma. */
 const PACS_TOKEN = String(process.env.PACS_BRIDGE_KEY || process.env.PACS_BRIDGE_TOKEN || '').trim();
 
-function pacsHeaders(extra) {
+installAxiosSigner(axios);
+
+/**
+ * @param {Record<string, string>} [extra]
+ * @param {number|string} [idEmpresaOpt] por defecto, la empresa del request
+ */
+function pacsHeaders(extra, idEmpresaOpt) {
 	const headers = { ...(extra || {}) };
 	if (PACS_TOKEN) {
 		headers['x-imedic-pacs-key'] = PACS_TOKEN;
 		// pacs-bridge.js (Node) valida x-imedic-token
 		headers['x-imedic-token'] = PACS_TOKEN;
 	}
+	const id = idEmpresaOpt != null && idEmpresaOpt !== '' ? idEmpresaOpt : getTenantId();
+	markForSigning(headers, 'pacs', id);
 	return headers;
 }
 

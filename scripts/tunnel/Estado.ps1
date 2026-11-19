@@ -49,7 +49,15 @@ Write-Bien "clinica $Clinica"
 Write-Dato "hostname   https://$Hostname"
 Write-Dato "puerto     127.0.0.1:$Port"
 Write-Dato "carpeta    $Root"
-Write-Dato "auth       $(if ($Token) { 'token compartido' } else { 'solo tunel' })"
+$Firma    = $cfg['IMEDIC_FS_SIGNING_KEY']
+$modo = @()
+if ($Firma) { $modo += 'token firmado' }
+if ($Token) { $modo += 'token compartido legado' }
+if ($modo.Count -eq 0) {
+	Write-Mal 'auth       SIN CONFIGURAR: el file server no sirve archivos. Reinstala con Instalar-Clinica.ps1'
+} else {
+	Write-Dato "auth       $($modo -join ' + ')"
+}
 
 # -------------------------------------------------------------------- disco
 
@@ -137,7 +145,7 @@ $headers = @{}
 if ($Token) { $headers['x-imedic-token'] = $Token }
 try {
 	$h = Invoke-RestMethod -Uri "https://$Hostname/health" -Headers $headers -TimeoutSec 15
-	Write-Bien "https://$Hostname responde (root=$($h.root))"
+	Write-Bien "https://$Hostname responde (auth=$($h.auth), security=$($h.security))"
 } catch {
 	Write-Mal "https://$Hostname no responde"
 	Write-Dato $_.Exception.Message

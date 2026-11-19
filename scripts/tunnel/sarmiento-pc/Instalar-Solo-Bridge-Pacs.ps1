@@ -9,18 +9,29 @@
 
       powershell -ExecutionPolicy Bypass -File .\Instalar-Solo-Bridge-Pacs.ps1
 
-  Seguridad: todo endpoint salvo /health exige header X-iMedic-Pacs-Key.
-  La clave se genera la primera vez en C:\ProgramData\iMedic\pacs\key.txt
-  (re-ejecutar el instalador la conserva) y va a Railway como PACS_BRIDGE_KEY.
+  Seguridad: todo endpoint salvo /health exige una credencial:
+    - token firmado de vida corta (header x-imedic-sig), con la clave de
+      C:\ProgramData\iMedic\pacs\sign-key.txt -> Railway PACS_SIGNING_KEYS
+    - LEGADO: header X-iMedic-Pacs-Key con la clave de key.txt -> Railway
+      PACS_BRIDGE_KEY. Cuando Railway ya firma, borrar key.txt y reiniciar la
+      tarea: queda solo el token firmado.
+  Re-ejecutar el instalador conserva ambas claves.
 #>
 
 $SqlServer   = 'localhost\SQLCC'
 $SqlDatabase = 'ImageServer'
 $FsRoot      = 'D:\FS'
 $Port        = 9013
+$EmpresaId   = 101
+# Clave de firma (>= 32). Vacio = se conserva sign-key.txt o se genera una.
+# Con IMEDIC_SIGNING_MASTER en Railway: node scripts/tunnel/clave-firma.js --servicio pacs --empresa 101
+$SignKeyIn   = ''
+# $false = no genera key.txt legado en una instalacion nueva.
+$LegacyKey   = $true
 $InstallDir  = 'C:\ProgramData\iMedic\pacs'
 $BridgePs1   = Join-Path $InstallDir 'pacs-bridge.ps1'
 $KeyFile     = Join-Path $InstallDir 'key.txt'
+$SignKeyFile = Join-Path $InstallDir 'sign-key.txt'
 $TaskBridge  = 'iMedic PACS Bridge'
 
 $ErrorActionPreference = 'Stop'
@@ -45,12 +56,18 @@ param(
 	[string]$SqlDatabase = '__SQL_DB__',
 	[string]$FsRoot = '__FS_ROOT__',
 	[string]$KeyFile = '__KEY_FILE__',
-	[int]$Port = 9013
+	[string]$SignKeyFile = '__SIGN_KEY_FILE__',
+	[string]$EmpresaId = '__EMPRESA_ID__',
+	[int]$Port = 9013,
+	[int]$SkewS = 300,
+	[int]$MaxTtlS = 900
 )
 $ErrorActionPreference = 'Continue'
 $ApiKey = ''
 if (Test-Path $KeyFile) { $ApiKey = ([IO.File]::ReadAllText($KeyFile)).Trim() }
-if ($ApiKey.Length -lt 32) { Write-Host "[iMedic PACS] SIN CLAVE en ${KeyFile}: solo /health responde" }
+$SignKey = ''
+if (Test-Path $SignKeyFile) { $SignKey = ([IO.File]::ReadAllText($SignKeyFile)).Trim() }
+if ($ApiKey.Length -lt 32 -and $SignKey.Length -lt 32) { Write-Host "[iMedic PACS] SIN CLAVES (${SignKeyFile} / ${KeyFile}): solo /health responde" }
 # + = todas las IPs (LAN). Requiere URL ACL (lo hace el instalador).
 $prefix = "http://+:$Port/"
 $listener = New-Object System.Net.HttpListener
@@ -65,6 +82,67 @@ function Test-Key($req) {
 	if ($got.Length -ne $ApiKey.Length) { return $false }
 	$diff = 0
 	for ($i = 0; $i -lt $ApiKey.Length; $i++) { $diff = $diff -bor ([int]$got[$i] -bxor [int]$ApiKey[$i]) }
+	return ($diff -eq 0)
+}
+
+# Token firmado v1: mismo mensaje que src/utils/signedFileToken.js del backend.
+function Unescape-Q([string]$s) { return [Uri]::UnescapeDataString($s.Replace('+', ' ')) }
+function Get-RawParts([string]$raw) {
+	if ($raw -match '^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(.*)$') { $raw = $Matches[1] }
+	$h = $raw.IndexOf('#'); if ($h -ge 0) { $raw = $raw.Substring(0, $h) }
+	$qi = $raw.IndexOf('?')
+	if ($qi -ge 0) { return @($raw.Substring(0, $qi), $raw.Substring($qi + 1)) }
+	return @($raw, '')
+}
+function Get-CanonQuery([string]$q) {
+	$items = New-Object System.Collections.ArrayList
+	foreach ($part in $q.Split('&')) {
+		if (-not $part) { continue }
+		$eq = $part.IndexOf('=')
+		if ($eq -ge 0) { $k = Unescape-Q $part.Substring(0, $eq); $v = Unescape-Q $part.Substring($eq + 1) }
+		else { $k = Unescape-Q $part; $v = '' }
+		if ($k -ceq 'sig') { continue }
+		[void]$items.Add($k + [char]0 + $v)
+	}
+	$arr = [string[]]$items.ToArray([string])
+	[Array]::Sort($arr, [StringComparer]::Ordinal)
+	$out = New-Object System.Collections.ArrayList
+	foreach ($s in $arr) { $z = $s.IndexOf([char]0); [void]$out.Add($s.Substring(0, $z) + '=' + $s.Substring($z + 1)) }
+	return [string]::Join('&', [string[]]$out.ToArray([string]))
+}
+function Get-Sig([string]$key, [string]$msg) {
+	$hm = New-Object System.Security.Cryptography.HMACSHA256
+	$hm.Key = [Text.Encoding]::UTF8.GetBytes($key)
+	$b = $hm.ComputeHash([Text.Encoding]::UTF8.GetBytes($msg))
+	return [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+function Test-Signed($req) {
+	if ($SignKey.Length -lt 32) { return $false }
+	$raw = [string]$req.RawUrl
+	$parts = Get-RawParts $raw
+	$tok = [string]$req.Headers['x-imedic-sig']
+	if (-not $tok) {
+		foreach ($p in $parts[1].Split('&')) { if ($p.StartsWith('sig=')) { $tok = Unescape-Q $p.Substring(4) } }
+	}
+	if (-not $tok) { return $false }
+	$t = $tok.Trim().Split('.')
+	if ($t.Length -ne 4 -or $t[0] -cne 'v1') { return $false }
+	if ($t[1] -notmatch '^\d+$' -or $t[2] -notmatch '^\d+$') { return $false }
+	if ($EmpresaId -and $EmpresaId -match '^\d+$' -and $t[1] -ne $EmpresaId) { return $false }
+	$exp = [long]$t[2]
+	$epoch = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+	$now = [long][Math]::Floor(([DateTime]::UtcNow - $epoch).TotalSeconds)
+	if ($now -gt ($exp + $SkewS)) { return $false }
+	if ($exp -gt ($now + $MaxTtlS + $SkewS)) { return $false }
+	$ruta = $parts[0]
+	try { $ruta = [Uri]::UnescapeDataString($ruta) } catch {}
+	$ruta = $ruta.TrimEnd('/'); if (-not $ruta) { $ruta = '/' }
+	$msg = [string]::Join("`n", [string[]]@('v1', $t[1], $req.HttpMethod.ToUpperInvariant(), $ruta, (Get-CanonQuery $parts[1]), $t[2]))
+	$want = Get-Sig $SignKey $msg
+	$got = $t[3]
+	if ($got.Length -ne $want.Length) { return $false }
+	$diff = 0
+	for ($i = 0; $i -lt $want.Length; $i++) { $diff = $diff -bor ([int]$got[$i] -bxor [int]$want[$i]) }
 	return ($diff -eq 0)
 }
 
@@ -138,11 +216,15 @@ while ($listener.IsListening) {
 		$req = $ctx.Request
 		$path = $req.Url.AbsolutePath.TrimEnd('/')
 		if ($path -eq '') { $path = '/' }
-		$authed = Test-Key $req
+		$authed = (Test-Signed $req) -or (Test-Key $req)
 		if ($path -eq '/health') {
 			$fsOk = Test-Path $FsRoot; $sql = 'fail'; $err = $null
 			try { $null = Invoke-Q 'SELECT 1 AS ok' $null; $sql = 'ok' } catch { $err = $_.Exception.Message }
-			$h = @{ ok = [bool]($sql -eq 'ok'); service = 'imedic-pacs-bridge-ps1'; sql = [string]$sql; keyConfigured = [bool]($ApiKey.Length -ge 32); authed = [bool]$authed }
+			$epochH = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+			$h = @{ ok = [bool]($sql -eq 'ok'); service = 'imedic-pacs-bridge-ps1'; security = 'v1'; sql = [string]$sql
+				keyConfigured = [bool](($ApiKey.Length -ge 32) -or ($SignKey.Length -ge 32)); signing = [bool]($SignKey.Length -ge 32)
+				legacyKey = [bool]($ApiKey.Length -ge 32); authed = [bool]$authed
+				epoch = [long][Math]::Floor(([DateTime]::UtcNow - $epochH).TotalSeconds) }
 			if ($authed) {
 				$h.port = [int]$Port; $h.sqlServer = [string]$SqlServer; $h.database = [string]$SqlDatabase
 				$h.fsRoot = [string]$FsRoot; $h.fsExists = [bool]$fsOk; $h.sqlError = [string]$err
@@ -288,24 +370,43 @@ Write-Ok 'SQL OK'
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-Write-Paso 'Clave del bridge'
+function New-HexKey {
+	$rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
+	$buf = New-Object byte[] 32
+	$rng.GetBytes($buf)
+	return ([BitConverter]::ToString($buf)).Replace('-', '').ToLowerInvariant()
+}
+function Protect-KeyFile([string]$f) {
+	# Solo Administradores y SYSTEM (por SID: el nombre del grupo cambia con el idioma)
+	cmd /c "icacls `"$f`" /inheritance:r /grant:r *S-1-5-32-544:F *S-1-5-18:F" 2>$null | Out-Null
+	if ($LASTEXITCODE -ne 0) { Write-Warn "no se pudieron restringir permisos de $f (sigue funcionando)" }
+}
+
+Write-Paso 'Clave legada del bridge (X-iMedic-Pacs-Key)'
 $Key = ''
 if (Test-Path $KeyFile) { $Key = ([IO.File]::ReadAllText($KeyFile)).Trim() }
 if ($Key.Length -ge 32) {
 	Write-Ok "se conserva la clave existente ($KeyFile)"
-} else {
-	$rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
-	$buf = New-Object byte[] 32
-	$rng.GetBytes($buf)
-	$Key = ([BitConverter]::ToString($buf)).Replace('-', '').ToLowerInvariant()
+	Protect-KeyFile $KeyFile
+} elseif ($LegacyKey) {
+	$Key = New-HexKey
 	[IO.File]::WriteAllText($KeyFile, $Key)
 	Write-Ok "clave nueva en $KeyFile"
+	Protect-KeyFile $KeyFile
+} else {
+	$Key = ''
+	Write-Ok 'sin clave legada: solo token firmado'
 }
-# Solo Administradores y SYSTEM (por SID: el nombre del grupo cambia con el idioma)
-cmd /c "icacls `"$KeyFile`" /inheritance:r /grant:r *S-1-5-32-544:F *S-1-5-18:F" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Warn 'no se pudieron restringir permisos de key.txt (sigue funcionando)' }
 
-$src = $BridgeSource.Replace('__SQL_SERVER__', $SqlServer).Replace('__SQL_DB__', $SqlDatabase).Replace('__FS_ROOT__', $FsRoot).Replace('__KEY_FILE__', $KeyFile)
+Write-Paso 'Clave de firma (x-imedic-sig)'
+$SignKey = $SignKeyIn
+if (-not $SignKey -and (Test-Path $SignKeyFile)) { $SignKey = ([IO.File]::ReadAllText($SignKeyFile)).Trim() }
+if ($SignKey -and $SignKey.Length -lt 32) { throw 'La clave de firma tiene que tener al menos 32 caracteres.' }
+if (-not $SignKey) { $SignKey = New-HexKey; Write-Ok "clave nueva en $SignKeyFile" } else { Write-Ok "clave en $SignKeyFile" }
+[IO.File]::WriteAllText($SignKeyFile, $SignKey)
+Protect-KeyFile $SignKeyFile
+
+$src = $BridgeSource.Replace('__SQL_SERVER__', $SqlServer).Replace('__SQL_DB__', $SqlDatabase).Replace('__FS_ROOT__', $FsRoot).Replace('__KEY_FILE__', $KeyFile).Replace('__SIGN_KEY_FILE__', $SignKeyFile).Replace('__EMPRESA_ID__', [string]$EmpresaId)
 Set-Content -Path $BridgePs1 -Value $src -Encoding UTF8
 Write-Ok $BridgePs1
 
@@ -352,10 +453,10 @@ Start-Sleep -Seconds 3
 $ok = $false
 try {
 	$wc = New-Object Net.WebClient
-	$wc.Headers.Add('X-iMedic-Pacs-Key', $Key)
+	if ($Key) { $wc.Headers.Add('X-iMedic-Pacs-Key', $Key) }
 	$txt = $wc.DownloadString("http://127.0.0.1:$Port/health")
 	$wc.Dispose()
-	if ($txt -match '"authed":true') { $ok = $true; Write-Ok $txt } else { Write-Warn $txt }
+	if ($txt -match '"signing":true') { $ok = $true; Write-Ok $txt } else { Write-Warn $txt }
 } catch { Write-Warn $_.Exception.Message }
 
 Write-Host ''
@@ -363,9 +464,14 @@ Write-Host '  BRIDGE LISTO (sin tunel en esta PC)' -ForegroundColor Green
 Write-Host ("  Local:  http://127.0.0.1:" + $Port + "/health")
 Write-Host ("  LAN:    http://" + $ip + ":" + $Port + "/health") -ForegroundColor Cyan
 Write-Host ''
-Write-Host '  CLAVE (copiar a Railway como PACS_BRIDGE_KEY):' -ForegroundColor Yellow
-Write-Host ("      " + $Key) -ForegroundColor White
-Write-Host ("  (queda guardada en " + $KeyFile + ")")
+Write-Host '  CLAVE DE FIRMA (Railway, PACS_SIGNING_KEYS):' -ForegroundColor Yellow
+Write-Host ("      `"" + $EmpresaId + "`":`"" + $SignKey + "`"") -ForegroundColor White
+Write-Host ("  (queda guardada en " + $SignKeyFile + "; si Railway usa IMEDIC_SIGNING_MASTER y la clave salio de clave-firma.js, no hace falta cargarla)")
+if ($Key) {
+	Write-Host '  Clave LEGADA (Railway PACS_BRIDGE_KEY, solo hasta que Railway firme):' -ForegroundColor Yellow
+	Write-Host ("      " + $Key) -ForegroundColor White
+	Write-Host ("  (en " + $KeyFile + "; borrar ese archivo y reiniciar la tarea para dejar solo la firma)")
+}
 Write-Host ''
 Write-Host '  SIGUIENTE: en Cloudflare Dashboard (navegador, desde tu PC):' -ForegroundColor Yellow
 Write-Host '  Zero Trust -> Networks -> Tunnels -> imedic-sarmiento (adjuntos)'

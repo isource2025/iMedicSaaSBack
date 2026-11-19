@@ -6,6 +6,7 @@ const { createTenantOnce } = require('../context/tenantCache');
 const { insertJobs, getJobsByPatient, replaceJobs } = require('./patientJobs.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const { v4: uuidv4 } = require('uuid');
+const { signMediaUrl, stripMediaSignature } = require('../utils/mediaUrl');
 const {
 	normalizarTextoParaClarionAnsi,
 	repararTextoClarionAnsi,
@@ -193,21 +194,23 @@ const ensureExtraColumns = createTenantOnce(async () => {
 	}
 });
 
-// Normaliza un resultado (o lista) agregando baseUrl a FotoURL relativa
+// Normaliza un resultado (o lista) agregando baseUrl a FotoURL relativa y la firma de vida corta
 const mapFotoURL = (rows, baseUrl) => {
-	if (!baseUrl) return rows;
+	if (!baseUrl) return rows.map((r) => ({ ...r, FotoURL: r.FotoURL ? signMediaUrl(r.FotoURL) : r.FotoURL }));
 	return rows.map((r) => ({
 		...r,
 		// Normalizamos rutas antiguas que apuntaban a /uploads/<archivo> cuando ahora servimos /media/patients
 		FotoURL: r.FotoURL
-			? /^https?:\/\//i.test(r.FotoURL)
-				? r.FotoURL
-				: r.FotoURL.startsWith('/media/patients/')
-				? `${baseUrl}${r.FotoURL}`
-				: r.FotoURL.startsWith('/uploads/')
-				? // Compatibilidad: si quedó en carpeta vieja pero queremos servirla igual
-				  `${baseUrl}${r.FotoURL.replace('/uploads/', '/media/patients/')}`
-				: `${baseUrl}${r.FotoURL}`
+			? signMediaUrl(
+					/^https?:\/\//i.test(r.FotoURL)
+						? r.FotoURL
+						: r.FotoURL.startsWith('/media/patients/')
+						? `${baseUrl}${r.FotoURL}`
+						: r.FotoURL.startsWith('/uploads/')
+						? // Compatibilidad: si quedó en carpeta vieja pero queremos servirla igual
+						  `${baseUrl}${r.FotoURL.replace('/uploads/', '/media/patients/')}`
+						: `${baseUrl}${r.FotoURL}`,
+			  )
 			: null,
 	}));
 };
@@ -610,7 +613,7 @@ const crearPaciente = async (pacienteData) => {
 			Mail: limitLength(pacienteData.Mail, 80) || null,
 			NumeroSSN: limitLength(numeroSSNIn, 40) || null,
 			NumeroCuenta: limitLength(numeroCuentaIn, 40) || null,
-			FotoURL: limitLength(pacienteData.FotoURL, 255) || null,
+			FotoURL: limitLength(stripMediaSignature(pacienteData.FotoURL), 255) || null,
 			LicenciaConducir: limitLength(pacienteData.LicenciaConducir, 40) || null,
 			DadorOrganos: limitLength(pacienteData.DadorOrganos, 1) || null,
 			OrdenNacimiento:
@@ -763,7 +766,7 @@ const actualizarPaciente = async (id, pacienteData) => {
 			Mail: limitLength(pacienteData.Mail, 100) || '',
 			NumeroSSN: limitLength(numeroSSNIn, 20) || '',
 			NumeroCuenta: limitLength(numeroCuentaIn, 40) || null,
-			FotoURL: pacienteData.FotoURL ? limitLength(pacienteData.FotoURL, 255) : null,
+			FotoURL: pacienteData.FotoURL ? limitLength(stripMediaSignature(pacienteData.FotoURL), 255) : null,
 			LicenciaConducir: limitLength(pacienteData.LicenciaConducir, 40) || null,
 			DadorOrganos: limitLength(pacienteData.DadorOrganos, 1) || null,
 			OrdenNacimiento:

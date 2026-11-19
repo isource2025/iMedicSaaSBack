@@ -36,6 +36,10 @@ $SaUser       = 'superadmin'
 $SaPass       = ''              # vacío = no graba; después: set-pacs-url.js
 # =============================================================================
 
+# OBSOLETO: instala un bridge sin token firmado y con CORS abierto (*).
+# Usar sarmiento-pc/Instalar-Solo-Bridge-Pacs.ps1 (el túnel ya existe). Ver docs/SEGURIDAD_MISALUD.md.
+throw 'Script obsoleto e inseguro: usar sarmiento-pc/Instalar-Solo-Bridge-Pacs.ps1 (ver docs/SEGURIDAD_MISALUD.md).'
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Off
 

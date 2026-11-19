@@ -17,13 +17,23 @@
  *                             en ese caso usar usuario SQL de solo lectura)
  *   IMEDIC_PACS_SQL_PASSWORD
  *   IMEDIC_PACS_FS_ROOT       default D:\\FS (FilesystemPath de ImageServer)
- *   IMEDIC_PACS_TOKEN         si seteado, exige header x-imedic-token
+ *   IMEDIC_PACS_SIGNING_KEY   clave de ESTA clínica para el token firmado (x-imedic-sig)
+ *   IMEDIC_PACS_EMPRESA_ID    si está, el token tiene que ser de esta empresa
+ *   IMEDIC_PACS_TOKEN         clave compartida legada (x-imedic-token), solo transición
+ *
+ * Sin IMEDIC_PACS_SIGNING_KEY ni IMEDIC_PACS_TOKEN responde solo /health.
  */
 const express = require('express');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
+const {
+	verifyRequest,
+	tokenFromRequest,
+	safeEqual,
+	MIN_KEY_LENGTH,
+	DEFAULT_SKEW_S,
+} = require('./src/utils/signedFileToken');
 
 const PORT = Number(process.env.IMEDIC_PACS_PORT || 9013);
 const SQL_SERVER = process.env.IMEDIC_PACS_SQL_SERVER || 'localhost\\SQLCC';
@@ -32,17 +42,40 @@ const SQL_USER = String(process.env.IMEDIC_PACS_SQL_USER || '').trim();
 const SQL_PASSWORD = String(process.env.IMEDIC_PACS_SQL_PASSWORD || '');
 const FS_ROOT = process.env.IMEDIC_PACS_FS_ROOT || 'D:\\FS';
 const TOKEN = String(process.env.IMEDIC_PACS_TOKEN || '').trim();
+const SIGNING_KEY = String(process.env.IMEDIC_PACS_SIGNING_KEY || '').trim();
+const EMPRESA_ID = String(process.env.IMEDIC_PACS_EMPRESA_ID || '').trim();
+const CLOCK_SKEW_S = Number(process.env.IMEDIC_PACS_CLOCK_SKEW_S || DEFAULT_SKEW_S);
+const FIRMA_ACTIVA = SIGNING_KEY.length >= MIN_KEY_LENGTH;
 
 const app = express();
 app.disable('x-powered-by');
-app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+function autenticado(req) {
+	const firma = tokenFromRequest(req.headers, req.originalUrl);
+	if (firma && FIRMA_ACTIVA) {
+		const r = verifyRequest({
+			token: firma,
+			key: SIGNING_KEY,
+			method: req.method,
+			url: req.originalUrl,
+			skewS: CLOCK_SKEW_S,
+			idEmpresaEsperada: EMPRESA_ID,
+		});
+		if (r.ok) return true;
+		console.warn(`[pacs-bridge] firma rechazada (${r.motivo}) ${req.method} ${req.path}`);
+	}
+	if (!TOKEN) return false;
+	const legado = String(req.headers['x-imedic-token'] || req.headers['x-imedic-pacs-key'] || '').trim();
+	return safeEqual(legado, TOKEN);
+}
+
 app.use((req, res, next) => {
-	if (!TOKEN) return next();
 	if (req.path === '/health') return next();
-	const got = String(req.headers['x-imedic-token'] || '');
-	if (got !== TOKEN) return res.status(401).json({ error: 'unauthorized' });
+	if (!FIRMA_ACTIVA && !TOKEN) {
+		return res.status(503).json({ error: 'bridge sin credenciales: configure IMEDIC_PACS_SIGNING_KEY' });
+	}
+	if (!autenticado(req)) return res.status(401).json({ error: 'unauthorized' });
 	return next();
 });
 
@@ -122,23 +155,33 @@ function safeUnderFs(absPath) {
 }
 
 app.get('/health', async (_req, res) => {
+	const authed = (FIRMA_ACTIVA || Boolean(TOKEN)) && autenticado(_req);
 	const out = {
 		ok: true,
 		service: 'imedic-pacs-bridge',
-		port: PORT,
-		sqlServer: SQL_SERVER,
-		database: SQL_DATABASE,
-		fsRoot: FS_ROOT,
-		fsExists: fs.existsSync(FS_ROOT),
+		security: 'v1',
+		keyConfigured: FIRMA_ACTIVA || Boolean(TOKEN),
+		signing: FIRMA_ACTIVA,
+		authed,
+		epoch: Math.floor(Date.now() / 1000),
 		sql: 'unknown',
 	};
+	if (authed) {
+		Object.assign(out, {
+			port: PORT,
+			sqlServer: SQL_SERVER,
+			database: SQL_DATABASE,
+			fsRoot: FS_ROOT,
+			fsExists: fs.existsSync(FS_ROOT),
+		});
+	}
 	try {
 		const pool = await getPool();
 		await pool.request().query('SELECT 1 AS ok');
 		out.sql = 'ok';
 	} catch (e) {
 		out.sql = 'fail';
-		out.sqlError = e.message;
+		if (authed) out.sqlError = e.message;
 		out.ok = false;
 	}
 	res.status(out.ok ? 200 : 503).json(out);
@@ -333,4 +376,6 @@ app.use((_req, res) => res.status(404).json({ error: 'not found' }));
 
 app.listen(PORT, '127.0.0.1', () => {
 	console.log(`[pacs-bridge] http://127.0.0.1:${PORT}  sql=${SQL_SERVER}/${SQL_DATABASE}  fs=${FS_ROOT}`);
+	const modo = [FIRMA_ACTIVA && 'firma', TOKEN && 'token-legado'].filter(Boolean).join('+');
+	console.log(`[pacs-bridge] auth: ${modo || 'SIN CONFIGURAR (solo /health)'}`);
 });

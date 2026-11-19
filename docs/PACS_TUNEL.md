@@ -1,5 +1,7 @@
 # PACS Sarmiento — túnel fijo (igual que adjuntos)
 
+> **Seguridad (S1–S3):** el file server y el bridge PACS exigen un token firmado por clínica y solo sirven archivos de sus carpetas. Despliegue y verificación: [`SEGURIDAD_MISALUD.md`](SEGURIDAD_MISALUD.md).
+
 ```
 HCE (Vercel) → API (Railway) → https://pacs-sarmiento.imedic.com.ar
                               → Cloudflare Tunnel imedic-pacs-sarmiento

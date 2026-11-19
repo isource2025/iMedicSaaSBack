@@ -11,9 +11,16 @@
  * Se instala como servicio con scripts/tunnel/Instalar-Clinica.ps1.
  *
  * Variables (scripts/tunnel/clinica.env):
- *   IMEDIC_FS_PORT    puerto local (default 9012)
- *   IMEDIC_FS_ROOT    carpeta de adjuntos (default E:\adjuntos)
- *   IMEDIC_FS_TOKEN   si está seteado, exige el header x-imedic-token
+ *   IMEDIC_FS_PORT         puerto local (default 9012)
+ *   IMEDIC_FS_ROOT         carpeta de adjuntos (default E:\adjuntos)
+ *   IMEDIC_FS_EXTRA_ROOTS  otras carpetas permitidas, separadas por ";"
+ *   IMEDIC_FS_SIGNING_KEY  clave de ESTA clínica para el token firmado (x-imedic-sig)
+ *   IMEDIC_FS_EMPRESA_ID   si está, el token tiene que ser de esta empresa
+ *   IMEDIC_FS_TOKEN        secreto compartido legado (x-imedic-token), solo transición
+ *   IMEDIC_FS_CORS_ORIGINS orígenes de navegador permitidos (default: ninguno)
+ *
+ * Sin IMEDIC_FS_SIGNING_KEY ni IMEDIC_FS_TOKEN no sirve nada: solo /health.
+ * Solo lee y escribe dentro de IMEDIC_FS_ROOT / IMEDIC_FS_EXTRA_ROOTS.
  */
 const express = require('express');
 const cors = require('cors');
@@ -30,16 +37,36 @@ const {
 	decodeFileServerPathParam,
 	namesMatchLoose,
 } = require('./src/utils/fileNameEncoding');
+const {
+	verifyRequest,
+	tokenFromRequest,
+	safeEqual,
+	MIN_KEY_LENGTH,
+	DEFAULT_SKEW_S,
+} = require('./src/utils/signedFileToken');
+const { createConfinement, parseRootList } = require('./src/utils/rootConfinement');
 
 const PORT = Number(process.env.IMEDIC_FS_PORT || process.env.FILE_SERVER_PORT || 9012);
 const UPLOAD_ROOT = process.env.IMEDIC_FS_ROOT || process.env.FILE_SERVER_ROOT || 'E:\\adjuntos';
+const EXTRA_ROOTS = parseRootList(process.env.IMEDIC_FS_EXTRA_ROOTS);
 /** Cloudflare no deja pasar más de 100 MB por request en los planes Free/Pro. */
 const MAX_BYTES = Number(process.env.IMEDIC_FS_MAX_MB || 100) * 1024 * 1024;
 const TOKEN = String(process.env.IMEDIC_FS_TOKEN || '').trim();
+const SIGNING_KEY = String(process.env.IMEDIC_FS_SIGNING_KEY || '').trim();
+const EMPRESA_ID = String(process.env.IMEDIC_FS_EMPRESA_ID || '').trim();
+const CLOCK_SKEW_S = Number(process.env.IMEDIC_FS_CLOCK_SKEW_S || DEFAULT_SKEW_S);
+const CORS_ORIGINS = parseRootList(String(process.env.IMEDIC_FS_CORS_ORIGINS || '').replace(/,/g, ';'));
+
+if (SIGNING_KEY && SIGNING_KEY.length < MIN_KEY_LENGTH) {
+	console.error(`IMEDIC_FS_SIGNING_KEY tiene que tener al menos ${MIN_KEY_LENGTH} caracteres: se ignora.`);
+}
+const FIRMA_ACTIVA = SIGNING_KEY.length >= MIN_KEY_LENGTH;
+
+const raices = createConfinement([UPLOAD_ROOT, ...EXTRA_ROOTS]);
 
 const app = express();
 app.disable('x-powered-by');
-app.use(cors());
+if (CORS_ORIGINS.length) app.use(cors({ origin: CORS_ORIGINS }));
 app.use(express.json({ limit: '1mb' }));
 
 const upload = multer({
@@ -75,7 +102,7 @@ function normalizarRuta(ruta) {
 
 function existeArchivo(c) {
 	try {
-		return Boolean(c) && fs.existsSync(c) && fs.statSync(c).isFile();
+		return Boolean(c) && raices.contains(c) && fs.existsSync(c) && fs.statSync(c).isFile();
 	} catch {
 		return false;
 	}
@@ -120,6 +147,7 @@ function carpetasDeVisita(root, visita) {
 }
 
 function archivoEnCarpeta(folder, fileName, wantedLower) {
+	if (!raices.contains(folder)) return null;
 	const exact = path.join(folder, fileName);
 	if (existeArchivo(exact)) return exact;
 	try {
@@ -151,8 +179,8 @@ function buscarEnCarpetaVisita(rutaPedida) {
 	const visita = m[1];
 	const roots = [];
 	const seen = new Set();
-	for (const r of [UPLOAD_ROOT, path.dirname(path.dirname(base))]) {
-		if (!r || seen.has(r.toLowerCase())) continue;
+	for (const r of [UPLOAD_ROOT, ...EXTRA_ROOTS, path.dirname(path.dirname(base))]) {
+		if (!r || seen.has(r.toLowerCase()) || !raices.contains(r)) continue;
 		seen.add(r.toLowerCase());
 		roots.push(r);
 	}
@@ -176,10 +204,12 @@ function buscarArchivo(rutaPedida) {
 	const pedida = String(rutaPedida || '').replace(/\//g, '\\');
 	const esAbsoluta = /^[A-Za-z]:\\/.test(pedida) || pedida.startsWith('\\\\');
 	if (pedida && !esAbsoluta) {
+		for (const r of EXTRA_ROOTS) candidatos.push(path.join(r, pedida));
 		candidatos.unshift(path.join(UPLOAD_ROOT, pedida));
 	}
 	const legacyRel = pedida.match(/^\\\\[^\\]+\\[Ii]magenes\\[^\\]+\\(.+)$/);
 	if (legacyRel) {
+		for (const r of EXTRA_ROOTS) candidatos.push(path.join(r, legacyRel[1]));
 		candidatos.unshift(path.join(UPLOAD_ROOT, legacyRel[1]));
 	}
 
@@ -204,29 +234,73 @@ function buscarArchivo(rutaPedida) {
 function resolverRuta(rutaCruda) {
 	const cruda = decodeFileServerPathParam(rutaCruda);
 	const normalizada = normalizarRuta(cruda);
-	return buscarArchivo(normalizada) || buscarArchivo(cruda) || buscarArchivo(String(rutaCruda || ''));
+	const hit =
+		buscarArchivo(normalizada) || buscarArchivo(cruda) || buscarArchivo(String(rutaCruda || ''));
+	return hit && raices.contains(hit) ? hit : null;
 }
 
-/** Con IMEDIC_FS_TOKEN vacío no valida nada: la protección es el túnel. */
+function modoAuth() {
+	if (FIRMA_ACTIVA && TOKEN) return 'firma+token-legado';
+	if (FIRMA_ACTIVA) return 'firma';
+	if (TOKEN) return 'token-legado';
+	return 'sin-configurar';
+}
+
+/** @returns {{ ok: boolean, motivo?: string }} */
+function autenticar(req) {
+	const firma = tokenFromRequest(req.headers, req.originalUrl);
+	let motivoFirma = '';
+	if (firma && FIRMA_ACTIVA) {
+		const r = verifyRequest({
+			token: firma,
+			key: SIGNING_KEY,
+			method: req.method,
+			url: req.originalUrl,
+			skewS: CLOCK_SKEW_S,
+			idEmpresaEsperada: EMPRESA_ID,
+		});
+		if (r.ok) return { ok: true };
+		motivoFirma = r.motivo;
+	}
+	if (TOKEN && safeEqual(String(req.headers['x-imedic-token'] || '').trim(), TOKEN)) {
+		if (motivoFirma) console.warn(`[auth] firma rechazada (${motivoFirma}); se aceptó el token legado`);
+		return { ok: true };
+	}
+	return { ok: false, motivo: motivoFirma || (firma ? 'firma-sin-clave' : 'sin-credencial') };
+}
+
 function exigirToken(req, res, next) {
-	if (!TOKEN) return next();
-	const enviado = String(req.headers['x-imedic-token'] || '').trim();
-	if (enviado && enviado === TOKEN) return next();
-	return res.status(401).json({ success: false, error: 'Token inválido' });
+	if (!FIRMA_ACTIVA && !TOKEN) {
+		return res.status(503).json({
+			success: false,
+			error:
+				'File server sin credenciales: configure IMEDIC_FS_SIGNING_KEY (Instalar-Clinica.ps1) y reinicie el servicio.',
+		});
+	}
+	const r = autenticar(req);
+	if (r.ok) return next();
+	console.warn(`[auth] 401 ${req.method} ${req.path} (${r.motivo})`);
+	return res.status(401).json({ success: false, error: 'Token inválido', motivo: r.motivo });
 }
 
 app.get(['/', '/health'], (req, res) => {
-	res.json({
+	const body = {
 		success: true,
 		ok: true,
 		status: 'ok',
 		encoding: 'utf8-v3',
-		root: UPLOAD_ROOT,
-		port: PORT,
+		security: 'v1',
 		maxMb: Math.round(MAX_BYTES / 1024 / 1024),
-		auth: TOKEN ? 'token' : 'tunnel',
+		auth: modoAuth(),
 		timestamp: new Date().toISOString(),
-	});
+		epoch: Math.floor(Date.now() / 1000),
+	};
+	if ((FIRMA_ACTIVA || TOKEN) && autenticar(req).ok) {
+		body.root = UPLOAD_ROOT;
+		body.extraRoots = EXTRA_ROOTS;
+		body.port = PORT;
+	}
+	res.json(body);
 });
 
 app.get('/file', exigirToken, (req, res) => {
@@ -237,6 +311,12 @@ app.get('/file', exigirToken, (req, res) => {
 
 	const encontrada = resolverRuta(pedida);
 	if (!encontrada) {
+		const literal = normalizarRuta(pedida);
+		if (literal && !raices.contains(literal) && fs.existsSync(literal)) {
+			console.error(
+				`[file] bloqueado, fuera de las carpetas permitidas: ${literal} (si es legítimo, agregar su carpeta a IMEDIC_FS_EXTRA_ROOTS)`,
+			);
+		}
 		console.error(`[file] no encontrado: ${pedida}`);
 		return res
 			.status(404)
@@ -278,9 +358,18 @@ app.post('/upload', exigirToken, upload.single('file'), (req, res) => {
 
 		// Ruta relativa (requisitos): anteponer el root de ESTA clínica.
 		const destNorm = String(destino || '').replace(/\//g, '\\');
-		const esAbsoluta = /^[A-Za-z]:\\/.test(destNorm) || destNorm.startsWith('\\\\');
+		const esAbsoluta =
+			path.isAbsolute(String(destino || '')) || /^[A-Za-z]:\\/.test(destNorm) || destNorm.startsWith('\\\\');
 		if (destino && !esAbsoluta) {
 			destino = path.join(UPLOAD_ROOT, destNorm);
+		}
+		if (!destino || !raices.contains(destino)) {
+			fs.promises.unlink(req.file.path).catch(() => {});
+			console.warn(`[upload] destino fuera de las carpetas permitidas: ${destino}`);
+			return res.status(400).json({
+				success: false,
+				error: 'Destino fuera de la carpeta de adjuntos de la clínica',
+			});
 		}
 
 		fs.mkdirSync(path.dirname(destino), { recursive: true });
@@ -353,5 +442,9 @@ app.listen(PORT, '127.0.0.1', () => {
 	console.log(`file server de adjuntos escuchando en http://127.0.0.1:${PORT}`);
 	console.log(`  carpeta:  ${UPLOAD_ROOT}`);
 	console.log(`  máximo:   ${Math.round(MAX_BYTES / 1024 / 1024)} MB por archivo`);
-	console.log(`  auth:     ${TOKEN ? 'token (x-imedic-token)' : 'solo túnel'}`);
+	if (EXTRA_ROOTS.length) console.log(`  extra:    ${EXTRA_ROOTS.join('; ')}`);
+	console.log(`  auth:     ${modoAuth()}`);
+	if (!FIRMA_ACTIVA && !TOKEN) {
+		console.error('  ATENCIÓN: sin IMEDIC_FS_SIGNING_KEY ni IMEDIC_FS_TOKEN no se sirve ningún archivo.');
+	}
 });
