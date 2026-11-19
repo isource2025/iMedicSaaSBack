@@ -8,7 +8,7 @@ el portal necesita. Ninguno se ejecuta solo: los corre un DBA.
 
 Crea el login `misalud_portal_ro` y, en la base de la clínica, el rol
 `misalud_lectura` con `SELECT` sobre una lista cerrada de tablas (paciente,
-visitas, epicrisis, adjuntos de estudios, catálogos) y `EXECUTE` sobre
+visitas, historia clínica de ingreso, epicrisis, adjuntos de estudios, catálogos) y `EXECUTE` sobre
 `fn_ClarionDATE2SQL`. Niega `INSERT`/`UPDATE`/`DELETE`/`ALTER` sobre `dbo`.
 Las tablas que no existan en esa clínica se saltean y se informan.
 

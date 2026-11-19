@@ -58,10 +58,10 @@ END;
 DECLARE @tablas nvarchar(max) = N'
 	imPacientes,imSexo,imClientes,
 	imVisita,imServiciosMedicos,imDiagnosticos,Sucursales,imCentroAsistencial,
-	imHCEpicrisis,
+	imHCI,imHCEpicrisis,
 	imPedidosEstudiosAdjuntos,hctiposimagenes';
 DECLARE @tablasFase2 nvarchar(max) = N'
-	imHCI,imHCEvolucion,
+	imHCEvolucion,
 	imPedidosEstudios,imTiposPedidosEstudios,imSolicitudesEstudios,
 	imHCExamenesLabCabecera,imHCExamenesLabDetalle,imHCExamenesLabDetalleConf,
 	HCProtocolosPtes,imProtocolosResultados,
