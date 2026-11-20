@@ -131,6 +131,8 @@ function _slotExtrasFromTurno(turno) {
 			cobertura: null,
 			racControles: 0,
 			racMedicacion: 0,
+			diagnosticoCodigo: null,
+			diagnosticoDescripcion: null,
 		};
 	}
 	const hl = Number(turno.Horallegada) || 0;
@@ -152,6 +154,8 @@ function _slotExtrasFromTurno(turno) {
 		cobertura: turno.Cobertura ? String(turno.Cobertura).trim() : null,
 		racControles: 0,
 		racMedicacion: 0,
+		diagnosticoCodigo: null,
+		diagnosticoDescripcion: null,
 	};
 }
 
@@ -211,6 +215,51 @@ function _aplicarRacResumenASlots(slots, racMap) {
 			s.racControles = r.controles;
 			s.racMedicacion = r.medicacion;
 		}
+	}
+}
+
+/** Diagnósticos CIE-10 de visitas cerradas (imVisita.DIAGNOSTICO → imDiagnosticos). */
+async function _diagnosticosPorVisitas(numeroVisitas) {
+	const map = new Map();
+	const ids = [...new Set(numeroVisitas.map(Number).filter((n) => n > 0))];
+	if (!ids.length) return map;
+	const list = ids.join(',');
+	const rows = await executeQuery(
+		`SELECT v.NUMEROVISITA AS numeroVisita,
+		        RTRIM(LTRIM(v.DIAGNOSTICO)) AS codigoRaw,
+		        RTRIM(LTRIM(d.CodigoOMS)) AS codigo,
+		        RTRIM(LTRIM(d.Descripcion)) AS descripcion
+		 FROM dbo.imVisita v
+		 LEFT JOIN dbo.imDiagnosticos d
+		   ON d.CIE = 10
+		  AND REPLACE(RTRIM(LTRIM(d.CodigoOMS)), ' ', '') = REPLACE(RTRIM(LTRIM(v.DIAGNOSTICO)), ' ', '')
+		 WHERE v.NUMEROVISITA IN (${list})
+		   AND NULLIF(RTRIM(LTRIM(v.DIAGNOSTICO)), '') IS NOT NULL`,
+	).catch(() => []);
+	for (const r of rows || []) {
+		const nv = Number(r.numeroVisita);
+		if (!nv) continue;
+		const codigo = String(r.codigo || r.codigoRaw || '').trim();
+		if (!codigo) continue;
+		map.set(nv, {
+			codigo,
+			descripcion: r.descripcion ? String(r.descripcion).trim() : null,
+		});
+	}
+	return map;
+}
+
+function _aplicarDiagnosticosASlots(slots, diagMap) {
+	for (const s of slots) {
+		const nv = Number(s.numeroVisita) || 0;
+		if (!nv) {
+			s.diagnosticoCodigo = null;
+			s.diagnosticoDescripcion = null;
+			continue;
+		}
+		const d = diagMap.get(nv);
+		s.diagnosticoCodigo = d?.codigo || null;
+		s.diagnosticoDescripcion = d?.descripcion || null;
 	}
 }
 
@@ -1099,6 +1148,10 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 	if (slotsConRac.length) {
 		const racMap = await _racResumenPorTurnos(slotsConRac.map((s) => s.idTurno));
 		_aplicarRacResumenASlots(slotsConRac, racMap);
+		const diagMap = await _diagnosticosPorVisitas(
+			slotsConRac.map((s) => s.numeroVisita).filter((n) => Number(n) > 0),
+		);
+		_aplicarDiagnosticosASlots(slotsConRac, diagMap);
 	}
 
 	return {
