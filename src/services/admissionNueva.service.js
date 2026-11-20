@@ -364,6 +364,20 @@ async function crearAdmision(body, ctx = {}) {
 	const codOperador = enteroOCero(ctx.codOperador);
 	const fechaCarga = convertirFechaAClarion(fechaCalendarioArgentina());
 	const horaCarga = convertirHoraAClarion(horaWallArgentina(true));
+	// El ambulatorio egresa el mismo día del ingreso: la ventana del tomógrafo
+	// es ese día. Un egreso en 0 la deja abierta hasta hoy y el estudio no cae ahí.
+	const esAmbulatorio = datos.clasePaciente.toUpperCase() === 'A';
+	const adm = datos.fechaAdmision;
+	const fechaEgreso = esAmbulatorio
+		? convertirFechaAClarion(
+				`${adm.getFullYear()}-${String(adm.getMonth() + 1).padStart(2, '0')}-${String(adm.getDate()).padStart(2, '0')}`,
+			)
+		: 0;
+	const horaEgreso = esAmbulatorio
+		? convertirHoraAClarion(
+				`${String(adm.getHours()).padStart(2, '0')}:${String(adm.getMinutes()).padStart(2, '0')}:${String(adm.getSeconds()).padStart(2, '0')}`,
+			)
+		: 0;
 
 	const params = [
 		{ value: datos.idPaciente, type: 'Int' },
@@ -386,6 +400,8 @@ async function crearAdmision(body, ctx = {}) {
 		{ value: codOperador, type: 'Int' },
 		{ value: fechaCarga, type: 'Int' },
 		{ value: horaCarga, type: 'Int' },
+		{ value: fechaEgreso, type: 'Int' },
+		{ value: horaEgreso, type: 'Int' },
 	];
 
 	// Los requisitos van como parámetros para no interpolar nada en el SQL.
@@ -454,7 +470,7 @@ async function crearAdmision(body, ctx = {}) {
 			@p10, @p11, @p12,
 			@p13, @p14, ' ', @p15,
 			'', '',
-			0, 0, @p18, @p19,
+			@p20, @p21, @p18, @p19,
 			'', @p16, @p17, 0
 		);
 
