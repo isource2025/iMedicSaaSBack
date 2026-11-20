@@ -2529,7 +2529,9 @@ async function cerrarTurno({
 					@p0, @p1, 0, @p2, ' ',
 					@p3, 'A', @p4, @p4,
 					@p5, 0, @p6, ' ',
-					@p7, @p8, @p7, @p8,
+					DATEDIFF(day, '18001228', CAST(@p2 AS date)),
+					DATEPART(hour, @p2) * 360000 + DATEPART(minute, @p2) * 6000 + DATEPART(second, @p2) * 100 + 1,
+					@p7, @p8,
 					'', '', @p9, @p10, 0,
 					0
 				)`,
@@ -2552,7 +2554,18 @@ async function cerrarTurno({
 			// La visita ya existe — solo actualizar egreso/diagnóstico/operador egreso
 			await executeQuery(
 				`UPDATE dbo.imVisita
-				 SET FECHAEGRESO = @p1, HORAEGRESO = @p2,
+				 SET FECHAEGRESO = CASE
+				       WHEN UPPER(LEFT(LTRIM(RTRIM(ISNULL(CLASEPACIENTE, ''))), 1)) = 'A'
+				       THEN DATEDIFF(day, '18001228', CAST(FECHAADMISIONS AS date))
+				       ELSE @p1
+				     END,
+				     HORAEGRESO = CASE
+				       WHEN UPPER(LEFT(LTRIM(RTRIM(ISNULL(CLASEPACIENTE, ''))), 1)) = 'A'
+				       THEN DATEPART(hour, FECHAADMISIONS) * 360000
+				          + DATEPART(minute, FECHAADMISIONS) * 6000
+				          + DATEPART(second, FECHAADMISIONS) * 100 + 1
+				       ELSE @p2
+				     END,
 				     DIAGNOSTICO = CASE WHEN LEN(LTRIM(RTRIM(@p3))) > 0 THEN @p3 ELSE DIAGNOSTICO END,
 				     CONTRATO = CASE WHEN @p4 > 0 THEN @p4 ELSE CONTRATO END,
 				     OperadorEgreso = @p5
