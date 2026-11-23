@@ -26,7 +26,10 @@
 const { executeQuery } = require('../models/db');
 const admissionSearchService = require('./admissionSearch.service');
 const interconsultasService = require('./interconsultas.service');
-const laboratoriosService = require('./laboratorios.service');
+// Mismo servicio que usa la UI (esquema real imHCExamenesLabCabecera/Detalle: IdExamenLaboratorio,
+// FechaEstudio, Estudio, Valor). laboratorios.service.js apunta a otro esquema que no existe en producción.
+const laboratoriosService = require('./laboratorios-simple.service');
+const indicacionesService = require('./indicaciones.service');
 const visitaMovimientosService = require('./visitaMovimientos.service');
 const botOpenai = require('./botOpenai.service');
 
@@ -48,13 +51,24 @@ const SECTIONS_IA = [
 	'adjuntos',
 ];
 
+/**
+ * Secciones que se leen con el exportador general. Prácticas e indicaciones se cargan aparte con
+ * consultas livianas: las del exportador no terminan en internaciones largas (cientos de prácticas,
+ * miles de hojas de indicación) y dejaban la sección vacía tras 2 minutos de espera.
+ */
+const SECTIONS_EXPORT_IA = SECTIONS_IA.filter((s) => s !== 'practicas' && s !== 'indicaciones');
+/** Tope por fuente: si una consulta se cuelga se sigue sin ella en vez de frenar toda la epicrisis. */
+const TOPE_FUENTE_MS = 45000;
+
 /** Columna imHCEpicrisis.Epicrisis (varchar 8000). Ver epicrisis.service.js. */
 const MAX_EPICRISIS_DB = 8000;
 /** Espacio real para el cuerpo: el deslinde se agrega al guardar y no puede quedar cortado. */
 const MAX_CUERPO_EPICRISIS = MAX_EPICRISIS_DB - DISCLAIMER_IA.length - 2;
 
-/** Tope global del contexto enviado al modelo (red de seguridad; el normal es mucho menor). */
-const MAX_CONTEXT_CHARS = 150000;
+/** Tope global del contexto enviado al modelo. Si se supera, se reparte por sección (ver ajustarContexto). */
+const MAX_CONTEXT_CHARS = 120000;
+/** Total de caracteres de notas que se admite como resultado de condensar las evoluciones. */
+const PRESUPUESTO_NOTAS_CHARS = 45000;
 /** Si el contexto supera esto, las evoluciones se condensan por tramos antes de redactar. */
 const UMBRAL_CONDENSAR_CHARS = 70000;
 const TRAMO_EVOLUCIONES_CHARS = 18000;
@@ -500,7 +514,9 @@ function lineaIndicacion(e, maxChars) {
 function lineaLaboratorio(ex, perfil) {
 	const cab = [
 		`[${dmy(ex.FechaExamen)} ${hhmm(ex.HoraExamen)}]`.replace(/\s+\]/, ']'),
-		takeText(ex.TipoEstudio, 60),
+		/^\d+$/.test(String(ex.TipoEstudio ?? '').trim())
+			? `Laboratorio (tipo ${String(ex.TipoEstudio).trim()}${ex.Protocolo ? `, protocolo ${takeText(ex.Protocolo, 20)}` : ''})`
+			: takeText(ex.TipoEstudio, 60),
 		takeText(ex.Laboratorio, 60) ? `(${takeText(ex.Laboratorio, 60)})` : '',
 		takeText(ex.Estado, 20) ? `estado=${takeText(ex.Estado, 20)}` : '',
 	]
@@ -738,8 +754,12 @@ function buildContextText(dossier, opts = {}) {
 			pItem.PracticaDescripcion || pItem.Descripcion || pItem.descripcion || pItem.DescPractica || pItem.Practica || '';
 		const cant = Number(pItem.CantidadPractica) > 1 ? ` x${Number(pItem.CantidadPractica)}` : '';
 		const sector = takeText(pItem.SectorDescripcion, 40);
+		const veces = Number(pItem.Veces) > 1 ? ` (${Number(pItem.Veces)} registros)` : '';
+		const f1 = ymd(pItem.FechaPractica);
+		const f2 = ymd(pItem.FechaUltimaPractica);
+		const fecha = f1 && f2 && f1 !== f2 ? `${dmy(f1)} a ${dmy(f2)}` : dmy(pItem.FechaPractica);
 		lines.push(
-			`${i + 1}. [${dmy(pItem.FechaPractica)}] ${takeText(nombre, 200)}${cant}${sector ? ` | ${sector}` : ''}`,
+			`${i + 1}. [${fecha}] ${takeText(nombre, 200)}${cant}${veces}${sector ? ` | ${sector}` : ''}`,
 		);
 	});
 
@@ -825,7 +845,83 @@ function buildContextText(dossier, opts = {}) {
 	});
 
 	const text = lines.join('\n');
-	return text.length > MAX_CONTEXT_CHARS ? text.slice(0, MAX_CONTEXT_CHARS) + '\n…[truncado]' : text;
+	if (opts.sinAjuste) return text;
+	return ajustarContexto(text, MAX_CONTEXT_CHARS);
+}
+
+/**
+ * Reduce una sección a un presupuesto de caracteres conservando muestras repartidas de TODA la
+ * internación (primero, último y parejo en el medio) en lugar de cortar el final.
+ * Un "registro" empieza en una línea "N. ..." y arrastra sus líneas de detalle.
+ */
+function reducirSeccion(texto, presupuesto) {
+	if (texto.length <= presupuesto) return texto;
+	const lineas = texto.split('\n');
+	const cabecera = lineas[0];
+	const items = [];
+	for (const l of lineas.slice(1)) {
+		// Registro nuevo: línea numerada ("12. ...") o bloque de período condensado ("--- Período ... ---").
+		if (/^(\d+\. |--- )/.test(l) || !items.length) items.push([l]);
+		else items[items.length - 1].push(l);
+	}
+	if (!items.length) return texto.slice(0, presupuesto);
+	const armar = (sel) =>
+		[
+			cabecera,
+			...sel.flat(),
+			`(… ${items.length - sel.length} de ${items.length} registros omitidos por tamaño; se conservan muestras repartidas en toda la internación)`,
+		].join('\n');
+	const promedio = (texto.length - cabecera.length) / items.length;
+	let n = Math.max(1, Math.floor((presupuesto - cabecera.length - 140) / Math.max(1, promedio)));
+	let sel = muestrear(items, n);
+	let out = armar(sel);
+	while (out.length > presupuesto && n > 1) {
+		n = Math.max(1, Math.floor(n * 0.9));
+		sel = muestrear(items, n);
+		out = armar(sel);
+	}
+	// Último recurso (un solo registro enorme): se recorta ese registro, nunca se excede el presupuesto.
+	return out.length > presupuesto ? `${out.slice(0, Math.max(0, presupuesto - 20))}\n(… recortado)` : out;
+}
+
+/**
+ * Si el contexto supera el tope, reparte el espacio entre secciones: las chicas quedan completas y
+ * las grandes se reducen (reparto "water-filling"). Así no se pierden secciones enteras del final
+ * (indicaciones, medicación, estudios, protocolos, controles) por culpa de una sección enorme.
+ */
+function ajustarContexto(text, limite) {
+	if (text.length <= limite) return text;
+	const partes = text.split(/\n\n(?==== \d)/);
+	const separadores = (partes.length - 1) * 2;
+	const fija = (p) => /^=== (1|2)\. /.test(p);
+	const tamFijo = partes.filter(fija).reduce((s, p) => s + p.length, 0);
+	let presupuesto = limite - separadores - tamFijo;
+	// Peso de cada sección en el reparto: el curso hospitalario (evoluciones) es lo más valioso.
+	const PESOS = { 4: 3, 5: 1, 11: 1.5 };
+	const pesoDe = (p) => PESOS[(p.match(/^=== (\d+)/) || [])[1]] || 1;
+	let pendientes = partes
+		.map((p, i) => ({ i, tam: p.length, peso: pesoDe(p) }))
+		.filter((x) => !fija(partes[x.i]));
+	const asignado = new Map();
+	for (;;) {
+		if (!pendientes.length) break;
+		const sumaPesos = pendientes.reduce((s, x) => s + x.peso, 0);
+		const cuotaDe = (x) => (presupuesto * x.peso) / sumaPesos;
+		const chicas = pendientes.filter((x) => x.tam <= cuotaDe(x));
+		if (!chicas.length) {
+			pendientes.forEach((x) => asignado.set(x.i, Math.floor(cuotaDe(x))));
+			break;
+		}
+		const ids = new Set(chicas.map((x) => x.i));
+		chicas.forEach((x) => {
+			asignado.set(x.i, x.tam);
+			presupuesto -= x.tam;
+		});
+		pendientes = pendientes.filter((x) => !ids.has(x.i));
+	}
+	const out = partes.map((p, i) => (fija(p) ? p : reducirSeccion(p, asignado.get(i) ?? p.length)));
+	const unido = out.join('\n\n');
+	return unido.length > limite ? `${unido.slice(0, limite)}\n…[truncado]` : unido;
 }
 
 function buildFallbackDraft(dossier, contextText) {
@@ -928,17 +1024,48 @@ async function reunirExpediente(numeroVisita) {
 	const idVisita = Number(numeroVisita);
 	const today = new Date().toISOString().slice(0, 10);
 
-	const [paciente, payload, interconsultas, laboratorios, movimientos, controles, evoEnf] =
+	// Cada fuente con tope de tiempo y registro de lo que falló/omitió (se informa en la respuesta).
+	const fuentesOmitidas = [];
+	const fuente = (nombre, factory, vacio) => {
+		let timer;
+		const tope = new Promise((resolve) => {
+			timer = setTimeout(() => {
+				fuentesOmitidas.push(`${nombre} (tiempo)`);
+				resolve(vacio);
+			}, TOPE_FUENTE_MS);
+		});
+		const real = Promise.resolve()
+			.then(factory)
+			.catch((e) => {
+				fuentesOmitidas.push(`${nombre} (${String(e?.message || e).slice(0, 60)})`);
+				return vacio;
+			});
+		return Promise.race([real, tope]).finally(() => clearTimeout(timer));
+	};
+
+	const [paciente, payload, interconsultas, laboratorios, movimientos, controles, evoEnf, practicas, indicaciones] =
 		await Promise.all([
 			obtenerPacienteEnriquecido(idVisita).catch(() => null),
-			admissionSearchService
-				.exportarAdmisionSelectivo(idVisita, { sections: SECTIONS_IA, exportAll: true })
-				.catch(() => null),
-			interconsultasService.listarPorVisita(idVisita).catch(() => []),
-			laboratoriosService.obtenerExamenesPorVisita(idVisita).catch(() => []),
-			visitaMovimientosService.obtenerMovimientosVisita(idVisita).catch(() => []),
-			obtenerControlesResumen(idVisita),
-			obtenerEvolucionEnfermeriaResumen(idVisita),
+			fuente(
+				'expediente',
+				() =>
+					admissionSearchService.exportarAdmisionSelectivo(idVisita, {
+						sections: SECTIONS_EXPORT_IA,
+						exportAll: true,
+					}),
+				null,
+			),
+			fuente('interconsultas', () => interconsultasService.listarPorVisita(idVisita), []),
+			fuente('laboratorios', () => laboratoriosService.obtenerExamenesPorVisita(idVisita), []),
+			fuente('movimientos', () => visitaMovimientosService.obtenerMovimientosVisita(idVisita), []),
+			fuente('controles', () => obtenerControlesResumen(idVisita), []),
+			fuente('enfermeria', () => obtenerEvolucionEnfermeriaResumen(idVisita), []),
+			fuente('practicas', () => admissionSearchService.obtenerPracticasResumenPorVisita(idVisita), []),
+			fuente(
+				'indicaciones',
+				() => indicacionesService.getIndicacionesByVisita(idVisita, { incluirSuspendidas: true, sinCadena: true }),
+				[],
+			),
 		]);
 
 	if (!paciente && !payload) return null;
@@ -955,16 +1082,17 @@ async function reunirExpediente(numeroVisita) {
 		movimientos: movimientos || [],
 		historialClinico: payload?.historialClinico || [],
 		evolucionesMedicas: payload?.evolucionesMedicas || [],
-		indicaciones: payload?.indicaciones || [],
+		indicaciones: indicaciones || [],
 		medicamentos: payload?.medicamentos || [],
 		estudios: payload?.estudios || [],
 		protocolos: payload?.protocolos || [],
-		practicasPaciente: payload?.practicasPaciente || [],
+		practicasPaciente: practicas || [],
 		adjuntos: payload?.adjuntos || [],
 		interconsultas: interconsultas || [],
 		laboratorios: laboratorios || [],
 		controles: controles || [],
 		evolucionEnfermeria: evoEnf || [],
+		fuentesOmitidas,
 		_today: today,
 	};
 }
@@ -1045,7 +1173,12 @@ async function condensarEvoluciones(dossier, { apiKey, model, onUsage }) {
 
 	let fallidos = 0;
 	const notas = await mapConConcurrencia(tramos, CONCURRENCIA_TRAMOS, async (t) => {
-		const maxChars = Math.min(7000, Math.max(1800, Math.round(t.texto.length * 0.32)));
+		// El total de notas no debe pasar PRESUPUESTO_NOTAS_CHARS (si no, ocupan todo el contexto).
+		const maxChars = Math.min(
+			7000,
+			Math.max(1500, Math.round(t.texto.length * 0.32)),
+			Math.floor(PRESUPUESTO_NOTAS_CHARS / tramos.length),
+		);
 		try {
 			const json = await botOpenai.chatJson({
 				apiKey,
@@ -1174,6 +1307,8 @@ async function generarBorrador(numeroVisita) {
 	}
 
 	let contextText = buildContextText(dossier, { perfil: PERFIL_EPICRISIS });
+	// Tamaño real del expediente (sin recortes) para decidir si hay que condensar evoluciones.
+	const tamanoCompleto = buildContextText(dossier, { perfil: PERFIL_EPICRISIS, sinAjuste: true }).length;
 
 	if (!botOpenai.isEpicrisisConfigured()) {
 		return buildFallbackDraft(dossier, contextText);
@@ -1187,7 +1322,7 @@ async function generarBorrador(numeroVisita) {
 
 	try {
 		// Internación larga: condensar evoluciones por tramos en vez de truncar u omitir las más antiguas.
-		if (contextText.length > UMBRAL_CONDENSAR_CHARS && (dossier.evolucionesMedicas || []).length > 1) {
+		if (tamanoCompleto > UMBRAL_CONDENSAR_CHARS && (dossier.evolucionesMedicas || []).length > 1) {
 			condensado = await condensarEvoluciones(dossier, llamada);
 			if (condensado) {
 				contextText = buildContextText(dossier, {
@@ -1231,6 +1366,7 @@ async function generarBorrador(numeroVisita) {
 				? { tramos: condensado.tramos, tramosFallidos: condensado.fallidos, evoluciones: condensado.evoluciones }
 				: null,
 			ajustadaPorLongitud: ajustada,
+			fuentesOmitidas: dossier.fuentesOmitidas || [],
 			disclaimer: DISCLAIMER_IA,
 			aviso: 'Borrador generado con IA a partir del expediente completo. Debe ser revisado por el profesional antes de guardar.',
 		};
@@ -1269,4 +1405,6 @@ module.exports = {
 	dividirEnTramos,
 	muestrear,
 	cortarEnLimite,
+	ajustarContexto,
+	reducirSeccion,
 };

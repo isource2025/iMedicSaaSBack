@@ -115,6 +115,17 @@ origenVigente AS (
 )`;
 
 /**
+ * Variante sin la cadena recursiva: `origenVigente` queda vacío, así que "vigente desde" cae a la
+ * FechaCarga de cada hoja. Para consumidores que consolidan por su cuenta (epicrisis con IA):
+ * en internaciones largas la CTE recursiva sobre miles de hojas no termina en tiempo razonable.
+ */
+const SQL_CTE_SIN_CADENA = `
+WITH origenVigente AS (
+  SELECT CAST(NULL AS INT) AS Hoja, CAST(NULL AS INT) AS FechaVigente, CAST(NULL AS INT) AS HoraVigente
+  WHERE 1 = 0
+)`;
+
+/**
  * Próxima toma = última aplicación + intervalo de la frecuencia.
  * Si nunca se aplicó, cae a FechaProximo/HoraProximo guardados.
  */
@@ -291,7 +302,7 @@ const obtenerIntervaloFrecuencia = async (frecuencia) => {
  * @returns {Promise<Array>} Lista de indicaciones agrupadas (padre + hijas), ordenadas por tit.Orden ASC
  */
 async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
-    const { fecha, days, limit, excluirSuspendidas = false, incluirSuspendidas = false } = opciones;
+    const { fecha, days, limit, excluirSuspendidas = false, incluirSuspendidas = false, sinCadena = false } = opciones;
 
     // Construir cláusula TOP dinámica
     const topClause = limit ? `TOP (${parseInt(limit)})` : '';
@@ -340,7 +351,7 @@ async function getIndicacionesByVisita(numeroVisita, opciones = {}) {
     }
 
     const sql = `
-${SQL_CTE_VIGENTE_DESDE}
+${sinCadena ? SQL_CTE_SIN_CADENA : SQL_CTE_VIGENTE_DESDE}
 SELECT ${topClause}
   iim.NroIndicacion,
   iim.NroAdicional,

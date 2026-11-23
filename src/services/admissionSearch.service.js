@@ -850,6 +850,57 @@ async function _medicoDelTurnoPorVisita(numeroVisita) {
 	};
 }
 
+/**
+ * Prácticas agrupadas por código (una fila por práctica distinta, con veces, cantidad y rango de fechas).
+ * Liviana a propósito: la descripción se resuelve UNA vez por código y no por cada fila facturada
+ * (en internaciones largas hay cientos de filas y las subconsultas por fila no terminan a tiempo).
+ * Para consumidores que solo necesitan "qué prácticas hubo" (epicrisis con IA).
+ */
+async function obtenerPracticasResumenPorVisita(numeroVisita) {
+	// Búsqueda directa por IDPractica (igual que protocolos.service): usa índice. El resolver
+	// completo (_sqlDescripcionPractica) convierte/recorta ambos lados y escanea catálogos enteros.
+	const rows = await executeQuery(
+		`
+      SELECT
+        fp.Practica,
+        fp.NumeroVisita,
+        fp.DescPractica,
+        LTRIM(RTRIM(ISNULL(COALESCE(mo.Descripcion, no.Descripcion), ''))) AS PracticaDescripcion,
+        fp.Veces,
+        fp.Cantidad,
+        fp.PrimeraFecha,
+        fp.UltimaFecha
+      FROM (
+        SELECT g.Practica, g.NumeroVisita,
+               MAX(g.DescPractica) AS DescPractica,
+               COUNT(*) AS Veces,
+               SUM(ISNULL(g.CantidadPractica, 1)) AS Cantidad,
+               MIN(g.FechaPractica) AS PrimeraFecha,
+               MAX(g.FechaPractica) AS UltimaFecha
+        FROM dbo.imFacPracticas g
+        WHERE g.NumeroVisita = @p0
+        GROUP BY g.Practica, g.NumeroVisita
+      ) fp
+      OUTER APPLY (
+        SELECT TOP 1 Descripcion FROM dbo.imModuladas WHERE IDPractica = fp.Practica
+      ) mo
+      OUTER APPLY (
+        SELECT TOP 1 Descripcion FROM dbo.imNomenclador WHERE IDPractica = fp.Practica
+      ) no
+      ORDER BY fp.PrimeraFecha, fp.Practica
+    `,
+		[{ value: numeroVisita, type: 'Int' }],
+	);
+	return (rows || []).map((r) => ({
+		Practica: r.Practica,
+		PracticaDescripcion: String(r.PracticaDescripcion || r.DescPractica || r.Practica || '').trim(),
+		CantidadPractica: Number(r.Cantidad) || 1,
+		Veces: Number(r.Veces) || 1,
+		FechaPractica: _clarionFechaIso(r.PrimeraFecha),
+		FechaUltimaPractica: _clarionFechaIso(r.UltimaFecha),
+	}));
+}
+
 async function obtenerPracticasPorVisita(numeroVisita) {
 	const nomenclador = await getPracticasNomencladorResolver();
 	const descSql = _sqlDescripcionPractica(nomenclador);
@@ -1966,6 +2017,7 @@ module.exports = {
   listarCoberturas,
   listarSectores,
   obtenerPracticasPorVisita,
+  obtenerPracticasResumenPorVisita,
   exportarAdmisionShell,
   exportarSeccionesClinicas,
   exportarAdmisionCompleta,

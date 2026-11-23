@@ -176,3 +176,41 @@ test('formatear: rótulos internos en minúscula no se convierten en títulos de
 	);
 	assert.match(t, /Estudios: hemocultivos negativos\. Medicación: ceftriaxona\./);
 });
+
+test('ajustarContexto: una sección enorme no hace desaparecer las secciones del final', () => {
+	const interconsultas = Array.from({ length: 200 }, (_, i) => ({
+		FechaSolicitud: `2026-03-${String(Math.floor(i / 10) + 1).padStart(2, '0')}`,
+		HoraSolicitud: `${String(i % 10).padStart(2, '0')}:00`,
+		ServicioDescripcion: `Servicio ${i}`,
+		Motivo: `Motivo ${i}`,
+		Respuesta: `Respuesta larga ${i} ${'detalle clinico '.repeat(150)}`,
+	}));
+	const dossier = {
+		numeroVisita: 1,
+		interconsultas,
+		medicamentos: [{ NombreMedicamento: 'Ceftriaxona 1 g', FechaControl: '2026-03-02', Cantidad: 1, TipoUnidad: 'amp' }],
+		laboratorios: [
+			{ FechaExamen: '2026-03-02', detalles: [{ NombreParametro: 'Hemoglobina', Resultado: '8.9', UnidadMedida: 'g/dL' }] },
+		],
+		controles: [{ Fecha: '2026-03-02', Hora: '08:00', Maximo: 110, Minimo: 70, Pulso: 95 }],
+	};
+	const crudo = epi.buildContextText(dossier, { perfil: PE, sinAjuste: true });
+	assert.ok(crudo.length > 120000, 'el caso debe superar el tope para que la prueba tenga sentido');
+	const ctx = epi.buildContextText(dossier, { perfil: PE });
+	assert.ok(ctx.length <= 120000);
+	assert.match(ctx, /Ceftriaxona 1 g/);
+	assert.match(ctx, /Hemoglobina 8\.9 g\/dL/);
+	assert.match(ctx, /PA 110\/70/);
+	assert.match(ctx, /registros omitidos por tamaño/);
+	// las muestras cubren toda la internación: están la primera y la última interconsulta
+	assert.match(ctx, /Respuesta larga 0 /);
+	assert.match(ctx, /Respuesta larga 199 /);
+});
+
+test('reducirSeccion: conserva primero y último registro y respeta el presupuesto', () => {
+	const sec = ['=== 5. X ===', ...Array.from({ length: 50 }, (_, i) => `${i + 1}. registro ${i + 1} ${'x'.repeat(100)}`)].join('\n');
+	const r = epi.reducirSeccion(sec, 1500);
+	assert.ok(r.length <= 1500);
+	assert.match(r, /50\. registro 50/);
+	assert.match(r, /1\. registro 1 /);
+});
