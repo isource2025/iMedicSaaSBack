@@ -67,3 +67,37 @@ test('la cuota en base cuenta aunque la memoria esté vacía', async () => {
 		assert.equal(e.limitada, true);
 	});
 });
+
+test('ADMIN y SUPER_ADMIN no tienen tope de prueba', async () => {
+	await conEnv('15', async () => {
+		cuota._setContarMensajes(async () => 99);
+		const admin = await cuota.estadoDe(reqDe({ rolNombre: 'ADMIN' }));
+		assert.equal(admin.limitada, false);
+		assert.equal(admin.prueba, false);
+		assert.equal(admin.restantes, null);
+		await cuota.exigir(reqDe({ rolNombre: 'ADMIN' }));
+
+		const sa = await cuota.estadoDe(reqDe({ rolNombre: 'SUPER_ADMIN' }));
+		assert.equal(sa.limitada, false);
+
+		const medico = await cuota.estadoDe(reqDe({ rolNombre: 'MEDICO' }));
+		assert.equal(medico.limitada, true);
+	});
+});
+
+test('ASISTENTE_CUOTA_EXENTOS libera por empresa:actor', async () => {
+	const prev = process.env.ASISTENTE_CUOTA_EXENTOS;
+	process.env.ASISTENTE_CUOTA_EXENTOS = '1:10';
+	try {
+		await conEnv('15', async () => {
+			cuota._setContarMensajes(async () => 99);
+			const e = await cuota.estadoDe(reqDe({ idEmpresa: 1, valorPersonal: 10 }));
+			assert.equal(e.limitada, false);
+			const otro = await cuota.estadoDe(reqDe({ idEmpresa: 1, valorPersonal: 11 }));
+			assert.equal(otro.limitada, true);
+		});
+	} finally {
+		if (prev == null) delete process.env.ASISTENTE_CUOTA_EXENTOS;
+		else process.env.ASISTENTE_CUOTA_EXENTOS = prev;
+	}
+});

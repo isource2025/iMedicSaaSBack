@@ -3,6 +3,9 @@ const auditoria = require('./auditoria');
 /** Tope de la versión de prueba. 0 = sin límite. */
 const LIMITE_PRUEBA = 15;
 
+/** Roles sin tope de prueba (admin de clínica / plataforma). */
+const ROLES_EXENTOS_DEFAULT = Object.freeze(['ADMIN', 'SUPER_ADMIN']);
+
 const memoria = new Map();
 let contarMensajes = (args) => auditoria.contarMensajes(args);
 
@@ -21,6 +24,29 @@ function desdeCuota() {
 
 function clave(idEmpresa, actor) {
 	return `${Number(idEmpresa) || 0}:${actor == null || actor === '' ? 'anon' : actor}`;
+}
+
+/** Exentos: ADMIN / SUPER_ADMIN, o lista en ASISTENTE_CUOTA_EXENTOS_ROLES / ASISTENTE_CUOTA_EXENTOS (empresa:actor). */
+function esExento(req) {
+	const rol = String(req?.rolNombre || '')
+		.trim()
+		.toUpperCase();
+	const rolesEnv = String(process.env.ASISTENTE_CUOTA_EXENTOS_ROLES || '')
+		.split(',')
+		.map((s) => s.trim().toUpperCase())
+		.filter(Boolean);
+	const roles = rolesEnv.length ? rolesEnv : ROLES_EXENTOS_DEFAULT;
+	if (rol && roles.includes(rol)) return true;
+
+	const actor = req?.valorPersonal;
+	const emp = Number(req?.idEmpresa) || 0;
+	if (actor == null || actor === '') return false;
+	const lista = String(process.env.ASISTENTE_CUOTA_EXENTOS || '')
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	const yo = `${emp}:${actor}`;
+	return lista.some((x) => x === yo || x === String(actor));
 }
 
 function estadoDesde(usados, limite = limiteActual()) {
@@ -53,6 +79,7 @@ async function usadosDe(req) {
 }
 
 async function estadoDe(req) {
+	if (esExento(req)) return estadoDesde(await usadosDe(req), 0);
 	return estadoDesde(await usadosDe(req));
 }
 
@@ -96,7 +123,9 @@ function _setContarMensajes(fn) {
 
 module.exports = {
 	LIMITE_PRUEBA,
+	ROLES_EXENTOS_DEFAULT,
 	limiteActual,
+	esExento,
 	estadoDesde,
 	estadoDe,
 	exigir,
