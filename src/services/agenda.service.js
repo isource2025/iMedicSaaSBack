@@ -1702,18 +1702,34 @@ async function asignarTurno({
 		horaPersistir = await _resolverHoraSobreturno(mat, fechaClarion, base);
 	}
 
-	// Sector = imSectores.Valor (letra). Acepta también ValorServicio (CIR→sector).
-	// Profesional + Especialidad + TipoTurno siempre. Nunca consultorio numérico.
+	// El Sector del modal manda: código de letra del formulario → imTurnos.Sector.
+	// Canónico vía imSectores si existe; si no, se graba el código enviado.
+	// Numérico puro = consultorio Clarion → rechazado.
+	const sectorPayload = _normCodigoSector(sector);
+	const payloadNumerico = sectorPayload != null && /^[0-9]+$/.test(sectorPayload);
 	let secFinal =
 		(await _resolverSectorMedico(mat, fecha, horaPersistir, [
-			sector,
+			payloadNumerico ? null : sectorPayload,
 			slot?.sector,
 			prof.sector,
 			prof.valorServicio,
 		])) || '';
+	if (!secFinal && sectorPayload && !payloadNumerico) {
+		secFinal = sectorPayload.slice(0, 4);
+	}
 	if (!secFinal) {
 		const e = new Error(
-			'No se pudo determinar un Sector válido (imSectores) para este profesional. Asigná un sector al personal o un código que exista en imSectores (Valor o ValorServicio).',
+			payloadNumerico
+				? 'El Sector no puede ser un número de consultorio. Usá el código de letra del sector (ej. CIR, GIN).'
+				: 'Falta el Sector en el turno. El modal debe enviar el código de sector.',
+		);
+		e.statusCode = 409;
+		e.code = 'SECTOR_INVALIDO';
+		throw e;
+	}
+	if (/^[0-9]+$/.test(secFinal)) {
+		const e = new Error(
+			'El Sector resuelto es numérico (consultorio). No se puede grabar; usá un código de letra.',
 		);
 		e.statusCode = 409;
 		e.code = 'SECTOR_INVALIDO';
