@@ -670,30 +670,51 @@ async function _consultarVisitasPorSector(filtros) {
 async function _consultarVisitasPorProfesional(filtros) {
 	try {
 		const { condiciones, params } = _paramsVisitasBase(filtros);
-		// El OR sobre imPersonal no admite seek: se resuelve el nombre después de
-		// agrupar (30 filas) y no por cada visita del período.
+		// DOCTORADMISOR a veces guarda imPersonal.Valor (no Matricula).
+		// Se normaliza a Matricula para mergear con imTurnos.Profesional.
 		return await executeQuery(
-			`WITH Agrupado AS (
-				SELECT TOP 30
-					v.DOCTORADMISOR AS Matricula,
-					COUNT(*) AS Total,
-					${_sqlConteoVisitasPorOrigen()}
+			`WITH Base AS (
+				SELECT
+					v.NUMEROVISITA,
+					tt.TipoTurnoMin,
+					COALESCE(
+						NULLIF(per.MatriculaEfectiva, 0),
+						NULLIF(v.DOCTORADMISOR, 0)
+					) AS Matricula,
+					per.ApellidoNombre AS Nombre
 				FROM dbo.imVisita v
 				LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+				OUTER APPLY (
+					SELECT TOP 1
+						CASE
+							WHEN p.Matricula IS NOT NULL AND p.Matricula > 0 THEN p.Matricula
+							ELSE NULL
+						END AS MatriculaEfectiva,
+						p.ApellidoNombre
+					FROM dbo.imPersonal p
+					WHERE p.Valor = v.DOCTORADMISOR OR p.Matricula = v.DOCTORADMISOR
+					ORDER BY CASE
+						WHEN p.Matricula = v.DOCTORADMISOR THEN 0
+						WHEN p.Valor = v.DOCTORADMISOR THEN 1
+						ELSE 2 END
+				) per
 				WHERE ${condiciones.join('\n\t\t\t\t  AND ')}
 				  AND ISNULL(v.DOCTORADMISOR, 0) > 0
-				GROUP BY v.DOCTORADMISOR
+			),
+			Agrupado AS (
+				SELECT TOP 30
+					Matricula,
+					MAX(Nombre) AS Nombre,
+					COUNT(*) AS Total,
+					${_sqlConteoVisitasPorOrigen('b')}
+				FROM Base b
+				WHERE ISNULL(Matricula, 0) > 0
+				GROUP BY Matricula
 				ORDER BY COUNT(*) DESC
 			)
-			SELECT a.Matricula, per.ApellidoNombre AS Nombre, a.ConTurno, a.ADemanda
-			FROM Agrupado a
-			OUTER APPLY (
-				SELECT TOP 1 p.ApellidoNombre
-				FROM dbo.imPersonal p
-				WHERE p.Matricula = a.Matricula OR p.Valor = a.Matricula
-				ORDER BY p.Valor
-			) per
-			ORDER BY a.Total DESC`,
+			SELECT Matricula, Nombre, ConTurno, ADemanda
+			FROM Agrupado
+			ORDER BY Total DESC`,
 			params,
 		);
 	} catch (error) {
@@ -930,16 +951,17 @@ function _mergeDimensionConVisitas(turnoDims, visitaRows, campoCodigo, extra = (
 		if (v.conTurno + v.aDemanda <= 0) continue;
 		// No inventar filas "Sin identificar · 6" por VALORSECTOR=consultorio.
 		if (/^[0-9]+$/.test(codigo) && !v.descripcion) continue;
+		const aten = v.conTurno + v.aDemanda;
 		merged.push({
 			codigo: v.codigo,
 			descripcion: v.descripcion,
 			programados: 0,
-			atendidos: 0,
-			atendidosAgenda: 0,
-			atendidosDemanda: 0,
+			atendidos: aten,
+			atendidosAgenda: v.conTurno,
+			atendidosDemanda: v.aDemanda,
 			ausentes: 0,
 			cancelados: 0,
-			turnosDemanda: 0,
+			turnosDemanda: v.aDemanda,
 			tasaAusentismo: null,
 			esperaProm: null,
 			permanenciaProm: null,
@@ -949,7 +971,14 @@ function _mergeDimensionConVisitas(turnoDims, visitaRows, campoCodigo, extra = (
 		});
 	}
 
-	return merged.sort((a, b) => b.conTurno + b.aDemanda - (a.conTurno + a.aDemanda));
+	// Orden por lo que se ve en la tabla (agenda + demanda + atendidos), no por conTurno oculto.
+	return merged.sort((a, b) => {
+		const sb =
+			(b.programados || 0) + (b.aDemanda || 0) + (b.atendidos || 0);
+		const sa =
+			(a.programados || 0) + (a.aDemanda || 0) + (a.atendidos || 0);
+		return sb - sa;
+	});
 }
 
 function _mapDimension(rows, campoCodigo, extra = () => ({})) {
