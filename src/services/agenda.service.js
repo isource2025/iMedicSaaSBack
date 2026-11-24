@@ -632,24 +632,64 @@ function _slotBloqueado(fechaClarion, horaClarion, noHorarios) {
 }
 
 function _normCodigoSector(v) {
-	const s = String(v ?? '')
+	// Primer token en mayúsculas (evita "CIR QUIROFANO" → "CIR ").
+	const token = String(v ?? '')
 		.trim()
 		.toUpperCase()
-		.slice(0, 4);
+		.split(/\s+/)[0] || '';
+	const s = token.replace(/[^A-Z0-9]/g, '').slice(0, 10);
 	return s && s !== '0000' && s !== 'NULL' && s !== 'NAN' ? s : null;
 }
 
-/** ¿El código existe en imSectores.Valor? Sector del turno SOLO admite esos códigos. */
-async function _existeEnImSectores(codigo) {
+/**
+ * Resuelve un código a imSectores.Valor canónico.
+ * Acepta match por Valor O por ValorServicio (en Güemes/Clarion CIR suele ser
+ * el servicio ligado; el sector real puede ser CIRA u otro Valor).
+ * Devuelve el Valor a persistir en imTurnos.Sector (máx. 4, legado Clarion).
+ */
+async function _resolverCodigoImSectores(codigo) {
 	const c = _normCodigoSector(codigo);
-	if (!c) return false;
-	const rows = await executeQuery(
-		`SELECT TOP 1 1 AS ok
-		 FROM dbo.imSectores
-		 WHERE UPPER(LTRIM(RTRIM(Valor))) = @p0`,
-		[{ value: c, type: 'VarChar', length: 4 }],
-	);
-	return rows.length > 0;
+	if (!c) return null;
+	const pref4 = `${c}    `.slice(0, 4);
+	let rows = [];
+	try {
+		rows = await executeQuery(
+			`SELECT TOP 1
+			    RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor
+			 FROM dbo.imSectores
+			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0
+			    OR UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) = @p0
+			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1
+			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) + '    ', 4) = @p1
+			 ORDER BY CASE
+			   WHEN UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0 THEN 0
+			   WHEN LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1 THEN 1
+			   ELSE 2 END`,
+			[
+				{ value: c, type: 'VarChar', length: 50 },
+				{ value: pref4, type: 'VarChar', length: 4 },
+			],
+		);
+	} catch {
+		rows = await executeQuery(
+			`SELECT TOP 1 RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor
+			 FROM dbo.imSectores
+			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0
+			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1`,
+			[
+				{ value: c, type: 'VarChar', length: 50 },
+				{ value: pref4, type: 'VarChar', length: 4 },
+			],
+		).catch(() => []);
+	}
+	const valor = rows?.[0]?.Valor != null ? String(rows[0].Valor).trim().toUpperCase() : '';
+	if (!valor) return null;
+	return valor.slice(0, 4) || null;
+}
+
+/** ¿El código existe como sector (Valor o ValorServicio de imSectores)? */
+async function _existeEnImSectores(codigo) {
+	return !!(await _resolverCodigoImSectores(codigo));
 }
 
 /**
@@ -714,7 +754,8 @@ async function _sectoresPersonalAsignados(matricula) {
 async function _sectorPersonalAsignado(matricula) {
 	const lista = await _sectoresPersonalAsignados(matricula);
 	for (const c of lista) {
-		if (await _existeEnImSectores(c)) return c;
+		const canon = await _resolverCodigoImSectores(c);
+		if (canon) return canon;
 	}
 	return null;
 }
@@ -758,7 +799,8 @@ async function _resolverSectorMedico(matricula, fechaIso, horaClarion, extras = 
 	for (const e of extras || []) push(e);
 
 	for (const c of candidatos) {
-		if (await _existeEnImSectores(c)) return c;
+		const canon = await _resolverCodigoImSectores(c);
+		if (canon) return canon;
 	}
 	return null;
 }
@@ -1660,18 +1702,18 @@ async function asignarTurno({
 		horaPersistir = await _resolverHoraSobreturno(mat, fechaClarion, base);
 	}
 
-	// Sector = imSectores.Valor (letra). Profesional + Especialidad + TipoTurno siempre.
-	// No usar consultorio ni códigos numéricos Clarion.
+	// Sector = imSectores.Valor (letra). Acepta también ValorServicio (CIR→sector).
+	// Profesional + Especialidad + TipoTurno siempre. Nunca consultorio numérico.
 	let secFinal =
 		(await _resolverSectorMedico(mat, fecha, horaPersistir, [
-			prof.sector,
-			slot?.sector,
 			sector,
+			slot?.sector,
+			prof.sector,
 			prof.valorServicio,
 		])) || '';
 	if (!secFinal) {
 		const e = new Error(
-			'No se pudo determinar un Sector válido (imSectores) para este profesional. Asigná un sector al personal o un IdServicio del horario que exista como sector.',
+			'No se pudo determinar un Sector válido (imSectores) para este profesional. Asigná un sector al personal o un código que exista en imSectores (Valor o ValorServicio).',
 		);
 		e.statusCode = 409;
 		e.code = 'SECTOR_INVALIDO';
