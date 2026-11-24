@@ -642,52 +642,24 @@ function _normCodigoSector(v) {
 }
 
 /**
- * Resuelve un código a imSectores.Valor canónico.
- * Acepta match por Valor O por ValorServicio (en Güemes/Clarion CIR suele ser
- * el servicio ligado; el sector real puede ser CIRA u otro Valor).
- * Devuelve el Valor a persistir en imTurnos.Sector (máx. 4, legado Clarion).
+ * Match EXACTO: código === imSectores.Valor (trim/upper).
+ * Nada de ValorServicio, prefijos ni nombres.
  */
 async function _resolverCodigoImSectores(codigo) {
 	const c = _normCodigoSector(codigo);
 	if (!c) return null;
-	const pref4 = `${c}    `.slice(0, 4);
-	let rows = [];
-	try {
-		rows = await executeQuery(
-			`SELECT TOP 1
-			    RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor
-			 FROM dbo.imSectores
-			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0
-			    OR UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) = @p0
-			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1
-			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(ISNULL(ValorServicio, '') AS VARCHAR(50))))) + '    ', 4) = @p1
-			 ORDER BY CASE
-			   WHEN UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0 THEN 0
-			   WHEN LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1 THEN 1
-			   ELSE 2 END`,
-			[
-				{ value: c, type: 'VarChar', length: 50 },
-				{ value: pref4, type: 'VarChar', length: 4 },
-			],
-		);
-	} catch {
-		rows = await executeQuery(
-			`SELECT TOP 1 RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor
-			 FROM dbo.imSectores
-			 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0
-			    OR LEFT(UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) + '    ', 4) = @p1`,
-			[
-				{ value: c, type: 'VarChar', length: 50 },
-				{ value: pref4, type: 'VarChar', length: 4 },
-			],
-		).catch(() => []);
-	}
+	const rows = await executeQuery(
+		`SELECT TOP 1 RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor
+		 FROM dbo.imSectores
+		 WHERE UPPER(LTRIM(RTRIM(CAST(Valor AS VARCHAR(50))))) = @p0`,
+		[{ value: c, type: 'VarChar', length: 50 }],
+	).catch(() => []);
 	const valor = rows?.[0]?.Valor != null ? String(rows[0].Valor).trim().toUpperCase() : '';
 	if (!valor) return null;
 	return valor.slice(0, 4) || null;
 }
 
-/** ¿El código existe como sector (Valor o ValorServicio de imSectores)? */
+/** ¿El código existe exacto en imSectores.Valor? */
 async function _existeEnImSectores(codigo) {
 	return !!(await _resolverCodigoImSectores(codigo));
 }
@@ -761,11 +733,9 @@ async function _sectorPersonalAsignado(matricula) {
 }
 
 /**
- * imTurnos.Sector = código de imSectores.Valor (letras: GIN, CLI, OFT…).
- * Nunca consultorio numérico ni un servicio que no exista como sector.
- *
- * Orden: personalSectores → IdServicio del rango si está en imSectores →
- * ValorServicio del personal si está en imSectores → candidatos explícitos.
+ * imTurnos.Sector = imSectores.Valor exacto.
+ * Candidatos: modal → imPersonalSectores → IdServicio del horario (si es Valor de sector).
+ * No usa ValorServicio del personal (eso es servicio, no sector).
  */
 async function _resolverSectorMedico(matricula, fechaIso, horaClarion, extras = []) {
 	const candidatos = [];
@@ -774,6 +744,7 @@ async function _resolverSectorMedico(matricula, fechaIso, horaClarion, extras = 
 		if (c && !candidatos.includes(c)) candidatos.push(c);
 	};
 
+	for (const e of extras || []) push(e);
 	for (const c of await _sectoresPersonalAsignados(matricula)) push(c);
 
 	if (fechaIso != null && horaClarion != null) {
@@ -795,8 +766,6 @@ async function _resolverSectorMedico(matricula, fechaIso, horaClarion, extras = 
 		}));
 		push(_elegirCodigoDeRangos(filas, horaClarion));
 	}
-
-	for (const e of extras || []) push(e);
 
 	for (const c of candidatos) {
 		const canon = await _resolverCodigoImSectores(c);
@@ -843,18 +812,26 @@ async function _datosProfesionalParaTurno(matricula, fechaIso = null, horaClario
 	const valorServicioRaw = _normCodigoSector(r.ValorServicio);
 	const sector =
 		fechaIso != null
-			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion, [
-					valorServicioRaw,
-				])
+			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion, [])
 			: null;
 	return {
 		matricula: matEfectiva,
 		nombre: r.ApellidoNombre ? String(r.ApellidoNombre).trim() : null,
 		especialidad: Number(r.ValorEspecialidad) || 0,
-		// ValorServicio = imServicios (no es Sector). Solo se usa si también está en imSectores.
+		// ValorServicio = imServicios (no es Sector).
 		valorServicio: valorServicioRaw || null,
 		sector,
 	};
+}
+
+/** Set de imSectores.Valor (exacto) para filtrar códigos de slot. */
+async function _valoresImSectoresSet() {
+	const rows = await executeQuery(
+		`SELECT RTRIM(LTRIM(CAST(Valor AS VARCHAR(50)))) AS Valor FROM dbo.imSectores`,
+	).catch(() => []);
+	return new Set(
+		(rows || []).map((r) => _normCodigoSector(r.Valor)).filter(Boolean),
+	);
 }
 
 async function _cargarNoHorarios(matricula, desdeClarion, hastaClarion) {
@@ -1086,14 +1063,16 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 	const desdeClarion = convertirFechaAClarion(desdeIso);
 	const hastaClarion = convertirFechaAClarion(hastaIso);
 
-	const [horarios, noHorarios, turnosData, feriados, sectorPersonalMed, profesional] = await Promise.all([
-		agendaConfig.obtenerHorariosPorMatricula(m),
-		_cargarNoHorarios(m, desdeClarion, hastaClarion),
-		_cargarTurnos(m, desdeClarion, hastaClarion),
-		feriadosService.listarEnRangoConEnsure(desdeIso, hastaIso).catch(() => []),
-		_sectorPersonalAsignado(m),
-		_datosProfesionalParaTurno(m, desdeIso),
-	]);
+	const [horarios, noHorarios, turnosData, feriados, sectorPersonalMed, profesional, valoresSector] =
+		await Promise.all([
+			agendaConfig.obtenerHorariosPorMatricula(m),
+			_cargarNoHorarios(m, desdeClarion, hastaClarion),
+			_cargarTurnos(m, desdeClarion, hastaClarion),
+			feriadosService.listarEnRangoConEnsure(desdeIso, hastaIso).catch(() => []),
+			_sectorPersonalAsignado(m),
+			_datosProfesionalParaTurno(m, desdeIso),
+			_valoresImSectoresSet(),
+		]);
 
 	const diasOut = [];
 	/** Slots con turno de todos los días: el resumen RAC se pide una sola vez al final. */
@@ -1208,11 +1187,14 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 				if (!_slotBloqueado(fechaClarion, t, noHorarios)) {
 					const hora = _hhmm(t);
 					const clave = horaClaveTurno(t);
-					// Sector del slot = código imSectores. Nunca IDConsultorio.
-					const sector =
-						sectorPersonalMed ||
+					// Sector del slot = imSectores.Valor exacto. No IdServicio/servicio suelto.
+					const candSlot =
 						_elegirSectorDeRangos(diaCfg.rangos, t) ||
 						_normCodigoSector(rango.servicio || horarios.servicio) ||
+						null;
+					const sector =
+						sectorPersonalMed ||
+						(candSlot && valoresSector.has(candSlot) ? candSlot : '') ||
 						'';
 					const turno =
 						turnosData.map.get(`${fechaIso}|${t}|${sector}`) ||
@@ -1702,34 +1684,18 @@ async function asignarTurno({
 		horaPersistir = await _resolverHoraSobreturno(mat, fechaClarion, base);
 	}
 
-	// El Sector del modal manda: código de letra del formulario → imTurnos.Sector.
-	// Canónico vía imSectores si existe; si no, se graba el código enviado.
-	// Numérico puro = consultorio Clarion → rechazado.
+	// Match EXACTO imSectores.Valor. Modal / personalSectores / IdServicio horario.
 	const sectorPayload = _normCodigoSector(sector);
-	const payloadNumerico = sectorPayload != null && /^[0-9]+$/.test(sectorPayload);
 	let secFinal =
 		(await _resolverSectorMedico(mat, fecha, horaPersistir, [
-			payloadNumerico ? null : sectorPayload,
+			sectorPayload,
 			slot?.sector,
 			prof.sector,
-			prof.valorServicio,
 		])) || '';
-	if (!secFinal && sectorPayload && !payloadNumerico) {
-		secFinal = sectorPayload.slice(0, 4);
-	}
 	if (!secFinal) {
 		const e = new Error(
-			payloadNumerico
-				? 'El Sector no puede ser un número de consultorio. Usá el código de letra del sector (ej. CIR, GIN).'
-				: 'Falta el Sector en el turno. El modal debe enviar el código de sector.',
-		);
-		e.statusCode = 409;
-		e.code = 'SECTOR_INVALIDO';
-		throw e;
-	}
-	if (/^[0-9]+$/.test(secFinal)) {
-		const e = new Error(
-			'El Sector resuelto es numérico (consultorio). No se puede grabar; usá un código de letra.',
+			`El código «${sectorPayload || sector || ''}» no existe en imSectores.Valor. ` +
+				'Asigná al personal un idSector exacto del catálogo de sectores.',
 		);
 		e.statusCode = 409;
 		e.code = 'SECTOR_INVALIDO';
