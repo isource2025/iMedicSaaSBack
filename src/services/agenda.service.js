@@ -631,8 +631,32 @@ function _slotBloqueado(fechaClarion, horaClarion, noHorarios) {
 	return false;
 }
 
-/** Elige IdServicio del rango horario que cubre la hora (±tolerancia). */
-function _elegirSectorDeRangos(filas, horaClarion) {
+function _normCodigoSector(v) {
+	const s = String(v ?? '')
+		.trim()
+		.toUpperCase()
+		.slice(0, 4);
+	return s && s !== '0000' && s !== 'NULL' && s !== 'NAN' ? s : null;
+}
+
+/** ¿El código existe en imSectores.Valor? Sector del turno SOLO admite esos códigos. */
+async function _existeEnImSectores(codigo) {
+	const c = _normCodigoSector(codigo);
+	if (!c) return false;
+	const rows = await executeQuery(
+		`SELECT TOP 1 1 AS ok
+		 FROM dbo.imSectores
+		 WHERE UPPER(LTRIM(RTRIM(Valor))) = @p0`,
+		[{ value: c, type: 'VarChar', length: 4 }],
+	);
+	return rows.length > 0;
+}
+
+/**
+ * Elige un candidato de servicio/sector del rango horario que cubre la hora.
+ * Devuelve el código crudo del rango (IdServicio); quien llama valida imSectores.
+ */
+function _elegirCodigoDeRangos(filas, horaClarion) {
 	const h = Number(horaClarion);
 	if (!Number.isFinite(h) || h <= 0) return null;
 	const tol = HORA_TURNO_TOLERANCIA;
@@ -651,9 +675,7 @@ function _elegirSectorDeRangos(filas, horaClarion) {
 				: r.HoraHasta != null
 					? Number(r.HoraHasta)
 					: convertirHoraAClarion(r.fin);
-		const sec = String(r.servicio || r.IdServicio || '')
-			.trim()
-			.slice(0, 4);
+		const sec = _normCodigoSector(r.servicio || r.IdServicio || '');
 		if (!sec || hd == null || hh == null || !hd || !hh) continue;
 		if (h + tol < hd || h - tol > hh) continue;
 		const dist = Math.min(Math.abs(h - hd), Math.abs(h - hh));
@@ -665,47 +687,80 @@ function _elegirSectorDeRangos(filas, horaClarion) {
 	return mejor;
 }
 
-/**
- * Sector del médico para imTurnos.Sector (varchar 4, = IdServicio del horario).
- * 1) IdServicio del rango en imPersonalHorarios que cubre la hora.
- * 2) idSector en imPersonalSectores (por Valor del personal).
- */
-async function _sectorPersonalAsignado(matricula) {
+/** Compat: nombre histórico; no usar consultorio aquí. */
+function _elegirSectorDeRangos(filas, horaClarion) {
+	return _elegirCodigoDeRangos(filas, horaClarion);
+}
+
+/** Sectores del profesional en imPersonalSectores (códigos, sin validar aún). */
+async function _sectoresPersonalAsignados(matricula) {
 	const sectores = await executeQuery(
-		`SELECT TOP 1 RTRIM(LTRIM(ps.idSector)) AS idSector
+		`SELECT RTRIM(LTRIM(ps.idSector)) AS idSector
 		 FROM dbo.imPersonal p
 		 INNER JOIN dbo.imPersonalSectores ps ON ps.idPersonal = p.Valor
 		 WHERE p.Matricula = @p0
 		 ORDER BY ps.idSector`,
 		[{ value: matricula, type: 'Int' }],
 	);
-	if (sectores.length && sectores[0].idSector) {
-		return String(sectores[0].idSector).trim().slice(0, 4);
+	return [
+		...new Set(
+			(sectores || [])
+				.map((r) => _normCodigoSector(r.idSector))
+				.filter(Boolean),
+		),
+	];
+}
+
+async function _sectorPersonalAsignado(matricula) {
+	const lista = await _sectoresPersonalAsignados(matricula);
+	for (const c of lista) {
+		if (await _existeEnImSectores(c)) return c;
 	}
 	return null;
 }
 
-async function _resolverSectorMedico(matricula, fechaIso, horaClarion) {
-	const sectorPersonal = await _sectorPersonalAsignado(matricula);
-	if (sectorPersonal) return sectorPersonal;
+/**
+ * imTurnos.Sector = código de imSectores.Valor (letras: GIN, CLI, OFT…).
+ * Nunca consultorio numérico ni un servicio que no exista como sector.
+ *
+ * Orden: personalSectores → IdServicio del rango si está en imSectores →
+ * ValorServicio del personal si está en imSectores → candidatos explícitos.
+ */
+async function _resolverSectorMedico(matricula, fechaIso, horaClarion, extras = []) {
+	const candidatos = [];
+	const push = (v) => {
+		const c = _normCodigoSector(v);
+		if (c && !candidatos.includes(c)) candidatos.push(c);
+	};
 
-	const diaNombre = _diaSemana(_parseIso(fechaIso));
-	const horarios = await executeQuery(
-		`SELECT IdServicio, HoraDesde, HoraHasta
-		 FROM dbo.imPersonalHorarios
-		 WHERE Matricula = @p0 AND Dia = @p1
-		 ORDER BY HoraDesde`,
-		[
-			{ value: matricula, type: 'Int' },
-			{ value: diaNombre, type: 'VarChar' },
-		],
-	);
-	const filas = horarios.map((r) => ({
-		IdServicio: r.IdServicio,
-		inicioClarion: Number(r.HoraDesde) || null,
-		finClarion: Number(r.HoraHasta) || null,
-	}));
-	return _elegirSectorDeRangos(filas, horaClarion);
+	for (const c of await _sectoresPersonalAsignados(matricula)) push(c);
+
+	if (fechaIso != null && horaClarion != null) {
+		const diaNombre = _diaSemana(_parseIso(fechaIso));
+		const horarios = await executeQuery(
+			`SELECT IdServicio, HoraDesde, HoraHasta
+			 FROM dbo.imPersonalHorarios
+			 WHERE Matricula = @p0 AND Dia = @p1
+			 ORDER BY HoraDesde`,
+			[
+				{ value: matricula, type: 'Int' },
+				{ value: diaNombre, type: 'VarChar' },
+			],
+		);
+		const filas = horarios.map((r) => ({
+			IdServicio: r.IdServicio,
+			inicioClarion: Number(r.HoraDesde) || null,
+			finClarion: Number(r.HoraHasta) || null,
+		}));
+		push(_elegirCodigoDeRangos(filas, horaClarion));
+	}
+
+	for (const e of extras || []) push(e);
+
+	for (const c of candidatos) {
+		if (await _existeEnImSectores(c)) return c;
+	}
+	return null;
 }
 
 /**
@@ -743,17 +798,18 @@ async function _datosProfesionalParaTurno(matricula, fechaIso = null, horaClario
 	const r = rows[0];
 	const matEfectiva =
 		r.Matricula != null && Number(r.Matricula) > 0 ? Number(r.Matricula) : m;
+	const valorServicioRaw = _normCodigoSector(r.ValorServicio);
 	const sector =
 		fechaIso != null
-			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion)
+			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion, [
+					valorServicioRaw,
+				])
 			: null;
-	const valorServicioRaw =
-		r.ValorServicio != null ? String(r.ValorServicio).trim().slice(0, 4) : '';
 	return {
 		matricula: matEfectiva,
 		nombre: r.ApellidoNombre ? String(r.ApellidoNombre).trim() : null,
 		especialidad: Number(r.ValorEspecialidad) || 0,
-		// ValorServicio es código de catálogo (CLI, OFT…), no un número.
+		// ValorServicio = imServicios (no es Sector). Solo se usa si también está en imSectores.
 		valorServicio: valorServicioRaw || null,
 		sector,
 	};
@@ -1110,18 +1166,12 @@ async function generarSlots(matricula, desdeIso, hastaIso, opts = {}) {
 				if (!_slotBloqueado(fechaClarion, t, noHorarios)) {
 					const hora = _hhmm(t);
 					const clave = horaClaveTurno(t);
+					// Sector del slot = código imSectores. Nunca IDConsultorio.
 					const sector =
 						sectorPersonalMed ||
 						_elegirSectorDeRangos(diaCfg.rangos, t) ||
-						String(
-							rango.servicio ||
-								horarios.servicio ||
-								rango.consultorio ||
-								horarios.consultorio ||
-								'',
-						)
-							.trim()
-							.slice(0, 4);
+						_normCodigoSector(rango.servicio || horarios.servicio) ||
+						'';
 					const turno =
 						turnosData.map.get(`${fechaIso}|${t}|${sector}`) ||
 						turnosData.map.get(`${fechaIso}|${clave}|${sector}`) ||
@@ -1610,28 +1660,35 @@ async function asignarTurno({
 		horaPersistir = await _resolverHoraSobreturno(mat, fechaClarion, base);
 	}
 
-	// Sector = IdServicio del horario del médico (no del operador logueado ni del slot UI)
-	const sec =
-		(prof.sector && String(prof.sector).trim().slice(0, 4)) ||
-		String(slot?.sector || sector || '')
-			.trim()
-			.slice(0, 4);
-	let secFinal = sec && sec !== '0000' ? sec : '';
+	// Sector = imSectores.Valor (letra). Profesional + Especialidad + TipoTurno siempre.
+	// No usar consultorio ni códigos numéricos Clarion.
+	let secFinal =
+		(await _resolverSectorMedico(mat, fecha, horaPersistir, [
+			prof.sector,
+			slot?.sector,
+			sector,
+			prof.valorServicio,
+		])) || '';
 	if (!secFinal) {
-		secFinal = (await _sectorPersonalAsignado(mat)) || '';
-	}
-	if (!secFinal && prof.valorServicio != null) {
-		secFinal = String(prof.valorServicio).trim().slice(0, 4);
-	}
-	if (!secFinal) {
-		secFinal = String(sector || '').trim().slice(0, 4);
-	}
-	if (!secFinal) {
-		const e = new Error('No se pudo determinar el sector del profesional');
+		const e = new Error(
+			'No se pudo determinar un Sector válido (imSectores) para este profesional. Asigná un sector al personal o un IdServicio del horario que exista como sector.',
+		);
 		e.statusCode = 409;
+		e.code = 'SECTOR_INVALIDO';
 		throw e;
 	}
-	const esp = Number(prof.especialidad) || 0;
+	const esp =
+		especialidad != null && Number.isFinite(Number(especialidad)) && Number(especialidad) > 0
+			? Number(especialidad)
+			: Number(prof.especialidad) || 0;
+	if (!esp) {
+		const e = new Error(
+			'El profesional no tiene especialidad cargada (imPersonal.ValorEspecialidad). Completá la ficha antes de asignar turnos.',
+		);
+		e.statusCode = 409;
+		e.code = 'ESPECIALIDAD_FALTANTE';
+		throw e;
+	}
 
 	// Datos del paciente
 	const pac = await executeQuery(

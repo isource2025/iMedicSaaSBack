@@ -469,22 +469,17 @@ async function _consultarPorEspecialidad(cte, params) {
 }
 
 async function _consultarPorSector(cte, params) {
-	// imTurnos.Sector = código de sector/servicio (imSectores.Valor o imServicios.Valor).
-	// Especialidad NO se usa: es otra dimensión. Si el valor no está en esos
-	// catálogos, Descripcion queda null ("Sin identificar") a propósito.
+	// imTurnos.Sector = imSectores.Valor (códigos letra). Nada más.
 	return executeQuery(
 		`${cte}
 		SELECT TOP 30
 			LTRIM(RTRIM(ISNULL(te.Sector, ''))) AS Codigo,
-			COALESCE(MAX(sec.Descripcion), MAX(srv.Descripcion)) AS Descripcion,
+			MAX(sec.Descripcion) AS Descripcion,
 			MAX(sec.AmbInt) AS AmbInt,
 			${SQL_DIM_METRICAS}
 		FROM TurnosEstado te
 		LEFT JOIN dbo.imSectores sec
 			ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ISNULL(te.Sector, '')))
-		LEFT JOIN dbo.imServicios srv
-			ON LTRIM(RTRIM(CONVERT(VARCHAR(20), srv.Valor))) =
-			   LTRIM(RTRIM(CONVERT(VARCHAR(20), ISNULL(te.Sector, ''))))
 		GROUP BY LTRIM(RTRIM(ISNULL(te.Sector, '')))
 		HAVING LTRIM(RTRIM(ISNULL(te.Sector, ''))) <> ''
 		ORDER BY COUNT(*) DESC`,
