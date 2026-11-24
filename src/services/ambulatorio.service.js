@@ -469,15 +469,20 @@ async function _consultarPorEspecialidad(cte, params) {
 }
 
 async function _consultarPorSector(cte, params) {
-	// imTurnos.Sector guarda el IdServicio del horario (imServicios.Valor), no
-	// necesariamente imSectores.Valor. La agenda SaaS joinea contra imServicios;
-	// Clarion legacy a veces dejó códigos de sector. Se resuelve el nombre con
-	// ambos catálogos para no caer en "Sin identificar" con A demanda en 0.
+	// imTurnos.Sector debería ser imServicios.Valor / imSectores.Valor (OFT, GIN…).
+	// En Clarion legacy (IOSCOR) a menudo quedó el Id numérico de imEspecialidad
+	// (6=CLÍNICA MÉDICA, 2=NEUROREHABILITACION…). Se resuelve el nombre con los
+	// tres catálogos para no mostrar "Sin identificar".
 	return executeQuery(
 		`${cte}
 		SELECT TOP 30
 			LTRIM(RTRIM(ISNULL(te.Sector, ''))) AS Codigo,
-			COALESCE(MAX(sec.Descripcion), MAX(srv.Descripcion)) AS Descripcion,
+			COALESCE(
+				MAX(sec.Descripcion),
+				MAX(srv.Descripcion),
+				MAX(esp.Descripcion),
+				MAX(espTurno.Descripcion)
+			) AS Descripcion,
 			MAX(sec.AmbInt) AS AmbInt,
 			${SQL_DIM_METRICAS}
 		FROM TurnosEstado te
@@ -486,6 +491,11 @@ async function _consultarPorSector(cte, params) {
 		LEFT JOIN dbo.imServicios srv
 			ON LTRIM(RTRIM(CONVERT(VARCHAR(20), srv.Valor))) =
 			   LTRIM(RTRIM(CONVERT(VARCHAR(20), ISNULL(te.Sector, ''))))
+		LEFT JOIN dbo.imEspecialidad esp
+			ON LTRIM(RTRIM(CONVERT(VARCHAR(20), esp.Valor))) =
+			   LTRIM(RTRIM(CONVERT(VARCHAR(20), ISNULL(te.Sector, ''))))
+		LEFT JOIN dbo.imEspecialidad espTurno
+			ON espTurno.Valor = te.Especialidad
 		GROUP BY LTRIM(RTRIM(ISNULL(te.Sector, '')))
 		HAVING LTRIM(RTRIM(ISNULL(te.Sector, ''))) <> ''
 		ORDER BY COUNT(*) DESC`,

@@ -747,11 +747,14 @@ async function _datosProfesionalParaTurno(matricula, fechaIso = null, horaClario
 		fechaIso != null
 			? await _resolverSectorMedico(matEfectiva, fechaIso, horaClarion)
 			: null;
+	const valorServicioRaw =
+		r.ValorServicio != null ? String(r.ValorServicio).trim().slice(0, 4) : '';
 	return {
 		matricula: matEfectiva,
 		nombre: r.ApellidoNombre ? String(r.ApellidoNombre).trim() : null,
 		especialidad: Number(r.ValorEspecialidad) || 0,
-		valorServicio: r.ValorServicio != null ? Number(r.ValorServicio) : null,
+		// ValorServicio es código de catálogo (CLI, OFT…), no un número.
+		valorServicio: valorServicioRaw || null,
 		sector,
 	};
 }
