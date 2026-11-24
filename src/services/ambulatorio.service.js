@@ -626,19 +626,38 @@ async function _consultarOrigen(filtros) {
 async function _consultarVisitasPorSector(filtros) {
 	try {
 		const { condiciones, params } = _paramsVisitasBase(filtros);
+		// Preferir Sector del turno ligado si matchea imSectores (post-migración).
+		// VALORSECTOR histórico a veces trae IDConsultorio numérico.
 		return await executeQuery(
 			`SELECT TOP 30
-				LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) AS Codigo,
+				secCodigo AS Codigo,
 				MAX(sec.Descripcion) AS Descripcion,
 				MAX(sec.AmbInt) AS AmbInt,
-				${_sqlConteoVisitasPorOrigen()}
-			FROM dbo.imVisita v
-			LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+				${_sqlConteoVisitasPorOrigen('x')}
+			FROM (
+				SELECT
+					tt.TipoTurnoMin,
+					COALESCE(
+						NULLIF(LTRIM(RTRIM(tur.SectorValido)), ''),
+						NULLIF(LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))), '')
+					) AS secCodigo
+				FROM dbo.imVisita v
+				LEFT JOIN (${SQL_ORIGEN_VISITA}) tt ON tt.NumeroVisita = v.NUMEROVISITA
+				OUTER APPLY (
+					SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(20), t.Sector))) AS SectorValido
+					FROM dbo.imTurnos t
+					INNER JOIN dbo.imSectores s
+						ON LTRIM(RTRIM(CAST(s.Valor AS VARCHAR(50)))) =
+						   LTRIM(RTRIM(CONVERT(VARCHAR(20), t.Sector)))
+					WHERE t.NumeroVisita = v.NUMEROVISITA
+					ORDER BY t.IdTurno DESC
+				) tur
+				WHERE ${condiciones.join('\n\t\t\t\t  AND ')}
+			) x
 			LEFT JOIN dbo.imSectores sec
-				ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ISNULL(v.VALORSECTOR, '')))
-			WHERE ${condiciones.join('\n\t\t\t  AND ')}
-			GROUP BY LTRIM(RTRIM(ISNULL(v.VALORSECTOR, '')))
-			HAVING LTRIM(RTRIM(ISNULL(v.VALORSECTOR, ''))) <> ''
+				ON LTRIM(RTRIM(CAST(sec.Valor AS VARCHAR(50)))) = LTRIM(RTRIM(x.secCodigo))
+			WHERE NULLIF(LTRIM(RTRIM(ISNULL(x.secCodigo, ''))), '') IS NOT NULL
+			GROUP BY secCodigo
 			ORDER BY COUNT(*) DESC`,
 			params,
 		);
@@ -909,6 +928,8 @@ function _mergeDimensionConVisitas(turnoDims, visitaRows, campoCodigo, extra = (
 	for (const [codigo, v] of visitaMap) {
 		if (seen.has(codigo)) continue;
 		if (v.conTurno + v.aDemanda <= 0) continue;
+		// No inventar filas "Sin identificar · 6" por VALORSECTOR=consultorio.
+		if (/^[0-9]+$/.test(codigo) && !v.descripcion) continue;
 		merged.push({
 			codigo: v.codigo,
 			descripcion: v.descripcion,
