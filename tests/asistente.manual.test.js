@@ -83,6 +83,8 @@ test('ranking: preguntas reales de usuarios encuentran el artículo correcto pri
 		['cómo responder una interconsulta', 'responder-interconsulta'],
 		['exportar planilla de turnos', 'planilla-turnos'],
 		['turnos asignados', 'planilla-turnos'],
+		['cómo imprimo el listado de turnos que tengo en el día de hoy', 'planilla-turnos'],
+		['imprimir turnos de hoy', 'planilla-turnos'],
 		['exportar ticket', 'ticket-turno'],
 		['filtrar por obra social los pacientes internados', 'consultar-hc'],
 		['listado de pacientes que egresaron hoy', 'egresos-por-fecha'],

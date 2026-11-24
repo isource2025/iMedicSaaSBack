@@ -43,16 +43,22 @@ module.exports = [
 			'planilla de turnos',
 			'planilla',
 			'turnos asignados',
+			'listado de turnos',
 			'listado de turnos del dia',
+			'imprimir listado de turnos',
+			'imprimir turnos',
+			'imprimir turnos de hoy',
+			'imprimir la agenda',
 			'exportar planilla',
 			'imprimir planilla',
 			'pdf planilla',
 			'agenda del dia pdf',
+			'turnos de hoy',
 		],
 		texto:
-			'PDF con los turnos asignados del día de la agenda que estés viendo (profesional o sector/servicio). Se abre una vista previa para imprimir o guardar.',
+			'Para imprimir o exportar el listado de turnos del día usá la planilla de la Agenda (no Gestión de turnos ni la impresión del navegador). PDF con los turnos asignados de la agenda que estés viendo (profesional o sector/servicio).',
 		pasos: [
-			'Abrí Turnos → Agenda y elegí la fecha y el «Profesional» (o «Agenda sector / servicio»).',
+			'Abrí Turnos → Agenda y elegí la fecha (hoy) y el «Profesional» (o «Agenda sector / servicio»).',
 			'Tocá «Otras Funciones» → «Planilla de turnos».',
 			'Se abre la previsualización «Planilla de turnos» (PDF). Desde ahí imprimí o descargá.',
 		],
@@ -60,6 +66,10 @@ module.exports = [
 			{
 				sintoma: 'El botón de planilla está deshabilitado',
 				causa: 'Hace falta tener cargada una agenda de profesional (o sector) con datos; si no hay profesional seleccionado no se genera.',
+			},
+			{
+				sintoma: 'Fui a Gestión de turnos a imprimir',
+				causa: 'Ahí no hay exportar planilla: el listado del día se imprime desde Agenda → Otras Funciones → Planilla de turnos.',
 			},
 		],
 	},
@@ -119,8 +129,8 @@ module.exports = [
 		modulo: 'TURNOS',
 		comoLlegar: 'Menú: Turnos → Gestión de turnos.',
 		permisos: ['TURNOS.ADMIN.VER', 'TURNOS.ADMIN.EDITAR', 'TURNOS.ADMIN.ELIMINAR'],
-		tags: ['gestion de turnos', 'administrador de turnos', 'historial de turnos', 'buscar turno', 'reasignar', 'listado de turnos'],
-		texto: 'Listado filtrable de turnos con menú por fila (ver detalle, editar o reasignar paciente, cancelar, RAC, finalizar atención, borrar).',
+		tags: ['gestion de turnos', 'administrador de turnos', 'historial de turnos', 'buscar turno', 'reasignar'],
+		texto: 'Historial filtrable de turnos con menú por fila (ver detalle, editar o reasignar paciente, cancelar, RAC, finalizar atención, borrar). No sirve para imprimir la agenda del día: eso es la planilla en Agenda → Otras Funciones.',
 		pasos: [
 			'Filtrá por «Fecha desde/hasta», «Estado», «Tipo», «Sector», «DNI», etc. → «Buscar».',
 			'Reasignar: menú → «Asignar / reasignar» o «Editar turno» → paciente y observaciones → «Guardar».',
@@ -129,6 +139,10 @@ module.exports = [
 		problemas: [
 			{ sintoma: '«No hay turnos con los filtros seleccionados.»', causa: 'Ampliá las fechas o tocá «Limpiar filtros».' },
 			{ sintoma: 'Quiero cambiar fecha u hora', causa: 'No se puede desde acá: cancelá y asigná uno nuevo en la Agenda.' },
+			{
+				sintoma: 'Cómo imprimo / exporto el listado de turnos de hoy',
+				causa: 'No desde acá: Turnos → Agenda → Otras Funciones → Planilla de turnos (PDF).',
+			},
 		],
 	},
 	{

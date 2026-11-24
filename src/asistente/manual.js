@@ -124,6 +124,8 @@ const SINONIMOS = {
 	patologos: 'personal especialidad patologia',
 	patologia: 'personal especialidad',
 	planilla: 'planilla de turnos turnos asignados',
+	imprimir: 'imprimir planilla listado turnos',
+	imprimo: 'imprimir planilla listado turnos',
 	ticket: 'exportar ticket',
 	egresaron: 'egresos egresados',
 	egresado: 'egreso egresos',
