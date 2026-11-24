@@ -287,6 +287,10 @@ async function _contextoTurnos(filtros) {
 				WHEN b.Status IN (2, 3) OR ISNULL(b.HoraSalida, 0) > 0
 				     OR ISNULL(b.NumeroVisita, 0) > 0 THEN 'ATENDIDO'
 				WHEN ISNULL(b.HoraIngreso, 0) > 0 THEN 'EN_CONSULTORIO'
+				-- Sobreturno / a demanda: mismos pasos que Admin (llegada → en sala,
+				-- sin marcas → pendiente). No usan gracia ni pasan a AUSENTE/SIN_CERRAR.
+				WHEN b.EsAgenda = 0 AND ISNULL(b.Horallegada, 0) > 0 THEN 'EN_SALA'
+				WHEN b.EsAgenda = 0 THEN 'PENDIENTE'
 				WHEN DATEADD(MINUTE, @p2, b.InstanteTurno) >= CONVERT(DATETIME, @p3, 120)
 				     THEN CASE WHEN ISNULL(b.Horallegada, 0) > 0 THEN 'EN_SALA' ELSE 'PENDIENTE' END
 				WHEN b.EsAgenda = 1 THEN 'AUSENTE'
@@ -323,9 +327,10 @@ async function _consultarResumen(cte, params) {
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS Atendidos,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
 			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
-			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'EN_SALA' THEN 1 ELSE 0 END) AS EnSala,
-			SUM(CASE WHEN EsAgenda = 1 AND Estado = 'EN_CONSULTORIO' THEN 1 ELSE 0 END) AS EnConsultorio,
+			-- Pendiente / en sala / en consultorio: agenda + sobreturnos (Admin Turnos).
+			SUM(CASE WHEN Estado = 'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
+			SUM(CASE WHEN Estado = 'EN_SALA' THEN 1 ELSE 0 END) AS EnSala,
+			SUM(CASE WHEN Estado = 'EN_CONSULTORIO' THEN 1 ELSE 0 END) AS EnConsultorio,
 			SUM(CASE WHEN EsAgenda = 0 AND Estado <> 'CANCELADO' THEN 1 ELSE 0 END) AS TurnosDemanda,
 			SUM(CASE WHEN EsAgenda = 0 AND Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosDemanda,
 			SUM(CASE WHEN EsAgenda = 0 AND Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS CanceladosDemanda,
@@ -442,8 +447,9 @@ const SQL_DIM_METRICAS = `
 			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosAgenda,
 			SUM(CASE WHEN te.EsAgenda = 0 AND te.Estado = 'ATENDIDO' THEN 1 ELSE 0 END) AS AtendidosDemanda,
 			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'AUSENTE' THEN 1 ELSE 0 END) AS Ausentes,
-			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
-			SUM(CASE WHEN te.EsAgenda = 0 THEN 1 ELSE 0 END) AS TurnosDemanda,
+			SUM(CASE WHEN te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS Cancelados,
+			SUM(CASE WHEN te.EsAgenda = 1 AND te.Estado = 'CANCELADO' THEN 1 ELSE 0 END) AS CanceladosAgenda,
+			SUM(CASE WHEN te.EsAgenda = 0 AND te.Estado <> 'CANCELADO' THEN 1 ELSE 0 END) AS TurnosDemanda,
 			AVG(CASE WHEN te.Estado = 'ATENDIDO' THEN te.MinEspera END) AS EsperaProm,
 			AVG(CASE WHEN te.Estado = 'ATENDIDO' THEN te.MinPermanencia END) AS PermanenciaProm`;
 
@@ -463,17 +469,25 @@ async function _consultarPorEspecialidad(cte, params) {
 }
 
 async function _consultarPorSector(cte, params) {
+	// imTurnos.Sector guarda el IdServicio del horario (imServicios.Valor), no
+	// necesariamente imSectores.Valor. La agenda SaaS joinea contra imServicios;
+	// Clarion legacy a veces dejó códigos de sector. Se resuelve el nombre con
+	// ambos catálogos para no caer en "Sin identificar" con A demanda en 0.
 	return executeQuery(
 		`${cte}
 		SELECT TOP 30
 			LTRIM(RTRIM(ISNULL(te.Sector, ''))) AS Codigo,
-			MAX(sec.Descripcion) AS Descripcion,
+			COALESCE(MAX(sec.Descripcion), MAX(srv.Descripcion)) AS Descripcion,
 			MAX(sec.AmbInt) AS AmbInt,
 			${SQL_DIM_METRICAS}
 		FROM TurnosEstado te
 		LEFT JOIN dbo.imSectores sec
 			ON LTRIM(RTRIM(sec.Valor)) = LTRIM(RTRIM(ISNULL(te.Sector, '')))
+		LEFT JOIN dbo.imServicios srv
+			ON LTRIM(RTRIM(CONVERT(VARCHAR(20), srv.Valor))) =
+			   LTRIM(RTRIM(CONVERT(VARCHAR(20), ISNULL(te.Sector, ''))))
 		GROUP BY LTRIM(RTRIM(ISNULL(te.Sector, '')))
+		HAVING LTRIM(RTRIM(ISNULL(te.Sector, ''))) <> ''
 		ORDER BY COUNT(*) DESC`,
 		params,
 	);
@@ -729,7 +743,9 @@ async function _consultarVisitasPorEspecialidad(filtros) {
 function _mapResumen(row, pct, graciaMin) {
 	const programados = _num(row.Programados);
 	const atendidos = _num(row.Atendidos);
-	const cancelados = _num(row.Cancelados);
+	const canceladosAgenda = _num(row.Cancelados);
+	const canceladosDemanda = _num(row.CanceladosDemanda);
+	const cancelados = canceladosAgenda + canceladosDemanda;
 	const ausentes = _num(row.Ausentes);
 	const pendientes = _num(row.Pendientes);
 	const enSala = _num(row.EnSala);
@@ -738,9 +754,9 @@ function _mapResumen(row, pct, graciaMin) {
 	const atendidosDemanda = _num(row.AtendidosDemanda);
 	const atendidosTotal = atendidos + atendidosDemanda;
 
-	// El ausentismo se mide sobre los turnos que realmente debían presentarse:
-	// los cancelados avisaron y no son inasistencia.
-	const base = Math.max(0, programados - cancelados);
+	// El ausentismo se mide sobre los turnos de agenda que debían presentarse:
+	// cancelados de agenda avisaron; los de sobreturno no entran al denominador.
+	const base = Math.max(0, programados - canceladosAgenda);
 
 	const atendidosCobertura = _num(row.AtendidosParaCobertura);
 	const conIngreso = _num(row.AtendidosConIngreso);
@@ -759,9 +775,9 @@ function _mapResumen(row, pct, graciaMin) {
 		atendidosDemanda,
 		/** Agenda atendida + demanda atendida (mismo criterio que Admin Turnos / Estado=Atendido). */
 		atendidosTotal,
-		canceladosDemanda: _num(row.CanceladosDemanda),
+		canceladosDemanda,
 		tasaAusentismo: _porcentaje(ausentes, base),
-		tasaCancelacion: _porcentaje(cancelados, programados),
+		tasaCancelacion: _porcentaje(canceladosAgenda, programados),
 		tasaAtencion: _porcentaje(atendidos, base),
 		tiempos: {
 			espera: {
@@ -925,8 +941,9 @@ function _mapDimension(rows, campoCodigo, extra = () => ({})) {
 	return (rows || []).map((r) => {
 		const programados = _num(r.Programados);
 		const cancelados = _num(r.Cancelados);
-		// Cancelados avisaron: no entran al denominador del ausentismo.
-		const base = Math.max(0, programados - cancelados);
+		// Ausentismo sólo sobre agenda: los cancelados de sobreturno no restan.
+		const canceladosAgenda = _num(r.CanceladosAgenda, cancelados);
+		const base = Math.max(0, programados - canceladosAgenda);
 		const atendidosAgenda = _num(r.AtendidosAgenda ?? r.Atendidos);
 		const atendidosDemanda = _num(r.AtendidosDemanda);
 		return {
@@ -938,6 +955,7 @@ function _mapDimension(rows, campoCodigo, extra = () => ({})) {
 			atendidosAgenda,
 			atendidosDemanda,
 			ausentes: _num(r.Ausentes),
+			/** Cancelados de agenda + sobreturno (todos los estados de baja). */
 			cancelados,
 			turnosDemanda: _num(r.TurnosDemanda),
 			tasaAusentismo: programados > 0 ? _porcentaje(_num(r.Ausentes), base || programados) : null,
