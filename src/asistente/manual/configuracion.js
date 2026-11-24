@@ -22,6 +22,7 @@ module.exports = [
 		modulo: 'CONFIGURACION',
 		comoLlegar: 'Menú: Configuración → Personal.',
 		permisos: ['CONFIGURACION.PERSONAL.VER', 'CONFIGURACION.PERSONAL.CREAR', 'CONFIGURACION.PERSONAL.EDITAR'],
+		boton: 'Agregar personal',
 		tags: [
 			'personal',
 			'alta de personal',
@@ -35,6 +36,11 @@ module.exports = [
 			'dar de alta un medico',
 			'doy de alta un medico',
 			'alta de medico nuevo',
+			'cargar patologos',
+			'patologo',
+			'patologos',
+			'patologia',
+			'especialidad',
 			'crear usuario',
 			'usuario de acceso',
 			'matricula',
@@ -44,18 +50,23 @@ module.exports = [
 			'roles del usuario',
 		],
 		texto:
-			'Fichas del personal del hospital, su usuario de acceso, roles, sectores, firma y códigos de facturación. El «alta» acá es dar de alta a un profesional, no el egreso de un internado.',
+			'Fichas del personal del hospital (médicos, enfermería, patólogos, etc.), su usuario de acceso, roles, sectores, firma y códigos de facturación. El «alta» acá es dar de alta a un profesional, no el egreso de un internado. «Cargar patólogos» = alta de personal con especialidad de patología.',
 		pasos: [
-			'Alta: «+ Agregar personal» → pestañas «Datos Personales» («DNI», «Apellido y Nombre», botón «RENAPER»), «Datos Profesionales», «Acceso y roles», «Sectores», «Firma» → «Guardar».',
-			'Usuario: en «Acceso y roles» marcá «Crear usuario de acceso al sistema» → «Usuario», «Contraseña», «Confirmar» y al menos un rol.',
-			'Cambiar roles: menú de la fila → «Roles del usuario» → marcá roles y el «Rol principal» → «Guardar». Los permisos de varios roles se suman.',
-			'Sectores del usuario: menú → «Sectores».',
+			'Alta: «Agregar personal» → pestaña «Datos Personales y Contacto» («DNI», «Apellido y Nombre», botón «RENAPER»).',
+			'Pestaña «Datos Profesionales»: matrícula y «Especialidad» (ej. patología para un patólogo).',
+			'Pestaña «Acceso y roles»: si necesita entrar al sistema, marcá «Crear usuario de acceso al sistema» → «Usuario», «Contraseña», «Confirmar» y al menos un rol.',
+			'Pestañas «Sectores» / «Servicios» (al editar) y «Firma» según haga falta → «Guardar».',
+			'Cambiar roles después: menú de la fila → «Roles del usuario» → marcá roles y el «Rol principal» → «Guardar».',
 			'«Actualizar desde base física» trae cambios del sistema local del hospital.',
 		],
 		problemas: [
 			{ sintoma: '«Marcá al menos un rol»', causa: 'Todo usuario necesita un rol.' },
 			{ sintoma: '«La contraseña debe tener al menos 4 caracteres» / «Las contraseñas no coinciden»', causa: 'Reglas de contraseña.' },
 			{ sintoma: '«DNI inválido» / «Matrícula inválida» / «No puede ser futura»', causa: 'Revisá los datos de la ficha.' },
+			{
+				sintoma: 'Necesito cargar patólogos / médicos de una especialidad',
+				causa: 'Es un alta de Personal: Configuración → Personal → Agregar personal → Datos Profesionales → Especialidad.',
+			},
 		],
 	},
 	{

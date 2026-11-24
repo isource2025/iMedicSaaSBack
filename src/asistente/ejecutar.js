@@ -84,6 +84,7 @@ function botonesDelManual(ctx, hits, ruta) {
 		let href = a.path;
 		let resaltar = a.seccion ? null : opcion;
 		if (a.seccion && nv) href = `/dashboard/visita/${nv}?seccion=${encodeURIComponent(a.seccion)}`;
+		else if (a.query && typeof a.query === 'object') href = armarUrl(a.path, a.query);
 		const aca = href.split('?')[0] === actual && !href.includes('?');
 		if (aca && !resaltar) continue;
 		if (!pathConocido(href)) continue;

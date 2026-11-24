@@ -80,6 +80,13 @@ test('ranking: preguntas reales de usuarios encuentran el artículo correcto pri
 		['h.c. de ingreso', 'hc-ingreso'],
 		['no puedo borrar la rendición', 'facturacion-rendiciones'],
 		['ajuste de precios del convenio', 'facturacion-convenios'],
+		['cómo responder una interconsulta', 'responder-interconsulta'],
+		['exportar planilla de turnos', 'planilla-turnos'],
+		['turnos asignados', 'planilla-turnos'],
+		['exportar ticket', 'ticket-turno'],
+		['filtrar por obra social los pacientes internados', 'consultar-hc'],
+		['listado de pacientes que egresaron hoy', 'egresos-por-fecha'],
+		['necesito cargar los patologos', 'personal'],
 	];
 	for (const [q, id] of casos) {
 		const hits = manual.buscar(q, 3);

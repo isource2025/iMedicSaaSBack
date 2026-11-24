@@ -120,6 +120,13 @@ const SINONIMOS = {
 	doctor: 'profesional medico',
 	enfermera: 'enfermeria',
 	enfermero: 'enfermeria',
+	patologo: 'personal especialidad patologia',
+	patologos: 'personal especialidad patologia',
+	patologia: 'personal especialidad',
+	planilla: 'planilla de turnos turnos asignados',
+	ticket: 'exportar ticket',
+	egresaron: 'egresos egresados',
+	egresado: 'egreso egresos',
 };
 
 function normalizar(s) {
