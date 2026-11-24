@@ -22,7 +22,7 @@ module.exports = [
 		],
 		problemas: [
 			{ sintoma: 'Quiero reprogramar / «Cambiar turno» no hace nada', causa: '«Cambiar turno» está marcado «próx.»: todavía no existe. Cancelá el turno y asigná uno nuevo.' },
-			{ sintoma: '«No se pueden asignar turnos en fechas anteriores al día de hoy.» / «En fechas pasadas solo se puede consultar el historial.»', causa: 'La fecha elegida ya pasó.' },
+			{ sintoma: '«fuera del margen de 12 h tras medianoche» / historial bloqueado', causa: 'La fecha está fuera del margen: hasta las 12:00 del día siguiente todavía se puede cargar el día anterior; después solo historial.' },
 			{ sintoma: '«Feriado nacional… No se asignan turnos.»', causa: 'El día es feriado.' },
 			{ sintoma: '«Sin horario configurado»', causa: 'El profesional no tiene horarios: se cargan en Turnos → Configuración → «Horarios agenda».' },
 			{ sintoma: '«Tu usuario no tiene matrícula asociada. Cerrá sesión y volvé a entrar.»', causa: 'El usuario médico no está vinculado a su ficha de Personal.' },

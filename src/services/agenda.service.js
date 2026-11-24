@@ -46,6 +46,28 @@ const { resolverFichaParaFacProfesional } = require('../utils/fichaFacProfesiona
 
 const DIA_POR_JS = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
 
+/** Horas después de medianoche en que aún se pueden cargar turnos del día anterior. */
+const MARGEN_CARGA_TURNOS_HS = 12;
+
+/**
+ * true si la fecha ya no admite asignación (calendario Argentina + margen post-medianoche).
+ * @param {string} fechaIso YYYY-MM-DD
+ */
+function _fechaTurnoFueraDeMargen(fechaIso) {
+	const fecha = String(fechaIso || '').slice(0, 10);
+	const hoy = fechaCalendarioArgentina();
+	if (!fecha || fecha >= hoy) return false;
+
+	const [yh, mh, dh] = hoy.split('-').map(Number);
+	const [yf, mf, df] = fecha.split('-').map(Number);
+	const diffDays = Math.round((Date.UTC(yh, mh - 1, dh) - Date.UTC(yf, mf - 1, df)) / 86400000);
+	if (diffDays > 1) return true;
+	if (diffDays < 1) return false;
+
+	const [hh] = String(horaWallArgentina(false) || '00:00').split(':').map(Number);
+	return hh >= MARGEN_CARGA_TURNOS_HS;
+}
+
 function _validarMatricula(matricula) {
 	const m = Number(matricula);
 	if (!Number.isFinite(m) || m <= 0) {
@@ -1521,9 +1543,10 @@ async function asignarTurno({
 	// Matrícula real en imPersonal (puede diferir si llegó Valor personal)
 	const mat = Number(prof.matricula) > 0 ? Number(prof.matricula) : m;
 
-	const hoyClarion = convertirFechaAClarion(_isoDate(new Date()));
-	if (fechaClarion < hoyClarion) {
-		const e = new Error('No se pueden asignar turnos en fechas anteriores al día de hoy');
+	if (_fechaTurnoFueraDeMargen(fecha)) {
+		const e = new Error(
+			`No se pueden asignar turnos fuera del margen de ${MARGEN_CARGA_TURNOS_HS} h tras medianoche`,
+		);
 		e.statusCode = 400;
 		throw e;
 	}
