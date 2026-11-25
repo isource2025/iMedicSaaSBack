@@ -1119,6 +1119,8 @@ async function obtenerResumenAmbulatorioHoy(graciaMinIn) {
 		fecha: hoy,
 		graciaMin: filtrosHoy.graciaMin,
 		programados: hoyMap.programados,
+		/** Sobreturnos / a demanda del día (TipoTurno = 1). */
+		turnosDemanda: hoyMap.turnosDemanda,
 		atendidos: hoyMap.atendidosTotal,
 		atendidosAgenda: hoyMap.atendidos,
 		atendidosDemanda: hoyMap.atendidosDemanda,

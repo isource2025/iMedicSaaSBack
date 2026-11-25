@@ -6,6 +6,11 @@ const { sumarCacheHit } = require('../context/requestTiming');
 
 const CAMA_ONLY_WHERE = "UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMA'";
 
+/** Catálogo imHabitacionCamas.Tipo: CAMA / CAMILLA / SILLON (vacío → cama). */
+const RECURSOS_INTERNACION_WHERE = `
+  UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, 'CAMA')))) IN ('CAMA', 'CAMILLA', 'SILLON', '')
+`;
+
 /**
  * Caches por tenant de la analítica (resultados de queries pesadas sobre
  * imVisitaMovimiento). El dashboard las pide con el mismo rango de 30 días
@@ -46,11 +51,20 @@ function invalidarCacheAnalitica() {
  * Bases Clarion viejas no tienen imHabitacionCamas.Tipo: ahí toda fila cuenta como cama.
  * El esquema no cambia en caliente → se consulta una sola vez por tenant.
  */
-const camaOnlyWhere = createTenantOnce(async () => {
+const tieneColumnaTipoCama = createTenantOnce(async () => {
   const rows = await executeQuery(
     "SELECT COL_LENGTH('dbo.imHabitacionCamas', 'Tipo') AS Largo",
   );
-  return rows?.[0]?.Largo == null ? '1 = 1' : CAMA_ONLY_WHERE;
+  return rows?.[0]?.Largo != null;
+});
+
+const camaOnlyWhere = createTenantOnce(async () => {
+  return (await tieneColumnaTipoCama()) ? CAMA_ONLY_WHERE : '1 = 1';
+});
+
+/** Cama + camilla + sillón (excluye consultorio/insumos si existen). */
+const recursosInternacionWhere = createTenantOnce(async () => {
+  return (await tieneColumnaTipoCama()) ? RECURSOS_INTERNACION_WHERE : '1 = 1';
 });
 
 function esObjetoSqlMissing(error) {
@@ -777,49 +791,69 @@ const obtenerEstadoActualCamas = async () =>
 const obtenerEstadoActualCamasSinCache = async () => {
   const startTime = Date.now();
   console.log(`🔍 [ESTADO-ACTUAL] Iniciando consulta de estado actual en tiempo real`);
-  
+
   try {
-    // Query para obtener estado actual real de camas ocupadas HOY
-    // Basada en la estructura real: imHabitacionCamas usa ValorHabitacionCama como ID y NumeroVisita para ocupación
-    const soloCamas = await camaOnlyWhere();
+    // Conteos de internación por Tipo (CAMA / CAMILLA / SILLON) + disponibles/ocupadas.
+    const filtro = await recursosInternacionWhere();
+    const conTipo = await tieneColumnaTipoCama();
+    const tipoExpr = conTipo
+      ? `CASE
+          WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'CAMILLA' THEN 'CAMILLA'
+          WHEN UPPER(LTRIM(RTRIM(ISNULL(hc.Tipo, '')))) = 'SILLON' THEN 'SILLON'
+          ELSE 'CAMA'
+        END`
+      : `'CAMA'`;
+
     const query = `
-      SELECT 
-        COUNT(*) AS TotalCamas,
-        SUM(CASE WHEN hc.NumeroVisita > 0 THEN 1 ELSE 0 END) AS CamasOcupadas,
-        SUM(CASE WHEN hc.NumeroVisita = 0 OR hc.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS CamasDisponibles
+      SELECT
+        ${tipoExpr} AS Tipo,
+        COUNT(*) AS Total,
+        SUM(CASE WHEN hc.NumeroVisita > 0 THEN 1 ELSE 0 END) AS Ocupadas,
+        SUM(CASE WHEN hc.NumeroVisita = 0 OR hc.NumeroVisita IS NULL THEN 1 ELSE 0 END) AS Disponibles
       FROM dbo.imHabitacionCamas hc
-      WHERE ${soloCamas}
+      WHERE ${filtro}
+      GROUP BY ${tipoExpr}
     `;
-    
+
     const queryStartTime = Date.now();
     const result = await executeQuery(query);
-    
+
     const queryTime = Date.now() - queryStartTime;
     console.log(`✅ [ESTADO-ACTUAL] Query completada en ${queryTime}ms`);
-    
-    const datos = result[0];
-    console.log(`📊 [ESTADO-ACTUAL] Datos obtenidos:`, {
-      TotalCamas: datos.TotalCamas,
-      CamasOcupadas: datos.CamasOcupadas,
-      CamasDisponibles: datos.CamasDisponibles
-    });
-    
-    const totalCamas = toNumberSafe(datos.TotalCamas);
-    const ocupadas = toNumberSafe(datos.CamasOcupadas);
-    const disponibles = toNumberSafe(datos.CamasDisponibles);
-    const porcentajeOcupacion = totalCamas > 0 ? Number(((ocupadas / totalCamas) * 100).toFixed(2)) : 0;
-    
+
+    const porTipo = { cama: 0, camilla: 0, sillon: 0 };
+    let totalCamas = 0;
+    let ocupadas = 0;
+    let disponibles = 0;
+
+    for (const row of result || []) {
+      const tipo = String(row.Tipo || 'CAMA').trim().toUpperCase();
+      const total = toNumberSafe(row.Total);
+      const occ = toNumberSafe(row.Ocupadas);
+      const disp = toNumberSafe(row.Disponibles);
+      totalCamas += total;
+      ocupadas += occ;
+      disponibles += disp;
+      if (tipo === 'CAMILLA') porTipo.camilla = total;
+      else if (tipo === 'SILLON') porTipo.sillon = total;
+      else porTipo.cama = total;
+    }
+
+    const porcentajeOcupacion =
+      totalCamas > 0 ? Number(((ocupadas / totalCamas) * 100).toFixed(2)) : 0;
+
     const resultado = {
       fecha: new Date().toISOString().split('T')[0],
       totalCamas,
       ocupadas,
       disponibles,
-      porcentajeOcupacion
+      porcentajeOcupacion,
+      porTipo,
     };
-    
+
     const totalTime = Date.now() - startTime;
     console.log(`🏁 [ESTADO-ACTUAL] Proceso completado en ${totalTime}ms:`, resultado);
-    
+
     return resultado;
   } catch (error) {
     const totalTime = Date.now() - startTime;
@@ -827,7 +861,7 @@ const obtenerEstadoActualCamasSinCache = async () => {
       message: error.message,
       code: error.code,
       number: error.number,
-      stack: error.stack?.split('\n').slice(0, 3)
+      stack: error.stack?.split('\n').slice(0, 3),
     });
     throw new Error('Error al obtener estado actual de camas');
   }
