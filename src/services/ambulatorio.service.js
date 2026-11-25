@@ -531,6 +531,35 @@ async function _consultarHeatmap(cte, params) {
 	);
 }
 
+/** Profesionales con espera > 0 por celda (día×hora), para tooltip del heatmap. */
+async function _consultarHeatmapRetrasos(cte, params) {
+	return executeQuery(
+		`${cte}
+		SELECT
+			${SQL_DIA_SEMANA} AS DiaSemana,
+			DATEPART(HOUR, InstanteTurno) AS Hora,
+			te.Profesional AS Matricula,
+			MAX(per.ApellidoNombre) AS Nombre,
+			AVG(te.MinEspera) AS EsperaProm,
+			COUNT(*) AS Atendidos
+		FROM TurnosEstado te
+		OUTER APPLY (
+			SELECT TOP 1 p.ApellidoNombre
+			FROM dbo.imPersonal p
+			WHERE p.Matricula = te.Profesional
+			  AND NULLIF(LTRIM(RTRIM(p.ApellidoNombre)), '') IS NOT NULL
+			ORDER BY p.Valor
+		) per
+		WHERE te.Estado = 'ATENDIDO'
+		  AND te.MinEspera IS NOT NULL
+		  AND te.MinEspera > 0
+		  AND te.EsAgenda = 1
+		GROUP BY ${SQL_DIA_SEMANA}, DATEPART(HOUR, InstanteTurno), te.Profesional
+		ORDER BY DiaSemana, Hora, AVG(te.MinEspera) DESC`,
+		params,
+	);
+}
+
 /**
  * Origen de cada visita según el turno que la generó.
  *
@@ -1010,15 +1039,37 @@ function _mapDimension(rows, campoCodigo, extra = () => ({})) {
 	});
 }
 
-function _mapHeatmap(rows) {
-	return (rows || []).map((r) => ({
-		diaSemana: _num(r.DiaSemana),
-		hora: _num(r.Hora),
-		programados: _num(r.Programados),
-		ausentes: _num(r.Ausentes),
-		esperaProm: _dec(r.EsperaProm),
-		permanenciaProm: _dec(r.PermanenciaProm),
-	}));
+const HEATMAP_RETRASOS_TOP = 5;
+
+function _mapHeatmap(rows, retrasoRows = []) {
+	const porCelda = new Map();
+	for (const r of retrasoRows || []) {
+		const dia = _num(r.DiaSemana);
+		const hora = _num(r.Hora);
+		const key = `${dia}-${hora}`;
+		const lista = porCelda.get(key) || [];
+		if (lista.length >= HEATMAP_RETRASOS_TOP) continue;
+		lista.push({
+			matricula: _num(r.Matricula),
+			nombre: _txt(r.Nombre) || `Mat. ${_num(r.Matricula)}`,
+			esperaProm: _dec(r.EsperaProm),
+			atendidos: _num(r.Atendidos),
+		});
+		porCelda.set(key, lista);
+	}
+	return (rows || []).map((r) => {
+		const dia = _num(r.DiaSemana);
+		const hora = _num(r.Hora);
+		return {
+			diaSemana: dia,
+			hora,
+			programados: _num(r.Programados),
+			ausentes: _num(r.Ausentes),
+			esperaProm: _dec(r.EsperaProm),
+			permanenciaProm: _dec(r.PermanenciaProm),
+			retrasos: porCelda.get(`${dia}-${hora}`) || [],
+		};
+	});
 }
 
 // ── API pública ─────────────────────────────────────────────────────────────
@@ -1031,20 +1082,33 @@ async function obtenerAnaliticaAmbulatoria(filtrosIn = {}) {
 	const filtros = normalizarFiltros(filtrosIn);
 	const { cte, params } = await _contextoTurnos(filtros);
 
-	const [resumenRow, percentiles, serieRows, origenRows, espRows, secRows, profRows, heatRows, visSecRows, visEspRows, visProfRows] =
-		await Promise.all([
-			_consultarResumen(cte, params),
-			_consultarPercentiles(cte, params),
-			_consultarSerie(cte, params),
-			_consultarOrigen(filtros),
-			_consultarPorEspecialidad(cte, params),
-			_consultarPorSector(cte, params),
-			_consultarPorProfesional(cte, params),
-			_consultarHeatmap(cte, params),
-			_consultarVisitasPorSector(filtros),
-			_consultarVisitasPorEspecialidad(filtros),
-			_consultarVisitasPorProfesional(filtros),
-		]);
+	const [
+		resumenRow,
+		percentiles,
+		serieRows,
+		origenRows,
+		espRows,
+		secRows,
+		profRows,
+		heatRows,
+		heatRetrasos,
+		visSecRows,
+		visEspRows,
+		visProfRows,
+	] = await Promise.all([
+		_consultarResumen(cte, params),
+		_consultarPercentiles(cte, params),
+		_consultarSerie(cte, params),
+		_consultarOrigen(filtros),
+		_consultarPorEspecialidad(cte, params),
+		_consultarPorSector(cte, params),
+		_consultarPorProfesional(cte, params),
+		_consultarHeatmap(cte, params),
+		_consultarHeatmapRetrasos(cte, params),
+		_consultarVisitasPorSector(filtros),
+		_consultarVisitasPorEspecialidad(filtros),
+		_consultarVisitasPorProfesional(filtros),
+	]);
 
 	const porEspecialidad = _mergeDimensionConVisitas(
 		_mapDimension(espRows, 'Codigo'),
@@ -1082,7 +1146,7 @@ async function obtenerAnaliticaAmbulatoria(filtrosIn = {}) {
 		porEspecialidad,
 		porSector,
 		porProfesional,
-		heatmap: _mapHeatmap(heatRows),
+		heatmap: _mapHeatmap(heatRows, heatRetrasos),
 	};
 }
 
