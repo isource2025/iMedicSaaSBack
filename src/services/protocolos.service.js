@@ -435,13 +435,17 @@ function _mapPracticaRows(rows) {
 	}));
 }
 
+/** Descripción vacía, = código o el fallback "Práctica N" → completar desde convenio. */
+function _descripcionPracticaIncompleta(descripcion, idPractica) {
+	const d = String(descripcion || '').trim();
+	const id = String(idPractica || '');
+	if (!d || d === id) return true;
+	return Boolean(id) && d.toLowerCase() === `práctica ${id}`.toLowerCase();
+}
+
 /** Si el catálogo trae descripción vacía o = código, completa desde imPracticasXConvenios. */
 async function _enriquecerDescripcionesXConvenios(mapped) {
-	const need = (mapped || []).filter((r) => {
-		const d = String(r.descripcion || '').trim();
-		const id = String(r.idPractica || '');
-		return !d || d === id;
-	});
+	const need = (mapped || []).filter((r) => _descripcionPracticaIncompleta(r.descripcion, r.idPractica));
 	if (!need.length) return mapped || [];
 	const ids = [...new Set(need.map((r) => Number(r.idPractica)).filter((n) => n > 0))];
 	if (!ids.length) return mapped || [];
@@ -467,9 +471,8 @@ async function _enriquecerDescripcionesXConvenios(mapped) {
 			}
 		}
 		return (mapped || []).map((r) => {
-			const d = String(r.descripcion || '').trim();
 			const id = Number(r.idPractica);
-			if (d && d !== String(id)) return r;
+			if (!_descripcionPracticaIncompleta(r.descripcion, id)) return r;
 			const alt = byId.get(id);
 			return alt ? { ...r, descripcion: alt } : r;
 		});
@@ -865,6 +868,91 @@ const sqlApplyDiagnostico = (columna, alias) => `
 		   ORDER BY dx.Valor
 		 ) ${alias}`;
 
+/**
+ * Prácticas de los protocolos de una visita, con descripción resuelta.
+ * Orden: catálogo según TipoPractica → DescPractica → imPracticasXConvenios
+ * (prestaciones como 658018 a menudo sólo tienen nombre útil en convenio).
+ * Si falta la columna/tabla de convenio, cae al join de catálogo y el enrich JS completa.
+ */
+async function _practicasDeProtocolos(idList, numeroVisita) {
+	const params = [{ value: numeroVisita, type: 'Int' }];
+	const selectBase = `
+		   fp.Valor AS valorPractica,
+		   fp.IdProtocolo,
+		   fp.Practica AS codigoPractica,
+		   LTRIM(RTRIM(ISNULL(fp.TipoPractica, ''))) AS tipoPractica,
+		   fp.CantidadPractica,
+		   fp.FechaPractica,
+		   fp.HoraPracticaInicio,
+		   fp.HoraPracticaFin,
+		   fp.CodOperador,
+		   CASE WHEN ${SQL_PRACTICA_BLOQUEADA} THEN 1 ELSE 0 END AS bloqueada,
+		   ISNULL(fp.Status, 0) AS Status`;
+	const joinsCatalogo = `
+		 OUTER APPLY (
+		   SELECT TOP 1 Descripcion FROM dbo.imModuladas
+		   WHERE IDPractica = fp.Practica
+		 ) mo
+		 OUTER APPLY (
+		   SELECT TOP 1 Descripcion FROM dbo.imNomenclador
+		   WHERE IDPractica = fp.Practica
+		 ) no`;
+	const where = `
+		 WHERE fp.IdProtocolo IN (${idList})
+		   AND fp.NumeroVisita = @p0
+		 ORDER BY fp.Valor`;
+
+	const descCatalogo = `COALESCE(
+		     NULLIF(LTRIM(RTRIM(ISNULL(CASE
+		       WHEN UPPER(LTRIM(RTRIM(ISNULL(fp.TipoPractica, '')))) = 'MO' THEN mo.Descripcion
+		       ELSE no.Descripcion
+		     END, ''))), ''),
+		     NULLIF(LTRIM(RTRIM(ISNULL(CASE
+		       WHEN UPPER(LTRIM(RTRIM(ISNULL(fp.TipoPractica, '')))) = 'MO' THEN no.Descripcion
+		       ELSE mo.Descripcion
+		     END, ''))), '')
+		   )`;
+
+	try {
+		return await executeQuery(
+			`SELECT ${selectBase},
+			   LTRIM(RTRIM(ISNULL(COALESCE(
+			     ${descCatalogo},
+			     NULLIF(LTRIM(RTRIM(ISNULL(fp.DescPractica, ''))), ''),
+			     NULLIF(LTRIM(RTRIM(ISNULL(xc.Descripcion, ''))), '')
+			   ), ''))) AS practicaDescripcion
+			 FROM dbo.imFacPracticas fp
+			 ${joinsCatalogo}
+			 OUTER APPLY (
+			   SELECT TOP 1 LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))) AS Descripcion
+			   FROM dbo.imPracticasXConvenios x
+			   WHERE x.IdPractica = fp.Practica
+			     AND NULLIF(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))), '') IS NOT NULL
+			     AND LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion))) <>
+			         LTRIM(RTRIM(CONVERT(VARCHAR(50), fp.Practica)))
+			   ORDER BY
+			     CASE WHEN x.IdConvenio = (
+			       SELECT TOP 1 ISNULL(v.CONTRATO, 0) FROM dbo.imVisita v WHERE v.NUMEROVISITA = fp.NumeroVisita
+			     ) THEN 0 ELSE 1 END,
+			     LEN(LTRIM(RTRIM(CONVERT(VARCHAR(250), x.Descripcion)))) DESC
+			 ) xc
+			 ${where}`,
+			params,
+		);
+	} catch (err) {
+		if (!_sqlBusquedaNoDisponible(err)) throw err;
+	}
+
+	return executeQuery(
+		`SELECT ${selectBase},
+		   LTRIM(RTRIM(ISNULL(${descCatalogo}, ''))) AS practicaDescripcion
+		 FROM dbo.imFacPracticas fp
+		 ${joinsCatalogo}
+		 ${where}`,
+		params,
+	);
+}
+
 async function listarPorVisita(numeroVisita) {
 	const nv = Number(numeroVisita);
 	if (!Number.isFinite(nv) || nv <= 0) throw _httpError('Visita inválida. Volvé a abrir la internación.');
@@ -908,34 +996,7 @@ async function listarPorVisita(numeroVisita) {
 	const idList = ids.join(',');
 
 	// Siempre acotado a la visita: IdProtocolo es un contador propio de HCProtocolosPtes.
-	const practicas = await executeQuery(
-		`SELECT
-		   fp.Valor AS valorPractica,
-		   fp.IdProtocolo,
-		   fp.Practica AS codigoPractica,
-		   LTRIM(RTRIM(ISNULL(fp.TipoPractica, ''))) AS tipoPractica,
-		   fp.CantidadPractica,
-		   fp.FechaPractica,
-		   fp.HoraPracticaInicio,
-		   fp.HoraPracticaFin,
-		   fp.CodOperador,
-		   CASE WHEN ${SQL_PRACTICA_BLOQUEADA} THEN 1 ELSE 0 END AS bloqueada,
-		   ISNULL(fp.Status, 0) AS Status,
-		   LTRIM(RTRIM(ISNULL(COALESCE(mo.Descripcion, no.Descripcion), ''))) AS practicaDescripcion
-		 FROM dbo.imFacPracticas fp
-		 OUTER APPLY (
-		   SELECT TOP 1 Descripcion FROM dbo.imModuladas
-		   WHERE IDPractica = fp.Practica
-		 ) mo
-		 OUTER APPLY (
-		   SELECT TOP 1 Descripcion FROM dbo.imNomenclador
-		   WHERE IDPractica = fp.Practica
-		 ) no
-		 WHERE fp.IdProtocolo IN (${idList})
-		   AND fp.NumeroVisita = @p0
-		 ORDER BY fp.Valor`,
-		[{ value: nv, type: 'Int' }],
-	);
+	const practicas = await _practicasDeProtocolos(idList, nv);
 
 	const valores = (practicas || []).map((p) => Number(p.valorPractica)).filter((x) => x > 0);
 	let profesionales = [];
@@ -991,16 +1052,33 @@ async function listarPorVisita(numeroVisita) {
 		});
 	}
 
+	// Segunda pasada por JS por si el OUTER APPLY de convenios no está (o vino vacío).
+	const descEnriquecidas = await _enriquecerDescripcionesXConvenios(
+		(practicas || []).map((fp) => ({
+			idPractica: Number(fp.codigoPractica) || 0,
+			descripcion: String(fp.practicaDescripcion || '').trim(),
+		})),
+	);
+	const descByCodigo = new Map(
+		descEnriquecidas.map((r) => [Number(r.idPractica) || 0, String(r.descripcion || '').trim()]),
+	);
+
 	const facByProt = {};
 	for (const fp of practicas || []) {
 		const idP = Number(fp.IdProtocolo);
 		if (!facByProt[idP]) facByProt[idP] = [];
 		const valor = Number(fp.valorPractica);
+		const codigo = Number(fp.codigoPractica) || 0;
+		const candidata =
+			String(fp.practicaDescripcion || '').trim() || descByCodigo.get(codigo) || '';
+		const desc = !_descripcionPracticaIncompleta(candidata, codigo)
+			? candidata
+			: `Práctica ${codigo}`;
 		facByProt[idP].push({
 			valorPractica: valor,
-			codigoPractica: Number(fp.codigoPractica) || 0,
+			codigoPractica: codigo,
 			tipoPractica: String(fp.tipoPractica || '').trim(),
-			descripcion: String(fp.practicaDescripcion || '').trim() || `Práctica ${fp.codigoPractica}`,
+			descripcion: desc,
 			cantidad: Number(fp.CantidadPractica) || 1,
 			facturada: Number(fp.bloqueada) === 1,
 			status: Number(fp.Status) || 0,
@@ -1578,5 +1656,7 @@ module.exports = {
 	_insertarPractica,
 	_reemplazarEquipo,
 	_reemplazarMedicamentos,
+	_descripcionPracticaIncompleta,
+	_enriquecerDescripcionesXConvenios,
 };
 

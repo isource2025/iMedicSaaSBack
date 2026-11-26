@@ -273,3 +273,95 @@ test('buscarPracticas: si el convenio tiene prácticas y el término no coincide
 	assert.deepEqual(rows, []);
 });
 });
+
+test('descripción incompleta: vacío, =código o fallback "Práctica N"', () => {
+	assert.equal(svc._descripcionPracticaIncompleta('', 658018), true);
+	assert.equal(svc._descripcionPracticaIncompleta('658018', 658018), true);
+	assert.equal(svc._descripcionPracticaIncompleta('Práctica 658018', 658018), true);
+	assert.equal(svc._descripcionPracticaIncompleta('MODULO E DE CIRUGIA DE PANCREAS', 658018), false);
+});
+
+test('listarPorVisita: si catálogo no tiene nombre, usa convenio (no "Práctica N")', async () => {
+	sqlMock((sql) => {
+		if (/FROM dbo\.HCProtocolosPtes/.test(sql)) {
+			return [
+				{
+					IdProtocolo: 10,
+					NumeroProtocolo: 7983,
+					NumeroVisita: 493294,
+					IDPaciente: 1,
+					Fecha: '2026-11-25T11:28:00',
+					TipoProtocolo: '',
+					TipoDescripcion: null,
+					FechaHoraInicio: '2026-11-25T11:51:00',
+					FechaHoraFin: '2026-11-25T11:51:00',
+					DiagnosticoPre: 'C25',
+					DiagnosticoPos: 'C25',
+					Tecnica: 'Biopsia',
+					Texto: '',
+					Estado: '',
+					IdOperador: 1,
+					OperadorNombre: null,
+					OperadorMatricula: null,
+					DiagnosticoPreDescripcion: 'TUMOR',
+					DiagnosticoPosDescripcion: 'TUMOR',
+				},
+			];
+		}
+		if (/FROM dbo\.imFacPracticas fp/.test(sql) && /imPracticasXConvenios/.test(sql)) {
+			return [
+				{
+					valorPractica: 1002742,
+					IdProtocolo: 10,
+					codigoPractica: 658018,
+					tipoPractica: 'NO',
+					CantidadPractica: 1,
+					FechaPractica: 1,
+					HoraPracticaInicio: 1,
+					HoraPracticaFin: 1,
+					CodOperador: 1,
+					bloqueada: 0,
+					Status: 0,
+					practicaDescripcion: '',
+				},
+			];
+		}
+		if (/FROM dbo\.imFacPracticas fp/.test(sql)) {
+			return [
+				{
+					valorPractica: 1002742,
+					IdProtocolo: 10,
+					codigoPractica: 658018,
+					tipoPractica: 'NO',
+					CantidadPractica: 1,
+					FechaPractica: 1,
+					HoraPracticaInicio: 1,
+					HoraPracticaFin: 1,
+					CodOperador: 1,
+					bloqueada: 0,
+					Status: 0,
+					practicaDescripcion: '',
+				},
+			];
+		}
+		if (/FROM dbo\.imFacProfesionales/.test(sql)) return [];
+		if (/HCProtocolosMedicamentos/.test(sql)) return [];
+		if (/imPracticasXConvenios/.test(sql) && /IdPractica IN/.test(sql)) {
+			return [
+				{
+					idPractica: 658018,
+					descripcion: 'MODULO E DE CIRUGIA DE PANCREAS, HIGADO Y VIA BILIAR',
+				},
+			];
+		}
+		return [];
+	});
+	const rows = await svc.listarPorVisita(493294);
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].practicas.length, 1);
+	assert.equal(rows[0].practicas[0].codigoPractica, 658018);
+	assert.equal(
+		rows[0].practicas[0].descripcion,
+		'MODULO E DE CIRUGIA DE PANCREAS, HIGADO Y VIA BILIAR',
+	);
+});
