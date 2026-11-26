@@ -2334,7 +2334,7 @@ async function _insertarFacPracticaConProfesional({
  * @param {Array<{idTipoPedido:number}>} [args.procedimientos] - procedimientos realizados en consultorio
  * @param {Array<{idTipoPedido:number,notas?:string,estadoUrgencia?:string}>} [args.pedidosEstudios] - pedidos de estudios
  */
-const VENTANA_EDICION_POST_CIERRE_MS = 48 * 60 * 60 * 1000;
+const VENTANA_EDICION_POST_CIERRE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Fecha/hora de egreso (Clarion) → epoch ms (Argentina UTC-3).
@@ -2495,7 +2495,7 @@ async function _resolverEdicionPostCierre({ numeroVisita, codOperador, valorPers
 	if (venceMs == null || Date.now() > venceMs) {
 		return {
 			puedeEditar: false,
-			motivoBloqueo: 'La ventana de edición de 48 horas ya venció',
+			motivoBloqueo: 'La ventana de edición de 24 horas ya venció',
 			operadorEgreso: opEgr,
 			cerradoEn,
 			venceEn,
@@ -2895,7 +2895,7 @@ async function cerrarTurno({
 
 /**
  * Edita HC / agrega prácticas y pedidos a una atención ya cerrada.
- * Solo el operador que cerró, dentro de las 48 h posteriores.
+ * Solo el operador que cerró, dentro de las 24 h posteriores.
  */
 async function actualizarAtencionPostCierre({
 	matricula,
