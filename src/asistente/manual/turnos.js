@@ -112,11 +112,11 @@ module.exports = [
 			'«Marcar llegada» cuando el paciente llega (permiso LLEGADA). Con llegada se habilitan «Llamar por pantalla» y «RAC de enfermería».',
 			'«Ingresó a consultorio» → «Atender / Finalizar atención» (permiso CERRAR / Atender).',
 			'Asistente de atención: «RAC», «Historia clínica» («Motivo de consulta», «Enfermedad actual» y «Diagnóstico CIE-10» son obligatorios), «Procedimientos», «Solicitud de Estudios», «Interconsultas», «Adjuntos» → «Finalizar atención».',
-			'Corregir: «Editar / agregar (24 h)», solo dentro de las 24 h.',
+			'Corregir: «Editar / agregar (48 h)», solo dentro de las 48 h.',
 		],
 		problemas: [
 			{ sintoma: '«Faltan datos obligatorios» / «No se puede finalizar la atención todavía…»', causa: 'Completá Motivo, Enfermedad actual y Diagnóstico CIE-10.' },
-			{ sintoma: '«Solo quien finalizó la atención puede editarla dentro de las 24 horas»', causa: 'Autoría y plazo de 24 h.' },
+			{ sintoma: '«Solo quien finalizó la atención puede editarla dentro de las 48 horas»', causa: 'Autoría y plazo de 48 h.' },
 			{ sintoma: 'No me aparece «Marcar llegada»', causa: 'Requiere TURNOS.AGENDA.LLEGADA.' },
 			{ sintoma: 'No me aparece «Atender» / «Ingresó a consultorio»', causa: 'Requiere TURNOS.AGENDA.CERRAR.' },
 			{ sintoma: 'No me aparece «RAC de enfermería»', causa: 'Requiere rol ADMIN, ENFERMERO o MEDICO y que el paciente tenga la llegada marcada.' },
